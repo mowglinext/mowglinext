@@ -27,7 +27,10 @@ Keep the app visible and focused. All interlocks apply in both browser and PWA.
    for cancel. Browser button numbers are authoritative; labels vary by device.
 4. Change axis/button selectors or choose **Bind input**, release everything,
    then press one button or move one stick. Assign unique buttons and axes.
-   Configure dead zone, inversion and speed scale, then save. Unknown layouts
+   Button learning ignores resting axes. Axis learning measures movement from
+   a stable resting position; an ambiguous gesture must return fully to that
+   position before retrying. Configure dead zone, inversion and speed scale,
+   then save. Unknown layouts
    require testing and saving before Enable becomes available.
 5. Close configuration with **Done**, then tap **Enable for this robot** directly
    on the map. Done never opens a control session; activation stays unavailable
@@ -104,8 +107,8 @@ valid polygon was saved. Check the resulting map.
   A nonempty WebSocket send buffer terminates the session. Recovery requires
   explicit Enable, neutral inputs and a new deadman press.
 - The backend's dedicated `/api/mowglinext/publish/gamepad` socket first sends
-  `{type: "gamepadHello", challenge: <random 32-character hex>}`. The current
-  browser attempt must return `{type: "gamepadClaim", challenge: <same>}` from a
+  `{type: "gamepadHello", challenge: <random 32-character hex>, version: 2}`. The current
+  browser attempt must return `{type: "gamepadClaim", challenge: <same>, version: 2}` from a
   valid native-input poll within 300 ms of server challenge issuance. An HTTP
   upgrade alone reserves no ownership and performs no ROS subscription, zero
   publish or STOP. A canceled browser ignores a late Hello; invalid, expired or
@@ -118,13 +121,19 @@ valid polygon was saved. Check the resulting map.
   timestamp ordering, poll history or terminal faults. The entire browser
   startup remains bounded at two seconds, including Ready. Handshake writes
   are bounded at 100 ms. This internal protocol requires matching GUI/backend
-  builds; an older page fails closed and must be reloaded.
+  builds. Version 2 rejects cached clients that still send browser-side delayed
+  STOP compensation; an older page fails closed and must be reloaded.
 - After Ready, the socket accepts only bounded, finite teleop frames
   `{twist: <TwistStamped>, deadman: <boolean>}`.
   A 300 ms monotonic session lease expires independently of the read/publish
   loop. Disconnect, malformed input and lease expiry close the session, send
   zero and request STOP if this session has observed Manual Mowing. Transient
   NULL/IDLE guard states retain that responsibility; explicit RECORDING clears it.
+  Each publish carries that accepted frame's fixed deadline through transport
+  selection, relay writing and Foxglove advertisement/publication. Both writers
+  recheck validity after acquiring their shared lock; an expired queued motion
+  is discarded. Cleanup zero and STOP use independent contexts. Providers that
+  cannot enforce this contract reject controller activation with HTTP 503.
   Receiving a frame checks the deadline under the same lock as renewal, and
   expiry checks/marks the session ended atomically. A delayed timer callback
   cannot let an already-expired session revive from late input.
@@ -134,15 +143,46 @@ valid polygon was saved. Check the resulting map.
 - One controller session owns GUI teleop across tabs. While it owns the path,
   legacy touch publishers cannot send commands. Publishers predating a
   controller takeover cannot resume old queued input afterward. Cleanup retains
-  ownership until zero, the STOP attempt and subscription cleanup complete. Relay writes are
+  ownership until zero, pending mode requests, STOP compensation and subscription
+  cleanup complete. Relay writes are
   bounded at 100 ms. Other ROS teleop producers are outside GUI arbitration.
 - Existing relay, `twist_mux`, hardware bridge and firmware safety remain in
   place. Teleop bypasses the Nav2 collision-monitor lane, as the existing touch
   joystick does: keep the robot in sight and its path clear.
 
-STOP is a best-effort call to the existing behavior service, conditional on the
-session’s observed manual ownership (which may initially be cached). It is not atomic with
-another client's mode change. Its ROS service context is limited to one second.
+Controller recording (3/5/6) and STOP (8) requests use the existing
+`high_level_control` route with the internal `X-Mowgli-Gamepad-Session` header,
+carrying this socket's Hello/Claim challenge. The server rejects retired,
+unready or expired sessions with HTTP 409 and never logs the challenge. The
+server owns admitted mode requests through bounded settlement, independently of
+HTTP cancellation or page/component lifetime. STOP bypasses a pending request,
+then reasserts STOP after it settles, including after failure. Concurrent STOP
+requests and disconnect cleanup share that obligation. No retired browser sends
+later compensation.
+
+During a pending mode request, STOP compensation or session cleanup, conflicting
+GUI requests (`high_level_control` except STOP, `start_in_area`, and
+`coverage_clear_resume`) return HTTP 409 instead of entering a queue. Pending
+requests also suppress controller velocity. A new socket cannot acquire ownership
+until settlement and cleanup finish. Ordinary Manual Mowing (7) still works with
+an idle, ready controller. An admitted Manual Mowing command retains its cleanup
+obligation even if delayed/cached RECORDING status arrives. Only a successful
+subsequent explicit mode command or final STOP supersedes that obligation;
+clearing coverage progress does not select a mode. Once a GUI command establishes
+mode ownership, uncorrelated status cannot erase or restore its cleanup obligation.
+Status remains a mode hint for sessions with no explicit GUI mode command.
+Untagged older GUI mode requests remain compatible:
+when a controller owns the path they acquire the same action fence and cleanup
+obligation; without an owner they retain request cancellation. Untagged STOP and
+emergency requests remain recovery paths. This arbitration covers GUI routes,
+not other ROS or MQTT producers.
+
+STOP remains a best-effort existing behavior-service call, with a one-second
+context per attempt (mode calls have a ten-second bound). Failure is reported;
+settlement does not prove the robot stopped. Ownership is released after the
+attempts settle, even if STOP fails, allowing an explicit recovery request.
+A completed recording is preserved on disconnect; an in-flight recording must
+settle and be compensated before a replacement controller can take over.
 Waiting for a shared Foxglove writer can outlast that context, but cancellation
 is checked after acquiring the writer and an expired call is not sent later.
 The network write uses the earlier service/transport deadline. An already-sent

@@ -34,7 +34,7 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
         localStorage.setItem('i18nextLng', 'en');
         const input = {
             axes: [0, 0], buttons: Array(16).fill(false), connected: true,
-            mapping, getGamepadsThrows,
+            mapping, getGamepadsThrows, reads: 0,
         };
         Object.assign(window, {controllerFailureInput: input});
         if (denyProfileStorage) {
@@ -47,6 +47,7 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
             };
         }
         Object.defineProperty(navigator, 'getGamepads', {configurable: true, value: () => {
+            input.reads++;
             if (input.getGamepadsThrows) throw new DOMException('Permission denied', 'SecurityError');
             if (!input.connected) return [null];
             return [{
@@ -84,10 +85,10 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
         state.challenges.push(challenge);
         let ready = false;
         socket.onMessage(raw => {
-            const message = JSON.parse(String(raw)) as GamepadFrame & {type?: string; challenge?: string};
+            const message = JSON.parse(String(raw)) as GamepadFrame & {type?: string; challenge?: string; version?: number};
             if (message.type === 'gamepadClaim') {
                 state.claims.push(message.challenge ?? '');
-                if (message.challenge === challenge) {
+                if (message.challenge === challenge && message.version === 2) {
                     ready = true;
                     socket.send(JSON.stringify({type: 'gamepadReady'}));
                 }
@@ -100,7 +101,7 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
             if (!ready) state.preReadyFrames.push(message);
             state.frames.push(message);
         });
-        const hello = JSON.stringify({type: 'gamepadHello', challenge});
+        const hello = JSON.stringify({type: 'gamepadHello', challenge, version: 2});
         if (options.deferFirstGamepadHello && state.opened === 1) state.releaseLateHello = () => socket.send(hello);
         else socket.send(hello);
         socket.onClose(() => { state.closed++; });
@@ -215,7 +216,10 @@ test('conflicting axes prevent saving or enabling a controller profile', async (
 
     await dialog.getByRole('button', {name: 'Bind input', exact: true}).first().click();
     await expect(dialog.getByRole('status')).toContainText('Forward / reverse axis');
-    await page.waitForTimeout(150); // let the mapper observe a neutral sample first
+    const reads = await page.evaluate(() => (window as any).controllerFailureInput.reads as number);
+    // Axis learning needs two stable preview samples. Wait for actual polls,
+    // rather than assuming they occurred during a fixed wall-clock delay.
+    await page.waitForFunction(start => (window as any).controllerFailureInput.reads >= start + 6, reads);
     await page.evaluate(() => { (window as any).controllerFailureInput.axes[0] = 1; });
     await expect(dialog.getByText('Use a different button for each function and a different axis for driving and steering. All assigned inputs must exist on this controller.')).toBeVisible();
     await expect(dialog.getByRole('button', {name: 'Save mapping', exact: true})).toBeDisabled();

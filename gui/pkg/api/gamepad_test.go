@@ -34,6 +34,7 @@ type gamepadTestProvider struct {
 	serviceErr      error
 	blockMotion     <-chan struct{}
 	blockStop       <-chan struct{}
+	beforePublish   func(context.Context) error
 	subscriptions   atomic.Int64
 	unsubscriptions atomic.Int64
 }
@@ -64,6 +65,17 @@ func (p *gamepadTestProvider) Publish(_ string, _ string, value interface{}) err
 		<-p.blockMotion
 	}
 	return p.publishErr
+}
+func (p *gamepadTestProvider) PublishContext(ctx context.Context, topic string, msgType string, value interface{}) error {
+	if p.beforePublish != nil {
+		if err := p.beforePublish(ctx); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return p.Publish(topic, msgType, value)
 }
 func (p *gamepadTestProvider) CallService(ctx context.Context, service string, req any, res any, _ ...string) error {
 	if service != "/behavior_tree_node/high_level_control" || req.(*mowgli.HighLevelControlReq).Command != 8 {
@@ -101,14 +113,15 @@ func sendGamepadClaim(conn *websocket.Conn) error {
 	var hello struct {
 		Type      string `json:"type"`
 		Challenge string `json:"challenge"`
+		Version   int    `json:"version"`
 	}
 	if err := conn.ReadJSON(&hello); err != nil {
 		return err
 	}
-	if hello.Type != "gamepadHello" || len(hello.Challenge) != 32 {
+	if hello.Type != "gamepadHello" || hello.Version != gamepadProtocolVersion || len(hello.Challenge) != 32 {
 		return errors.New("invalid gamepad hello")
 	}
-	return conn.WriteJSON(map[string]string{"type": "gamepadClaim", "challenge": hello.Challenge})
+	return conn.WriteJSON(map[string]any{"type": "gamepadClaim", "challenge": hello.Challenge, "version": gamepadProtocolVersion})
 }
 
 func completeGamepadHandshake(conn *websocket.Conn) error {
@@ -435,9 +448,11 @@ func readGamepadHello(t *testing.T, conn *websocket.Conn) string {
 	var hello struct {
 		Type      string `json:"type"`
 		Challenge string `json:"challenge"`
+		Version   int    `json:"version"`
 	}
 	require.NoError(t, conn.ReadJSON(&hello))
 	require.Equal(t, "gamepadHello", hello.Type)
+	require.Equal(t, gamepadProtocolVersion, hello.Version)
 	require.Regexp(t, "^[0-9a-f]{32}$", hello.Challenge)
 	return hello.Challenge
 }
@@ -473,7 +488,7 @@ func awaitGamepadHandshakeRejection(t *testing.T, c *gamepadCoordinator) {
 }
 
 func TestGamepadUnclaimedOrInvalidHandshakeNeverTouchesROS(t *testing.T) {
-	for _, kind := range []string{"cancel", "expired", "wrongChallenge", "wrongType", "unknownField", "trailingJSON", "binary", "oldVelocityProtocol"} {
+	for _, kind := range []string{"cancel", "expired", "wrongChallenge", "wrongType", "unknownField", "trailingJSON", "binary", "oldVelocityProtocol", "unversionedClaim", "wrongVersion"} {
 		t.Run(kind, func(t *testing.T) {
 			c, p := diagnosticTestCoordinator()
 			p.state = 4 // A later operator manual command must not acquire an old connection's STOP.
@@ -492,13 +507,17 @@ func TestGamepadUnclaimedOrInvalidHandshakeNeverTouchesROS(t *testing.T) {
 				_ = conn.SetReadDeadline(time.Now().Add(time.Second))
 				_, _, err := conn.ReadMessage()
 				require.Error(t, err)
-				_ = conn.WriteJSON(map[string]string{"type": "gamepadClaim", "challenge": challenge})
+				_ = conn.WriteJSON(map[string]any{"type": "gamepadClaim", "challenge": challenge, "version": gamepadProtocolVersion})
 			default:
-				raw := fmt.Sprintf(`{"type":"gamepadClaim","challenge":%q}`, challenge)
+				raw := fmt.Sprintf(`{"type":"gamepadClaim","challenge":%q,"version":2}`, challenge)
 				messageType := websocket.TextMessage
 				switch kind {
+				case "unversionedClaim":
+					raw = strings.Replace(raw, `,"version":2`, "", 1)
+				case "wrongVersion":
+					raw = strings.Replace(raw, `"version":2`, `"version":1`, 1)
 				case "wrongChallenge":
-					raw = `{"type":"gamepadClaim","challenge":"wrong"}`
+					raw = `{"type":"gamepadClaim","challenge":"wrong","version":2}`
 				case "wrongType":
 					raw = strings.Replace(raw, "gamepadClaim", "gamepadReady", 1)
 				case "unknownField":
@@ -559,7 +578,7 @@ func TestGamepadClaimCannotReuseAnotherConnectionsChallenge(t *testing.T) {
 	require.NoError(t, err)
 	defer second.Close()
 	require.NotEqual(t, old, readGamepadHello(t, second))
-	require.NoError(t, second.WriteJSON(map[string]string{"type": "gamepadClaim", "challenge": old}))
+	require.NoError(t, second.WriteJSON(map[string]any{"type": "gamepadClaim", "challenge": old, "version": gamepadProtocolVersion}))
 	awaitGamepadHandshakeRejection(t, c)
 	assertNoGamepadROS(t, c, p)
 }
@@ -577,12 +596,12 @@ func TestGamepadPendingClaimsHaveOnlyOneROSOwner(t *testing.T) {
 	defer second.Close()
 	secondChallenge := readGamepadHello(t, second)
 	assertNoGamepadROS(t, c, p)
-	require.NoError(t, first.WriteJSON(map[string]string{"type": "gamepadClaim", "challenge": firstChallenge}))
+	require.NoError(t, first.WriteJSON(map[string]any{"type": "gamepadClaim", "challenge": firstChallenge, "version": gamepadProtocolVersion}))
 	var ready map[string]string
 	require.NoError(t, first.ReadJSON(&ready))
 	require.Equal(t, "gamepadReady", ready["type"])
 	_ = readGamepadVelocity(t, p)
-	require.NoError(t, second.WriteJSON(map[string]string{"type": "gamepadClaim", "challenge": secondChallenge}))
+	require.NoError(t, second.WriteJSON(map[string]any{"type": "gamepadClaim", "challenge": secondChallenge, "version": gamepadProtocolVersion}))
 	awaitGamepadHandshakeRejection(t, c)
 	require.True(t, c.active.Load())
 	require.EqualValues(t, 1, c.epoch.Load())
@@ -734,7 +753,7 @@ func TestGamepadClaimExpiresWhileWaitingForCoordinator(t *testing.T) {
 			c.mu.Unlock()
 		}
 	}()
-	require.NoError(t, conn.WriteJSON(map[string]string{"type": "gamepadClaim", "challenge": challenge}))
+	require.NoError(t, conn.WriteJSON(map[string]any{"type": "gamepadClaim", "challenge": challenge, "version": gamepadProtocolVersion}))
 	// Model another publisher occupying the coordinator across the complete
 	// claim window. A valid echo must not gain ownership after that wait.
 	<-time.After(gamepadLease + 25*time.Millisecond)
@@ -780,4 +799,126 @@ func TestGamepadPublishRejectsExpiredFrameBeforeDelayedTimerRuns(t *testing.T) {
 		t.Fatalf("expired frame forwarded: %v", frame)
 	default:
 	}
+}
+
+// A provider with only the old contract must never get leased motion through
+// an implicit, uncancellable Publish fallback.
+func TestGamepadRejectsProviderWithoutContextPublishing(t *testing.T) {
+	p := &gamepadTestProvider{published: make(chan geometry.TwistStamped, 8)}
+	legacyOnly := struct{ types.IRosProvider }{p}
+	c := &gamepadCoordinator{provider: legacyOnly}
+	server := httptest.NewServer(diagnosticRouter(c))
+	defer server.Close()
+	conn, response, err := websocket.DefaultDialer.Dial(gamepadURL(server), nil)
+	if conn != nil {
+		defer conn.Close()
+	}
+	require.Error(t, err)
+	require.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
+	assertNoGamepadROS(t, c, p)
+}
+
+func TestGamepadQueuedPublishIsCanceledWithoutCancelingCleanupZero(t *testing.T) {
+	for _, end := range []string{"lease", "termination"} {
+		t.Run(end, func(t *testing.T) {
+			c, p := diagnosticTestCoordinator()
+			p.state = 4
+			entered := make(chan context.Context, 1)
+			release := make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			defer unblock()
+			// Block only the motion publish after the initial preemption zero.
+			var calls atomic.Int64
+			p.beforePublish = func(ctx context.Context) error {
+				if calls.Add(1) == 1 {
+					return nil
+				}
+				entered <- ctx
+				<-release
+				return ctx.Err()
+			}
+			server := httptest.NewServer(diagnosticRouter(c))
+			defer server.Close()
+			conn, _, err := websocket.DefaultDialer.Dial(gamepadURL(server), nil)
+			require.NoError(t, err)
+			defer conn.Close()
+			require.NoError(t, completeGamepadHandshake(conn))
+			require.Zero(t, readGamepadVelocity(t, p).Twist.Linear.X)
+			c.mu.Lock()
+			s := c.owner
+			c.mu.Unlock()
+			writeGamepad(t, conn, 0.2, true)
+			var publishCtx context.Context
+			select {
+			case publishCtx = <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("motion did not enter provider")
+			}
+			s.mu.Lock()
+			leaseEnd := s.lastValid.Add(gamepadLease)
+			if end == "lease" {
+				// The context must expire even when the watchdog has not run.
+				s.timer.Stop()
+			}
+			s.mu.Unlock()
+			deadline, ok := publishCtx.Deadline()
+			require.True(t, ok)
+			require.True(t, deadline.Equal(leaseEnd), "publish extended the accepted frame's lease")
+			if end == "termination" {
+				s.terminate(gamepadServerEvent{Cause: "testTermination"})
+			}
+			select {
+			case <-publishCtx.Done():
+			case <-time.After(time.Second):
+				t.Fatal("queued motion was not canceled")
+			}
+			if end == "lease" {
+				require.ErrorIs(t, publishCtx.Err(), context.DeadlineExceeded)
+			} else {
+				require.ErrorIs(t, publishCtx.Err(), context.Canceled)
+			}
+			unblock()
+			awaitGamepadStop(t, p)
+			require.Zero(t, readGamepadVelocity(t, p).Twist.Linear.X, "cleanup must send zero, never the queued motion")
+			events := awaitGamepadReleased(t, c)
+			ended := 0
+			for _, event := range events {
+				if event.Event == "sessionEnded" {
+					ended++
+					if end == "lease" {
+						require.Equal(t, "leaseExpired", event.Cause)
+					} else {
+						require.Equal(t, "testTermination", event.Cause)
+					}
+				}
+			}
+			require.Equal(t, 1, ended)
+			select {
+			case msg := <-p.published:
+				t.Fatalf("unexpected replay: %+v", msg)
+			default:
+			}
+		})
+	}
+}
+
+func TestGamepadHelloFailsClosedForCachedControllerParser(t *testing.T) {
+	c, p := diagnosticTestCoordinator()
+	server := httptest.NewServer(diagnosticRouter(c))
+	defer server.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(gamepadURL(server), nil)
+	require.NoError(t, err)
+	defer conn.Close()
+	var hello map[string]any
+	require.NoError(t, conn.ReadJSON(&hello))
+	// The previous browser build required exactly type/challenge. It must not
+	// adopt a session capable of issuing its retired untagged STOP chain.
+	legacyAccepts := hello["type"] == "gamepadHello" && len(hello) == 2
+	require.False(t, legacyAccepts)
+	require.EqualValues(t, gamepadProtocolVersion, hello["version"])
+	assertNoGamepadROS(t, c, p)
+	require.NoError(t, conn.Close())
+	awaitGamepadHandshakeRejection(t, c)
+	assertNoGamepadROS(t, c, p)
 }

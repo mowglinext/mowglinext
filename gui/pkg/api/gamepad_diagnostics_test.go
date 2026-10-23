@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -169,8 +170,8 @@ type failFirstGamepadPublish struct {
 	fail atomic.Bool
 }
 
-func (p *failFirstGamepadPublish) Publish(topic, kind string, value interface{}) error {
-	if err := p.gamepadTestProvider.Publish(topic, kind, value); err != nil {
+func (p *failFirstGamepadPublish) PublishContext(ctx context.Context, topic, kind string, value interface{}) error {
+	if err := p.gamepadTestProvider.PublishContext(ctx, topic, kind, value); err != nil {
 		return err
 	}
 	if p.fail.Swap(false) {

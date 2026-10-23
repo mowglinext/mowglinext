@@ -22,6 +22,7 @@ import (
 	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
+const gamepadProtocolVersion = 2
 const gamepadLease = 300 * time.Millisecond
 const gamepadStopTimeout = time.Second
 const gamepadHandshakeWriteTimeout = 100 * time.Millisecond
@@ -38,24 +39,33 @@ type gamepadCoordinator struct {
 	epoch       atomic.Uint64
 	active      atomic.Bool
 	diagnostics gamepadDiagnosticHistory
+	// actionMu never spans an RPC. Lock order: mu -> actionMu -> session.mu.
+	actionMu    sync.Mutex
+	actionOwner *gamepadSession
+	modeAction  *gamepadModeAction
+	stopAction  *gamepadStopAction
 }
 
 type gamepadSession struct {
-	coordinator   *gamepadCoordinator
-	conn          *websocket.Conn
-	id            string
-	client        string
-	started       time.Time
-	mu            sync.Mutex
-	ended         bool
-	deadman       bool
-	state         uint8
-	manualOwned   bool
-	lastValid     time.Time
-	frames        uint64
-	maxGap        time.Duration
-	timer         *time.Timer
-	subscribeDone chan struct{}
+	coordinator      *gamepadCoordinator
+	conn             *websocket.Conn
+	id               string
+	challenge        string
+	ready            bool
+	client           string
+	started          time.Time
+	mu               sync.Mutex
+	ended            bool
+	deadman          bool
+	state            uint8
+	manualOwned      bool
+	modeCommandOwned bool
+	lastValid        time.Time
+	frames           uint64
+	maxGap           time.Duration
+	timer            *time.Timer
+	cancelPublish    context.CancelFunc
+	subscribeDone    chan struct{}
 }
 
 // Wire: echo gamepadHello's challenge in gamepadClaim and wait for gamepadReady,
@@ -126,6 +136,12 @@ func (c *gamepadCoordinator) publishLegacy(msg *geometry.TwistStamped, epoch uin
 }
 
 func (c *gamepadCoordinator) handle(ctx *gin.Context) {
+	// A legacy provider cannot enforce the input lease at its transport writer.
+	// Fail closed before ownership or any ROS side effects.
+	if _, ok := c.provider.(types.ContextRosPublisher); !ok {
+		ctx.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
 	if c.active.Load() {
 		c.diagnostics.record(gamepadServerEvent{Event: "upgradeRejected", Cause: "active", Client: gamepadClientLabel(ctx.Query("client"))})
 		ctx.AbortWithStatus(http.StatusConflict)
@@ -157,7 +173,8 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 	if err := writeGamepadHandshake(conn, struct {
 		Type      string `json:"type"`
 		Challenge string `json:"challenge"`
-	}{"gamepadHello", challenge}); err != nil {
+		Version   int    `json:"version"`
+	}{"gamepadHello", challenge, gamepadProtocolVersion}); err != nil {
 		reject("helloWriteFailed")
 		return
 	}
@@ -186,8 +203,10 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 	c.mu.Lock()
 	// Claim freshness is checked again after lock acquisition: an unrelated
 	// blocked legacy publish cannot turn an expired claim into ownership.
-	if c.owner != nil || !time.Now().Before(deadline) {
-		active := c.owner != nil
+	c.actionMu.Lock()
+	if c.owner != nil || c.modeAction != nil || c.stopAction != nil || !time.Now().Before(deadline) {
+		active := c.owner != nil || c.modeAction != nil || c.stopAction != nil
+		c.actionMu.Unlock()
 		c.mu.Unlock()
 		if active {
 			reject("active")
@@ -197,8 +216,10 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 		return
 	}
 	now := time.Now()
-	s := &gamepadSession{coordinator: c, conn: conn, id: fmt.Sprintf("gamepad-%p", conn), client: client, started: now, lastValid: now, subscribeDone: make(chan struct{})}
+	s := &gamepadSession{coordinator: c, conn: conn, challenge: challenge, id: fmt.Sprintf("gamepad-%p", conn), client: client, started: now, lastValid: now, subscribeDone: make(chan struct{})}
 	c.owner = s
+	c.actionOwner = s
+	c.actionMu.Unlock()
 	c.epoch.Add(1)
 	c.active.Store(true)
 	// Ownership immediately starts the lease, including while Subscribe waits
@@ -227,10 +248,15 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 			// mask a still-latched manual command. Retain its cleanup obligation
 			// until the operator explicitly enters recording, whose trajectory a
 			// STOP would discard.
-			if status.State == 4 {
-				s.manualOwned = true
-			} else if status.State == 3 {
-				s.manualOwned = false
+			// Status carries no command identity and callbacks can arrive after
+			// a newer RPC. Once this session has an explicit mode obligation,
+			// only a subsequent owned command may supersede it in either direction.
+			if !s.modeCommandOwned {
+				if status.State == 4 {
+					s.manualOwned = true
+				} else if status.State == 3 {
+					s.manualOwned = false
+				}
 			}
 			s.mu.Unlock()
 		})
@@ -247,6 +273,11 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 		s.terminate(gamepadServerEvent{Cause: "publishFailed", Error: err.Error()})
 		return
 	}
+	// Publish readiness before exposing Ready on the wire: a client can send
+	// its first HTTP action before WriteJSON has returned on this goroutine.
+	s.mu.Lock()
+	s.ready = !s.ended
+	s.mu.Unlock()
 	if err := writeGamepadHandshake(conn, struct {
 		Type string `json:"type"`
 	}{"gamepadReady"}); err != nil {
@@ -305,10 +336,11 @@ func validGamepadClaim(raw []byte, challenge string) bool {
 	var claim struct {
 		Type      string `json:"type"`
 		Challenge string `json:"challenge"`
+		Version   int    `json:"version"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(&claim) == nil && decoder.Decode(new(any)) == io.EOF && claim.Type == "gamepadClaim" && claim.Challenge == challenge
+	return decoder.Decode(&claim) == nil && decoder.Decode(new(any)) == io.EOF && claim.Type == "gamepadClaim" && claim.Version == gamepadProtocolVersion && claim.Challenge == challenge
 }
 
 type gamepadFrameContext struct {
@@ -345,6 +377,12 @@ func (s *gamepadSession) acceptFrame(deadman bool) (gamepadFrameContext, bool) {
 func (s *gamepadSession) publish(msg *geometry.TwistStamped) error {
 	c := s.coordinator
 	c.mu.Lock()
+	c.actionMu.Lock()
+	blocked := c.modeAction != nil || c.stopAction != nil
+	c.actionMu.Unlock()
+	if blocked {
+		msg = &geometry.TwistStamped{}
+	}
 	s.mu.Lock()
 	if s.ended || c.owner != s {
 		s.mu.Unlock()
@@ -361,9 +399,28 @@ func (s *gamepadSession) publish(msg *geometry.TwistStamped) error {
 		s.finishTermination(gamepadServerEvent{Cause: "leaseExpired"})
 		return errors.New("gamepad session expired")
 	}
+	publisher, ok := c.provider.(types.ContextRosPublisher)
+	if !ok {
+		s.mu.Unlock()
+		c.mu.Unlock()
+		return errors.New("gamepad provider does not support leased publishing")
+	}
+	// The lease belongs to this accepted input, including time spent waiting
+	// for either transport's writer. The deadline is fixed even if the timer
+	// callback is delayed; termination also cancels a queued publish promptly.
+	deadline := s.lastValid.Add(gamepadLease)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	s.cancelPublish = cancel
 	s.mu.Unlock()
-	err := c.provider.Publish("/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", msg)
+	err := publisher.PublishContext(ctx, "/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", msg)
+	cancel()
 	c.mu.Unlock()
+	// A deadline-bounded writer can finish before the watchdog callback gets
+	// CPU. Complete the same lease-expiry transition here, without letting a
+	// transport timeout win the diagnostic cause or revive the session.
+	if !time.Now().Before(deadline) {
+		s.expire()
+	}
 	return err
 }
 
@@ -382,26 +439,6 @@ func (s *gamepadSession) expire() {
 	s.markEndedLocked(time.Now())
 	s.mu.Unlock()
 	s.finishTermination(gamepadServerEvent{Cause: "leaseExpired"})
-}
-
-func (s *gamepadSession) stopManual() {
-	s.mu.Lock()
-	manual := s.manualOwned
-	s.mu.Unlock()
-	s.record(gamepadServerEvent{Event: "stopStarted", Skipped: !manual})
-	if !manual {
-		s.record(gamepadServerEvent{Event: "stopFinished", Skipped: true})
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), gamepadStopTimeout)
-	defer cancel()
-	var response mowgli.HighLevelControlRes
-	err := s.coordinator.provider.CallService(ctx, "/behavior_tree_node/high_level_control", &mowgli.HighLevelControlReq{Command: 8}, &response, "mowgli_interfaces/srv/HighLevelControl")
-	event := gamepadServerEvent{Event: "stopFinished", Success: &response.Success}
-	if err != nil {
-		event.Error = err.Error()
-	}
-	s.record(event)
 }
 
 func (s *gamepadSession) end() {
@@ -423,6 +460,9 @@ func (s *gamepadSession) terminate(cause gamepadServerEvent) {
 // indivisible with respect to accepting/renewing an input frame.
 func (s *gamepadSession) markEndedLocked(now time.Time) {
 	s.ended = true
+	if s.cancelPublish != nil {
+		s.cancelPublish()
+	}
 	if gap := now.Sub(s.lastValid); gap > s.maxGap {
 		s.maxGap = gap
 	}
@@ -440,7 +480,7 @@ func (s *gamepadSession) finishTermination(cause gamepadServerEvent) {
 	// until it completes rather than permitting an unsafe delayed takeover.
 	go func() {
 		stopped := make(chan struct{})
-		go func() { defer close(stopped); s.stopManual() }()
+		go func() { defer close(stopped); s.coordinator.stopSession(s) }()
 		c := s.coordinator
 		s.record(gamepadServerEvent{Event: "cleanupZeroStarted"})
 		var publishErr error
@@ -465,6 +505,9 @@ func (s *gamepadSession) finishTermination(cause gamepadServerEvent) {
 		s.record(gamepadServerEvent{Event: "unsubscribeFinished"})
 		c.mu.Lock()
 		if c.owner == s {
+			c.actionMu.Lock()
+			c.actionOwner = nil
+			c.actionMu.Unlock()
 			c.owner = nil
 			c.active.Store(false)
 		}

@@ -1,3 +1,4 @@
+import type {RequestParams} from '../api/Api';
 import {useRef, useState} from 'react';
 import {Alert, App, Button, Drawer, Form, Select, Slider, Space, Switch, Tag, Typography, theme} from 'antd';
 import {ControlOutlined} from '@ant-design/icons';
@@ -10,7 +11,7 @@ import {
 } from './controller';
 
 interface Props {
-    mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
+    mowerAction: (action: string, params: Record<string, unknown>, requestParams?: RequestParams) => () => Promise<void>;
     onOwnershipChange: (owns: boolean) => void;
 }
 export function BrowserController({mowerAction, onOwnershipChange}: Props) {
@@ -26,6 +27,8 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
     const [profileState, setProfileState] = useState<'default' | 'saved' | 'unsaved'>('default');
     const [learn, setLearn] = useState<ButtonBinding | 'linearAxis' | 'angularAxis' | null>(null);
     const learnNeutral = useRef(false);
+    const learnAxisBaseline = useRef<number[] | null>(null);
+    const learnAxisAwaitRelease = useRef(false);
     const applySelection = (device: ControllerSample) => {
         setSelected({index: device.index, id: device.id});
         const saved = loadProfile(controllerKey(device));
@@ -43,21 +46,50 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
     const observeInput = (devices: ControllerSample[]) => {
         const pad = devices.find(p => p.index === selected?.index && p.id === selected.id);
         if (!learn || !pad) return;
-        if (!learnNeutral.current) {
-            learnNeutral.current = pad.buttons.every(b => !b.pressed && b.value < 0.5) && pad.axes.every(v => Math.abs(v) < 0.25);
+        const axisBinding = learn === 'linearAxis' || learn === 'angularAxis';
+        const buttonsReleased = pad.buttons.every(b => !b.pressed && b.value < 0.5);
+        if (axisBinding && learnAxisAwaitRelease.current) {
+            // Keep the established resting position: held axes must never
+            // become a new baseline after an ambiguous gesture.
+            if (buttonsReleased && pad.axes.every((value, index) =>
+                Math.abs(value - (learnAxisBaseline.current?.[index] ?? value)) < 0.1)) {
+                learnAxisAwaitRelease.current = false;
+            }
             return;
         }
-        const axisBinding = learn === 'linearAxis' || learn === 'angularAxis';
-        const candidates = axisBinding ? pad.axes.flatMap((v, i) => Math.abs(v) > 0.65 ? [i] : []) :
+        if (!learnNeutral.current) {
+            if (!buttonsReleased) return;
+            if (!axisBinding) {
+                learnNeutral.current = true;
+                return;
+            }
+            const baseline = learnAxisBaseline.current;
+            if (baseline && pad.axes.every((value, index) => Math.abs(value - baseline[index]) < 0.1)) {
+                learnNeutral.current = true;
+            } else {
+                learnAxisBaseline.current = [...pad.axes];
+            }
+            return;
+        }
+        if (axisBinding && !buttonsReleased) {
+            learnAxisAwaitRelease.current = true;
+            return;
+        }
+        const candidates = axisBinding ? pad.axes.flatMap((v, i) => Math.abs(v - (learnAxisBaseline.current?.[i] ?? v)) > 0.65 ? [i] : []) :
             pad.buttons.flatMap((b, i) => b.pressed || b.value >= 0.5 ? [i] : []);
         if (candidates.length === 1) {
-            setProfile(old => axisBinding ? {...old, [learn]: candidates[0]} : {...old, buttons: {...old.buttons, [learn]: candidates[0]}});
+            const input = candidates[0];
+            setProfile(old => axisBinding ? {...old, [learn]: input} : {...old, buttons: {...old.buttons, [learn]: input}});
             setProfileState('unsaved');
             setLearn(null);
+        } else if (candidates.length > 1) {
+            if (axisBinding) learnAxisAwaitRelease.current = true;
+            else learnNeutral.current = false;
         }
     };
     const controller = useBrowserGamepad({profile, selected, onOwnershipChange, onSample: observeInput, onInventoryChange: observeInventory, preview: open,
-        runAction: action => mowerAction('high_level_control', {Command: ACTION_COMMANDS[action]})(),
+        runAction: (action, sessionToken) => mowerAction('high_level_control', {Command: ACTION_COMMANDS[action]},
+            {headers: {'X-Mowgli-Gamepad-Session': sessionToken}})(),
     });
     const pad = controller.pads.find(p => p.index === selected?.index && p.id === selected.id);
     const configured = !!pad && profileFits(profile, pad) && profileState !== 'unsaved';
@@ -74,7 +106,13 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
         try { saveSelectedControllerKey(key); }
         catch { void message.warning(t('gamepad.selectionSaveFailed')); }
     };
-    const bind = (key: NonNullable<typeof learn>) => { selectionExplicit.current = true; learnNeutral.current = false; setLearn(key); };
+    const bind = (key: NonNullable<typeof learn>) => {
+        selectionExplicit.current = true;
+        learnNeutral.current = false;
+        learnAxisBaseline.current = null;
+        learnAxisAwaitRelease.current = false;
+        setLearn(key);
+    };
     const save = () => {
         if (!pad || !profileFits(profile, pad)) return;
         selectionExplicit.current = true;
