@@ -363,6 +363,16 @@ func (c *Client) Advertise(topic, msgType string) error {
 // client publish message. An optional schemaName (e.g. "geometry_msgs/msg/Twist")
 // tells the bridge how to convert JSON to CDR for ROS2 publishing.
 func (c *Client) Publish(topic string, msg interface{}, schemaName ...string) error {
+	return c.PublishContext(context.Background(), topic, msg, schemaName...)
+}
+
+// PublishContext carries an input lease through advertisement and the actual
+// message write. Cancellation is rechecked after each shared writer wait;
+// expired input is discarded rather than replayed after the wait or reconnect.
+func (c *Client) PublishContext(ctx context.Context, topic string, msg interface{}, schemaName ...string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !c.connected.Load() {
 		return fmt.Errorf("foxglove: Publish %s: not connected", topic)
 	}
@@ -373,6 +383,10 @@ func (c *Client) Publish(topic string, msg interface{}, schemaName ...string) er
 	}
 
 	c.advMu.Lock()
+	if err := ctx.Err(); err != nil {
+		c.advMu.Unlock()
+		return err
+	}
 	chanID, ok := c.advertised[topic]
 	if !ok {
 		chanID = c.chanIDCounter.Add(1)
@@ -391,7 +405,11 @@ func (c *Client) Publish(topic string, msg interface{}, schemaName ...string) er
 				},
 			},
 		}
-		if err := c.writeJSON(advMsg); err != nil {
+		data, err := json.Marshal(advMsg)
+		if err == nil {
+			err = c.writeMessageContext(ctx, websocket.TextMessage, data)
+		}
+		if err != nil {
 			c.advMu.Unlock()
 			return fmt.Errorf("foxglove: Publish advertise: %w", err)
 		}
@@ -405,7 +423,7 @@ func (c *Client) Publish(topic string, msg interface{}, schemaName ...string) er
 	binary.LittleEndian.PutUint32(buf[1:5], chanID)
 	copy(buf[5:], data)
 
-	return c.writeMessage(websocket.BinaryMessage, buf)
+	return c.writeMessageContext(ctx, websocket.BinaryMessage, buf)
 }
 
 // CallService invokes a ROS2 service and blocks until a response arrives or
@@ -518,9 +536,10 @@ func (c *Client) writeMessage(messageType int, data []byte) error {
 	return c.writeMessageContext(context.Background(), messageType, data)
 }
 
-// Acquiring connMu can outlast a service deadline. Check cancellation after
-// acquiring it, before touching the socket: an expired STOP must never be sent
-// later behind another writer. This bounds the write, not the mutex wait.
+// Acquiring connMu can outlast a service deadline or input lease. Check
+// cancellation after acquiring it, before touching the socket: an expired
+// request must never be sent later behind another writer. This bounds the
+// write, not the mutex wait.
 func (c *Client) writeMessageContext(ctx context.Context, messageType int, data []byte) error {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
@@ -532,6 +551,11 @@ func (c *Client) writeMessageContext(ctx context.Context, messageType int, data 
 	}
 	deadline := time.Now().Add(c.writeTimeout)
 	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		// Check wall/monotonic deadline independently of the context timer:
+		// its callback need not have received CPU yet after a writer wait.
+		if !time.Now().Before(contextDeadline) {
+			return context.DeadlineExceeded
+		}
 		deadline = contextDeadline
 	}
 	if err := c.conn.SetWriteDeadline(deadline); err != nil {

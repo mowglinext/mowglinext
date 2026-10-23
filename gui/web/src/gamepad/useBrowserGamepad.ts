@@ -11,7 +11,7 @@ import {
 interface Options {
     profile: ControllerProfile;
     selected: ControllerIdentity | null;
-    runAction: (action: ControllerAction) => Promise<void>;
+    runAction: (action: ControllerAction, sessionToken: string) => Promise<void>;
     onOwnershipChange: (owns: boolean) => void;
     onSample?: (devices: ControllerSample[]) => void;
     onInventoryChange?: (devices: ControllerSample[]) => void;
@@ -143,9 +143,9 @@ export function useBrowserGamepad(options: Options) {
                 if (typeof data !== 'string' || data.length > 256) throw new Error('invalid server handshake');
                 const parsed: unknown = JSON.parse(data);
                 if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid server handshake');
-                const message = parsed as {type?: unknown; challenge?: unknown};
+                const message = parsed as {type?: unknown; challenge?: unknown; version?: unknown};
                 if (message.type === 'gamepadHello' && active.phase === 'hello' && active.challenge === null &&
-                    Object.keys(message).length === 2 && typeof message.challenge === 'string' && /^[0-9a-f]{32}$/.test(message.challenge)) {
+                    Object.keys(message).length === 3 && message.version === 2 && typeof message.challenge === 'string' && /^[0-9a-f]{32}$/.test(message.challenge)) {
                     active.challenge = message.challenge;
                     diagnostics.record('helloReceived', {attempt, handshakeMs: Math.round(performance.now() - active.opened)});
                 } else if (message.type === 'gamepadReady' && active.phase === 'claim' && Object.keys(message).length === 1) {
@@ -239,9 +239,8 @@ export function useBrowserGamepad(options: Options) {
                 // No velocity or robot action is sent until the server is ready.
                 if (active.phase === 'hello' && active.challenge !== null) {
                     const challenge = active.challenge;
-                    active.challenge = null;
                     active.phase = 'claim';
-                    try { active.socket.send(JSON.stringify({type: 'gamepadClaim', challenge})); }
+                    try { active.socket.send(JSON.stringify({type: 'gamepadClaim', challenge, version: 2})); }
                     catch { diagnostics.record('sendFailed'); cancel('connectionLost'); }
                 }
                 return;
@@ -258,19 +257,14 @@ export function useBrowserGamepad(options: Options) {
             catch { diagnostics.record('sendFailed'); cancel('connectionLost'); return; }
             if (frame.action && (frame.action === 'stop' || !pending.current)) {
                 const action = frame.action;
-                const previous = actionTask.current;
                 const runAction = opts.current.runAction;
                 pending.current = true;
                 pendingSince.current = now;
                 diagnostics.record('actionStarted', {attempt: active.attempt, action});
-                const task = (async () => {
-                    if (action === 'stop' && previous) {
-                        // STOP must bypass a hung recording request. Reassert it
-                        // after that request completes so a late start cannot win.
-                        try { await runAction('stop'); }
-                        finally { await previous.catch(() => {}); await runAction('stop'); }
-                    } else await runAction(action);
-                })();
+                // The coordinator owns settlement/STOP compensation across
+                // unmount, navigation and HTTP cancellation. Never send a late
+                // browser compensation that could stop a replacement mode.
+                const task = runAction(action, active.challenge!);
                 actionTask.current = task;
                 void task.then(() => { diagnostics.record('actionFinished', {attempt: active.attempt, action}); }).catch(() => {
                     diagnostics.record('actionFailed', {attempt: active.attempt, action});

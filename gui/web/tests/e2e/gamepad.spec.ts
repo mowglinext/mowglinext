@@ -69,7 +69,7 @@ for (const width of [390, 1440]) {
                 const message = JSON.parse(String(raw));
                 if (message.type === 'gamepadClaim') {
                     claims.push(message.challenge);
-                    if (message.challenge === challenge) {
+                    if (message.challenge === challenge && message.version === 2) {
                         ready = true;
                         socket.send(JSON.stringify({type: 'gamepadReady'}));
                     }
@@ -82,7 +82,7 @@ for (const width of [390, 1440]) {
                 if (!ready) preReadyFrames.push(message);
                 frames.push(message);
             });
-            socket.send(JSON.stringify({type: 'gamepadHello', challenge}));
+            socket.send(JSON.stringify({type: 'gamepadHello', challenge, version: 2}));
         });
         await page.routeWebSocket(/\/api\/mowglinext\/publish\/joy/, () => {});
         await page.route('https://api.mapbox.com/styles/v1/**', route => route.fulfill({json: {version: 8, sources: {}, layers: [], glyphs: 'https://gamepad-fixture.invalid/fonts/{fontstack}/{range}.pbf'}}));

@@ -38,7 +38,7 @@ class FakeWebSocket {
     message(value: unknown) { this.onmessage?.({data: JSON.stringify(value)} as MessageEvent); }
     open(hello = true) {
         this.readyState = FakeWebSocket.OPEN;
-        if (hello) this.message({type: 'gamepadHello', challenge: '0123456789abcdef0123456789abcdef'});
+        if (hello) this.message({type: 'gamepadHello', version: 2, challenge: '0123456789abcdef0123456789abcdef'});
     }
     send(value: string) {
         const parsed: unknown = JSON.parse(value);
@@ -69,7 +69,8 @@ type ControlMessage = {
     deadman: boolean;
     twist: {twist: {linear: {x: number}; angular: {z: number}}};
 };
-type RunAction = (action: ControllerAction) => Promise<void>;
+const SESSION_TOKEN = '0123456789abcdef0123456789abcdef';
+type RunAction = (action: ControllerAction, sessionToken: string) => Promise<void>;
 type OwnershipChange = (owns: boolean) => void;
 
 function parseControl(raw: string): ControlMessage {
@@ -163,7 +164,7 @@ describe('useBrowserGamepad session ownership', () => {
         poll(100);
         expect(socket.claims).toHaveLength(0);
         expect(socket.sent).toHaveLength(0);
-        act(() => { socket.message({type: 'gamepadHello', challenge: '0123456789abcdef0123456789abcdef'}); });
+        act(() => { socket.message({type: 'gamepadHello', version: 2, challenge: '0123456789abcdef0123456789abcdef'}); });
         expect(socket.claims).toHaveLength(0);
         poll();
         expect(socket.claims).toHaveLength(1);
@@ -174,7 +175,7 @@ describe('useBrowserGamepad session ownership', () => {
         expect(runAction).not.toHaveBeenCalled();
         act(() => { socket.message({type: 'gamepadReady'}); });
         poll();
-        expect(runAction).toHaveBeenCalledExactlyOnceWith('stop');
+        expect(runAction).toHaveBeenCalledExactlyOnceWith('stop', SESSION_TOKEN);
         expect(parseControl(socket.sent[0]).deadman).toBe(false);
         await act(async () => { await Promise.resolve(); });
         hook.unmount();
@@ -192,7 +193,7 @@ describe('useBrowserGamepad session ownership', () => {
         const replacement = enable(hook);
         poll();
         act(() => {
-            retired.message({type: 'gamepadHello', challenge: 'fedcba9876543210fedcba9876543210'});
+            retired.message({type: 'gamepadHello', version: 2, challenge: 'fedcba9876543210fedcba9876543210'});
             retired.message({type: 'gamepadReady'});
         });
         expect(retired.claims).toHaveLength(0);
@@ -218,8 +219,10 @@ describe('useBrowserGamepad session ownership', () => {
 
     it.each([
         {type: 'gamepadReady'},
-        {type: 'gamepadHello', challenge: 'too-short'},
-        {type: 'gamepadHello', challenge: '0123456789abcdef0123456789abcdef', unexpected: true},
+        {type: 'gamepadHello', challenge: '0123456789abcdef0123456789abcdef'},
+        {type: 'gamepadHello', version: 1, challenge: '0123456789abcdef0123456789abcdef'},
+        {type: 'gamepadHello', version: 2, challenge: 'too-short'},
+        {type: 'gamepadHello', version: 2, challenge: '0123456789abcdef0123456789abcdef', unexpected: true},
         {type: 'unknown'},
     ])('fails closed on an invalid or out-of-order server handshake: %j', message => {
         const {hook, runAction} = mount();
@@ -686,7 +689,7 @@ describe('useBrowserGamepad session ownership', () => {
         poll(); // Start the hold.
         poll(800); // Hold reaches 800 ms.
         expect(runAction).toHaveBeenCalledTimes(1);
-        expect(runAction).toHaveBeenCalledWith('recordStart');
+        expect(runAction).toHaveBeenCalledWith('recordStart', SESSION_TOKEN);
 
         await act(async () => {
             rejectAction(new Error('action failed'));
@@ -699,55 +702,47 @@ describe('useBrowserGamepad session ownership', () => {
         expect(onOwnershipChange.mock.calls.map(([owns]) => owns)).toEqual([true, false]);
     });
 
-    it('lets STOP bypass a pending recording action and reasserts STOP after it settles', async () => {
+    it('sends one session-tagged STOP and never compensates from a retired hook after remount', async () => {
         let resolveStart!: () => void;
-        let resolveReassert!: () => void;
-        const startRequest = new Promise<void>(resolve => { resolveStart = resolve; });
-        let stopCalls = 0;
-        const runAction = vi.fn<RunAction>(action => {
-            if (action === 'recordStart') return startRequest;
-            stopCalls++;
-            return stopCalls === 1 ? Promise.resolve() : new Promise<void>(resolve => { resolveReassert = resolve; });
-        });
+        let resolveStop!: () => void;
+        const runAction = vi.fn<RunAction>(action => action === 'recordStart' ?
+            new Promise<void>(resolve => { resolveStart = resolve; }) :
+            new Promise<void>(resolve => { resolveStop = resolve; }));
         const {hook} = mount(runAction);
         const socket = enable(hook);
-        poll(); // Mode transition.
-        poll(); // Initial neutral interlock.
+        poll();
+        poll();
         setButton(DEFAULT_PROFILE.buttons.recordStart, true);
-        poll(); // Begin recordStart hold.
-        poll(800); // Start request remains unresolved.
-        expect(runAction.mock.calls.map(([action]) => action)).toEqual(['recordStart']);
+        poll();
+        poll(800);
+        expect(runAction).toHaveBeenCalledExactlyOnceWith('recordStart', SESSION_TOKEN);
         const actionStartFrame = socket.sent.length;
-
         setButton(DEFAULT_PROFILE.buttons.recordStart, false);
         setButton(DEFAULT_PROFILE.buttons.deadman, true);
         setAxis(1, -1);
-        poll(); // Pending request must suppress movement.
-        setButton(DEFAULT_PROFILE.buttons.stop, true);
-        poll(); // STOP bypasses the pending start.
-        expect(runAction.mock.calls.map(([action]) => action)).toEqual(['recordStart', 'stop']);
-
-        setButton(DEFAULT_PROFILE.buttons.stop, false);
         poll();
+        setButton(DEFAULT_PROFILE.buttons.stop, true);
+        poll();
+        expect(runAction.mock.calls).toEqual([['recordStart', SESSION_TOKEN], ['stop', SESSION_TOKEN]]);
+        expect(socket.sent.slice(actionStartFrame).map(parseControl).every(({deadman, twist}) =>
+            !deadman && twist.twist.linear.x === 0 && twist.twist.angular.z === 0)).toBe(true);
+        hook.unmount();
+        setButton(DEFAULT_PROFILE.buttons.stop, false);
+        setButton(DEFAULT_PROFILE.buttons.deadman, false);
+        setAxis(1, 0);
+        const replacement = mount();
+        enable(replacement.hook);
+        poll(100);
         await act(async () => {
             resolveStart();
-            await Promise.resolve();
-            await Promise.resolve();
-            await Promise.resolve();
-        });
-        expect(runAction.mock.calls.map(([action]) => action)).toEqual(['recordStart', 'stop', 'stop']);
-        poll(); // The reasserted STOP is still pending, so input remains neutral.
-
-        const pendingFrames = socket.sent.slice(actionStartFrame).map(parseControl);
-        expect(pendingFrames.length).toBeGreaterThan(0);
-        expect(pendingFrames.every(({deadman, twist}) =>
-            !deadman && twist.twist.linear.x === 0 && twist.twist.angular.z === 0,
-        )).toBe(true);
-        await act(async () => {
-            resolveReassert();
+            resolveStop();
             await Promise.resolve();
             await Promise.resolve();
         });
+        // The server retains the action fence until compensation; the retired
+        // component must issue no later STOP against the replacement's mode.
+        expect(runAction.mock.calls).toEqual([['recordStart', SESSION_TOKEN], ['stop', SESSION_TOKEN]]);
+        expect(replacement.hook.result.current.enabled).toBe(true);
     });
 
     it('ignores late action completion after the server closes the manual session', async () => {

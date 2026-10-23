@@ -139,6 +139,24 @@ function configure() {
     return screen.getByRole('button', {name: 'Enable for this robot'});
 }
 
+function sendInput(axes: number[], pressedButtons: number[] = []) {
+    const pad = structuredClone(initialPad);
+    pad.axes = axes;
+    for (const index of pressedButtons) pad.buttons[index] = {pressed: true, touched: true, value: 1};
+    const observer = mocks.hookOptions?.onSample;
+    if (!observer) throw new Error('Input observer is missing');
+    act(() => observer([pad]));
+}
+
+function savedProfile(pad = initialPad) {
+    return JSON.parse(localStorage.getItem(`mowglinext.gamepad.v1:${controllerKey(pad)}`) ?? 'null') as typeof DEFAULT_PROFILE | null;
+}
+
+function saveMapping(dialog: HTMLElement, pad = initialPad) {
+    fireEvent.click(within(dialog).getByRole('button', {name: 'Save mapping'}));
+    return savedProfile(pad);
+}
+
 function notifyInventory() {
     const observer = mocks.hookOptions?.onInventoryChange;
     if (!observer) throw new Error('Inventory observer is missing');
@@ -146,6 +164,89 @@ function notifyInventory() {
 }
 
 describe('BrowserController map activation', () => {
+    it('learns a button with an unused raw axis resting at -1 on a standard layout', () => {
+        mount();
+        const dialog = openSettings();
+        selectController();
+        fireEvent.click(within(dialog).getAllByRole('button', {name: 'Bind input'})[2]);
+
+        sendInput([-1, 0]);
+        sendInput([-1, 0], [4]);
+
+        expect(within(dialog).getByText(/Unsaved mapping/)).toBeVisible();
+        expect(saveMapping(dialog)?.buttons.deadman).toBe(4);
+    });
+
+    it('requires a held button to be released after starting button learning', () => {
+        mocks.controller.pads[0].buttons[4] = {pressed: true, touched: true, value: 1};
+        mount();
+        const dialog = openSettings();
+        selectController();
+        fireEvent.click(within(dialog).getAllByRole('button', {name: 'Bind input'})[2]);
+
+        sendInput([0, 0], [4]);
+        expect(within(dialog).getByRole('status')).toHaveTextContent('Release all controls');
+        sendInput([0, 0]);
+        sendInput([0, 0], [4]);
+
+        expect(saveMapping(dialog)?.buttons.deadman).toBe(4);
+    });
+
+    it('does not learn an ambiguous multi-button gesture', () => {
+        mount();
+        const dialog = openSettings();
+        selectController();
+        fireEvent.click(within(dialog).getAllByRole('button', {name: 'Bind input'})[2]);
+
+        sendInput([0, 0]);
+        sendInput([0, 0], [2, 4]);
+        sendInput([0, 0], [4]);
+        expect(within(dialog).getByRole('status')).toHaveTextContent('Release all controls');
+
+        sendInput([0, 0]);
+        sendInput([0, 0], [4]);
+        expect(saveMapping(dialog)?.buttons.deadman).toBe(4);
+    });
+
+    it('requires full release after ambiguous axes before learning a new gesture', () => {
+        mocks.controller.pads[0].axes = [0, 0, -1];
+        mount();
+        const dialog = openSettings();
+        selectController();
+        fireEvent.click(within(dialog).getAllByRole('button', {name: 'Bind input'})[0]);
+
+        sendInput([0, 0, -1]);
+        sendInput([0, 0, -1]);
+        sendInput([0, 0.9, 0]);
+        sendInput([0, 0.9, 0]);
+        sendInput([0, 0.9, 0]);
+        sendInput([0, 0.9, -1]); // Partial release must not bind axis 2.
+        expect(within(dialog).getByRole('status')).toHaveTextContent('Release all controls');
+        expect(savedProfile()).toBeNull();
+
+        sendInput([0, 0, -1]);
+        sendInput([0, 0.9, -1]);
+        expect(saveMapping(dialog, mocks.controller.pads[0])?.linearAxis).toBe(1);
+    });
+
+    it('learns axis movement relative to a stable nonzero resting baseline', () => {
+        mocks.controller.pads[0].axes = [-1, 0];
+        mount();
+        const dialog = openSettings();
+        selectController();
+        fireEvent.click(within(dialog).getAllByRole('button', {name: 'Bind input'})[1]);
+
+        sendInput([-1, 0]);
+        sendInput([-1, 0]);
+        sendInput([0, 0], [4]);
+        expect(within(dialog).getByRole('status')).toHaveTextContent('Release all controls');
+        sendInput([0, 0]); // A held axis must not become a replacement baseline.
+        sendInput([-1, 0]);
+        sendInput([0.8, 0]);
+
+        expect(saveMapping(dialog)?.angularAxis).toBe(0);
+    });
+
     it('restores one remembered fingerprint at its current slot without opening settings or activating', () => {
         const key = controllerKey(mocks.controller.pads[0]);
         saveSelectedControllerKey(key);
@@ -398,4 +499,13 @@ describe('BrowserController map activation', () => {
         expect(within(dialog).getByText(JSON.stringify(mocks.controller.inputLoss))).toBeVisible();
         expect(mocks.controller.enable).not.toHaveBeenCalled();
     });
+});
+
+
+it('tags controller actions with the live handshake session through mowerAction', async () => {
+    const mowerAction = vi.fn(() => vi.fn().mockResolvedValue(undefined));
+    render(<App><BrowserController mowerAction={mowerAction} onOwnershipChange={vi.fn()}/></App>);
+    await act(async () => { await mocks.hookOptions!.runAction('recordStart', 'session-challenge'); });
+    expect(mowerAction).toHaveBeenCalledExactlyOnceWith('high_level_control', {Command: 3},
+        {headers: {'X-Mowgli-Gamepad-Session': 'session-challenge'}});
 });
