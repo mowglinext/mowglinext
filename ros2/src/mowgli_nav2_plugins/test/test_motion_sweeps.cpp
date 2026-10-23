@@ -196,6 +196,30 @@ TEST(MotionSweeps, NavigationAndDockCorridorCannotGrantCoveragePermission)
   EXPECT_TRUE(geometry->permits({1.5, 0, 0}, kBody, -0.2, 0, 1, false));
 }
 
+TEST(MotionSweeps, PublishedDockBodyPreservesClearMotionAndForbidsExecutionThroughDock)
+{
+  auto message = Lawn();
+  Rectangle(message, -3, -1, -1, 1, "dock_corridor");
+  message.markers.back().scale.x = 0.01;
+  Rectangle(message, -1, -1, 0, 1, "dock_body");
+  // Match map_server's complete publication: identity map pose, purpose-tagged
+  // area, allowed dock corridor and zero-margin forbidden dock body.
+  const auto geometry = Snapshot::parse(message);
+  ASSERT_TRUE(geometry->valid);
+  ASSERT_EQ(geometry->holes.size(), 1U);
+  for (bool coverage : {false, true})
+  {
+    SCOPED_TRACE(coverage);
+    EXPECT_TRUE(geometry->permits({5, 5, 0}, kBody, 0.2, 0, 1, coverage));
+    EXPECT_FALSE(geometry->permits({-2, 0, 0}, kBody, 1, 0, 3, coverage));
+    // The planner's dock-start exemption never grants execution permission.
+    EXPECT_FALSE(geometry->permits({-0.5, 0, 0}, kBody, -0.2, 0, 1, coverage));
+    EXPECT_FALSE(geometry->permits({-0.5, 0, 0}, kBody, 0, 1, 1, coverage));
+  }
+  message.markers.back().ns = "unknown_dock_geometry";
+  EXPECT_FALSE(Snapshot::parse(message)->valid);
+}
+
 TEST(MotionSweeps, IdentityIgnoresCachedDeliveryStampButTracksPurposeAndHole)
 {
   auto message = Lawn();

@@ -148,7 +148,9 @@ struct Snapshot
       }
       else if (marker.ns == "dock_corridor")
         next->transit.allowed.push_back(ring);
-      else if (marker.ns == "obstacle")
+      // Execution keeps the dock body forbidden; the transit planner's
+      // dock-start exception does not authorize a controller's body sweep.
+      else if (marker.ns == "obstacle" || marker.ns == "dock_body")
         next->holes.push_back(std::move(poly));
       else
         return next;
