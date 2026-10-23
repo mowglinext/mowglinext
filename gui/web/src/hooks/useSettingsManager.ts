@@ -43,6 +43,15 @@ const persistedFailure = (response: unknown): string | undefined => {
     return isJsonObject(body) && body.persisted === true && typeof body.error === 'string' ? body.error : undefined;
 };
 
+// A hardware node may accept a live write at a different value than requested
+// (e.g. clamped). POST /params then lists it under `adjustments` and echoes the
+// applied value; a refused write is an error response instead.
+const adjustedLiveValue = (response: Record<string, unknown>, name: string): {applied: unknown} | undefined => {
+    if (!Array.isArray(response.adjustments)) return undefined;
+    const match: unknown = response.adjustments.find(item => isJsonObject(item) && item.name === name);
+    return isJsonObject(match) && 'applied_value' in match ? {applied: match.applied_value} : undefined;
+};
+
 /** A section that saves outside mowgli_robot.yaml but wants the page's Save button. */
 export interface ExternalSaver {
     /** Number of pending edits (0 = clean). Feeds the Save button count. */
@@ -760,9 +769,20 @@ export const useSettingsManager = () => {
                     const raw: unknown = liveResponse.data;
                     if (!isJsonObject(raw) || !Array.isArray(raw.parameters)) throw new Error(t('settingsSections.toasts.runtimeUnconfirmed'));
                     const echoed: unknown[] = raw.parameters;
+                    const expectedValue = (want: {name: string; value: unknown}) =>
+                        adjustedLiveValue(raw, want.name)?.applied ?? want.value;
                     if (!liveParameters.every(want => echoed.some(item => isJsonObject(item)
-                        && item.name === want.name && item.value === want.value))) throw new Error(t('settingsSections.toasts.runtimeUnconfirmed'));
-                    notification.success({message: t('settingsSections.toasts.liveApplied')});
+                        && item.name === want.name && item.value === expectedValue(want)))) throw new Error(t('settingsSections.toasts.runtimeUnconfirmed'));
+                    const adjusted = liveParameters.flatMap(want => {
+                        const adjustment = adjustedLiveValue(raw, want.name);
+                        return adjustment === undefined ? [] : [t('settingsSections.toasts.liveAdjustedItem',
+                            {name: want.name, applied: String(adjustment.applied), requested: String(want.value)})];
+                    });
+                    if (adjusted.length > 0) {
+                        notification.warning({message: t('settingsSections.toasts.liveAdjusted'), description: adjusted.join('; ')});
+                    } else {
+                        notification.success({message: t('settingsSections.toasts.liveApplied')});
+                    }
                 } catch (e) {
                     setRestartRequired(true);
                     notification.warning({

@@ -4198,6 +4198,8 @@
       "savedDisplaySettings": "Enregistré. Apparence de la station mise à jour ; aucun redémarrage du robot nécessaire.",
       "runtimeUnconfirmed": "Mise à jour active non confirmée ; le YAML reste enregistré.",
       "liveApplied": "Paramètres actifs confirmés",
+      "liveAdjusted": "Paramètres actifs appliqués, ajustés par le robot",
+      "liveAdjustedItem": "{{name}} réglé à {{applied}} (demandé {{requested}}, ajusté par le pont matériel)",
       "invalidNumericValue": "Valeur numérique invalide ; rien n’a été enregistré.",
       "savedRuntimeFailed": "YAML enregistré, mais une opération suivante a échoué",
       "routing": {

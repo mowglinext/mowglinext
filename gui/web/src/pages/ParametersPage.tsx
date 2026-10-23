@@ -22,6 +22,8 @@ interface RosParameter {
 
 interface ParamsResponse {
   parameters: RosParameter[];
+  // POST only: hardware writes the node accepted at a different value.
+  adjustments?: {name: string; requested_value: unknown; applied_value: unknown}[];
 }
 
 // Profile labels. The catalog keys stay basic/middle/expert; only the display
@@ -210,13 +212,20 @@ export const ParametersPage = () => {
 
   const commit = useCallback(async (name: string, value: unknown) => {
     try {
-      await guiApi.request({
+      const res = await guiApi.request<ParamsResponse>({
         path: "/params", method: "POST", format: "json",
         type: ContentType.Json,
         body: {parameters: [{name, value}]},
       });
-      setParams((prev) => prev.map((p) => (p.name === name ? {...p, value} : p)));
-      notification.success({message: t("parametersPage.updateSuccess", {name}), duration: 2});
+      const adjustment = res?.data?.adjustments?.find((a) => a.name === name);
+      const applied = adjustment ? adjustment.applied_value : value;
+      setParams((prev) => prev.map((p) => (p.name === name ? {...p, value: applied} : p)));
+      if (adjustment) {
+        notification.warning({message: t("settingsSections.toasts.liveAdjustedItem",
+          {name, applied: String(applied), requested: String(value)})});
+      } else {
+        notification.success({message: t("parametersPage.updateSuccess", {name}), duration: 2});
+      }
     } catch {
       notification.error({message: t("parametersPage.updateFailure", {name})});
       throw new Error("commit failed");

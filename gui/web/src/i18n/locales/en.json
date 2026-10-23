@@ -4202,6 +4202,8 @@
       "savedDisplaySettings": "Saved. Dock appearance updated; no robot restart is needed.",
       "runtimeUnconfirmed": "Runtime update was not confirmed; YAML remains saved.",
       "liveApplied": "Runtime parameters confirmed",
+      "liveAdjusted": "Runtime parameters applied, adjusted by the robot",
+      "liveAdjustedItem": "{{name}} set to {{applied}} (requested {{requested}}, adjusted by the bridge)",
       "invalidNumericValue": "Invalid numeric setting; nothing was saved.",
       "savedRuntimeFailed": "YAML saved, but a subsequent operation failed",
       "routing": {

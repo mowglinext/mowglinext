@@ -150,6 +150,21 @@ it.each(['rejected', 'missing_echo', 'wrong_echo'])('YAML remains saved when run
     expect(mocks.notification.success).not.toHaveBeenCalledWith(expect.objectContaining({message: 'settingsSections.toasts.liveApplied'}));
 });
 
+it('reports a runtime value the bridge adjusted instead of calling it unconfirmed', async () => {
+    const parameter = 'hardware_bridge.ticks_per_meter';
+    mocks.hardware.backend = 'mowgli';
+    mocks.hardware.parameterRoutes = {ticks_per_meter: {parameter, runtime: 'available'}};
+    mocks.api.request.mockImplementation(args => Promise.resolve({data: args.path !== '/params' ? {} : {
+        parameters: [{name: parameter, value: 45}], adjusted: true,
+        adjustments: [{name: parameter, requested_value: 49, applied_value: 45}]}}));
+    const {result} = renderHook(useSettingsManager); await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => result.current.handleChange('ticks_per_meter', 49)); await act(() => result.current.save());
+    expect(result.current.restartRequired).toBe(false);
+    expect(mocks.notification.warning).toHaveBeenCalledWith(expect.objectContaining({message: 'settingsSections.toasts.liveAdjusted'}));
+    expect(mocks.notification.warning).not.toHaveBeenCalledWith(expect.objectContaining({message: 'settingsSections.toasts.drivePidUpdateFailed'}));
+    expect(mocks.notification.success).not.toHaveBeenCalledWith(expect.objectContaining({message: 'settingsSections.toasts.liveApplied'}));
+});
+
 it.each([NaN, Infinity, -Infinity])('does not silently persist nonfinite %s as a JSON null', async value => {
     const {result} = renderHook(useSettingsManager); await waitFor(() => expect(result.current.loading).toBe(false));
     act(() => result.current.handleChange('ticks_per_meter', value)); await act(() => result.current.save());
