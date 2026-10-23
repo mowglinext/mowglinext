@@ -88,7 +88,15 @@ OpenMowerBridgeNode::~OpenMowerBridgeNode()
   {
     if (motor)
     {
+#ifdef OPENMOWER_SIMULATION_TRACE
+      const bool written = motor->SendDuty(0.0);
+      if (motor.get() == motors_[kMow].get())
+      {
+        OM_SIM_TRACE("blade_direct_write", "\"duty\":0,\"written\":%d", written);
+      }
+#else
       motor->SendDuty(0.0);
+#endif
     }
   }
 }
@@ -471,7 +479,15 @@ void OpenMowerBridgeNode::on_emergency_stop(
     {
       if (motor)
       {
+#ifdef OPENMOWER_SIMULATION_TRACE
+        const bool written = motor->SendDuty(0.0);
+        if (motor.get() == motors_[kMow].get())
+        {
+          OM_SIM_TRACE("blade_direct_write", "\"duty\":0,\"written\":%d", written);
+        }
+#else
         motor->SendDuty(0.0);
+#endif
       }
     }
   }

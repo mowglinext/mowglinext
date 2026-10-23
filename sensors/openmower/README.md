@@ -287,6 +287,18 @@ are reported independently. A status-only LowLevel interruption tests the
 immediate blade inhibit and its qualified recovery, then HLS expiry is measured
 from the actual receipt and zero commands must persist until a new HLS arrives.
 Missing, truncated or replaced native evidence cannot silently pass the test.
+Blade receipts are correlated with the complete successful-write prefix on
+their dedicated ordered UART, including direct emergency/destructor writes
+outside control ticks. A fresh nonzero command still in transit at
+HLS expiry is reported as such, rather than attributed to a later stale
+decision; mismatched or truncated packet histories fail the measurement.
+The 350 ms starvation scenario starts its nominal phase with a new LowLevel
+receipt. A separate phase deliberately ages that status before suspension
+and requires the real guard stop, original acceleration ramp and recovered
+speed with the original tolerance. Requested suspension, observed stopped
+state and native control gap are recorded separately. Blade packets and
+starvation commands/heartbeats/physical history are retained as JSON beside
+the logs, so a lower real speed cannot be explained away by matching odometry.
 Use a fresh log directory for each run. The trace option defaults to OFF and
 is compiled out of production/image builds; it changes no safety thresholds.
 Use a separate simulation workspace and do not deploy its instrumented binary.

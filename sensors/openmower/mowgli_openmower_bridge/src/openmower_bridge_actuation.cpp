@@ -107,6 +107,21 @@ void OpenMowerBridgeNode::control_tick()
       cmd_vel_stamp_.nanoseconds() != 0 && (now() - cmd_vel_stamp_).seconds() <= cmd_vel_timeout_s_;
   const bool wheels_allowed = WheelsMayRun(emergency, ll_alive, current_mode_, cmd_fresh);
   drive_wheels(dt_s, wheels_allowed && drives_ok);
+  OM_SIM_TRACE("wheel_control",
+               "\"cycle\":%llu,\"allowed\":%d,\"ll_alive\":%d,\"emergency\":%d,"
+               "\"cmd_fresh\":%d,\"drives_ok\":%d,\"target_vx\":%.17g,\"applied_vx\":%.17g,"
+               "\"dt_s\":%.17g,\"measured_left\":%.17g,\"measured_right\":%.17g",
+               static_cast<unsigned long long>(control_ticks_),
+               wheels_allowed && drives_ok,
+               ll_alive,
+               emergency,
+               cmd_fresh,
+               drives_ok,
+               cmd_vx_,
+               applied_vx_,
+               dt_s,
+               wheel_speed_[kLeft].value(),
+               wheel_speed_[kRight].value());
 
   const bool hl_fresh = hl_status_stamp_.nanoseconds() != 0 &&
                         (now() - hl_status_stamp_).seconds() <= high_level_status_timeout_s_;

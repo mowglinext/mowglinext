@@ -14,9 +14,11 @@ import unittest
 
 from native_trace import (
     NativeTrace,
+    blade_receipts,
     commanded_zero,
     heartbeat_cadence,
     stale_blade_window,
+    wheel_recovery,
 )
 from openmower_v1_emulator import LowLevelBoard, Plant, cobs_packet, LL_HEARTBEAT
 
@@ -116,6 +118,114 @@ class MeasurementTest(unittest.TestCase):
             path.write_text(json.dumps(identity) + "\n")
             with self.assertRaises(ValueError):
                 reader.read()
+
+
+class CausalWindowTest(unittest.TestCase):
+    def blade(self):
+        # One command emitted while fresh, then 50 zeros while stale. All 51
+        # are RECEIVED after expiry: the former time-only assertion is RED.
+        rows = [dict(duty(0, -1), mono_ns=4_999_000_000)]
+        rows += [
+            dict(duty(i), mono_ns=5_000_000_000 + i * 20_000_000) for i in range(1, 51)
+        ]
+        expired = gate(5_019_000_000, 1)
+        commands = [(5021 + i * 20, -1 if i == 0 else 0) for i in range(51)]
+        return rows, commands, expired
+
+    def test_all_51_deliveries_are_qualified_by_their_origin_not_arrival(self):
+        rows, commands, expired = self.blade()
+        self.assertEqual(len(commands), 51)
+        self.assertFalse(all(value == 0 for _, value in commands))  # baseline RED
+        ok, detail = blade_receipts(rows, commands, expired, 6_001_000_000, 0, 20000)
+        self.assertTrue(ok, detail)
+        self.assertIn("50 stale-origin zero packets", detail)
+        self.assertIn("1 earlier nonzero packets delivered late", detail)
+
+    def test_nonzero_stale_packet_is_not_excused_as_a_late_fresh_packet(self):
+        rows, commands, expired = self.blade()
+        commands[20] = (commands[20][0], -1)
+        self.assertFalse(
+            blade_receipts(rows, commands, expired, 6_001_000_000, 0, 20000)[0]
+        )
+
+    def test_missing_receipts_or_missing_native_evidence_cannot_pass(self):
+        rows, commands, expired = self.blade()
+        self.assertFalse(
+            blade_receipts(rows, commands[:1], expired, 6_001_000_000, 0, 20000)[0]
+        )
+        self.assertFalse(
+            blade_receipts(rows[:4], commands, expired, 6_001_000_000, 0, 20000)[0]
+        )
+
+    def test_shifted_or_truncated_uart_prefix_cannot_be_reinterpreted(self):
+        rows, commands, expired = self.blade()
+        self.assertFalse(
+            blade_receipts(rows, commands[1:], expired, 6_001_000_000, 0, 20000)[0]
+        )
+        self.assertFalse(
+            blade_receipts(rows, commands, expired, 6_001_000_000, 0, len(commands))[0]
+        )
+
+    def test_direct_emergency_write_belongs_to_the_full_uart_prefix(self):
+        rows, commands, expired = self.blade()
+        direct = dict(
+            event="blade_direct_write", mono_ns=4_900_000_000, duty=0, written=1
+        )
+        rows.insert(0, direct)
+        commands.insert(0, (4901, 0))
+        self.assertTrue(
+            blade_receipts(rows, commands, expired, 6_001_000_000, 0, 20000)[0]
+        )
+        # A control-tick-only observer cannot silently omit that writer.
+        self.assertFalse(
+            blade_receipts(rows[1:], commands, expired, 6_001_000_000, 0, 20000)[0]
+        )
+
+    def wheel_rows(self):
+        base = dict(
+            event="wheel_control",
+            target_vx=0.3,
+            ll_alive=1,
+            cmd_fresh=1,
+            drives_ok=1,
+            emergency=0,
+            allowed=1,
+            dt_s=0.02,
+        )
+        rows = [dict(base, cycle=0, mono_ns=0, ll_alive=0, allowed=0, applied_vx=0)]
+        rows += [
+            dict(base, cycle=i, mono_ns=i * 20_000_000, applied_vx=min(0.3, i * 0.006))
+            for i in range(1, 51)
+        ]
+        return rows
+
+    def test_real_ll_stop_then_original_ramp_is_not_a_constant_speed_interval(self):
+        rows = self.wheel_rows()
+        self.assertTrue(wheel_recovery(rows, 0, 1_000_000_000, 0.3, 0.3)[0])
+        self.assertLess(sum(r["applied_vx"] for r in rows) / len(rows), 0.25)
+        # Same requested 0.30 m/s; agreement between odometry and a lower
+        # physical mean must never stand in for the recovered-speed check.
+
+    def test_no_recovery_without_ll_or_with_a_nonzero_held_command(self):
+        rows = self.wheel_rows()
+        rows[1]["ll_alive"] = 0
+        self.assertFalse(wheel_recovery(rows, 0, 1_000_000_000, 0.3, 0.3)[0])
+        rows = self.wheel_rows()
+        rows[0]["applied_vx"] = 0.3
+        self.assertFalse(wheel_recovery(rows, 0, 1_000_000_000, 0.3, 0.3)[0])
+
+    def test_instant_recovery_cannot_replace_the_original_acceleration_ramp(self):
+        rows = self.wheel_rows()
+        rows[1]["applied_vx"] = 0.3
+        self.assertFalse(wheel_recovery(rows, 0, 1_000_000_000, 0.3, 0.3)[0])
+
+    def test_recovery_proof_requires_continuous_samples_and_the_actual_target(self):
+        rows = self.wheel_rows()
+        self.assertFalse(wheel_recovery(rows[1:], 0, 1_000_000_000, 0.3, 0.3)[0])
+        self.assertFalse(
+            wheel_recovery(rows[:20] + rows[21:], 0, 1_000_000_000, 0.3, 0.3)[0]
+        )
+        self.assertFalse(wheel_recovery(rows[:-2], 0, 1_000_000_000, 0.3, 0.3)[0])
 
 
 class BoardWatchdogTest(unittest.TestCase):

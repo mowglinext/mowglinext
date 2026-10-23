@@ -132,3 +132,95 @@ def stale_blade_window(rows, expired_gate, end_ns):
         if gate["hl_fresh"] or gate["allowed"] or not commanded_zero(rows, gate):
             return False, "stale HLS did not continuously command zero"
     return True, f"{len(gates)} stale control cycles wrote zero; no HLS renewal/rearm"
+
+
+def blade_receipts(rows, commands, expired_gate, end_ns, origin_ns, capacity):
+    """Correlate the dedicated blade UART's ordered packets, not delivery time.
+
+    A fresh nonzero packet can still be in transit at the first stale decision.
+    Check the entire received prefix against successful native writes before
+    selecting the commands that actually originated in the stale window. Never
+    search for a convenient first zero or skip a mismatching packet. The bench
+    uses exactly representable blade duties (0 and +/-1) on both protocols.
+    """
+    writes = [
+        r
+        for r in rows
+        if r["event"] in ("blade_write", "blade_direct_write") and r["written"] == 1
+    ]
+    if len(commands) >= capacity:
+        return False, "blade receipt history may have been truncated"
+    if len(commands) > len(writes):
+        return False, "received blade packet lacks native write evidence"
+    for index, (_, value) in enumerate(commands):
+        if (
+            not math.isfinite(value)
+            or not math.isfinite(writes[index]["duty"])
+            or abs(value - writes[index]["duty"]) >= 1e-9
+        ):
+            return False, f"blade UART prefix mismatch at packet {index}"
+    first = next(
+        (
+            i
+            for i, w in enumerate(writes)
+            if w["event"] == "blade_write" and w["cycle"] == expired_gate["cycle"]
+        ),
+        None,
+    )
+    if first is None:
+        return False, "missing first stale blade write"
+    selected = [
+        (i, value)
+        for i, (_, value) in enumerate(commands)
+        if i >= first and writes[i]["mono_ns"] <= end_ns
+    ]
+    if len(selected) < 2 or any(abs(value) >= 1e-9 for _, value in selected):
+        return False, "stale bridge writes were not received as repeated zero commands"
+    late_fresh = sum(
+        abs(value) >= 1e-9 and origin_ns + int(t * 1e6) >= expired_gate["mono_ns"]
+        for t, value in commands[:first]
+    )
+    return True, (
+        f"{len(selected)} stale-origin zero packets received; "
+        f"{late_fresh} earlier nonzero packets delivered late; full UART prefix matched"
+    )
+
+
+def wheel_recovery(rows, start_ns, end_ns, acceleration, target):
+    """A genuine LL inhibit must stop, then obey the unchanged recovery ramp."""
+    controls = [
+        r
+        for r in rows
+        if r["event"] == "wheel_control" and start_ns <= r["mono_ns"] <= end_ns
+    ]
+    held = next((i for i, c in enumerate(controls) if not c["ll_alive"]), None)
+    if held is None:
+        return False, "no native LowLevel inhibit observed"
+    controls = controls[held:]
+    for index, control in enumerate(controls):
+        if control["target_vx"] != target:
+            return False, "requested speed changed during the observation"
+        if not control["allowed"] and control["applied_vx"] != 0:
+            return False, "held wheels did not command an immediate zero"
+        if control["allowed"] and not all(
+            (
+                control["ll_alive"],
+                control["cmd_fresh"],
+                control["drives_ok"],
+                not control["emergency"],
+            )
+        ):
+            return False, "wheel reauthorization violated a gate"
+        if index:
+            previous = controls[index - 1]
+            if control["cycle"] != previous["cycle"] + 1:
+                return False, "incomplete native recovery observation"
+            increase = control["applied_vx"] - previous["applied_vx"]
+            if increase > acceleration * control["dt_s"] + 1e-9:
+                return False, "recovery exceeded the existing acceleration limit"
+    if not controls or abs(controls[-1]["applied_vx"] - target) >= 1e-9:
+        return False, "requested speed was not recovered"
+    return (
+        True,
+        "native LL hold commanded zero; qualified recovery respected the original ramp",
+    )
