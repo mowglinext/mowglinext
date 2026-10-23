@@ -2278,6 +2278,12 @@ void MapServerNode::load_areas_from_file(const std::string& path, DockPoseFrame 
   std::string line;
   while (std::getline(in, line))
   {
+    // A CRLF (hand-edited on Windows) file leaves a '\r' on every line; it is
+    // never content — the writer forbids it in every free-text value.
+    if (!line.empty() && line.back() == '\r')
+    {
+      line.pop_back();
+    }
     if (line.empty() || line[0] == '#')
     {
       continue;
@@ -2315,9 +2321,12 @@ void MapServerNode::load_areas_from_file(const std::string& path, DockPoseFrame 
     if (it == kv.end())
       return def;
     uint64_t value = 0;
-    const auto& text = it->second;
+    // Exact match after trimming: surrounding whitespace from a hand edit is
+    // tolerated, anything else (sign, suffix, overflow) is not.
+    const std::string text = trim_ascii_whitespace(it->second);
     auto [last, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-    if (error != std::errc{} || last != text.data() + text.size() || value > maximum)
+    if (text.empty() || error != std::errc{} || last != text.data() + text.size() ||
+        value > maximum)
       throw std::runtime_error("Invalid unsigned value for " + key);
     return value;
   };
@@ -2333,6 +2342,38 @@ void MapServerNode::load_areas_from_file(const std::string& path, DockPoseFrame 
     auto it = kv.find(key);
     return (it != kv.end()) ? it->second : std::string{};
   };
+
+  // Corridors are parsed into locals BEFORE any live state is touched: their
+  // strict unsigned fields are the ones that can throw, and a throw after
+  // areas_ was refilled would leave a half-loaded map with the datum
+  // migration below skipped.
+  std::vector<LidarIgnoreCorridorEntry> loaded_corridors;
+  const int lidar_corridor_count = get_int("lidar_corridor_count", 0);
+  for (int i = 0; i < lidar_corridor_count; ++i)
+  {
+    const std::string prefix = "lidar_corridor_" + std::to_string(i);
+    auto polyline = parse_polygon_string(get_str(prefix + "_polyline"));
+    if (polyline.points.size() < 2)
+    {
+      continue;
+    }
+    LidarIgnoreCorridorEntry entry;
+    // Same normalisation as the add/replace services, so a legacy name with
+    // trailing blanks cannot make every later GUI replace fail validation.
+    entry.name = trim_ascii_whitespace(get_str(prefix + "_name"));
+    entry.polyline = std::move(polyline);
+    entry.width_m = std::clamp(get_double(prefix + "_width_m", 0.40),
+                               kMinLidarIgnoreCorridorWidthM,
+                               kMaxLidarIgnoreCorridorWidthM);
+    entry.id = static_cast<uint32_t>(get_unsigned(prefix + "_id", 0, UINT32_MAX));
+    loaded_corridors.push_back(std::move(entry));
+  }
+  uint64_t loaded_next_corridor_id =
+      get_unsigned("next_lidar_corridor_id", 1, uint64_t{UINT32_MAX} + 1);
+  for (const auto& corridor : loaded_corridors)
+  {
+    loaded_next_corridor_id = std::max(loaded_next_corridor_id, uint64_t{corridor.id} + 1);
+  }
 
   // Clear existing areas and reload from file.
   areas_.clear();
@@ -2429,34 +2470,8 @@ void MapServerNode::load_areas_from_file(const std::string& path, DockPoseFrame 
     }
   }
 
-  lidar_ignore_corridors_.clear();
-  const int lidar_corridor_count = get_int("lidar_corridor_count", 0);
-  for (int i = 0; i < lidar_corridor_count; ++i)
-  {
-    const std::string prefix = "lidar_corridor_" + std::to_string(i);
-    auto polyline = parse_polygon_string(get_str(prefix + "_polyline"));
-    if (polyline.points.size() < 2)
-    {
-      continue;
-    }
-    LidarIgnoreCorridorEntry entry;
-    entry.name = get_str(prefix + "_name");
-    entry.polyline = std::move(polyline);
-    entry.width_m = std::clamp(get_double(prefix + "_width_m", 0.40),
-                               kMinLidarIgnoreCorridorWidthM,
-                               kMaxLidarIgnoreCorridorWidthM);
-    entry.id = static_cast<uint32_t>(get_unsigned(prefix + "_id", 0, UINT32_MAX));
-    lidar_ignore_corridors_.push_back(std::move(entry));
-  }
-  {
-    uint64_t max_corridor_id = 0;
-    for (const auto& corridor : lidar_ignore_corridors_)
-    {
-      max_corridor_id = std::max(max_corridor_id, uint64_t{corridor.id});
-    }
-    next_lidar_corridor_id_ = get_unsigned("next_lidar_corridor_id", 1, uint64_t{UINT32_MAX} + 1);
-    next_lidar_corridor_id_ = std::max(next_lidar_corridor_id_, max_corridor_id + 1);
-  }
+  lidar_ignore_corridors_ = std::move(loaded_corridors);
+  next_lidar_corridor_id_ = loaded_next_corridor_id;
   RCLCPP_INFO(get_logger(), "Loaded %zu LiDAR-ignore corridor(s).", lidar_ignore_corridors_.size());
 
   // Dock pose is loaded from mowgli_robot.yaml at construction, never

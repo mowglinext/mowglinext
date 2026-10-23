@@ -26,6 +26,7 @@
 #include <mutex>
 #include <set>
 
+#include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
 
 namespace mowgli_map
@@ -33,21 +34,33 @@ namespace mowgli_map
 namespace
 {
 using Replace = mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors;
+using Corridor = mowgli_interfaces::msg::LidarIgnoreCorridor;
 
-bool validate_corridor(const mowgli_interfaces::msg::LidarIgnoreCorridor& c)
+/// Names are normalised (surrounding whitespace trimmed) on every input path —
+/// add, replace and load — instead of being rejected, so a legacy name with a
+/// trailing blank can never make a whole-list GUI replace fail validation.
+Corridor normalised(Corridor c)
 {
-  // areas.dat is explicitly 2D. Never acknowledge a Z coordinate that the writer drops.
-  if (c.polyline.points.size() < 2 || !std::isfinite(c.width_m) ||
-      c.name.find_first_of("\r\n") != std::string::npos || c.name.find('\0') != std::string::npos ||
-      (!c.name.empty() && (std::isspace(static_cast<unsigned char>(c.name.front())) ||
-                           std::isspace(static_cast<unsigned char>(c.name.back())))))
-    return false;
+  c.name = trim_ascii_whitespace(c.name);
+  return c;
+}
+
+/// nullptr when `c` (already normalised) is valid, else why it is not.
+const char* corridor_rejection(const Corridor& c)
+{
+  if (c.polyline.points.size() < 2)
+    return "polyline has fewer than 2 points";
+  if (!std::isfinite(c.width_m))
+    return "width_m is not finite";
+  if (c.name.find_first_of("\r\n") != std::string::npos || c.name.find('\0') != std::string::npos)
+    return "name contains a line break or NUL";
   bool segment = false;
   for (size_t i = 0; i < c.polyline.points.size(); ++i)
   {
     const auto& p = c.polyline.points[i];
+    // areas.dat is explicitly 2D. Never acknowledge a Z coordinate that the writer drops.
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) || p.z != 0)
-      return false;
+      return "point is not finite or has a non-zero z";
     if (i)
     {
       const auto& prev = c.polyline.points[i - 1];
@@ -55,7 +68,30 @@ bool validate_corridor(const mowgli_interfaces::msg::LidarIgnoreCorridor& c)
       segment |= dx * dx + dy * dy > 1e-12;  // same degeneracy scale as the consumer
     }
   }
-  return segment;
+  return segment ? nullptr : "polyline has no non-degenerate segment";
+}
+
+/// True when committing `candidate` can only make the scan filter suppress
+/// FEWER beams than `current`: every candidate entry is an existing corridor
+/// (same id, same polyline) at the same or a narrower width. Clear and a
+/// replace that only drops lines qualify; any new, re-shaped or widened line
+/// does not. Names and order do not affect what the filter drops.
+template <class Entries>
+bool only_removes_suppression(const Entries& candidate, const Entries& current)
+{
+  return std::all_of(candidate.begin(),
+                     candidate.end(),
+                     [&](const auto& next)
+                     {
+                       return std::any_of(current.begin(),
+                                          current.end(),
+                                          [&](const auto& now)
+                                          {
+                                            return now.id == next.id &&
+                                                   now.polyline == next.polyline &&
+                                                   next.width_m <= now.width_m;
+                                          });
+                     });
 }
 }  // namespace
 
@@ -110,6 +146,7 @@ void MapServerNode::commit_corridors(std::vector<LidarIgnoreCorridorEntry> candi
   }
   auto canonical = message.corridors;
   bool durable = false;
+  std::string write_error;
   try
   {
     if (!areas_file_path_.empty())
@@ -117,9 +154,27 @@ void MapServerNode::commit_corridors(std::vector<LidarIgnoreCorridorEntry> candi
   }
   catch (const std::exception& e)
   {
-    result.outcome = "PERSISTENCE_FAILED_BEFORE_COMMIT";
-    result.message = e.what();
-    return;
+    write_error = e.what();
+  }
+  if (!write_error.empty())
+  {
+    // A corridor makes collision_monitor blind along its line. A change that only
+    // REMOVES suppression must therefore never be blocked by the disk (full SD
+    // card): it takes effect in memory and is published, and the file keeps the
+    // old list until the next successful areas.dat write (every writer serializes
+    // the live corridor list). Additions and widenings stay all-or-nothing.
+    if (!only_removes_suppression(candidate, lidar_ignore_corridors_))
+    {
+      result.outcome = "PERSISTENCE_FAILED_BEFORE_COMMIT";
+      result.message = write_error;
+      return;
+    }
+    RCLCPP_WARN(get_logger(),
+                "Corridor removal applied in memory but NOT persisted (%s); %s still holds the "
+                "previous list until the next successful map save, and a restart before then "
+                "restores the removed line(s).",
+                write_error.c_str(),
+                areas_file_path_.c_str());
   }
   {
     std::lock_guard<std::mutex> lock(map_mutex_);
@@ -141,7 +196,16 @@ void MapServerNode::commit_corridors(std::vector<LidarIgnoreCorridorEntry> candi
   {
     RCLCPP_ERROR(get_logger(), "Corridor commit completed; publication pending: %s", e.what());
   }
-  if (!durable && !areas_file_path_.empty())
+  if (!write_error.empty())
+  {
+    result.outcome = "COMMITTED_DURABILITY_UNCONFIRMED";
+    result.message = std::string("removal committed in memory") +
+                     (result.published ? " and published" : ", publication pending") +
+                     "; areas.dat write failed (" + write_error +
+                     "), durability unconfirmed — a restart before the next successful save "
+                     "restores it";
+  }
+  else if (!durable && !areas_file_path_.empty())
   {
     result.outcome = "COMMITTED_DURABILITY_UNCONFIRMED";
     result.message = "replacement committed; directory sync failed, durability unconfirmed";
@@ -189,8 +253,19 @@ void MapServerNode::on_replace_lidar_ignore_corridors(const Replace::Request::Sh
     if (c.polyline.points.size() > remaining / sizeof(geometry_msgs::msg::Point32))
       return;
     remaining -= c.polyline.points.size() * sizeof(geometry_msgs::msg::Point32);
-    if (!validate_corridor(c) || (c.id && !ids.insert(c.id).second))
+    const auto normal = normalised(c);
+    if (const char* reason = corridor_rejection(normal))
+    {
+      res->message = std::string("invalid corridor '") + normal.name + "': " + reason;
+      RCLCPP_WARN(get_logger(), "Rejected corridor replacement: %s", res->message.c_str());
       return;
+    }
+    if (c.id && !ids.insert(c.id).second)
+    {
+      res->message = "duplicate corridor id " + std::to_string(c.id);
+      RCLCPP_WARN(get_logger(), "Rejected corridor replacement: %s", res->message.c_str());
+      return;
+    }
   }
   uint64_t next = next_lidar_corridor_id_;
   for (auto id : ids)
@@ -207,7 +282,7 @@ void MapServerNode::on_replace_lidar_ignore_corridors(const Replace::Request::Sh
       id = next++;
     }
     candidate.push_back(
-        {c.name,
+        {trim_ascii_whitespace(c.name),
          c.polyline,
          std::clamp(c.width_m, kMinLidarIgnoreCorridorWidthM, kMaxLidarIgnoreCorridorWidthM),
          static_cast<uint32_t>(id)});
@@ -220,9 +295,12 @@ void MapServerNode::on_add_lidar_ignore_corridor(
     mowgli_interfaces::srv::AddLidarIgnoreCorridor::Response::SharedPtr res)
 {
   std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
-  const auto& c = req->corridor;
-  if (!validate_corridor(c))
+  const auto c = normalised(req->corridor);
+  if (const char* reason = corridor_rejection(c))
+  {
+    RCLCPP_WARN(get_logger(), "Rejected LiDAR-ignore corridor '%s': %s", c.name.c_str(), reason);
     return;
+  }
   auto candidate = lidar_ignore_corridors_;
   uint64_t next = next_lidar_corridor_id_;
   uint64_t id = c.id;
@@ -265,7 +343,10 @@ void MapServerNode::on_clear_lidar_ignore_corridors(
   std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
   Replace::Response result;
   commit_corridors({}, next_lidar_corridor_id_, result, false);
-  res->success = result.success;
+  // Clearing only ever un-blinds the scan filter: report success once the empty
+  // list is live and published, even if areas.dat could not be rewritten
+  // (commit_corridors logs that durability is unconfirmed).
+  res->success = result.committed && result.published;
 }
 
 void MapServerNode::publish_lidar_ignore_corridors()

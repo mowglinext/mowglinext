@@ -11,6 +11,7 @@
 
 #include "mowgli_map/map_server_node.hpp"
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <gtest/gtest.h>
 #include <rcl/error_handling.h>
 #include <sys/syscall.h>
@@ -31,7 +32,7 @@ bool matches(int fd, const std::string& target)
 {
   char key[64], path[4096];
   snprintf(key, sizeof(key), "/proc/self/fd/%d", fd);
-  auto n = syscall(SYS_readlink, key, path, sizeof(path) - 1);
+  auto n = syscall(SYS_readlinkat, AT_FDCWD, key, path, sizeof(path) - 1);
   if (n < 0)
     return false;
   path[n] = 0;
@@ -91,7 +92,7 @@ extern "C" int rename(const char* from, const char* to) noexcept
                 return release_rename;
               });
   }
-  return syscall(SYS_rename, from, to);
+  return syscall(SYS_renameat, AT_FDCWD, from, AT_FDCWD, to);
 }
 extern "C" rcl_ret_t rcl_publish(const rcl_publisher_t* publisher,
                                  const void* msg,
@@ -208,6 +209,10 @@ protected:
     EXPECT_TRUE(r->success);
     return r->corridors;
   }
+  std::string area_name(size_t index)
+  {
+    return node->areas_.at(index).name;
+  }
   uint64_t next()
   {
     return node->next_lidar_corridor_id_;
@@ -255,7 +260,9 @@ protected:
     fault = mode;
     auto cleared = legacy_clear();
     fault = 0;
-    EXPECT_FALSE(cleared.success);
+    // Clearing only un-blinds the filter: success once the empty list is live AND
+    // published; a pending publication is still reported as not done.
+    EXPECT_EQ(cleared.success, mode != 6);
     EXPECT_TRUE(get().empty());
     EXPECT_EQ(next(), 43u);
     auto cleared_file = read(path);
@@ -491,11 +498,8 @@ TEST_F(CorridorTransactionTest, WholeListValidationLeavesOldState)
   c = corridor();
   c.width_m = std::numeric_limits<double>::infinity();
   invalid.push_back(c);
-  for (auto name : {std::string("bad\nname"),
-                    std::string("bad\rname"),
-                    std::string("bad\0name", 8),
-                    std::string(" leading"),
-                    std::string("trailing ")})
+  for (auto name :
+       {std::string("bad\nname"), std::string("bad\rname"), std::string("bad\0name", 8)})
     invalid.push_back(corridor(name));
   for (const auto& bad : invalid)
   {
@@ -789,9 +793,10 @@ TEST_F(CorridorTransactionTest, LegacyServicesKeepTypesAndReportDiskFailure)
   auto [added, cleared] = legacy_failure();
   fault = 0;
   EXPECT_FALSE(added);
-  EXPECT_FALSE(cleared);
+  // A clear is a pure removal: it applies in memory even though the write failed.
+  EXPECT_TRUE(cleared);
   EXPECT_EQ(read(path), old);
-  EXPECT_EQ(get()[0].name, "original");
+  EXPECT_TRUE(get().empty());
   EXPECT_EQ(next(), 42u);
   // Preserve the old writer's directory-sync policy for unrelated callers.
   fault = 5;
@@ -812,12 +817,8 @@ TEST_F(CorridorTransactionTest, LegacyAddRejectsInvalid2DGeometryAndNamesWithout
     c.polyline.points[1].z = z;
     invalid.push_back(c);
   }
-  for (auto name : {std::string("bad\nname"),
-                    std::string("bad\rname"),
-                    std::string("bad\0name", 8),
-                    std::string(" leading"),
-                    std::string("trailing "),
-                    std::string("\ttab")})
+  for (auto name :
+       {std::string("bad\nname"), std::string("bad\rname"), std::string("bad\0name", 8)})
     invalid.push_back(corridor(name));
   auto c = corridor();
   c.polyline.points.resize(1);
@@ -924,14 +925,12 @@ TEST_F(CorridorTransactionTest, LegacyPrecommitFailuresPreserveDiskMemoryAndCoun
     }
     fault = mode;
     auto added = legacy_add(corridor());
-    auto cleared = legacy_clear();
     fault = 0;
     EXPECT_FALSE(added.success);
     EXPECT_EQ(added.id, 0u);
-    EXPECT_FALSE(cleared.success);
     if (mode != 1)
     {
-      EXPECT_GE(hits.load(), 2);
+      EXPECT_GE(hits.load(), 1);
     }
     EXPECT_EQ(read(path), old);
     EXPECT_EQ(get(), std::vector<Corridor>{corridor("original", 41)});
@@ -988,5 +987,196 @@ TEST_F(CorridorTransactionTest, CombinedDirectorySyncAndPublicationFailuresPrese
   EXPECT_EQ(get(), snapshot);
   EXPECT_EQ(read(path), committed_file);
   EXPECT_EQ(non_corridor_data(committed_file), non_corridor_data(old));
+}
+// ── Removal must survive a failed areas.dat write (full SD card) ────────────
+// A corridor blinds collision_monitor along its line, so the disk must never be
+// able to keep one alive: clear, or a replace that only drops / narrows lines,
+// applies in memory and is published; the file is caught up by the next save.
+TEST_F(CorridorTransactionTest, RemovalCommitsInMemoryAndPublishesWhenTheWriteFails)
+{
+  for (int mode : {1, 2, 3, 4})
+  {
+    SCOPED_TRACE(mode);
+    // Two lines on disk and in memory.
+    ASSERT_TRUE(replace({corridor("original", 41), corridor("second", 50)}).success);
+    old = read(path);
+    publications.clear();
+    hits = 0;
+    if (mode == 1)
+    {
+      ASSERT_TRUE(std::filesystem::create_directory(temporary));
+    }
+    fault = mode;
+    auto r = replace({corridor("original", 41)});  // drop "second"
+    fault = 0;
+    if (mode != 1)
+    {
+      ASSERT_GT(hits.load(), 0);
+    }
+    EXPECT_FALSE(r.success);  // not COMMITTED: durability is not confirmed
+    EXPECT_TRUE(r.committed);
+    EXPECT_FALSE(r.persisted);
+    EXPECT_TRUE(r.published);
+    EXPECT_EQ(r.outcome, "COMMITTED_DURABILITY_UNCONFIRMED");
+    EXPECT_NE(r.message.find("removal committed in memory"), std::string::npos);
+    EXPECT_EQ(get(), std::vector<Corridor>{corridor("original", 41)});
+    EXPECT_EQ(r.corridors, get());
+    ASSERT_EQ(publications.size(), 1u);
+    EXPECT_EQ(publications.back(), std::vector<std::string>{"original"});
+    EXPECT_EQ(read(path), old);  // the failed write left the file untouched
+    EXPECT_EQ(next(), 51u);
+    if (mode == 1)
+    {
+      EXPECT_TRUE(std::filesystem::remove(temporary));
+    }
+  }
+}
+TEST_F(CorridorTransactionTest, ClearCommitsInMemoryAndPublishesWhenTheWriteFails)
+{
+  fault = 2;  // ENOSPC on the temp file
+  auto cleared = legacy_clear();
+  fault = 0;
+  ASSERT_GT(hits.load(), 0);
+  EXPECT_TRUE(cleared.success);
+  EXPECT_TRUE(get().empty());
+  ASSERT_EQ(publications.size(), 1u);
+  EXPECT_TRUE(publications.back().empty());
+  EXPECT_EQ(read(path), old);
+  EXPECT_EQ(next(), 42u);
+  fault = 2;
+  auto r = replace({});  // the replace service's clear behaves the same
+  fault = 0;
+  EXPECT_TRUE(r.committed);
+  EXPECT_TRUE(r.published);
+  EXPECT_FALSE(r.persisted);
+  EXPECT_EQ(r.outcome, "COMMITTED_DURABILITY_UNCONFIRMED");
+}
+TEST_F(CorridorTransactionTest, NarrowingIsARemovalButWideningReshapingAndAddingAreNot)
+{
+  auto narrower = corridor("original", 41, .2);
+  fault = 2;
+  auto r = replace({narrower});
+  fault = 0;
+  EXPECT_TRUE(r.committed);
+  EXPECT_EQ(get(), std::vector<Corridor>{narrower});
+  EXPECT_EQ(read(path), old);
+  publications.clear();
+  auto wider = corridor("original", 41, .6);
+  auto reshaped = narrower;
+  reshaped.polyline.points[1].x = 5.f;
+  for (const auto& expanding : std::vector<std::vector<Corridor>>{
+           {wider}, {reshaped}, {narrower, corridor("new", 0)}, {corridor("original", 0, .2)}})
+  {
+    fault = 2;
+    auto refused = replace(expanding);
+    fault = 0;
+    EXPECT_FALSE(refused.committed);
+    EXPECT_EQ(refused.outcome, "PERSISTENCE_FAILED_BEFORE_COMMIT");
+    EXPECT_EQ(get(), std::vector<Corridor>{narrower});
+    EXPECT_TRUE(publications.empty());
+  }
+  fault = 2;
+  EXPECT_FALSE(legacy_add(corridor("added")).success);
+  fault = 0;
+  EXPECT_EQ(get(), std::vector<Corridor>{narrower});
+  EXPECT_TRUE(publications.empty());
+}
+TEST_F(CorridorTransactionTest, NextSuccessfulWritePersistsAnInMemoryRemoval)
+{
+  ASSERT_TRUE(replace({corridor("original", 41), corridor("second", 50)}).success);
+  fault = 2;
+  ASSERT_TRUE(replace({corridor("second", 50)}).committed);
+  fault = 0;
+  // Any later writer serializes the live list — here an unrelated map save.
+  save();
+  reload();
+  EXPECT_EQ(get(), std::vector<Corridor>{corridor("second", 50)});
+  EXPECT_EQ(next(), 51u);
+  // ...and the next corridor transaction too.
+  fault = 2;
+  ASSERT_TRUE(legacy_clear().success);
+  fault = 0;
+  ASSERT_TRUE(replace({corridor("fresh")}).success);
+  reload();
+  EXPECT_EQ(get(), std::vector<Corridor>{corridor("fresh", 51)});
+}
+
+// ── Names: normalised, not rejected ─────────────────────────────────────────
+TEST_F(CorridorTransactionTest, SurroundingWhitespaceInNamesIsTrimmedOnAddAndReplace)
+{
+  auto added = legacy_add(corridor(" \tpadded add \r\n", 60));
+  ASSERT_TRUE(added.success);
+  EXPECT_EQ(get().back().name, "padded add");
+  auto r = replace({corridor("  original ", 41), corridor("trailing ", 60), corridor(" ", 0)});
+  ASSERT_TRUE(r.success) << r.message;
+  ASSERT_EQ(r.corridors.size(), 3u);
+  EXPECT_EQ(r.corridors[0].name, "original");
+  EXPECT_EQ(r.corridors[1].name, "trailing");
+  EXPECT_EQ(r.corridors[2].name, "");
+  reload();
+  EXPECT_EQ(get(), r.corridors);
+  // Genuinely invalid names are still rejected, with the reason in the message.
+  auto bad = replace({corridor("bad\nname")});
+  EXPECT_EQ(bad.outcome, "VALIDATION_REJECTED");
+  EXPECT_NE(bad.message.find("line break"), std::string::npos);
+}
+TEST_F(CorridorTransactionTest, LegacyNameWithTrailingWhitespaceLoadsTrimmedAndReplaces)
+{
+  auto data = read(path);
+  const std::string key = "lidar_corridor_0_name: original\n";
+  auto at = data.find(key);
+  ASSERT_NE(at, std::string::npos);
+  data.replace(at, key.size(), "lidar_corridor_0_name: original  \t\n");
+  std::ofstream(path, std::ios::trunc) << data;
+  reload();
+  EXPECT_EQ(get(), std::vector<Corridor>{corridor("original", 41)});
+  // The GUI sends back exactly what it read: the whole-list replace must pass.
+  auto r = replace(get());
+  EXPECT_TRUE(r.success) << r.message;
+}
+
+// ── areas.dat tolerance: CRLF and surrounding blanks ────────────────────────
+TEST_F(CorridorTransactionTest, CrlfAndPaddedAreasFileLoadsCompletely)
+{
+  ASSERT_TRUE(replace({corridor("original", 41), corridor("second", 50)}).success);
+  auto lf = read(path);
+  std::string crlf;
+  std::istringstream in(lf);
+  std::string line;
+  while (std::getline(in, line))
+  {
+    // Trailing blanks after the strictly parsed unsigned corridor values
+    // (lidar_corridor_N_id, next_lidar_corridor_id), plus Windows line endings.
+    if (line.find("corridor_") != std::string::npos && line.find("_id: ") != std::string::npos)
+      line += "  ";
+    crlf += line + "\r\n";
+  }
+  std::ofstream(path, std::ios::trunc | std::ios::binary) << crlf;
+  reload();
+  EXPECT_EQ(get(), std::vector<Corridor>({corridor("original", 41), corridor("second", 50)}));
+  EXPECT_EQ(next(), 51u);
+  EXPECT_EQ(node->area_obstacle_count_for_test(0), 1u);
+  // Round-trips byte-identically to the LF form once re-saved.
+  save();
+  EXPECT_EQ(read(path), lf);
+}
+TEST_F(CorridorTransactionTest, MalformedCorridorIdFailsTheLoadBeforeTouchingLiveState)
+{
+  auto data = read(path);
+  const std::string key = "lidar_corridor_0_id: 41\n";
+  auto at = data.find(key);
+  ASSERT_NE(at, std::string::npos);
+  data.replace(at, key.size(), "lidar_corridor_0_id: 41x\n");
+  // A different area set, so a half-applied load would be visible.
+  const std::string area = "area_0_name: kept-area\n";
+  at = data.find(area);
+  ASSERT_NE(at, std::string::npos);
+  data.replace(at, area.size(), "area_0_name: replaced-area\n");
+  std::ofstream(path, std::ios::trunc) << data;
+  EXPECT_THROW(reload(), std::runtime_error);
+  EXPECT_EQ(get(), std::vector<Corridor>{corridor("original", 41)});
+  EXPECT_EQ(next(), 42u);
+  EXPECT_EQ(node->area_obstacle_count_for_test(0), 1u);
+  EXPECT_EQ(area_name(0), "kept-area");
 }
 }  // namespace mowgli_map
