@@ -84,7 +84,7 @@ func TestFleetPeerIdentityInvalidationAndReadmission(t *testing.T) {
 	start := func() (*socketEvent, chan error) {
 		t.Helper()
 		done := make(chan error, 1)
-		go func() { done <- p.session() }()
+		go func() { _, err := p.session(); done <- err }()
 		select {
 		case e := <-events:
 			return e, done

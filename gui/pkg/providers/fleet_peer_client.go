@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -193,6 +194,7 @@ type peerClient struct {
 	done                  chan struct{}
 	now                   func() time.Time
 	sessionOpened         bool
+	identityRefresh       time.Duration
 }
 
 func newPeerClient(address string, now func() time.Time) *peerClient {
@@ -206,6 +208,8 @@ func newPeerClient(address string, now func() time.Time) *peerClient {
 		cancel:  cancel,
 		done:    make(chan struct{}),
 		now:     now,
+
+		identityRefresh: peerIdentityRefresh,
 	}
 }
 
@@ -215,24 +219,63 @@ func (p *peerClient) start() {
 
 // Identity refresh belongs to one socket lifetime. Its in-flight HTTP request
 // is canceled and joined before reconnecting, so it cannot requalify old data.
+//
+// Only a DEFINITIVE answer (a different robot id, an incompatible fleet API,
+// an identity that is not one) ends the socket. A TRANSIENT failure (timeout,
+// network error, HTTP 5xx) leaves the working socket and the cached poses in
+// place and is retried next interval: for a no-LiDAR robot this feed is the
+// only way its costmaps see the other mower (docs/MULTI_ROBOT.md § 3c), and a
+// slow identity reply says nothing about the pose stream, whose own liveness
+// is guarded by the socket read deadline and peerOnlineMaxAge.
 func (p *peerClient) identityLoop(ctx context.Context, conn *websocket.Conn) {
-	ticker := time.NewTicker(peerIdentityRefresh)
+	period := p.identityRefresh
+	if period <= 0 {
+		period = peerIdentityRefresh
+	}
+	ticker := time.NewTicker(period)
 	defer ticker.Stop()
+	consecutiveTransient := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := p.refreshIdentity(ctx); err != nil {
-				_ = conn.Close()
+			if !p.handleIdentityRefresh(ctx, conn, &consecutiveTransient) {
 				return
 			}
 		}
 	}
 }
 
+// handleIdentityRefresh runs one periodic identity check and reports whether
+// the socket should stay up.
+func (p *peerClient) handleIdentityRefresh(ctx context.Context, conn *websocket.Conn, consecutiveTransient *int) bool {
+	err := p.refreshIdentity(ctx)
+	if err == nil {
+		*consecutiveTransient = 0
+		return true
+	}
+	if ctx.Err() != nil {
+		return false
+	}
+	if isTransientPeerError(err) {
+		*consecutiveTransient++
+		logrus.WithFields(logrus.Fields{"peer": p.address, "consecutive": *consecutiveTransient}).
+			Warnf("fleet peer identity refresh failed transiently, keeping the socket and cached data: %v", err)
+		return true
+	}
+	logrus.WithField("peer", p.address).Warnf("fleet peer identity rejected, disconnecting: %v", err)
+	_ = conn.Close()
+	return false
+}
+
+// refreshIdentity re-reads the peer identity. A transient failure is returned
+// as-is WITHOUT touching the cache; a definitive one invalidates it.
 func (p *peerClient) refreshIdentity(ctx context.Context) error {
 	id, err := fetchPeerIdentity(ctx, p.http, p.address)
+	if err != nil && isTransientPeerError(err) {
+		return err
+	}
 	if err == nil && p.expectedID != "" && id.ID != p.expectedID {
 		err = fmt.Errorf("peer identity differs: expected %s, received %s", p.expectedID, id.ID)
 	}
@@ -263,7 +306,7 @@ func (p *peerClient) run() {
 	defer close(p.done)
 	backoff := peerReconnectMin
 	for {
-		err := p.session()
+		established, err := p.session()
 		p.cache.setSocket(false)
 		if p.ctx.Err() != nil {
 			return
@@ -276,19 +319,32 @@ func (p *peerClient) run() {
 			return
 		case <-time.After(backoff):
 		}
-		backoff *= 2
-		if backoff > peerReconnectMax {
-			backoff = peerReconnectMax
-		}
+		backoff = nextPeerBackoff(backoff, established)
 	}
 }
 
-// session runs one connected WebSocket until it fails.
-func (p *peerClient) session() error {
+// nextPeerBackoff doubles the reconnect delay up to peerReconnectMax while
+// sessions keep failing, and starts over from peerReconnectMin once a session
+// was established (identity qualified and subscriptions sent): otherwise a
+// few slow replies early on would make every later reconnect wait 30 s.
+func nextPeerBackoff(current time.Duration, established bool) time.Duration {
+	if established {
+		return peerReconnectMin
+	}
+	next := current * 2
+	if next > peerReconnectMax {
+		return peerReconnectMax
+	}
+	return next
+}
+
+// session runs one connected WebSocket until it fails. established reports
+// whether it got as far as a qualified, subscribed socket.
+func (p *peerClient) session() (established bool, err error) {
 	p.cache.invalidateIdentity()
 	conn, _, err := p.dialer.DialContext(p.ctx, "ws://"+p.address+peerMultiplexPath, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer conn.Close()
 	defer p.cache.invalidateIdentity()
@@ -298,14 +354,14 @@ func (p *peerClient) session() error {
 	}
 	p.sessionOpened = true
 	if err := p.refreshIdentity(p.ctx); err != nil {
-		return err
+		return false, err
 	}
 	conn.SetReadLimit(peerMaxFrameBytes)
 	for _, topic := range FleetTopics {
 		op := map[string]string{"op": "subscribe", "topic": topic}
 		_ = conn.SetWriteDeadline(p.now().Add(peerWriteDeadline))
 		if err := conn.WriteJSON(op); err != nil {
-			return err
+			return false, err
 		}
 	}
 	p.cache.setSocket(true)
@@ -345,7 +401,7 @@ func (p *peerClient) session() error {
 	for {
 		kind, payload, err := conn.ReadMessage()
 		if err != nil {
-			return err
+			return true, err
 		}
 		_ = conn.SetReadDeadline(p.now().Add(peerReadDeadline))
 		if kind != websocket.BinaryMessage {
@@ -418,15 +474,22 @@ func fetchPeerIdentity(ctx context.Context, client *http.Client, address string)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return RobotIdentity{}, err
+		return RobotIdentity{}, transientPeerError{err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return RobotIdentity{}, fmt.Errorf("peer %s answered HTTP %d to identity", address, resp.StatusCode)
+		err := fmt.Errorf("peer %s answered HTTP %d to identity", address, resp.StatusCode)
+		if resp.StatusCode >= http.StatusInternalServerError {
+			return RobotIdentity{}, transientPeerError{err}
+		}
+		return RobotIdentity{}, err
 	}
 	var id RobotIdentity
 	decoder := json.NewDecoder(io.LimitReader(resp.Body, 64<<10))
 	if err := decoder.Decode(&id); err != nil {
+		if isTruncatedRead(err) {
+			return RobotIdentity{}, transientPeerError{err}
+		}
 		return RobotIdentity{}, err
 	}
 	if strings.TrimSpace(id.ID) == "" {
@@ -436,6 +499,27 @@ func fetchPeerIdentity(ctx context.Context, client *http.Client, address string)
 		return RobotIdentity{}, fmt.Errorf("peer %s returned invalid trailing identity data", address)
 	}
 	return id, nil
+}
+
+// transientPeerError marks a failure that says nothing about WHO the peer is
+// (timeout, network error, HTTP 5xx, a body cut off mid-read): it must never
+// be treated like an identity mismatch.
+type transientPeerError struct{ err error }
+
+func (e transientPeerError) Error() string { return e.err.Error() }
+func (e transientPeerError) Unwrap() error { return e.err }
+
+func isTransientPeerError(err error) bool {
+	var transient transientPeerError
+	return errors.As(err, &transient)
+}
+
+// isTruncatedRead reports a body read that failed because the connection did,
+// not because the peer sent a well-formed but wrong answer.
+func isTruncatedRead(err error) bool {
+	var netErr net.Error
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) || errors.As(err, &netErr)
 }
 
 // postPeerJSON posts a JSON body to a peer GUI and returns status + body.
