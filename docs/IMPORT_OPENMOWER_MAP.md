@@ -242,8 +242,7 @@ or a datum write. The GUI preserves the local draft, warns that it may differ
 from the robot, and requires verification before another operation. It does not
 retry automatically. Old summary-only apply acknowledgements are shown as
 unconfirmed because they cannot expose the dock persistence warning; legacy
-previews remain supported. See the [Lot 23 report](../gui/web/docs/gui-lot23-openmower-map-dock-integrity.md)
-for the complete outcome table, tests and remaining guarantees.
+previews remain supported.
 
 ---
 
