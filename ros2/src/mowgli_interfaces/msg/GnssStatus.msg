@@ -173,3 +173,9 @@ uint8 correction_semantic_status
 string correction_source
 string correction_forwarding_source
 string msm_summary_source
+
+# Producer-owned identity, copied verbatim from the GNSS source. Empty strings
+# indicate legacy/unavailable provenance, not a newly authorized session.
+# Neither field proves acquisition freshness or authorizes a session by itself.
+string source_id
+string source_incarnation

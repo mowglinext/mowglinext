@@ -23,6 +23,11 @@ import (
 
 const latLonDecimalPlaces = 9
 
+// Serialize GUI read/merge/write transactions and their runtime sidecars.
+// Same-key edits are ordered by transaction acquisition (last writer wins).
+// This mutex does not coordinate ROS or other processes sharing the file.
+var settingsYAMLWriteMu sync.Mutex
+
 var fixedPrecisionEnvKeys = map[string]bool{
 	"OM_DATUM_LAT":  true,
 	"OM_DATUM_LONG": true,
@@ -154,10 +159,15 @@ func SettingsRoutes(r *gin.RouterGroup, dbProvider types.IDBProvider) {
 // @Tags settings
 // @Produce json
 // @Success 200 {object} SettingsStatusResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /settings/status [get]
 func GetSettingsStatus(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes {
 	return r.GET("/settings/status", func(c *gin.Context) {
 		val, err := dbProvider.Get("onboarding.completed")
+		if err != nil && !errors.Is(err, types.ErrKeyNotFound) {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
 		completed := err == nil && string(val) == "true"
 		c.JSON(200, gin.H{"onboarding_completed": completed})
 	})
@@ -1446,7 +1456,12 @@ func GetSettingsYAMLDefaults(r *gin.RouterGroup, dbProvider types.IDBProvider) g
 		extractDefaults(schema, defaults)
 		// On a robot whose backend changes some defaults, "default" means the
 		// backend's value (config/backends/<backend>.yaml, Invariant 15).
-		applyBackendDefaults(defaults, activeHardwareBackend(loadRuntimeEnv(dbProvider)))
+		backend, backendErr := resolveHardwareBackendForDB(dbProvider)
+		if backendErr != nil {
+			c.JSON(503, ErrorResponse{Error: backendErr.Error()})
+			return
+		}
+		applyBackendDefaults(defaults, backend)
 		selection := map[string]any{}
 		if doc, err := loadGNSSSettingsDocument(dbProvider); err == nil {
 			selection = doc.Flat
@@ -1479,6 +1494,8 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			c.JSON(400, ErrorResponse{Error: err.Error()})
 			return
 		}
+		settingsYAMLWriteMu.Lock()
+		defer settingsYAMLWriteMu.Unlock()
 
 		configFilePath, err := dbProvider.Get("system.mower.yamlConfigFile")
 		if err != nil {
@@ -1516,7 +1533,12 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			// Backend-aware, exactly like GET /settings/yaml/defaults: a value
 			// equal to the BACKEND's default is pruned, so the robot falls back
 			// to that same value.
-			applyBackendDefaults(defaults, activeHardwareBackend(loadRuntimeEnv(dbProvider)))
+			backend, backendErr := resolveHardwareBackendForDB(dbProvider)
+			if backendErr != nil {
+				c.JSON(503, ErrorResponse{Error: backendErr.Error()})
+				return
+			}
+			applyBackendDefaults(defaults, backend)
 			// Resolve against the requested model before filling absent values
 			// and pruning. Explicit zero must survive when its preset is nonzero.
 			selection := cloneFlatMap(existing)
@@ -1597,14 +1619,14 @@ func PostSettingsYAML(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRou
 			return
 		}
 		if err := writeMavrosRuntimeConfig(dbProvider); err != nil {
-			c.JSON(500, ErrorResponse{Error: "settings saved, but MAVROS runtime config failed: " + err.Error()})
+			c.JSON(500, gin.H{"error": "settings saved, but MAVROS runtime config failed: " + err.Error(), "persisted": true})
 			return
 		}
 
 		envFilePath, err := dbProvider.Get("system.mower.runtimeEnvFile")
 		if err == nil && len(envFilePath) > 0 {
 			if err := writeRuntimeEnvFile(string(envFilePath), gnssEnvUpdates); err != nil {
-				c.JSON(500, ErrorResponse{Error: "failed to update runtime env: " + err.Error()})
+				c.JSON(500, gin.H{"error": "settings saved, but runtime env update failed: " + err.Error(), "persisted": true})
 				return
 			}
 		}

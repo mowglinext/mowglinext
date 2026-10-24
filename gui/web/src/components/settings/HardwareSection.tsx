@@ -1,3 +1,4 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import {useMeasurementEditor} from "../robot/useMeasurementEditor";
 import {DOCK_VISUAL_DEFAULTS} from "../robot/dockGeometry";
 import {resolveCasterPosition} from "../../utils/casterPosition";
@@ -18,9 +19,10 @@ const { Text, Paragraph } = Typography;
 type Props = {
     revealAdvanced?: boolean;
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
-    onBulkChange: (changes: Record<string, any>) => void;
+    onChange: (key: string, value: unknown) => void;
+    onBulkChange: (changes: SettingsValues) => void;
     /** Settings whose default the robot's hardware backend replaces. */
+    backendConfirmed?: boolean;
     backendDefaultOverrides?: Record<string, unknown>;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
@@ -33,6 +35,7 @@ export const HardwareSection: React.FC<Props> = ({
     onChange,
     onBulkChange,
     backendDefaultOverrides = {},
+    backendConfirmed = false,
     isOverridden,
     hasDefault,
     onReset,
@@ -55,6 +58,7 @@ export const HardwareSection: React.FC<Props> = ({
     );
 
     const applyModelPreset = (model: string) => {
+        if (!backendConfirmed) return;
         onChange("mower_model", model);
         const preset = MOWER_MODELS.find((m) => m.value === model);
         onChange("mower_visual_style", (preset?.appearance ?? DEFAULT_MOWER_VISUAL).style);
@@ -64,6 +68,7 @@ export const HardwareSection: React.FC<Props> = ({
     };
 
     const handleModelSelect = (model: string) => {
+        if (!backendConfirmed) return;
         if (model === selectedModel) {
             return;
         }
@@ -119,6 +124,7 @@ export const HardwareSection: React.FC<Props> = ({
                                         size="small"
                                         role="radio"
                                         tabIndex={0}
+                                        aria-disabled={!backendConfirmed}
                                         aria-checked={isSelected}
                                         aria-label={t(model.label)}
                                         onKeyDown={(event) => {
@@ -167,41 +173,41 @@ export const HardwareSection: React.FC<Props> = ({
                     <Row gutter={[16, 0]}>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-wheel_radius" data-setting-key="wheel_radius" label={fieldLabel("wheel_radius", t("settingsHardware.wheelRadius"))} tooltip={t("settingsHardware.wheelRadiusTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("wheel_radius")} aria-label={t("settingsHardware.wheelRadius") + ", m"} aria-description={t("settingsHardware.wheelRadiusTooltip")}  id="setting-wheel_radius"
+                                <NumberWithAddon {...measurementEditor.fieldProps("wheel_radius")} aria-label={t("settingsHardware.wheelRadius") + ", m"} aria-description={t("settingsHardware.wheelRadiusTooltip")}  id="setting-wheel_radius"
                                     value={values.wheel_radius}
                                     onChange={(v) => onChange("wheel_radius", v)}
                                     step={0.001} precision={5} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-wheel_track" data-setting-key="wheel_track" label={fieldLabel("wheel_track", t("settingsHardware.wheelTrack"))} tooltip={t("settingsHardware.wheelTrackTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("wheel_track")} aria-label={t("settingsHardware.wheelTrack") + ", m"} aria-description={t("settingsHardware.wheelTrackTooltip")}  id="setting-wheel_track"
+                                <NumberWithAddon {...measurementEditor.fieldProps("wheel_track")} aria-label={t("settingsHardware.wheelTrack") + ", m"} aria-description={t("settingsHardware.wheelTrackTooltip")}  id="setting-wheel_track"
                                     value={values.wheel_track}
                                     onChange={(v) => onChange("wheel_track", v)}
                                     step={0.005} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-blade_radius" data-setting-key="blade_radius" label={fieldLabel("blade_radius", t("settingsHardware.bladeRadius"))} tooltip={t("settingsHardware.bladeRadiusTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("blade_radius")} aria-label={t("settingsHardware.bladeRadius") + ", m"} aria-description={t("settingsHardware.bladeRadiusTooltip")}  id="setting-blade_radius"
+                                <NumberWithAddon {...measurementEditor.fieldProps("blade_radius")} aria-label={t("settingsHardware.bladeRadius") + ", m"} aria-description={t("settingsHardware.bladeRadiusTooltip")}  id="setting-blade_radius"
                                     value={values.blade_radius}
                                     onChange={(v) => onChange("blade_radius", v)}
                                     step={0.01} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-tool_width" data-setting-key="tool_width" label={fieldLabel("tool_width", t("settingsHardware.toolWidth"))} tooltip={t("settingsHardware.toolWidthTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("tool_width")} aria-label={t("settingsHardware.toolWidth") + ", m"} aria-description={t("settingsHardware.toolWidthTooltip")}  id="setting-tool_width"
+                                <NumberWithAddon {...measurementEditor.fieldProps("tool_width")} aria-label={t("settingsHardware.toolWidth") + ", m"} aria-description={t("settingsHardware.toolWidthTooltip")}  id="setting-tool_width"
                                     value={values.tool_width}
                                     onChange={(v) => onChange("tool_width", v)}
                                     step={0.01} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
@@ -239,31 +245,31 @@ export const HardwareSection: React.FC<Props> = ({
                     <Row gutter={[16, 0]}>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-chassis_length" data-setting-key="chassis_length" label={fieldLabel("chassis_length", t("settingsHardware.chassisLength"))} tooltip={t("settingsHardware.chassisLengthTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("chassis_length")} aria-label={t("settingsHardware.chassisLength") + ", m"} aria-description={t("settingsHardware.chassisLengthTooltip")} id="setting-chassis_length"
+                                <NumberWithAddon {...measurementEditor.fieldProps("chassis_length")} aria-label={t("settingsHardware.chassisLength") + ", m"} aria-description={t("settingsHardware.chassisLengthTooltip")} id="setting-chassis_length"
                                     value={values.chassis_length}
                                     onChange={(v) => onChange("chassis_length", v)}
                                     step={0.01} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-chassis_width" data-setting-key="chassis_width" label={fieldLabel("chassis_width", t("settingsHardware.chassisWidth"))} tooltip={t("settingsHardware.chassisWidthTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("chassis_width")} aria-label={t("settingsHardware.chassisWidth") + ", m"} aria-description={t("settingsHardware.chassisWidthTooltip")} id="setting-chassis_width"
+                                <NumberWithAddon {...measurementEditor.fieldProps("chassis_width")} aria-label={t("settingsHardware.chassisWidth") + ", m"} aria-description={t("settingsHardware.chassisWidthTooltip")} id="setting-chassis_width"
                                     value={values.chassis_width}
                                     onChange={(v) => onChange("chassis_width", v)}
                                     step={0.01} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-chassis_height" data-setting-key="chassis_height" label={fieldLabel("chassis_height", t("settingsHardware.chassisHeight"))} tooltip={t("settingsHardware.chassisHeightTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("chassis_height")} aria-label={t("settingsHardware.chassisHeight") + ", m"} aria-description={t("settingsHardware.chassisHeightTooltip")} id="setting-chassis_height"
+                                <NumberWithAddon {...measurementEditor.fieldProps("chassis_height")} aria-label={t("settingsHardware.chassisHeight") + ", m"} aria-description={t("settingsHardware.chassisHeightTooltip")} id="setting-chassis_height"
                                     value={values.chassis_height}
                                     onChange={(v) => onChange("chassis_height", v)}
                                     step={0.01} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
@@ -271,86 +277,86 @@ export const HardwareSection: React.FC<Props> = ({
                             <Form.Item htmlFor="setting-chassis_z_offset" data-setting-key="chassis_z_offset"
                                 label={fieldLabel("chassis_z_offset", t("settingsHardware.chassisZOffset"))}
                                 tooltip={t("settingsHardware.chassisZOffsetTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("chassis_z_offset")} id="setting-chassis_z_offset" aria-label={t("settingsHardware.chassisZOffset") + ", m"}
+                                <NumberWithAddon {...measurementEditor.fieldProps("chassis_z_offset")} id="setting-chassis_z_offset" aria-label={t("settingsHardware.chassisZOffset") + ", m"}
                                     aria-description={t("settingsHardware.chassisZOffsetTooltip")}
                                     value={values.chassis_z_offset == null ? undefined : Number(values.chassis_z_offset)}
                                     onChange={v=>{if(v != null) onChange("chassis_z_offset",v);}}
-                                    min={-.3} max={.3} step={.005} precision={3} style={{width:"100%"}} addonAfter="m"/>
+                                    min={-.3} max={.3} step={.005} precision={3} style={{width:"100%"}} after="m"/>
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-chassis_center_x" data-setting-key="chassis_center_x" label={fieldLabel("chassis_center_x", t("settingsHardware.chassisCenterX"))} tooltip={t("settingsHardware.chassisCenterXTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("chassis_center_x")} aria-label={t("settingsHardware.chassisCenterX") + ", m"} aria-description={t("settingsHardware.chassisCenterXTooltip")}  id="setting-chassis_center_x"
+                                <NumberWithAddon {...measurementEditor.fieldProps("chassis_center_x")} aria-label={t("settingsHardware.chassisCenterX") + ", m"} aria-description={t("settingsHardware.chassisCenterXTooltip")}  id="setting-chassis_center_x"
                                     value={values.chassis_center_x}
                                     onChange={(v) => onChange("chassis_center_x", v)}
                                     step={0.01} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-chassis_mass_kg" data-setting-key="chassis_mass_kg" label={fieldLabel("chassis_mass_kg", t("settingsHardware.mass"))} tooltip={t("settingsHardware.massTooltip")}>
-                                <InputNumber aria-label={t("settingsHardware.mass") + ", kg"} aria-description={t("settingsHardware.massTooltip")} id="setting-chassis_mass_kg"
+                                <NumberWithAddon aria-label={t("settingsHardware.mass") + ", kg"} aria-description={t("settingsHardware.massTooltip")} id="setting-chassis_mass_kg"
                                     value={values.chassis_mass_kg}
                                     onChange={(v) => onChange("chassis_mass_kg", v)}
                                     step={0.5} precision={2} style={{ width: "100%" }}
-                                    addonAfter="kg"
+                                    after="kg"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-wheel_width" data-setting-key="wheel_width" label={fieldLabel("wheel_width", t("settingsHardware.wheelWidth"))} tooltip={t("settingsHardware.wheelWidthTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("wheel_width")} aria-label={t("settingsHardware.wheelWidth") + ", m"} aria-description={t("settingsHardware.wheelWidthTooltip")} id="setting-wheel_width"
+                                <NumberWithAddon {...measurementEditor.fieldProps("wheel_width")} aria-label={t("settingsHardware.wheelWidth") + ", m"} aria-description={t("settingsHardware.wheelWidthTooltip")} id="setting-wheel_width"
                                     value={values.wheel_width}
                                     onChange={(v) => onChange("wheel_width", v)}
                                     step={0.005} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-wheel_x_offset" data-setting-key="wheel_x_offset" label={fieldLabel("wheel_x_offset", t("settingsHardware.wheelXOffset"))} tooltip={t("settingsHardware.wheelXOffsetTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("wheel_x_offset")} aria-label={t("settingsHardware.wheelXOffset") + ", m"} aria-description={t("settingsHardware.wheelXOffsetTooltip")}  id="setting-wheel_x_offset"
+                                <NumberWithAddon {...measurementEditor.fieldProps("wheel_x_offset")} aria-label={t("settingsHardware.wheelXOffset") + ", m"} aria-description={t("settingsHardware.wheelXOffsetTooltip")}  id="setting-wheel_x_offset"
                                     value={values.wheel_x_offset}
                                     onChange={(v) => onChange("wheel_x_offset", v)}
                                     step={0.01} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-blade_x_offset" data-setting-key="blade_x_offset" label={fieldLabel("blade_x_offset", t("settingsHardware.bladeXOffset"))} tooltip={t("settingsHardware.bladeXOffsetTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("blade_x_offset")} id="setting-blade_x_offset"
+                                <NumberWithAddon {...measurementEditor.fieldProps("blade_x_offset")} id="setting-blade_x_offset"
                                     aria-label={t("settingsHardware.bladeXOffset") + ", m"}
                                     value={typeof values.blade_x_offset === "number" ? values.blade_x_offset : 0} onChange={v => onChange("blade_x_offset", v)}
-                                    step={0.001} precision={4} style={{width: "100%"}} addonAfter="m"/>
+                                    step={0.001} precision={4} style={{width: "100%"}} after="m"/>
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-blade_y_offset" data-setting-key="blade_y_offset" label={fieldLabel("blade_y_offset", t("settingsHardware.bladeYOffset"))} tooltip={t("settingsHardware.bladeYOffsetTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("blade_y_offset")} id="setting-blade_y_offset"
+                                <NumberWithAddon {...measurementEditor.fieldProps("blade_y_offset")} id="setting-blade_y_offset"
                                     aria-label={t("settingsHardware.bladeYOffset") + ", m"}
                                     value={typeof values.blade_y_offset === "number" ? values.blade_y_offset : 0} onChange={v => onChange("blade_y_offset", v)}
-                                    step={0.001} precision={4} style={{width: "100%"}} addonAfter="m"/>
+                                    step={0.001} precision={4} style={{width: "100%"}} after="m"/>
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-caster_radius" data-setting-key="caster_radius" label={fieldLabel("caster_radius", t("settingsHardware.casterRadius"))} tooltip={t("settingsHardware.casterRadiusTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("caster_radius")} aria-label={t("settingsHardware.casterRadius") + ", m"} aria-description={t("settingsHardware.casterRadiusTooltip")} id="setting-caster_radius"
+                                <NumberWithAddon {...measurementEditor.fieldProps("caster_radius")} aria-label={t("settingsHardware.casterRadius") + ", m"} aria-description={t("settingsHardware.casterRadiusTooltip")} id="setting-caster_radius"
                                     value={values.caster_radius}
                                     onChange={(v) => onChange("caster_radius", v)}
                                     step={0.005} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={12} sm={8} lg={6}>
                             <Form.Item htmlFor="setting-caster_track" data-setting-key="caster_track" label={fieldLabel("caster_track", t("settingsHardware.casterTrack"))} tooltip={t("settingsHardware.casterTrackTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("caster_track")} aria-label={t("settingsHardware.casterTrack") + ", m"} aria-description={t("settingsHardware.casterTrackTooltip")} id="setting-caster_track"
+                                <NumberWithAddon {...measurementEditor.fieldProps("caster_track")} aria-label={t("settingsHardware.casterTrack") + ", m"} aria-description={t("settingsHardware.casterTrackTooltip")} id="setting-caster_track"
                                     value={values.caster_track}
                                     onChange={(v) => onChange("caster_track", v)}
                                     step={0.01} precision={3} style={{ width: "100%" }}
-                                    addonAfter="m"
+                                    after="m"
                                 />
                             </Form.Item>
                         </Col>
@@ -358,11 +364,11 @@ export const HardwareSection: React.FC<Props> = ({
                             <Form.Item htmlFor="setting-caster_x_offset" data-setting-key="caster_x_offset"
                                 label={fieldLabel("caster_x_offset", t("settingsHardware.casterXOffset"))}
                                 tooltip={t("settingsHardware.casterXOffsetTooltip")}>
-                                <InputNumber {...measurementEditor.fieldProps("caster_x_offset")} id="setting-caster_x_offset" aria-label={t("settingsHardware.casterXOffset") + ", m"}
+                                <NumberWithAddon {...measurementEditor.fieldProps("caster_x_offset")} id="setting-caster_x_offset" aria-label={t("settingsHardware.casterXOffset") + ", m"}
                                     aria-description={t("settingsHardware.casterXOffsetTooltip")}
                                     value={resolveCasterPosition(values)} min={-.99} max={2} step={.01} precision={3}
                                     onChange={v=>{if(v != null) onChange("caster_x_offset",v);}}
-                                    style={{width:"100%"}} addonAfter="m"/>
+                                    style={{width:"100%"}} after="m"/>
                             </Form.Item>
                         </Col>
                     </Row>
@@ -374,12 +380,12 @@ export const HardwareSection: React.FC<Props> = ({
                                 <Form.Item htmlFor={`setting-${key}`} data-setting-key={key}
                                     label={fieldLabel(key, t(`settingsHardware.${key}`))}
                                     tooltip={t(`settingsHardware.${key}Tooltip`)}>
-                                    <InputNumber {...measurementEditor.fieldProps(key)} id={`setting-${key}`} aria-label={t(`settingsHardware.${key}`) + ", m"}
+                                    <NumberWithAddon {...measurementEditor.fieldProps(key)} id={`setting-${key}`} aria-label={t(`settingsHardware.${key}`) + ", m"}
                                         aria-description={t(`settingsHardware.${key}Tooltip`)}
                                         value={values[key] ?? DOCK_VISUAL_DEFAULTS[key]}
                                         min={key.endsWith("_offset") ? -2 : .1}
                                         max={key.endsWith("_offset") ? 2 : 3}
-                                        step={.01} precision={3} style={{width:"100%"}} addonAfter="m"
+                                        step={.01} precision={3} style={{width:"100%"}} after="m"
                                         onChange={v => {if (v != null) onChange(key, v);}}/>
                                 </Form.Item>
                             </Col>

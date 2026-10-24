@@ -568,6 +568,8 @@ class UniversalGnssTopicBridge(Node):
         # frozen receiver from a live one. Mirrors the C++ bridge exactly; see
         # mowgli_interfaces/gnss_observation_freshness.hpp.
         public_msg.position_observation_sequence = msg.position_observation_sequence
+        public_msg.source_id = msg.source_id
+        public_msg.source_incarnation = msg.source_incarnation
         public_msg.backend = self._backend
         public_msg.receiver_vendor = self._receiver_vendor
 

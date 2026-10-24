@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import "./SettingsPage.css";
 import {useSectionFocus} from "../hooks/useSectionFocus.ts";
 import {settingSearchText} from "../utils/settingsSearch.ts";
@@ -68,6 +69,7 @@ import {
 const { Text } = Typography;
 
 export const SettingsPage = () => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const { modal } = App.useApp();
     const guiApi = useApi();
@@ -93,6 +95,7 @@ export const SettingsPage = () => {
         acknowledgeRestart,
         searchQuery,
         advancedKeys,
+        validateAdvancedKey,
         setSearchQuery,
         matchesSearch,
         handleChange,
@@ -105,6 +108,9 @@ export const SettingsPage = () => {
         savePartialValues,
         saveAndRestartGps,
         acceptPersistedValues,
+        acceptPersistedDockPose,
+        beginDockCapture,
+        finishDockCapture,
         revert,
         gpsRestarting,
         hardwareBackend,
@@ -222,12 +228,14 @@ export const SettingsPage = () => {
                                     onReset={resetToDefault}
                                     revealAdvanced={!!targetField || !!searchQuery}
                                     backendDefaultOverrides={backendDefaultOverrides}
+                                    backendConfirmed={hardwareBackend.authority === "confirmed" && hardwareBackend.presetsAvailable}
                                 />
                             </>
                         }
                     />
                 );
             case "drive_motor":
+                if (hardwareBackend.authority !== "confirmed") return <HardwareBackendCard info={hardwareBackend}/>;
                 // Each backend exposes its own drive controls; never show
                 // Mowgli STM32 or OpenMower xESC controls on MAVROS.
                 if (hardwareBackend.backend === "openmower") {
@@ -266,7 +274,7 @@ export const SettingsPage = () => {
                     />
                 );
             case "sensors":
-                return <SensorsSection values={values} onChange={handleChange} />;
+                return <SensorsSection values={values} onChange={handleChange} onDockPosePersisted={acceptPersistedDockPose} onDockCaptureStart={beginDockCapture} onDockCaptureFinished={finishDockCapture} />;
             case "localization":
                 return (
                     <>
@@ -400,7 +408,7 @@ export const SettingsPage = () => {
                     />
                 );
             case "advanced":
-                return <AdvancedSection values={values} advancedKeys={advancedKeys} onChange={handleChange} />;
+                return <AdvancedSection values={values} advancedKeys={advancedKeys} onChange={handleChange} validateNewKey={validateAdvancedKey} />;
             default:
                 return null;
         }
@@ -569,7 +577,7 @@ export const SettingsPage = () => {
                 <Button
                     type="primary"
                     icon={<SaveOutlined />}
-                    onClick={save}
+                    onClick={asyncHandler(save)}
                     loading={saving}
                     disabled={!isDirty || ros2Restart.pending}
                 >

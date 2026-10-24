@@ -1,6 +1,7 @@
 import {render, screen, waitFor} from "@testing-library/react";
 import {afterEach, describe, expect, it, vi} from "vitest";
-import {UpdateChangelog, changelogAvailable} from "./UpdateChangelog.tsx";
+import {UpdateChangelog} from "./UpdateChangelog.tsx";
+import {changelogAvailable} from "./updateChangelogData";
 
 const installed = "a".repeat(40);
 const available = "b".repeat(40);

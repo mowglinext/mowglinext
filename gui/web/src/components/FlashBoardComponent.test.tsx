@@ -12,8 +12,9 @@ const state = vi.hoisted(() => ({
     settingsError: false,
 }));
 
-vi.mock("../hooks/useApi.ts", () => ({
-    useApi: () => ({
+vi.mock("../hooks/useApi.ts", () => {
+    // Match the application's singleton API; renders must not replace it.
+    const api = {
         config: {
             keysGetCreate: vi.fn(() => Promise.resolve({
                 data: {"gui.firmware.config": state.savedConfig},
@@ -25,8 +26,9 @@ vi.mock("../hooks/useApi.ts", () => ({
                 return Promise.resolve({data: {mower_model: state.settingsModel}});
             }),
         },
-    }),
-}));
+    };
+    return {useApi: () => api};
+});
 
 vi.mock("@microsoft/fetch-event-source", () => ({
     fetchEventSource: vi.fn(),

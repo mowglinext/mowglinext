@@ -2,9 +2,11 @@ package api
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -272,10 +274,223 @@ func TestRosbagDownload_RejectsTraversal(t *testing.T) {
 	docker := rosbagWithContainer()
 	r, _ := setupRosbagRouter(t, docker)
 	w := httptest.NewRecorder()
-	// gin will not route a raw "..", so exercise the validator with an invalid char.
+	// Invalid characters must be rejected in addition to dot-segment names.
 	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/tools/rosbag/download/bad$name", nil))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestRosbagPath_RejectsInvalidNames(t *testing.T) {
+	for _, name := range []string{
+		".", "..", "%2e", "%2e%2e", "%2E%2E", ".%2e", "%2e.",
+		"%252e%252e", "bad$name", "bad%20name", "bad%00name", "%5c..", "bad%25name",
+		"..%2f..", "%2fetc", "bad%5cname",
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodDelete} {
+			t.Run(method+"/"+name, func(t *testing.T) {
+				parent := t.TempDir()
+				root := filepath.Join(parent, "rosbags")
+				require.NoError(t, os.MkdirAll(filepath.Join(root, "legitimate"), 0o755))
+				sentinel := filepath.Join(parent, "sentinel.yaml")
+				require.NoError(t, os.WriteFile(sentinel, []byte("parent must stay unchanged"), 0o600))
+				t.Setenv("ROSBAG_DIR", root)
+				gin.SetMode(gin.TestMode)
+				r := gin.New()
+				RosbagRoutes(r.Group("/api"), rosbagWithContainer())
+				path := "/api/tools/rosbag/"
+				if method == http.MethodGet {
+					path += "download/"
+				}
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, httptest.NewRequest(method, path+name, nil))
+				// Decoded separators may be rejected by Gin before the handler.
+				require.Contains(t, []int{http.StatusBadRequest, http.StatusNotFound}, w.Code, w.Body.String())
+				if w.Code == http.StatusBadRequest {
+					var response ErrorResponse
+					require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+					assert.Equal(t, "invalid recording name", response.Error)
+				}
+				assert.NotContains(t, w.Header().Get("Content-Type"), "gzip")
+				data, err := os.ReadFile(sentinel)
+				require.NoError(t, err)
+				assert.Equal(t, "parent must stay unchanged", string(data))
+				info, err := os.Stat(sentinel)
+				require.NoError(t, err)
+				assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+				_, err = os.Stat(filepath.Join(root, "legitimate"))
+				assert.NoError(t, err)
+			})
+		}
+	}
+}
+
+func TestRosbagPath_RejectsSymlinks(t *testing.T) {
+	for _, link := range []string{"recording-absolute", "recording-relative", "nested-file", "nested-relative-file", "nested-directory", "dangling", "internal"} {
+		for _, method := range []string{http.MethodGet, http.MethodDelete} {
+			t.Run(method+"/"+link, func(t *testing.T) {
+				parent := t.TempDir()
+				root := filepath.Join(parent, "rosbags")
+				outside := filepath.Join(parent, "outside")
+				require.NoError(t, os.MkdirAll(outside, 0o755))
+				sentinel := filepath.Join(outside, "sentinel.mcap")
+				require.NoError(t, os.WriteFile(sentinel, []byte("external sentinel"), 0o600))
+				capture := filepath.Join(root, "capture")
+				require.NoError(t, os.MkdirAll(capture, 0o755))
+				switch link {
+				case "recording-absolute":
+					require.NoError(t, os.Remove(capture))
+					require.NoError(t, os.Symlink(outside, capture))
+				case "recording-relative":
+					require.NoError(t, os.Remove(capture))
+					require.NoError(t, os.Symlink("../outside", capture))
+				case "nested-file":
+					require.NoError(t, os.Symlink(sentinel, filepath.Join(capture, "data.mcap")))
+				case "nested-relative-file":
+					require.NoError(t, os.Symlink("../../outside/sentinel.mcap", filepath.Join(capture, "data.mcap")))
+				case "nested-directory":
+					require.NoError(t, os.Symlink(outside, filepath.Join(capture, "bag")))
+				case "dangling":
+					require.NoError(t, os.Symlink(filepath.Join(outside, "missing"), filepath.Join(capture, "data.mcap")))
+				case "internal":
+					require.NoError(t, os.WriteFile(filepath.Join(capture, "original.mcap"), []byte("payload"), 0o600))
+					require.NoError(t, os.Symlink("original.mcap", filepath.Join(capture, "data.mcap")))
+				}
+				t.Setenv("ROSBAG_DIR", root)
+				r := gin.New()
+				RosbagRoutes(r.Group("/api"), rosbagWithContainer())
+				path := "/api/tools/rosbag/"
+				if method == http.MethodGet {
+					path += "download/"
+				}
+				w := httptest.NewRecorder()
+				r.ServeHTTP(w, httptest.NewRequest(method, path+"capture", nil))
+				require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+				var response ErrorResponse
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+				assert.Equal(t, "invalid recording path", response.Error)
+				assert.NotContains(t, w.Header().Get("Content-Type"), "gzip")
+				data, err := os.ReadFile(sentinel)
+				require.NoError(t, err)
+				assert.Equal(t, "external sentinel", string(data))
+				_, err = os.Lstat(capture)
+				assert.NoError(t, err, "rejected capture must not be deleted")
+			})
+		}
+	}
+}
+
+func TestRosbagPath_PreservesExistingNames(t *testing.T) {
+	for _, name := range []string{"rosbag_20261021T120000Z", "legacy-capture.v1_2", ".legacy", "capture..old"} {
+		t.Run(name, func(t *testing.T) {
+			r, root := setupRosbagRouter(t, rosbagWithContainer())
+			require.NoError(t, os.MkdirAll(filepath.Join(root, name, "bag"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(root, name, "bag", "data.mcap"), []byte("payload"), 0o600))
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/tools/rosbag/download/"+name, nil))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			assert.True(t, tarEntryNames(t, w.Body.Bytes())[name+"/bag/data.mcap"])
+			w = httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/tools/rosbag/"+name, nil))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			_, err := os.Stat(filepath.Join(root, name))
+			assert.True(t, os.IsNotExist(err))
+		})
+	}
+}
+
+type rosbagSwapWriter struct {
+	io.Writer
+	beforeFirstWrite func()
+}
+
+func (w *rosbagSwapWriter) Write(p []byte) (int, error) {
+	if swap := w.beforeFirstWrite; swap != nil {
+		w.beforeFirstWrite = nil
+		swap()
+	}
+	return w.Writer.Write(p)
+}
+
+func TestRosbagDownload_ConfinesReadsDuringPathSwap(t *testing.T) {
+	parent := t.TempDir()
+	capture := filepath.Join(parent, "capture")
+	require.NoError(t, os.Mkdir(capture, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(capture, "a.mcap"), []byte("recorded data"), 0o600))
+	replaced := filepath.Join(capture, "b.mcap")
+	require.NoError(t, os.WriteFile(replaced, []byte("original b"), 0o600))
+	sentinel := filepath.Join(parent, "sentinel.mcap")
+	require.NoError(t, os.WriteFile(sentinel, []byte("external sentinel"), 0o600))
+	root, err := os.OpenRoot(capture)
+	require.NoError(t, err)
+	defer root.Close()
+	var body bytes.Buffer
+	w := &rosbagSwapWriter{Writer: &body, beforeFirstWrite: func() {
+		// Both entries were already enumerated. Replace b after the first
+		// archive header, before the second entry is opened: no timing sleeps.
+		require.NoError(t, os.Remove(replaced))
+		require.NoError(t, os.Symlink(sentinel, replaced))
+	}}
+	require.Error(t, writeRecordingTarGz(w, root, "capture"))
+	gz, err := gzip.NewReader(&body)
+	require.NoError(t, err)
+	defer gz.Close()
+	plain, err := io.ReadAll(gz)
+	require.NoError(t, err)
+	assert.Contains(t, string(plain), "recorded data")
+	assert.NotContains(t, string(plain), "external sentinel")
+	data, err := os.ReadFile(sentinel)
+	require.NoError(t, err)
+	assert.Equal(t, "external sentinel", string(data))
+}
+
+func TestRosbagDelete_RequiresKnownInactiveRecorder(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		result      pkgtypes.ContainerExecResult
+		probeError  error
+		noContainer bool
+		wantCode    int
+		wantError   string
+	}{
+		{name: "active", result: pkgtypes.ContainerExecResult{Stdout: "rosbag_live\n"}, wantCode: http.StatusConflict, wantError: "recording is still in progress; stop it first"},
+		{name: "inactive", wantCode: http.StatusOK},
+		{name: "probe-error", probeError: errors.New("docker unavailable"), wantCode: http.StatusServiceUnavailable, wantError: "cannot verify recording state: docker unavailable"},
+		{name: "probe-nonzero-exit", result: pkgtypes.ContainerExecResult{ExitCode: 7, Stderr: "probe failed"}, wantCode: http.StatusServiceUnavailable, wantError: "cannot verify recording state: failed to probe recordings: probe failed"},
+		{name: "unknown-container-state", noContainer: true, wantCode: http.StatusServiceUnavailable, wantError: "cannot verify recording state: mowgli-ros2 container not found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			docker := rosbagWithContainer()
+			if tc.noContainer {
+				docker.containers = nil
+			}
+			docker.execFn = func(pkgtypes.ContainerExecSpec) (pkgtypes.ContainerExecResult, error) {
+				return tc.result, tc.probeError
+			}
+			r, root := setupRosbagRouter(t, docker)
+			capture := filepath.Join(root, "rosbag_live")
+			require.NoError(t, os.MkdirAll(capture, 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(capture, rosbagPidFile), []byte("4242\n"), 0o600))
+			file := filepath.Join(capture, "data.mcap")
+			require.NoError(t, os.WriteFile(file, []byte("capture data"), 0o600))
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/tools/rosbag/rosbag_live", nil))
+			require.Equal(t, tc.wantCode, w.Code, w.Body.String())
+			if tc.wantCode == http.StatusOK {
+				_, err := os.Stat(capture)
+				assert.True(t, os.IsNotExist(err))
+			} else {
+				var response ErrorResponse
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+				assert.Equal(t, tc.wantError, response.Error)
+				data, err := os.ReadFile(file)
+				require.NoError(t, err)
+				assert.Equal(t, "capture data", string(data))
+				pid, err := os.ReadFile(filepath.Join(capture, rosbagPidFile))
+				require.NoError(t, err)
+				assert.Equal(t, "4242\n", string(pid))
+			}
+		})
 	}
 }
 

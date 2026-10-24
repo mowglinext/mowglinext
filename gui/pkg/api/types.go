@@ -12,7 +12,7 @@ type SettingsStatusResponse struct {
 }
 
 type GetSettingsResponse struct {
-	Settings map[string]any `json:"settings,omitempty"`
+	Settings map[string]any `json:"settings"`
 }
 
 type GetConfigResponse struct {

@@ -1,5 +1,5 @@
 import {describe, it, expect, vi} from 'vitest';
-import {render, screen} from '@testing-library/react';
+import {fireEvent, render, screen} from '@testing-library/react';
 import {JoystickOverlay} from './JoystickOverlay.tsx';
 import en from "../../../i18n/locales/en.json";
 
@@ -7,6 +7,18 @@ const noop = () => {};
 const asyncNoop = async () => {};
 
 describe('JoystickOverlay', () => {
+    it('forwards an explicit pointer-down and release from the real joystick', () => {
+        const onStart = vi.fn();
+        const onStop = vi.fn();
+        render(<JoystickOverlay visible={true} onStart={onStart} onMove={noop} onStop={onStop}/>);
+        const stick = screen.getByTestId('joystick-base').querySelector('button')!;
+        stick.setPointerCapture = vi.fn();
+        expect(onStart).not.toHaveBeenCalled();
+        fireEvent.pointerDown(stick, {pointerId: 1});
+        expect(onStart).toHaveBeenCalledOnce();
+        fireEvent.pointerUp(window, {pointerId: 1});
+        expect(onStop).toHaveBeenCalledOnce();
+    });
     it('renders nothing when not visible', () => {
         const {container} = render(
             <JoystickOverlay visible={false} onMove={noop} onStop={noop}/>,

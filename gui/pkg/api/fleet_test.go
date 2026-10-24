@@ -33,7 +33,7 @@ type fleetRobot struct {
 	id    string
 }
 
-func newFleetRobot(t *testing.T, name string) *fleetRobot {
+func newFleetRobot(t *testing.T, name string, configure ...func(*types.MockRosProvider)) *fleetRobot {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db := types.NewMockDBProvider()
@@ -41,6 +41,9 @@ func newFleetRobot(t *testing.T, name string) *fleetRobot {
 	require.NoError(t, os.WriteFile(yamlPath, []byte("mowgli:\n  ros__parameters:\n    robot_name: "+name+"\n    datum_lat: 48.0\n    datum_lon: 2.0\n"), 0o644))
 	require.NoError(t, db.Set("system.mower.yamlConfigFile", []byte(yamlPath)))
 	ros := types.NewMockRosProvider()
+	for _, setup := range configure {
+		setup(ros)
+	}
 	fleet := providers.NewFleetProvider(db, ros)
 
 	coord := providers.NewFleetCoordinator(db, ros, fleet)

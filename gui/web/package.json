@@ -21,6 +21,7 @@
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
+    "@ant-design/v5-patch-for-react-19": "1.0.3",
     "@formily/antd-v5": "^1.2.4",
     "@formily/core": "2.3.7",
     "@formily/react": "2.3.7",

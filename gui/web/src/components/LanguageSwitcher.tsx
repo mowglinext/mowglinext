@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {useTranslation} from "react-i18next";
 import {SUPPORTED_LANGUAGES} from "../i18n";
 
@@ -9,6 +10,7 @@ import {SUPPORTED_LANGUAGES} from "../i18n";
  * persisted to localStorage by the language detector.
  */
 export function LanguageSwitcher() {
+  const asyncHandler = useAsyncHandler();
   const {i18n, t} = useTranslation();
   const current = (i18n.resolvedLanguage ?? i18n.language ?? "fr").slice(0, 2);
 
@@ -32,7 +34,7 @@ export function LanguageSwitcher() {
           <button
             key={code}
             type="button"
-            onClick={() => i18n.changeLanguage(code)}
+            onClick={asyncHandler(() => i18n.changeLanguage(code))}
             aria-label={label}
             aria-pressed={active}
             style={{

@@ -4,8 +4,10 @@ import { App } from "antd";
 import i18n from "../../i18n";
 import { DriveMotorSection } from "./DriveMotorSection";
 
+import type {DriveTuningStatusResponse} from "../../hooks/useDriveTuning";
+
 const tuning = vi.hoisted(() => ({
-    status: undefined as any,
+    status: (() : DriveTuningStatusResponse | null => null)(),
     startFeedForward: vi.fn().mockResolvedValue({}),
     loadLatestReport: vi.fn(),
 }));
@@ -18,7 +20,7 @@ vi.mock("../../hooks/useDockingSensor.ts", () => ({ useDockingSensor: () => ({ d
 
 describe("shared motor calibration", () => {
     beforeEach(async () => {
-        tuning.status = undefined;
+        tuning.status = null;
         tuning.startFeedForward.mockClear();
         tuning.loadLatestReport.mockReset();
         await i18n.changeLanguage("en");
@@ -58,7 +60,7 @@ describe("shared motor calibration", () => {
 
     it.each(["en", "fr"])("shows the actual translated MAVROS warning cause (%s)", async language => {
         await i18n.changeLanguage(language);
-        tuning.status = { feed_forward: {
+        tuning.status = { pid: {status: "not_validated"}, feed_forward: {
             status: "warning", message: "No valid RTK/GNSS-backed odometry distance was accepted.",
         } };
         render(<App><DriveMotorSection hardwareBackend="mavros" values={{}} onChange={vi.fn()} /></App>);
@@ -68,15 +70,25 @@ describe("shared motor calibration", () => {
 
     it.each(["en", "fr"])("shows the odometry error percentage in the actual summary (%s)", async language => {
         await i18n.changeLanguage(language);
-        tuning.status = { feed_forward: {
+        tuning.status = { pid: {status: "not_validated"}, feed_forward: {
             status: "validated", message: "Validated odometry with distance error 0.5%.",
         } };
         render(<App><DriveMotorSection hardwareBackend="mavros" values={{}} onChange={vi.fn()} /></App>);
         expect(screen.getByText(i18n.t("settingsDriveMotor.odometry.validation.validated", { errorPct: "0.5" }))).toBeInTheDocument();
     });
 
+    it("reports a failed applied-report fetch without accepting values or announcing success", async () => {
+        tuning.status = { feed_forward: {status: "not_validated"}, pid: {status: "not_validated"}, job: { id: "failed-read", mode: "ff", started_at: "", apply: true, state: "succeeded", report_path: "/report.yaml" } };
+        tuning.loadLatestReport.mockRejectedValueOnce(new Error("Report unavailable"));
+        const accept = vi.fn();
+        render(<App><DriveMotorSection hardwareBackend="mavros" values={{}} onChange={vi.fn()} acceptPersistedValues={accept} /></App>);
+        expect(await screen.findByText("Report unavailable")).toBeInTheDocument();
+        expect(accept).not.toHaveBeenCalled();
+        expect(screen.queryByText(i18n.t("settingsDriveMotor.notifications.applied.title"))).not.toBeInTheDocument();
+    });
+
     it("syncs only float ticks from an applied MAVROS report, including legacy reports", async () => {
-        tuning.status = { job: { id: "one", apply: true, state: "succeeded", report_path: "/report.yaml" } };
+        tuning.status = { feed_forward: {status: "not_validated"}, pid: {status: "not_validated"}, job: { id: "one", mode: "ff", started_at: "", apply: true, state: "succeeded", report_path: "/report.yaml" } };
         tuning.loadLatestReport.mockResolvedValue({
             latest_report: { report_path: "/report.yaml" },
             parsed: { proposed_params: { ticks_per_meter: 343.596123, wheel_pid_pwm_per_mps: 999, wheel_pid_kp: 99 } },

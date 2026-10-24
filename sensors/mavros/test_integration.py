@@ -17,7 +17,7 @@ PARAMS_API = ROOT / "gui/pkg/api/params.go"
 FRONTEND_BACKENDS = ROOT / "gui/web/src/constants/hardwareBackends.ts"
 
 EXPECTED_IMAGE = (
-    "ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:latest"
+    "ghcr.io/pepeuch/mowglimavros/mowgli-mavros-sidecar:sha-9fd16a4234699c2c1c99a0c2547d9db02e496f17-lyrical@sha256:9b206989a287770278f7451d09b07653bf5a32282d512be04dda031188be9cd6"
 )
 
 
@@ -161,7 +161,7 @@ def main() -> int:
         "generic parameter API must not retain pending MAVROS route rejection",
     )
     require(
-        'route.runtime === "available"' in frontend_backends,
+        "route.runtime !== 'available'" in frontend_backends,
         "frontend must not apply pending MAVROS parameter routes",
     )
 

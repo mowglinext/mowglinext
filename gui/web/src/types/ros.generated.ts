@@ -408,6 +408,8 @@ export type GnssStatus = {
   correction_source?: string;
   correction_forwarding_source?: string;
   msm_summary_source?: string;
+  source_id?: string;
+  source_incarnation?: string;
 };
 
 export const enum HighLevelStatusConstants {

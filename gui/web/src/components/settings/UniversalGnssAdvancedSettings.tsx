@@ -1,5 +1,6 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React, { useState } from "react";
-import { Alert, Card, Form, Input, InputNumber, Select, Typography } from "antd";
+import { Alert, Card, Form, Input, Select, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import {
     GNSS_ADVANCED_SETTINGS_BY_FAMILY,
@@ -17,7 +18,7 @@ const { Paragraph } = Typography;
 type Props = {
     receiverFamily: unknown;
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: string | number | null) => void;
 };
 
 export const UniversalGnssAdvancedSettings: React.FC<Props> = ({
@@ -145,13 +146,13 @@ export const UniversalGnssAdvancedSettings: React.FC<Props> = ({
                         return (
                             <div key={field.key}>
                                 <Form.Item label={t(field.label)} tooltip={t(field.tooltip)}>
-                                    <InputNumber
+                                    <NumberWithAddon
                                         value={values[field.key] as number | null | undefined}
                                         onChange={(value) => onChange(field.key, value)}
                                         placeholder={field.placeholder ? t(field.placeholder) : field.placeholder}
                                         min={field.min}
                                         step={field.step}
-                                        addonAfter={field.addonAfter}
+                                        after={field.addonAfter}
                                         style={{ width: "100%" }}
                                     />
                                 </Form.Item>

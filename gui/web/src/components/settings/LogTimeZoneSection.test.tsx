@@ -1,7 +1,8 @@
 import {beforeEach, describe, expect, it} from "vitest";
 import {fireEvent, render, screen} from "@testing-library/react";
 import {ThemeProvider} from "../../theme/ThemeContext.tsx";
-import {TimeFormatProvider, useTimeFormat} from "../../hooks/useTimeFormat.tsx";
+import {useTimeFormat} from "../../hooks/useTimeFormat.tsx";
+import {TimeFormatProvider} from "../../hooks/TimeFormatProvider";
 import {LOG_TIME_ZONE_STORAGE_KEY} from "../../utils/logTime.ts";
 import {LogTimeZoneSection} from "./LogTimeZoneSection.tsx";
 

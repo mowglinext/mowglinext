@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {canCommand, deriveFleetRow, derivePhase, parseFleetRobots, projectFleetPositions} from "./fleet.ts";
+import {canCommand, deriveFleetRow, derivePhase, parseFleetRobots, projectFleetPositions, validateFleetHighLevelStatus, validateFleetGnssStatus} from "./fleet.ts";
 import type {FleetRobotWire} from "./fleet.ts";
 import type {HighLevelStatus} from "../types/ros.ts";
 
@@ -69,6 +69,12 @@ describe("deriveFleetRow", () => {
         expect(row.batteryKnown).toBe(true);
     });
 
+    it('keeps invalid battery interpolation unknown instead of marking a measured percentage', () => {
+        const row = deriveFleetRow(wire({}, {power: {v_battery: 26}}), {battery_full_voltage: '28 V'});
+        expect(row.batteryKnown).toBe(false);
+        expect(row.batteryPercent).toBeNaN();
+    });
+
     it("keeps a measured 0 % distinct from a missing voltage", () => {
         const row = deriveFleetRow(wire({}, {power: {v_battery: 23.0}}));
         expect(row.batteryPercent).toBe(0);
@@ -122,5 +128,120 @@ describe("projectFleetPositions", () => {
         const pts = projectFleetPositions([at("a", 48, 2), at("b", 48.000009, 2)]);
         const [a, b] = pts;
         expect(Math.abs(a.y - b.y)).toBeLessThan(0.1);
+    });
+});
+
+describe('Fleet robot identity boundary', () => {
+    const invalidRows = [
+        {name: 'name object', value: {...wire(), identity: {id: 'a', name: {label: 'bad'}}}},
+        {name: 'name null', value: {...wire(), identity: {id: 'a', name: null}}},
+        {name: 'address object', value: {...wire(), address: {host: 'bad'}}},
+        {name: 'online text', value: {...wire(), online: 'false'}},
+        {name: 'self text', value: {...wire(), self: 'false'}},
+        {name: 'online null', value: {...wire(), online: null}},
+        {name: 'self number', value: {...wire(), self: 0}},
+        {name: 'last seen number', value: {...wire(), last_seen: 123}},
+        {name: 'api text', value: {...wire(), identity: {id: 'a', api_version: '1'}}},
+        {name: 'api nonfinite', value: {...wire(), identity: {id: 'a', api_version: Infinity}}},
+    ];
+    it.each(invalidRows)('rejects the complete snapshot for $name', ({value}) => {
+        expect(() => parseFleetRobots([wire(), value])).toThrow('Invalid fleet robots response');
+    });
+    it('rejects duplicate retained ids including empty ids without choosing a winner', () => {
+        for (const id of ['same', '']) {
+            expect(() => parseFleetRobots([wire({identity: {id, name: 'Alpha'}}), wire({identity: {id, name: 'Beta'}})]))
+                .toThrow('Invalid fleet robots response');
+        }
+    });
+    it('preserves absent fields, an empty unique id, name fallback and additional properties by reference', () => {
+        const absent = {identity: {id: '', extra: {keep: true}}, extra: [1], topics: {unknown: {keep: true}}};
+        const named = wire({identity: {id: 'b', name: ''}, last_seen: null});
+        const parsed = parseFleetRobots([absent, named]);
+        expect(parsed).toEqual([absent, named]);
+        expect(parsed[0]).toBe(absent);
+        expect(parsed[1]).toBe(named);
+        expect(deriveFleetRow(parsed[1]).name).toBe('b');
+    });
+    it.each([undefined, null, 0, 1, 99])('preserves existing API compatibility for %s', version => {
+        const raw = {...wire(), identity: {id: 'a', name: 'Alpha', ...(version === undefined ? {} : {api_version: version})}};
+        const [parsed] = parseFleetRobots([raw]);
+        expect(parsed).toBe(raw);
+        expect(deriveFleetRow(parsed).apiVersionMismatch).toBe(version != null && version !== 1);
+    });
+    it('keeps valid text fields, booleans and timestamps without transforming them', () => {
+        const raw = wire({address: '', online: false, self: true, last_seen: '2026-10-18T12:00:00Z'});
+        expect(parseFleetRobots([raw])[0]).toBe(raw);
+        expect(parseFleetRobots([wire({last_seen: null})])[0].last_seen).toBeNull();
+    });
+    it('keeps legacy filtering and non-array compatibility and does not validate topics', () => {
+        const raw = {...wire(), topics: {highLevelStatus: {state_name: {not: 'in this lot'}}}};
+        expect(parseFleetRobots({})).toEqual([]);
+        expect(parseFleetRobots([null, {identity: {id: 4}, online: 'bad'}, raw])).toEqual([raw]);
+    });
+});
+
+describe('Fleet HighLevelStatus targeted validator', () => {
+    it('keeps arbitrary finite states, precision, extra properties and object references unchanged', () => {
+        const status = {state: 999, state_name: 'FUTURE', sub_state_name: '', emergency: false, is_charging: true,
+            current_area: -12.5, coverage_percent: 140.123456, extra: {keep: true}};
+        const raw = wire({}, {highLevelStatus: status, other: {keep: true}});
+        const robots = parseFleetRobots([raw]);
+        const before = JSON.stringify(robots);
+        validateFleetHighLevelStatus(robots);
+        expect(robots[0]).toBe(raw);
+        expect(robots[0].topics?.highLevelStatus).toBe(status);
+        expect(JSON.stringify(robots)).toBe(before);
+        expect(deriveFleetRow(raw).coveragePercent).toBe(140.123456);
+        expect(deriveFleetRow(raw).phase).toBe('charging');
+        status.state = -0.5;
+        expect(() => validateFleetHighLevelStatus(robots)).not.toThrow();
+    });
+    it.each(['state', 'current_area', 'coverage_percent'])('rejects NaN and infinities for %s', field => {
+        for (const value of [NaN, Infinity, -Infinity]) {
+            expect(() => validateFleetHighLevelStatus([wire({}, {highLevelStatus: {[field]: value}})]))
+                .toThrow('Invalid fleet highLevelStatus response');
+        }
+    });
+    it('keeps the shared parser independent and leaves other topics outside this validator', () => {
+        const raw = wire({}, {highLevelStatus: {state_name: {bad: true}}, pose: {keep: true}});
+        expect(parseFleetRobots([raw])[0]).toBe(raw);
+        const otherTopics = wire({}, {status: {is_charging: 'false'}, gnssStatus: {fix_valid: 'false'}, power: {v_battery: 'bad'}});
+        expect(() => validateFleetHighLevelStatus([otherTopics])).not.toThrow();
+        expect(otherTopics.topics?.gnssStatus).toEqual({fix_valid: 'false'});
+    });
+});
+
+describe('Fleet targeted GNSS validator', () => {
+    const base = {fix_type: 6, rtk_mode: 3, fix_valid: true, dead_reckoning: false, capability_flags: 1, value_flags: 1};
+    it.each([
+        {name: 'FIX', value: base, percent: 100},
+        {name: 'FLOAT', value: {...base, rtk_mode: 2}, percent: 80},
+        {name: '3D', value: {...base, capability_flags: 0, value_flags: 0}, percent: 40},
+        {name: 'UNKNOWN enum', value: {...base, fix_type: 999}, percent: 0},
+        {name: 'UNKNOWN mode', value: {...base, rtk_mode: 999}, percent: 0},
+        {name: 'finite fractional enum', value: {...base, fix_type: -0.5}, percent: 0},
+        {name: 'future mask bits', value: {...base, capability_flags: 0x80000001, value_flags: 0x80000001}, percent: 100},
+        {name: 'maximum uint32', value: {...base, capability_flags: 0xffffffff, value_flags: 0xffffffff}, percent: 100},
+    ])('preserves $name, references, extra fields and existing classification', ({value, percent}) => {
+        const gnss = {...value, extra: {keep: true}, horizontal_accuracy_m: 'outside this validator'};
+        const raw = wire({}, {gnssStatus: gnss, other: {keep: true}});
+        const robots = parseFleetRobots([raw]);
+        const before = JSON.stringify(robots);
+        validateFleetGnssStatus(robots);
+        expect(robots[0]).toBe(raw);
+        expect(robots[0].topics?.gnssStatus).toBe(gnss);
+        expect(JSON.stringify(robots)).toBe(before);
+        expect(deriveFleetRow(raw).gpsPercent).toBe(percent);
+    });
+    it.each(['fix_type', 'rtk_mode', 'capability_flags', 'value_flags'])('rejects nonfinite %s without changing the input', field => {
+        for (const value of [NaN, Infinity, -Infinity]) {
+            const gnss: Record<string, unknown> = {...base, [field]: value};
+            expect(() => validateFleetGnssStatus([wire({}, {gnssStatus: gnss})])).toThrow('Invalid fleet gnssStatus response');
+            expect(gnss[field]).toBe(value);
+        }
+    });
+    it('does not extend the shared identity parser to GNSS validation', () => {
+        const raw = wire({}, {gnssStatus: {fix_valid: 'false'}});
+        expect(parseFleetRobots([raw])[0]).toBe(raw);
     });
 });
