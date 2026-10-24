@@ -1,0 +1,44 @@
+# Navigate point-to-point to an absolute map-frame pose, independent of the
+# coverage planner. Target must lie inside an authorized area (mowing or
+# navigation-only, see MapArea.msg's is_navigation_area) — BoundaryGuard and
+# LocalizationGuard protect the transit exactly as they protect mowing (their
+# only exemption for this command is the blade-off dock transit, as for
+# mowing). The blade is never enabled on this path.
+#
+# Accepted only from a settled, undocked rest state. Otherwise success=false
+# and nothing changes; reason is one of:
+#   invalid_pose            x, y or yaw is NaN/Inf
+#   busy                    a mission (a GOTO included) or a transition is
+#                           active — no hot pre-emption; send COMMAND_STOP,
+#                           wait for IDLE, then a new request
+#   critical_dock_failure   a critical-battery docking failed; an operator
+#   critical_charge_hold    command / the charge hold must be resolved first
+#   battery_charge_pending  a battery-driven dock/charge is unfinished;
+#                           COMMAND_STOP or COMMAND_HOME releases it
+#   docked                  on the charger or mid-undock (GOTO does not undock)
+#   heading_not_calibrated  no heading seed yet this session
+#   localization_degraded   the localization-degraded latch is set
+#   battery_unknown         no recent valid battery voltage
+#   battery_low             at or below the low-battery docking level
+#   maintenance_active
+#   unsupported_tree        the loaded behavior tree lacks a branch GOTO
+#                           relies on (IdleSequence, StopHoldSequence,
+#                           GotoSequence) — logged at startup
+#
+# An accepted request revokes any fleet ownership (~/fleet_yield), like every
+# other accepted operator command.
+#
+# Returns success=true if the request was accepted; the actual navigation
+# outcome is reported via /behavior_tree_node/high_level_status, briefly,
+# before the tree returns to IDLE: GOTO_REACHED, GOTO_FAILED,
+# GOTO_LOW_BATTERY_DOCKED, GOTO_LOW_BATTERY_DOCK_FAILED or
+# GOTO_CRITICAL_BATTERY_DOCKED. No request ID correlates a status with a
+# request and the status is not latched: subscribe to high_level_status BEFORE
+# calling this service, then wait for GOTO_ACTIVE after success and for the
+# next terminal name (or a non-GOTO state if the GOTO was interrupted).
+float64 x
+float64 y
+float64 yaw
+---
+bool success
+string reason
