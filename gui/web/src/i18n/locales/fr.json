@@ -104,6 +104,7 @@
     }
   },
   "settingsHardwareBackend": {
+    "title": "Pont matériel",
     "active": "Pont matériel actif",
     "names": {
       "mowgli": "Carte Mowgli (STM32)",
@@ -274,7 +275,8 @@
       "ntrip": "NTRIP",
       "vesc": "VESC",
       "tfluna-front": "TF-Luna avant",
-      "tfluna-edge": "TF-Luna de bord"
+      "tfluna-edge": "TF-Luna de bord",
+      "openmower": "Pont OpenMower"
     },
     "containerStates": {
       "running": "En cours",
@@ -4250,6 +4252,8 @@
     "Motor control": "Contrôle moteur",
     "IMU": "IMU",
     "Diagnostics": "Diagnostics",
+    "Navigation": "Navigation",
+    "Obstacles": "Obstacles",
     "Other": "Autre"
   },
   "hookNotifications": {

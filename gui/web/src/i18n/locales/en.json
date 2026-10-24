@@ -104,6 +104,7 @@
     }
   },
   "settingsHardwareBackend": {
+    "title": "Hardware backend",
     "active": "Active backend",
     "names": {
       "mowgli": "Mowgli board (STM32)",
@@ -274,7 +275,8 @@
       "ntrip": "NTRIP",
       "vesc": "VESC",
       "tfluna-front": "Front TF-Luna",
-      "tfluna-edge": "Edge TF-Luna"
+      "tfluna-edge": "Edge TF-Luna",
+      "openmower": "OpenMower bridge"
     },
     "containerStates": {
       "running": "Running",
@@ -4254,6 +4256,8 @@
     "Motor control": "Motor control",
     "IMU": "IMU",
     "Diagnostics": "Diagnostics",
+    "Navigation": "Navigation",
+    "Obstacles": "Obstacles",
     "Other": "Other"
   },
   "hookNotifications": {

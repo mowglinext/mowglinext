@@ -128,6 +128,13 @@ const CATALOG: Record<string, ParamMeta> = {
   motor_temp_error_c: {label: "paramCatalog.motor_temp_error_c.label", description: "paramCatalog.motor_temp_error_c.description", tier: "middle", group: "Diagnostics", unit: "°C"},
 };
 
+const UNCURATED_GROUP = "Other";
+
+/** Every group the parameter editor can show; each is an i18n key under paramGroups. */
+export const PARAM_GROUPS: readonly string[] = [
+  ...new Set([...Object.values(CATALOG).map((meta) => meta.group), UNCURATED_GROUP]),
+];
+
 /** shortName returns the trailing segment of a fully-qualified parameter name. */
 export function paramShortName(name: string): string {
   const parts = name.split(/[./]/).filter(Boolean);
@@ -142,7 +149,7 @@ export function paramMeta(name: string): ParamMeta {
       label: short,
       description: "paramCatalog.uncurated.description",
       tier: "expert",
-      group: "Other",
+      group: UNCURATED_GROUP,
     }
   );
 }
