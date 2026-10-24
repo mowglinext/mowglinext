@@ -32,10 +32,11 @@ MowgliNext uses BehaviorTree.CPP v4 for reactive, composable robot control.
 | 6 | `COMMAND_RECORD_CANCEL` | Cancel recording, discard trajectory |
 | 7 | `COMMAND_MANUAL_MOW` | Enter manual mowing mode |
 | 8 | `COMMAND_STOP` | Stop in place / hold — motion halted, blade off, stays put (does **not** drive to the dock; that is `COMMAND_HOME`). Backs the GUI's "Stop Manual" and "Pause" buttons |
+| 9 | `COMMAND_GOTO` | Drive to a map-frame pose, blade off — started only through `~/goto_pose` (refused on this service) |
 | 254 | `COMMAND_RESET_EMERGENCY` | Reset latched emergency |
 | 255 | `COMMAND_DELETE_MAPS` | Delete all maps |
 
-The service is `/behavior_tree_node/high_level_control`. Two sibling services complete the surface: `~/start_in_area` ("mow this area only") and `~/clear_coverage_resume` ("start fresh" — discard the persisted resume cursor).
+The service is `/behavior_tree_node/high_level_control`. Three sibling services complete the surface: `~/start_in_area` ("mow this area only"), `~/clear_coverage_resume` ("start fresh" — discard the persisted resume cursor) and `~/goto_pose` ("drive to this pose", see `docs/claude/high-level-api.md`).
 
 ## Tree Structure
 
@@ -56,7 +57,8 @@ Root (ReactiveSequence) — re-evaluates all children every tick
 │   └── SensorFaultHandler: blade off, stop, wait
 │
 ├── BoundaryGuard (exempt while charging, under cmd 7/3/5/6/2,
-│   │              and during the blade-off dock transit of a mow run)
+│   │              and during the blade-off dock transit of a mow run
+│   │              or of a GOTO)
 │   ├── Inverter(IsBoundaryViolation) → continue if inside
 │   ├── LethalBoundaryHandler (IsLethalBoundaryViolation) → stop, latch
 │   │   BOUNDARY_EMERGENCY_STOP, hold for operator
@@ -77,8 +79,10 @@ Root (ReactiveSequence) — re-evaluates all children every tick
 └── MainLogic (Fallback — priority order)
     ├── CriticalBatteryDock (IsBatteryLow at battery_critical_pct, default 10 %)
     │   → save, dock, hold on the charger to battery_full_pct (default 95 %),
-    │     then undock and AUTO-CONTINUE the run (no ClearCommand). Only a dead
-    │     charger (IsChargingProgressing) ends the session.
+    │     then, for an active mow (command 1) only, undock and AUTO-CONTINUE
+    │     the run (no ClearCommand). Only a dead charger (IsChargingProgressing)
+    │     ends the session. Other commands stay docked; a GOTO (command 9) also
+    │     clears its command (GOTO_CRITICAL_BATTERY_DOCKED).
     │
     ├── MowingSequence (COMMAND_START = 1)
     │   ├── Nav2ReadyPoll, then UndockOrSkip:
@@ -107,6 +111,12 @@ Root (ReactiveSequence) — re-evaluates all children every tick
     │       : COVERAGE_FAILED_DOCKING; either way blade off, save, dock
     │
     ├── HomeSequence (COMMAND_HOME = 2) → save, dock
+    │
+    ├── GotoSequence (COMMAND_GOTO = 9, started only by ~/goto_pose)
+    │   ├── blade off, StopMoving, GOTO_ACTIVE
+    │   ├── one NavigateToPose to the target (default navigator tree,
+    │   │   bounded by goto_timeout_sec) → GOTO_REACHED / GOTO_FAILED
+    │   └── low battery → halt, dock once, end (no resume)
     │
     ├── RecordingSequence (COMMAND_RECORD_AREA = 3; guard accepts 3/5/6)
     │   ├── RecordArea (samples at area_record_rate_hz, live preview at 2 Hz)

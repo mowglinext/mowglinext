@@ -135,6 +135,7 @@ The five `wheel_pid_*` defaults are pinned in lockstep across template ↔ `mowg
 | `idle_nav2_suspend` (L170) | `false` | `full_system.launch.py:238` (pause Nav2 lifecycle on the dock) | Navigation | launch |
 | `area_simplification_tolerance` (L115) | 0.05 | `full_system.launch.py:262` (Douglas–Peucker on `RecordArea`) | Mapping | launch |
 | `area_record_rate_hz` (L129) | 10.0 | `full_system.launch.py:265` | Mapping | launch |
+| `goto_timeout_sec` (L240) | 300.0 (0 = no limit; invalid values fall back to 300 with an ERROR) | `full_system.launch.py:511` → BT blackboard → `NavigateToPose` in `GotoSequence` (monotonic clock; on expiry the Nav2 goal is cancelled and the GOTO ends `GOTO_FAILED`); guarded by `test_launch_injection.py::test_full_system_injects_goto_timeout` | — | launch |
 | `mowing_enabled` (L308) | `true` | **hardware_bridge only** `mowgli.launch.py:238` (dry-run blade inhibit; guarded by `test_launch_injection.py`) | Mowing | launch |
 | `mowing_speed` (L309) | 0.20 | BT `full_system.launch.py:245` (→ `SetNavMode`); `FollowCoveragePath.speed_fast` `navigation.launch.py:755`; also raises FTC's `max_cmd_vel_speed` clamp L764 | Mowing | dynamic (BT sets it per nav mode, `navigation_nodes.cpp:962`) |
 | `transit_speed` (L310) | 0.20 | BT `full_system.launch.py:244`; `FollowPath.primary_controller.max_linear_vel` `navigation.launch.py:745` | Mowing | dynamic (`navigation_nodes.cpp:961`) |
