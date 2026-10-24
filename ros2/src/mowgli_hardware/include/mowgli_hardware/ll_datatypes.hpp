@@ -52,7 +52,7 @@ namespace mowgli_hardware
 // formats and the operator must reflash. Bump this in lockstep with
 // MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h when an incompatible wire
 // change requires a hard compatibility break.
-static constexpr uint8_t kMowgliProtocolVersion = 8u;
+static constexpr uint8_t kMowgliProtocolVersion = 9u;
 
 // ---------------------------------------------------------------------------
 // Packet type identifiers
@@ -301,13 +301,14 @@ struct LlUiEvent
  *
  * Signed end-to-end: left_ticks/right_ticks carry direction in their sign
  * (no separate direction byte). Per-wheel velocity is computed on the
- * firmware side using the hardware-timer dt, so the host consumes it
- * directly without dividing by a jittery packet-arrival interval.
+ * firmware side using the hardware-timer dt. The host derives elapsed time
+ * from acquisition_millis alongside cumulative ticks, so skipped packets
+ * cannot lose firmware time. Host receive time is used only for clock fitting.
  */
 struct LlOdometry
 {
   uint8_t type;  ///< Must equal PACKET_ID_LL_ODOMETRY
-  uint16_t dt_millis;  ///< Firmware-measured interval since last packet [ms]
+  uint32_t acquisition_millis;  ///< Firmware HAL tick at encoder acquisition; wraps at 2^32 ms
   int32_t left_ticks;  ///< Signed cumulative left encoder ticks
   int32_t right_ticks;  ///< Signed cumulative right encoder ticks
   int16_t left_velocity_mm_s;  ///< Signed left wheel velocity [mm/s]
@@ -551,7 +552,7 @@ struct LlConfigRsp
 static_assert(sizeof(LlStatus) == 38u, "LlStatus layout mismatch");
 static_assert(sizeof(LlImu) == 41u, "LlImu layout mismatch");
 static_assert(sizeof(LlUiEvent) == 5u, "LlUiEvent layout mismatch");
-static_assert(sizeof(LlOdometry) == 17u, "LlOdometry layout mismatch");
+static_assert(sizeof(LlOdometry) == 19u, "LlOdometry layout mismatch");
 static_assert(sizeof(LlResetCause) == 5u, "LlResetCause layout mismatch");
 static_assert(sizeof(LlHeartbeat) == 5u, "LlHeartbeat layout mismatch");
 static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch");

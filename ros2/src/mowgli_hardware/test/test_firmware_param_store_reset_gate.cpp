@@ -41,7 +41,7 @@ TEST(FirmwareParamStoreResetWire, ProtocolV8RequestAndStatusLayoutsArePinned)
 {
   using namespace mowgli_hardware;
 
-  EXPECT_EQ(kMowgliProtocolVersion, 8u);
+  EXPECT_EQ(kMowgliProtocolVersion, 9u);
   EXPECT_EQ(PACKET_ID_LL_PARAM_STORE_RESET, 0x5Bu);
   EXPECT_EQ(kLlParamStoreResetMagic, 0xD3u);
   EXPECT_EQ(PARAM_COMMIT_RESET_PENDING, 6u);
