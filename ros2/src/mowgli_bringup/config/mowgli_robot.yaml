@@ -234,6 +234,10 @@ mowgli:
     # compare; the trajectory preview republishes on its own 2 Hz clock so the
     # GUI path message does not get rebuilt at the sampling rate.
     area_record_rate_hz: 10.0
+    #
+    # goto_timeout_sec: COMMAND_GOTO (~/goto_pose) — a NavigateToPose run longer
+    # than this is cancelled and the GOTO ends on GOTO_FAILED. 0 = no limit.
+    goto_timeout_sec: 300.0
     # Localization-quality gate (LocalizationGuard): pause blade-on mowing
     # while ABSOLUTE POSITION is untrustworthy. Field incident 2026-08-02:
     # >60 s plain-GPS fallback (σ ≈ 1.5 m) drove the robot out of the area
