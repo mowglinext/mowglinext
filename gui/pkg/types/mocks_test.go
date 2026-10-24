@@ -1,6 +1,8 @@
 package types
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +24,8 @@ func TestMockDBProvider_SetGetDelete(t *testing.T) {
 	// Get nonexistent
 	_, err = db.Get("nonexistent")
 	assert.Error(t, err)
+	assert.True(t, errors.Is(err, ErrKeyNotFound))
+	assert.EqualError(t, err, "key nonexistent not found")
 
 	// Delete
 	err = db.Delete("key1")
@@ -100,4 +104,32 @@ func TestMockRosProvider_MultipleSubscribers(t *testing.T) {
 
 	assert.Equal(t, "broadcast", string(received1))
 	assert.Equal(t, "broadcast", string(received2))
+}
+
+func TestMockDBProvider_StorageFailuresRemainDistinct(t *testing.T) {
+	db := NewMockDBProvider()
+	failure := errors.New("storage I/O failure")
+	require.NoError(t, db.Set("present", []byte("true")))
+	db.GetErr = failure
+	for _, key := range []string{"present", "absent"} {
+		_, err := db.Get(key)
+		assert.ErrorIs(t, err, failure)
+		assert.NotErrorIs(t, err, ErrKeyNotFound)
+	}
+	db.GetErr = nil
+	value, err := db.Get("present")
+	require.NoError(t, err)
+	assert.Equal(t, "true", string(value))
+	db.SetErr = failure
+	assert.ErrorIs(t, db.Set("present", []byte("false")), failure)
+	value, err = db.Get("present")
+	require.NoError(t, err)
+	assert.Equal(t, "true", string(value))
+}
+
+func TestKeyNotFoundError_Wrapping(t *testing.T) {
+	err := fmt.Errorf("lookup: %w", KeyNotFoundError{Key: "missing"})
+	assert.ErrorIs(t, err, ErrKeyNotFound)
+	assert.EqualError(t, err, "lookup: key missing not found")
+	assert.NotErrorIs(t, errors.New("key missing not found"), ErrKeyNotFound)
 }

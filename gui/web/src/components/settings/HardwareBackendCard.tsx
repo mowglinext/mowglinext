@@ -7,9 +7,11 @@ export const HardwareBackendCard: React.FC<{ info: HardwareBackendInfo }> = ({ i
     const { t } = useTranslation();
     return (
         <Card size="small" title={t("settingsHardwareBackend.title")} style={{ marginBottom: 16 }}>
+            {info.authority !== 'confirmed' && <Alert type="warning" showIcon message={t(`settingsHardwareBackend.authority.${info.authority}`)} />}
+            {info.authority === 'confirmed' && !info.presetsAvailable && <Alert type="warning" message={t('settingsHardwareBackend.presetsUnavailable')} />}
             <Descriptions size="small" column={1}>
                 <Descriptions.Item label={t("settingsHardwareBackend.active")}>
-                    <Tag color={info.backend === "mavros" ? "blue" : "green"}>
+                    <Tag color={info.authority !== "confirmed" ? "warning" : info.backend === "mavros" ? "blue" : "green"}>
                         {t(`settingsHardwareBackend.names.${info.backend}`)}
                     </Tag>
                 </Descriptions.Item>
@@ -18,8 +20,8 @@ export const HardwareBackendCard: React.FC<{ info: HardwareBackendInfo }> = ({ i
                 <Alert
                     type="info"
                     showIcon
-                    message={t("settingsHardwareBackend.mavrosTitle")}
-                    description={t("settingsHardwareBackend.mavrosPending")}
+                    message={t("settingsHardwareBackend.names.mavros")}
+                    description={t("settingsHardwareBackend.descriptions.mavros")}
                 />
             )}
         </Card>

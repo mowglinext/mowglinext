@@ -2,10 +2,11 @@ import {beforeEach, describe, expect, it, vi} from "vitest";
 import {render, screen, fireEvent, waitFor} from "@testing-library/react";
 import {App} from "antd";
 import {DigEscalationBanner} from "./DigEscalationBanner.tsx";
+import type {useStatus} from "../../hooks/useStatus.ts";
 
 // mowgli_hardware's Status.dig_escalated{,_distance_m,_required_distance_m} —
 // see hardware_bridge_node.cpp's on_clear_dig_escalation and Status.msg.
-const mockStatus = vi.fn();
+const mockStatus = vi.fn<() => ReturnType<typeof useStatus>>();
 vi.mock("../../hooks/useStatus.ts", () => ({useStatus: () => mockStatus()}));
 
 const callCreateMock = vi.fn();

@@ -1,3 +1,4 @@
+import {settingsCoordinate} from '../utils/settingsContract';
 import {visibleRobotGeometry} from "../utils/robotModel";
 import {dockVisualGeometry} from "../components/robot/dockGeometry";
 import {useMowerVisual} from "../hooks/useMowerVisual";
@@ -9,7 +10,7 @@ import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 import {useApi} from "../hooks/useApi.ts";
 import {App, Button} from "antd";
 import turfArea from "@turf/area";
-import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import React, {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
 import {MapArea, Map as MapType} from "../types/ros.ts";
 import DrawControl from "../components/DrawControl.tsx";
@@ -268,8 +269,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
 
     const onMapLoad = useMapBearingCamera({mapInstanceRef, bearing, onBearingChange: handleBearing, interactive: !compact});
 
-    const _datumLon = parseFloat(settings["datum_lon"] ?? 0)
-    const _datumLat = parseFloat(settings["datum_lat"] ?? 0)
+    const _datumLon = settingsCoordinate(settings["datum_lon"])
+    const _datumLat = settingsCoordinate(settings["datum_lat"])
 
     // Datum as [lat, lon, 0] for equirectangular projection
     // (matches the navsat_to_absolute_pose ROS node projection)
@@ -543,6 +544,55 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         }
     }, [curMowingAreaFeature, features, datum, offsetX, offsetY, guiApi, notification, t, updateMowingArea]);
 
+    const buildFeatures = useCallback((areas: MapArea[], type: string, fromLiveMap = false) : Record<string, MowingFeatureBase> => {
+
+
+        return areas?.flatMap((area, index) : MowingFeatureBase[] => {
+            if (!area.area?.points?.length) {
+                return []
+            }
+
+            const nfeat = type=="area" ? new MowingAreaFeature(type + "-" + index.toString() + "-area-0", index+1)
+                : new NavigationFeature(type + "-" + index.toString() + "-area-0");//, offsetX, offsetY, datum.
+            nfeat.setArea(area, offsetX, offsetY, datum);
+            // Preserve source identity separately from editable mowing order.
+            // Restored/imported maps cannot target live ROS areas until saved.
+            // source_working_area_id (mowglinext#637) is the STABLE identity;
+            // source_working_area_index is only the array position at build
+            // time and can point at a different area by the time it is
+            // re-resolved (the area list is rebuilt wholesale on any edit
+            // save) — prefer the id via mowingAreaIndexById where the value
+            // outlives this render (e.g. a later button click).
+            if (fromLiveMap) {
+                nfeat.properties.source_working_area_index = index;
+                nfeat.properties.source_working_area_id = area.id;
+            }
+
+            let obstacles:  ObstacleFeature[] = [];
+
+            if ((nfeat instanceof MowingAreaFeature) && (area.obstacles))
+                obstacles = area.obstacles.map((obstacle, oindex) => {
+                const nobst =  new ObstacleFeature(
+                    type + "-" + index.toString() + "-obstacle-" + oindex.toString(),
+                    nfeat
+                );
+
+                if (obstacle.points)
+                    nobst.transpose(obstacle.points, offsetX, offsetY, datum);
+
+                return nobst;
+
+            })
+            return [nfeat, ...obstacles ]
+        }).reduce((acc, val) :Record<string, MowingFeatureBase> => {
+            if (val.id == undefined) {
+                return acc
+            }
+            acc[val.id] = val;
+            return acc;
+        }, {} as Record<string, MowingFeatureBase>);
+    }, [offsetX, offsetY, datum]);
+
     useEffect(() => {
         // Don't rebuild features from stream data while in edit mode —
         // path/plan becoming undefined when streams stop would wipe user edits.
@@ -602,7 +652,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 Object.entries(old).filter(([k]) => k === "mower" || k.startsWith("mower-"))
             ),
         }))
-    }, [map, path, plan, offsetX, offsetY, datum, editMap, LAYER_COLORS]);
+    }, [map, path, plan, offsetX, offsetY, datum, editMap, LAYER_COLORS, buildFeatures]);
 
     useEffect(() => {
         const labels = buildLabels(Object.values(features))
@@ -620,7 +670,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 feat: feat
             }]
         }))
-    }, [features]);
+    }, [features, buildLabels]);
 
     // For each tracked obstacle (transient /obstacle_tracker/obstacles
     // observation), figure out which mowing area's polygon contains its
@@ -772,7 +822,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 const mowingOrder = f instanceof MowingAreaFeature ? f.getMowingOrder() : undefined;
                 return { id: f.id, name, ftype, areaLabel, mowingOrder };
             });
-    }, [features, t]);
+    }, [features, t, i18n.language]);
 
     const handleReorder = useCallback((id: string, direction: 'up' | 'down') => {
         setFeatures((curr) => {
@@ -791,55 +841,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
             return next;
         });
     }, []);
-
-    function buildFeatures(areas: MapArea[], type: string, fromLiveMap = false) : Record<string, MowingFeatureBase> {
-
-
-        return areas?.flatMap((area, index) : MowingFeatureBase[] => {
-            if (!area.area?.points?.length) {
-                return []
-            }
-
-            const nfeat = type=="area" ? new MowingAreaFeature(type + "-" + index.toString() + "-area-0", index+1)
-                : new NavigationFeature(type + "-" + index.toString() + "-area-0");//, offsetX, offsetY, datum.
-            nfeat.setArea(area, offsetX, offsetY, datum);
-            // Preserve source identity separately from editable mowing order.
-            // Restored/imported maps cannot target live ROS areas until saved.
-            // source_working_area_id (mowglinext#637) is the STABLE identity;
-            // source_working_area_index is only the array position at build
-            // time and can point at a different area by the time it is
-            // re-resolved (the area list is rebuilt wholesale on any edit
-            // save) — prefer the id via mowingAreaIndexById where the value
-            // outlives this render (e.g. a later button click).
-            if (fromLiveMap) {
-                nfeat.properties.source_working_area_index = index;
-                nfeat.properties.source_working_area_id = area.id;
-            }
-
-            let obstacles:  ObstacleFeature[] = [];
-
-            if ((nfeat instanceof MowingAreaFeature) && (area.obstacles))
-                obstacles = area.obstacles.map((obstacle, oindex) => {
-                const nobst =  new ObstacleFeature(
-                    type + "-" + index.toString() + "-obstacle-" + oindex.toString(),
-                    nfeat
-                );
-                
-                if (obstacle.points)
-                    nobst.transpose(obstacle.points, offsetX, offsetY, datum);
-
-                return nobst;
-
-            })
-            return [nfeat, ...obstacles ]
-        }).reduce((acc, val) :Record<string, MowingFeatureBase> => {
-            if (val.id == undefined) {
-                return acc
-            }
-            acc[val.id] = val;
-            return acc;
-        }, {} as Record<string, MowingFeatureBase>);
-    }
 
     // Build the full editable feature set (areas, obstacles and dock) from a
     // Map message. The stream-driven effect above does the same thing but is
@@ -892,7 +893,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     });
 
 
-    const {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream, stateName: highLevelStatus.highLevelStatus.state_name});
+    const {manualMode, handleManualMode, handleStopManualMode, handleStopIntent, handleJoyStart, handleJoyMove, handleJoyStop} = useManualMode({mowerAction, joyStream, stateName: highLevelStatus.highLevelStatus.state_name});
 
     // Toggle dock placement mode: re-pressing the button (or pressing Escape)
     // cancels it, so the crosshair cursor is not a one-way trap.
@@ -1341,11 +1342,20 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // robot is held, START is refused until the hold is released.
     const stateName = highLevelStatus.highLevelStatus.state_name;
     const ackStart = useDigObstructionAck(stateName);
+    const latestMap = useRef(map);
+    useLayoutEffect(() => { latestMap.current = map; }, [map]);
     const startSelectedArea = (key: string) => {
         const item = mowingAreas.find(item => item.key == key);
-        const index = mowingAreaIndexById(map, item?.feat?.properties?.id);
-        if (index === undefined) return Promise.reject(new Error(t("crossHatch.areaUnavailable")));
-        return ackStart(mowerAction("start_in_area", {area: index}))();
+        const selectedId: unknown = item?.feat?.properties?.id;
+        if (typeof selectedId !== "number" || mowingAreaIndexById(latestMap.current, selectedId) === undefined) {
+            return Promise.reject(new Error(t("crossHatch.areaUnavailable")));
+        }
+        return ackStart(async () => {
+            // The map may change while confirmation or clear is pending.
+            const index = mowingAreaIndexById(latestMap.current, selectedId);
+            if (index === undefined) throw new Error(t("crossHatch.areaUnavailable"));
+            await mowerAction("start_in_area", {area: index})();
+        })();
     };
 
     const mowerActions = useMemo(() => ({
@@ -1368,7 +1378,10 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onContinueOrPause:
             stateName === "IDLE_DOCKED" || stateName === "IDLE" || stateName === DIG_OBSTRUCTION_STATE
                 ? ackStart(mowerAction("high_level_control", {Command: 1}))
-                : mowerAction("high_level_control", {Command: 8}),
+                : () => {
+                    handleStopIntent();
+                    return mowerAction("high_level_control", {Command: 8})();
+                },
         // Retain explicit direction/OFF choices in the tree's session policy;
         // direct hardware commands would be overwritten by its next tick.
         onBladeForward: mowerAction("blade_control", {mow_enabled: 1, mow_direction: 0}),
@@ -1376,7 +1389,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         onBladeOff: mowerAction("blade_control", {mow_enabled: 0, mow_direction: 0}),
         onRecordFinish: mowerAction("high_level_control", {Command: 5}),
         onRecordCancel: mowerAction("high_level_control", {Command: 6}),
-    }), [mowerAction, ackStart, stateName]);
+    }), [mowerAction, ackStart, stateName, handleStopIntent]);
 
     // Centered message panel used for the missing-token and missing-datum
     // states — a plain, translated explanation instead of an eternal spinner
@@ -1874,6 +1887,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     visible={highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode}
                     isRecording={highLevelStatus.highLevelStatus.state_name === "RECORDING"}
                     mobile={isMobile}
+                    onStart={handleJoyStart}
                     onMove={handleJoyMove}
                     onStop={handleJoyStop}
                     onFinishRecording={mowerActions.onRecordFinish}

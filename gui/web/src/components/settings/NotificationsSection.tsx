@@ -1,3 +1,4 @@
+import {useExternalSettingsDraft} from "../../hooks/useExternalSettingsDraft.ts";
 import {useCallback, useEffect, useState} from "react";
 import {Alert, App, Button, Card, Spin, Switch, Typography} from "antd";
 import {BellOutlined, ReloadOutlined} from "@ant-design/icons";
@@ -35,7 +36,7 @@ export function NotificationsSection({registerSaver, unregisterSaver}: Notificat
     const guiApi = useApi();
     const {notification} = App.useApp();
     const [settings, setSettings] = useState<NotificationSettings | null>(null);
-    const [draft, setDraft] = useState<NotificationSettingsUpdate>({});
+    const {draft, setDraft, saveDraft} = useExternalSettingsDraft<NotificationSettingsUpdate>();
     const [status, setStatus] = useState<NotificationDeliveryStatus | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [testing, setTesting] = useState(false);
@@ -63,18 +64,14 @@ export function NotificationsSection({registerSaver, unregisterSaver}: Notificat
 
     const onChange = useCallback((patch: NotificationSettingsUpdate) => {
         setDraft((prev) => ({...prev, ...patch}));
-    }, []);
+    }, [setDraft]);
 
-    const isDirty = Object.keys(draft).length > 0;
-
-    const save = useCallback(async (): Promise<boolean> => {
-        if (!isDirty) return true;
+    const save = useCallback((): Promise<boolean> => saveDraft(async (submitted) => {
         try {
             const res = await guiApi.request<NotificationSettings>({
-                path: "/notifications/settings", method: "PUT", body: draft, format: "json",
+                path: "/notifications/settings", method: "PUT", body: submitted, format: "json",
             });
             setSettings(res.data);
-            setDraft({});
             notification.success({message: t("settingsNotifications.saved")});
             void refreshStatus();
             return true;
@@ -82,7 +79,7 @@ export function NotificationsSection({registerSaver, unregisterSaver}: Notificat
             notification.error({message: t("settingsNotifications.saveFailed"), description: apiErrorMessage(e)});
             return false;
         }
-    }, [draft, guiApi, isDirty, notification, refreshStatus, t]);
+    }), [guiApi, notification, refreshStatus, saveDraft, t]);
 
     useEffect(() => {
         registerSaver?.(SAVER_ID, {
@@ -90,7 +87,7 @@ export function NotificationsSection({registerSaver, unregisterSaver}: Notificat
             save,
             revert: () => setDraft({}),
         });
-    }, [draft, registerSaver, save]);
+    }, [draft, registerSaver, save, setDraft]);
     useEffect(() => () => unregisterSaver?.(SAVER_ID), [unregisterSaver]);
 
     const sendTest = useCallback(async () => {

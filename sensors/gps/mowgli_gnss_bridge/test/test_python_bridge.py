@@ -190,6 +190,18 @@ class PythonBridgeContractTest(unittest.TestCase):
             [700, 700, 701],
         )
 
+    def test_source_identity_is_forwarded(self) -> None:
+        bridge = _make_bridge()
+        incoming = UniversalGnssStatus()
+        incoming.fix_type = UniversalGnssStatus.FIX_TYPE_3D_FIX
+        incoming.fix_valid = True
+        incoming.source_id = '/dev/receiver'
+        incoming.source_incarnation = 'session-a'
+        bridge._on_status(incoming)
+        public = bridge._status_pub.messages[-1]
+        self.assertEqual(getattr(public, 'source_id', ''), incoming.source_id)
+        self.assertEqual(getattr(public, 'source_incarnation', ''), incoming.source_incarnation)
+
 
 class PythonCorrectionTrackerParityTest(unittest.TestCase):
     """Vectors mirror test_correction_diagnostic_tracker.cpp."""

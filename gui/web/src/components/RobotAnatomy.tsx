@@ -18,11 +18,12 @@ export interface AnatomyInputs {
   motorTempC: number;
   escTempC: number;
   gpsLabel: string;
-  gpsOk: boolean;
+  gpsOk: boolean | undefined;
   imuYawDeg: number;
-  imuOk: boolean;
+  imuOk: boolean | undefined;
   /** undefined = no live scan-freshness signal available → shown as "unknown". */
   lidarOk?: boolean;
+  lidarDisabled?: boolean;
   wheelLeftRpm: number;
   wheelRightRpm: number;
   bladeOn?: boolean;
@@ -40,8 +41,8 @@ interface PartInfo {
   tone: PartTone;
 }
 
-function boolTone(ok: boolean): PartTone {
-  return ok ? 'ok' : 'warn';
+function boolTone(ok: boolean | undefined): PartTone {
+  return ok === undefined ? 'unknown' : ok ? 'ok' : 'warn';
 }
 
 function partInfo(part: Part, inputs: AnatomyInputs, t: TFunction): PartInfo {
@@ -52,13 +53,14 @@ function partInfo(part: Part, inputs: AnatomyInputs, t: TFunction): PartInfo {
       return {label: t('robotAnatomy.imuYawTitle'), value: inputs.imuOk ? inputs.imuYawDeg.toFixed(0) : t('robotAnatomy.noData'), tone: boolTone(inputs.imuOk)};
     case 'lidar':
       // Without a live scan-freshness signal we refuse to fake "streaming".
+      if (inputs.lidarDisabled) return {label: 'LiDAR', value: t('diagnosticHealth.level.not_applicable'), tone: 'unknown'};
       return inputs.lidarOk === undefined
         ? {label: 'LiDAR', value: t('robotAnatomy.unknown'), tone: 'unknown'}
         : {label: 'LiDAR', value: inputs.lidarOk ? t('robotAnatomy.streaming') : t('robotAnatomy.noScan'), tone: boolTone(inputs.lidarOk)};
     case 'battery':
       return {
         label: t('robotAnatomy.battery'),
-        value: Number.isFinite(inputs.batteryPct) && Number.isFinite(inputs.vBattery)
+        value: Number.isFinite(inputs.batteryPct)
           ? (
               <>
                 <span className="diagnostics-battery-percent">
@@ -66,14 +68,14 @@ function partInfo(part: Part, inputs: AnatomyInputs, t: TFunction): PartInfo {
                 </span>
                 % ·{" "}
                 <span className="diagnostics-battery-voltage">
-                  {inputs.vBattery.toFixed(1)}
+                  {Number.isFinite(inputs.vBattery) ? inputs.vBattery.toFixed(1) : "—"}
                 </span>{" "}
                 V
               </>
             )
           : "—",
         tone: Number.isFinite(inputs.batteryPct)
-          ? boolTone(inputs.batteryPct > 20)
+          ? boolTone(inputs.batteryPct > 50)
           : "unknown",
       };
     case 'blade':

@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import React, { useEffect, useState } from "react";
 import { Alert, Button, Card, Modal, Space, Table, Tag, Tooltip, Typography } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
@@ -44,6 +45,7 @@ const differs = (param: FirmwareParam): boolean =>
  * board's flash (and therefore applied at power-on, before ROS2 connects).
  */
 export const FirmwareParamsCard: React.FC = () => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const guiApi = useApi();
     const {
@@ -386,7 +388,7 @@ export const FirmwareParamsCard: React.FC = () => {
                 confirmLoading={resetRequest?.phase === "sending"}
                 okButtonProps={{ disabled: !canRequestReset }}
                 onCancel={() => setResetConfirmOpen(false)}
-                onOk={sendResetRequest}
+                onOk={asyncHandler(sendResetRequest)}
             >
                 <Paragraph>{t("firmwareParams.resetConfirmBody")}</Paragraph>
                 <Paragraph type="warning">{t("firmwareParams.resetConfirmWarning")}</Paragraph>
@@ -399,7 +401,7 @@ export const FirmwareParamsCard: React.FC = () => {
                 cancelText={t("firmwareParams.resetConfirmCancel")}
                 okButtonProps={{ disabled: !canOfferReboot }}
                 onCancel={() => setRebootConfirmOpen(false)}
-                onOk={sendBoardReboot}
+                onOk={asyncHandler(sendBoardReboot)}
             >
                 <Paragraph>{t("firmwareParams.rebootConfirmBody")}</Paragraph>
                 <Paragraph type="warning">{t("firmwareParams.resetConfirmWarning")}</Paragraph>

@@ -2,6 +2,7 @@ import {HighLevelStatusConstants} from "../types/ros.ts";
 import type {AbsolutePose, GnssStatus, HighLevelStatus, Power, Status} from "../types/ros.ts";
 import {computeBatteryPercent, hasBatteryReading} from "./battery.ts";
 import {deriveGpsStatus} from "./gpsStatus.ts";
+import {isJsonObject} from "./json.ts";
 
 /** Wire shape of GET /api/fleet/robots (gui/pkg/providers/fleet.go). */
 export interface FleetIdentity {
@@ -61,8 +62,79 @@ export const FLEET_API_VERSION = 1;
 /** Accept only the array shape; the e2e mock answers `{}` for unknown routes. */
 export function parseFleetRobots(payload: unknown): FleetRobotWire[] {
     if (!Array.isArray(payload)) return [];
-    return payload.filter((r): r is FleetRobotWire =>
+    const robots = payload.filter((r): r is FleetRobotWire =>
         !!r && typeof r === "object" && typeof (r as FleetRobotWire).identity?.id === "string");
+    const ids = new Set<string>();
+    for (const robot of robots) {
+        const identity = robot.identity;
+        if (!isJsonObject(identity)
+            || ("name" in identity && typeof identity.name !== "string")
+            || ("address" in robot && typeof robot.address !== "string")
+            || ("online" in robot && typeof robot.online !== "boolean")
+            || ("self" in robot && typeof robot.self !== "boolean")
+            || ("last_seen" in robot && robot.last_seen !== null && typeof robot.last_seen !== "string")
+            || ("api_version" in identity && identity.api_version !== null
+                && (typeof identity.api_version !== "number" || !Number.isFinite(identity.api_version)))
+            || ids.has(identity.id)) {
+            throw new Error("Invalid fleet robots response");
+        }
+        ids.add(identity.id);
+    }
+    return robots;
+}
+
+const HIGH_LEVEL_STATUS_ERROR = "Invalid fleet highLevelStatus response";
+const GNSS_STATUS_ERROR = "Invalid fleet gnssStatus response";
+
+function isValidHighLevelStatus(robot: FleetRobotWire): boolean {
+    const value = robot.topics?.highLevelStatus;
+    if (value == null) return true;
+    return isJsonObject(value)
+        && ["state", "current_area", "coverage_percent"].every(key =>
+            value[key] == null || (typeof value[key] === "number" && Number.isFinite(value[key])))
+        && ["state_name", "sub_state_name"].every(key => value[key] == null || typeof value[key] === "string")
+        && ["emergency", "is_charging"].every(key => value[key] == null || typeof value[key] === "boolean");
+}
+
+function isValidGnssStatus(robot: FleetRobotWire): boolean {
+    const value = robot.topics?.gnssStatus;
+    if (value == null) return true;
+    return isJsonObject(value)
+        && ["fix_type", "rtk_mode"].every(key =>
+            value[key] == null || (typeof value[key] === "number" && Number.isFinite(value[key])))
+        && ["fix_valid", "dead_reckoning"].every(key => value[key] == null || typeof value[key] === "boolean")
+        && ["capability_flags", "value_flags"].every(key => value[key] == null
+            || (typeof value[key] === "number" && Number.isInteger(value[key]) && value[key] >= 0 && value[key] <= 0xffffffff));
+}
+
+/** Fleet-page-only validation; peer-map consumers do not use this topic. */
+export function validateFleetHighLevelStatus(robots: FleetRobotWire[]): void {
+    if (!robots.every(isValidHighLevelStatus)) throw new Error(HIGH_LEVEL_STATUS_ERROR);
+}
+
+/** Validate only Fleet's display inputs, preserving shared GNSS decisions. */
+export function validateFleetGnssStatus(robots: FleetRobotWire[]): void {
+    if (!robots.every(isValidGnssStatus)) throw new Error(GNSS_STATUS_ERROR);
+}
+
+export interface RejectedFleetRobot {
+    robot: FleetRobotWire;
+    reason: string;
+}
+
+/**
+ * Split a snapshot into the robots the Fleet page can display and the ones
+ * whose display topics are malformed. One bad peer must not blank the others.
+ */
+export function partitionFleetRobots(robots: FleetRobotWire[]): {robots: FleetRobotWire[]; rejected: RejectedFleetRobot[]} {
+    const valid: FleetRobotWire[] = [];
+    const rejected: RejectedFleetRobot[] = [];
+    for (const robot of robots) {
+        if (!isValidHighLevelStatus(robot)) rejected.push({robot, reason: HIGH_LEVEL_STATUS_ERROR});
+        else if (!isValidGnssStatus(robot)) rejected.push({robot, reason: GNSS_STATUS_ERROR});
+        else valid.push(robot);
+    }
+    return {robots: valid, rejected};
 }
 
 function topic<T>(row: FleetRobotWire, key: string): T | undefined {
@@ -102,6 +174,7 @@ export function deriveFleetRow(row: FleetRobotWire, settings: Record<string, unk
     const fix = topic<AbsolutePose>(row, "gps")?.pose?.pose?.position;
     const gps = deriveGpsStatus(gnss);
     const position = readPosition(fix?.x, fix?.y);
+    const batteryPercent = computeBatteryPercent(hl?.battery_percent, power?.v_battery, settings);
     return {
         id: row.identity.id,
         name: row.identity.name || row.identity.id,
@@ -113,8 +186,8 @@ export function deriveFleetRow(row: FleetRobotWire, settings: Record<string, unk
         subStateName: hl?.sub_state_name ?? "",
         currentArea: hl?.current_area ?? -1,
         coveragePercent: hl?.coverage_percent ?? 0,
-        batteryPercent: computeBatteryPercent(hl?.battery_percent, power?.v_battery, settings),
-        batteryKnown: hasBatteryReading(power?.v_battery),
+        batteryPercent,
+        batteryKnown: hasBatteryReading(power?.v_battery) && Number.isFinite(batteryPercent),
         isCharging: hl?.is_charging ?? status?.is_charging ?? false,
         emergency: hl?.emergency ?? false,
         gpsLabel: gps.label,

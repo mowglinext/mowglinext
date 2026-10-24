@@ -175,7 +175,7 @@ func TestPeerClientSessionRefreshesIdentity(t *testing.T) {
 	client := newPeerClient(strings.TrimPrefix(server.URL, "http://"), time.Now)
 	client.onIdentityUnavailable = func() { invalidated = true }
 	client.onIdentity = func(identity RobotIdentity) { got = identity }
-	err := client.session()
+	_, err := client.session()
 	assert.Error(t, err, "test server closes after receiving all subscriptions")
 	assert.False(t, invalidated, "the initial version stays trusted while the first refresh succeeds")
 	assert.Equal(t, "peer-id", got.ID)

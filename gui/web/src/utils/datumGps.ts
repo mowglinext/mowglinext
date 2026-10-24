@@ -23,7 +23,7 @@ export const requestDatumFromGps = async (
     guiApi: GuiApi,
 ): Promise<{ lat: number; lon: number }> => {
     const res = await guiApi.mowglinext.callCreate("set_datum", {});
-    if (res.error) throw new Error((res.error as any).error);
+    if (res.error) throw new Error(res.error.error);
     const msg: string = (res.data as any)?.message ?? "";
     const parts = msg.split(",");
     if (parts.length === 2) {

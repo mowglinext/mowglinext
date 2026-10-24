@@ -1,5 +1,6 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React, {useMemo} from "react";
-import {Alert, Card, Col, Form, InputNumber, Row, Space, Switch, Tag, Typography} from "antd";
+import {Alert, Card, Col, Form, Row, Space, Switch, Tag, Typography} from "antd";
 import {
     CompassOutlined,
     NodeIndexOutlined,
@@ -15,10 +16,10 @@ const {Text, Paragraph, Link} = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: number | boolean | null) => void;
 };
 
-const asBool = (v: any): boolean => v === true || v === "true";
+const asBool = (v: unknown): boolean => v === true || v === "true";
 
 type Toggle = {
     key: string;
@@ -284,31 +285,31 @@ export const LocalizationSection: React.FC<Props> = ({values, onChange}) => {
                     <Row gutter={[16, 0]}>
                         <Col xs={24} sm={8}>
                             <Form.Item htmlFor="setting-declination_deg" data-setting-key="declination_deg" label={t("settingsLocalization.magneticDeclinationLabel")} tooltip={t("settingsLocalization.magneticDeclinationTooltip")}>
-                                <InputNumber aria-label={t("settingsLocalization.magneticDeclinationLabel") + ", °"} aria-description={t("settingsLocalization.magneticDeclinationTooltip")}  id="setting-declination_deg"
+                                <NumberWithAddon aria-label={t("settingsLocalization.magneticDeclinationLabel") + ", °"} aria-description={t("settingsLocalization.magneticDeclinationTooltip")}  id="setting-declination_deg"
                                     value={values.declination_deg}
                                     onChange={(v) => onChange("declination_deg", v)}
                                     min={-30} max={30} step={0.1} precision={2}
-                                    style={{width: "100%"}} addonAfter="°"
+                                    style={{width: "100%"}} after="°"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={8}>
                             <Form.Item htmlFor="setting-min_horizontal_u" data-setting-key="min_horizontal_u" label={t("settingsLocalization.minHorizontalFieldLabel")} tooltip={t("settingsLocalization.minHorizontalFieldTooltip")}>
-                                <InputNumber aria-label={t("settingsLocalization.minHorizontalFieldLabel") + ", µT"} aria-description={t("settingsLocalization.minHorizontalFieldTooltip")}  id="setting-min_horizontal_u"
+                                <NumberWithAddon aria-label={t("settingsLocalization.minHorizontalFieldLabel") + ", µT"} aria-description={t("settingsLocalization.minHorizontalFieldTooltip")}  id="setting-min_horizontal_u"
                                     value={values.min_horizontal_uT}
                                     onChange={(v) => onChange("min_horizontal_uT", v)}
                                     min={0} max={100} step={1} precision={1}
-                                    style={{width: "100%"}} addonAfter="µT"
+                                    style={{width: "100%"}} after="µT"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={8}>
                             <Form.Item htmlFor="setting-mag_yaw_variance" data-setting-key="mag_yaw_variance" label={t("settingsLocalization.magYawVarianceLabel")} tooltip={t("settingsLocalization.magYawVarianceTooltip")}>
-                                <InputNumber aria-label={t("settingsLocalization.magYawVarianceLabel") + ", rad²"} aria-description={t("settingsLocalization.magYawVarianceTooltip")}  id="setting-mag_yaw_variance"
+                                <NumberWithAddon aria-label={t("settingsLocalization.magYawVarianceLabel") + ", rad²"} aria-description={t("settingsLocalization.magYawVarianceTooltip")}  id="setting-mag_yaw_variance"
                                     value={values.mag_yaw_variance}
                                     onChange={(v) => onChange("mag_yaw_variance", v)}
                                     min={0.0001} max={1} step={0.0001} precision={4}
-                                    style={{width: "100%"}} addonAfter="rad²"
+                                    style={{width: "100%"}} after="rad²"
                                 />
                             </Form.Item>
                         </Col>

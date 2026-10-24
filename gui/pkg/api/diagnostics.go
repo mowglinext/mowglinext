@@ -24,15 +24,17 @@ import (
 
 // DiagnosticsSnapshot is the top-level response for GET /diagnostics/snapshot.
 type DiagnosticsSnapshot struct {
-	Timestamp   string             `json:"timestamp"`
-	Containers  []ContainerHealth  `json:"containers"`
-	System      SystemHealth       `json:"system"`
-	Coverage    []AreaCoverageInfo `json:"coverage"`
-	CrossChecks CrossChecks        `json:"cross_checks"`
+	Timestamp           string             `json:"timestamp"`
+	ContainersAvailable bool               `json:"containers_available"`
+	Containers          []ContainerHealth  `json:"containers"`
+	System              SystemHealth       `json:"system"`
+	Coverage            []AreaCoverageInfo `json:"coverage"`
+	CrossChecks         CrossChecks        `json:"cross_checks"`
 }
 
 // ContainerHealth holds the health summary of a single Docker container.
 type ContainerHealth struct {
+	Component string `json:"component,omitempty"`
 	Name      string `json:"name"`
 	State     string `json:"state"`
 	Status    string `json:"status"`
@@ -41,8 +43,9 @@ type ContainerHealth struct {
 
 // SystemHealth holds host-level health metrics.
 type SystemHealth struct {
-	CpuTemperature float64  `json:"cpu_temperature"`
-	CpuUsage       *float64 `json:"cpu_usage"` // host-wide 0–100%; nil while unavailable/warming up
+	CpuTemperatureAvailable bool     `json:"cpu_temperature_available"`
+	CpuTemperature          float64  `json:"cpu_temperature"`
+	CpuUsage                *float64 `json:"cpu_usage"` // host-wide 0–100%; nil while unavailable/warming up
 }
 
 // AreaCoverageInfo holds per-area coverage data returned by the ROS service.
@@ -190,6 +193,7 @@ func getDiagnosticsSnapshot(dockerProvider types.IDockerProvider, rosProvider ty
 
 		// --- Containers ---
 		if containers, err := dockerProvider.ContainerList(ctx); err == nil {
+			snapshot.ContainersAvailable = true
 			for _, ct := range containers {
 				name := ""
 				if len(ct.Names) > 0 {
@@ -197,6 +201,7 @@ func getDiagnosticsSnapshot(dockerProvider types.IDockerProvider, rosProvider ty
 				}
 				startedAt := time.Unix(ct.Created, 0).UTC().Format(time.RFC3339)
 				snapshot.Containers = append(snapshot.Containers, ContainerHealth{
+					Component: ct.Labels["garden.mowgli.update.image"],
 					Name:      name,
 					State:     ct.State,
 					Status:    ct.Status,
@@ -207,11 +212,9 @@ func getDiagnosticsSnapshot(dockerProvider types.IDockerProvider, rosProvider ty
 
 		// --- System ---
 		snapshot.System.CpuUsage = cpuUsage.Usage()
-		if data, err := os.ReadFile("/sys/class/thermal/thermal_zone0/temp"); err == nil {
-			tempStr := strings.TrimSpace(string(data))
-			if tempMilliC, err := strconv.ParseFloat(tempStr, 64); err == nil {
-				snapshot.System.CpuTemperature = tempMilliC / 1000.0
-			}
+		if temperature, ok := readCPUTemperature("/sys/class/thermal/thermal_zone0/temp"); ok {
+			snapshot.System.CpuTemperature = temperature
+			snapshot.System.CpuTemperatureAvailable = true
 		}
 
 		// Per-area coverage % is no longer tracked (cell grid removed; swath-based coverage TBD).
@@ -219,8 +222,22 @@ func getDiagnosticsSnapshot(dockerProvider types.IDockerProvider, rosProvider ty
 		// --- Cross-checks ---
 		snapshot.CrossChecks = buildCrossChecks(dbProvider)
 
+		c.Header("Cache-Control", "no-store")
 		c.JSON(http.StatusOK, snapshot)
 	}
+}
+
+// Zero is a valid reading only when the file was actually read and parsed.
+func readCPUTemperature(path string) (float64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
+	if err != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0, false
+	}
+	return value / 1000, true
 }
 
 // buildCrossChecks reads the robot config and computes diagnostic checks.
