@@ -1959,7 +1959,8 @@
     "mapRotation": "Rotation de la carte",
     "resetToNorthUp": "Réinitialiser vers le nord",
     "lockRotation": "Verrouiller la rotation de la carte",
-    "unlockRotation": "Déverrouiller la rotation de la carte"
+    "unlockRotation": "Déverrouiller la rotation de la carte",
+    "rotationLockSaveError": "Échec de l'enregistrement du verrouillage de la rotation"
   },
   "mapEditArea": {
     "areaTypeMowing": "Zone de tonte",

@@ -32,7 +32,8 @@ import {useMapEditHistory} from "./map/hooks/useMapEditHistory.ts";
 import {useMapOffset} from "./map/hooks/useMapOffset.ts";
 import {useMapBearing} from "./map/hooks/useMapBearing.ts";
 import {useMapBearingCamera} from "./map/hooks/useMapBearingCamera.ts";
-import {MAP_ROTATION_LOCKED_KEY, mapRotationLocked} from "./map/hooks/mapRotationConfig.ts";
+import {MAP_ROTATION_LOCKED_KEY} from "./map/hooks/mapRotationConfig.ts";
+import {useMapRotationLock} from "./map/hooks/useMapRotationLock.ts";
 import {useManualMode} from "./map/hooks/useManualMode.ts";
 import {useMapEditing, type ShrinkMemory} from "./map/hooks/useMapEditing.ts";
 import {useObstacleOriginals} from "./map/hooks/useObstacleOriginals.ts";
@@ -267,7 +268,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // Extracted hooks
     const {offsetX, offsetY, handleOffsetX, handleOffsetY} = useMapOffset({config, setConfig, notification});
     const {bearing, handleBearing} = useMapBearing({config, setConfig, notification});
-    const rotationLocked = mapRotationLocked(config);
+    const {rotationLocked, setRotationLocked} = useMapRotationLock({config, setConfig, notification});
 
     const onMapLoad = useMapBearingCamera({
         mapInstanceRef,
@@ -1938,9 +1939,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         showCoveragePreview={coveragePreview.enabled}
                         onToggleCoveragePreview={() => coveragePreview.setEnabled((v) => !v)}
                         rotationLocked={rotationLocked}
-                        onToggleRotationLocked={() => void setConfig({
-                            [MAP_ROTATION_LOCKED_KEY]: String(!rotationLocked),
-                        })}
+                        onToggleRotationLocked={() => setRotationLocked(!rotationLocked)}
                         onManualMode={handleManualMode}
                         onStopManualMode={handleStopManualMode}
                         onBackupMap={handleBackupMap}
@@ -2162,9 +2161,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                                 bearing={bearing}
                                                 onChangeBearing={handleBearing}
                                                 rotationLocked={rotationLocked}
-                                                onChangeRotationLocked={(locked) => void setConfig({
-                                                    [MAP_ROTATION_LOCKED_KEY]: String(locked),
-                                                })}
+                                                onChangeRotationLocked={setRotationLocked}
                                             />
                                         </div>
                                     ),

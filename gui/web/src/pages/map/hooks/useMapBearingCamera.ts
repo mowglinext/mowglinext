@@ -35,9 +35,12 @@ export function useMapBearingCamera({
         if (rotationLocked) {
             map.dragRotate.disable();
             map.touchZoomRotate.disableRotation();
+            // Arrow keys with Shift rotate too; a locked map must not turn.
+            map.keyboard.disableRotation();
         } else {
             map.dragRotate.enable();
             map.touchZoomRotate.enableRotation();
+            map.keyboard.enableRotation();
         }
     }, [interactive, rotationLocked]);
 

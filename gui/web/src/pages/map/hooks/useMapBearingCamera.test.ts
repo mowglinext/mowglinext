@@ -12,6 +12,7 @@ function camera() {
         on: vi.fn(), off: vi.fn(),
         dragRotate: {disable: vi.fn(), enable: vi.fn()},
         touchZoomRotate: {disableRotation: vi.fn(), enableRotation: vi.fn()},
+        keyboard: {disableRotation: vi.fn(), enableRotation: vi.fn()},
     };
     return {map, target: map as unknown as MapboxMap};
 }
@@ -106,9 +107,12 @@ describe('saved map camera bearing', () => {
         act(() => result.current({target}));
         expect(map.dragRotate.disable).toHaveBeenCalled();
         expect(map.touchZoomRotate.disableRotation).toHaveBeenCalled();
+        expect(map.keyboard.disableRotation).toHaveBeenCalled();
+        expect(map.keyboard.enableRotation).not.toHaveBeenCalled();
 
         rerender({rotationLocked: false});
         expect(map.dragRotate.enable).toHaveBeenCalled();
         expect(map.touchZoomRotate.enableRotation).toHaveBeenCalled();
+        expect(map.keyboard.enableRotation).toHaveBeenCalled();
     });
 });
