@@ -65,6 +65,12 @@ void markCoverageStarted(BTContext& ctx, uint32_t area);
 /// recognised and any state present was loaded.
 bool loadCoverageResumeState(BTContext& ctx);
 
+/// Consume the first live power sample after auto-restoring a valid mow.
+/// A restart on the charger continues charging before any mission motion,
+/// including snapshots predating battery_charge_pending. Caller serializes
+/// access with the context mutex, as in the power subscriber.
+void observeRestoredMowPower(BTContext& ctx, bool charging);
+
 /// Clear commands/cursors at EndSession or an explicit progress reset. Retain
 /// only cross-hatch orientation metadata when present; this cannot auto-start
 /// the mower. EndSession must finish the phase before calling this function.

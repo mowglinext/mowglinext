@@ -59,6 +59,20 @@
         </Sequence>
       </Fallback>
 
+      <!-- Initial telemetry is a readiness event, not a timeout. Until the
+           first usable Power sample, battery/charger defaults say nothing
+           about whether it is safe to dock, undock or seed heading. Keep this
+           before every motion-capable guard; emergency handling stays first. -->
+      <ReactiveFallback name="InitialPowerGuard">
+        <HasPowerSample/>
+        <Sequence name="WaitingForPower">
+          <SetMowerEnabled enabled="false"/>
+          <StopMoving/>
+          <PublishHighLevelStatus state="1" state_name="WAITING_FOR_POWER"/>
+          <AlwaysFailure/>
+        </Sequence>
+      </ReactiveFallback>
+
       <!-- ================================================================
            GUARD 1.5: Sensor safety (SAFETY_REVIEW_2026-07-23 A-C2 + A-H1)
            Two faults, one response — halt mowing with the blade OFF:
@@ -476,7 +490,11 @@
              with FAILURE so the undock/resume tail is skipped.
              ============================================================ -->
         <Sequence name="CriticalBatteryDock">
+          <!-- Re-enter either battery-driven charge hold after a guard halt
+               or reboot. Recovery shares the critical charging status even
+               when the original entry was the normal low-battery guard. -->
           <Fallback name="CriticalBatteryLowOrDockFailureLatched">
+            <IsBatteryChargePending/>
             <IsCriticalDockFailureLatched/>
             <IsBatteryLow threshold="{battery_critical_pct}" voltage_threshold="{battery_critical_voltage}"/>
           </Fallback>
@@ -487,26 +505,34 @@
           <Inverter name="CriticalChargeStopNotLatched">
             <IsCriticalChargeStopHeld latch_current_stop="false"/>
           </Inverter>
+          <SetBatteryChargePending pending="true"/>
           <!-- After one failed critical docking attempt, hold in an explicit
-               failure state until an operator command requests a retry.
+               failure state until a retry command or physical charger contact.
                Check this before publishing docking status or attempting motion. -->
           <Fallback name="CriticalDockRetryGate">
             <Sequence>
-              <Inverter><IsCriticalDockFailureLatched/></Inverter>
-          <SetMowerEnabled enabled="false"/>
-          <StopMoving/>
-          <PublishHighLevelStatus state="2" state_name="CRITICAL_BATTERY_DOCKING"/>
-          <SaveObstacles/>
-          <ClearCostmap/>
-              <Fallback name="CriticalNavOrStop">
-                <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
-                <!-- Docking failed — stay stopped, battery is critical -->
+              <!-- Charger contact wins over navigation and a saved failure
+                   latch. Recheck while DockRobot runs so contact halts it. -->
+              <ReactiveFallback name="CriticalDockOrCharging">
+                <ConfirmChargingDock/>
                 <Sequence>
-                  <PublishHighLevelStatus state="0" state_name="CRITICAL_BATTERY_NAV_FAILED"/>
-                  <LatchCriticalDockFailure/>
-                  <AlwaysSuccess/>
+                  <Inverter><IsCriticalDockFailureLatched/></Inverter>
+                  <SetMowerEnabled enabled="false"/>
+                  <StopMoving/>
+                  <PublishHighLevelStatus state="2" state_name="CRITICAL_BATTERY_DOCKING"/>
+                  <SaveObstacles/>
+                  <ClearCostmap/>
+                  <Fallback name="CriticalNavOrStop">
+                    <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                    <!-- Docking failed — stay stopped, battery is critical -->
+                    <Sequence>
+                      <PublishHighLevelStatus state="0" state_name="CRITICAL_BATTERY_NAV_FAILED"/>
+                      <LatchCriticalDockFailure/>
+                      <AlwaysSuccess/>
+                    </Sequence>
+                  </Fallback>
                 </Sequence>
-              </Fallback>
+              </ReactiveFallback>
               <IfThenElse name="CriticalDockSucceededOrStayStopped">
                 <IsLastDockSucceeded/>
                 <Sequence>
@@ -570,21 +596,31 @@
                            in a settled state instead of a frozen one. -->
                       <Sequence name="CriticalChargerFailed">
                         <PublishHighLevelStatus state="1" state_name="CHARGER_FAILED"/>
+                        <SetBatteryChargePending pending="false"/>
                         <EndSession/>
                         <ClearCommand/>
                         <AlwaysFailure/>
                       </Sequence>
                     </Fallback>
                   </ReactiveSequence>
+                  <SetBatteryChargePending pending="false"/>
                   <!-- Recovered to the resume level — AUTO-CONTINUE. Undock (BackUp,
                          not opennav UndockRobot: isDocked() is fragile with RTK drift at
                          the dock) and fall through WITHOUT EndSession/ClearCommand, so
                          current_command stays 1 and MowingSequence resumes coverage from
                          the saved cursor on the next tick. Mirrors BatteryGuard's tail. -->
-                  <IsResumeUndockAllowed max_attempts="3"/>
-                  <PublishHighLevelStatus state="2" state_name="RESUMING_UNDOCKING"/>
-                  <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
-                  <PublishHighLevelStatus state="2" state_name="MOWING"/>
+                  <!-- Critical docking protects every command, including IDLE.
+                       Only an active mow authorizes the recovery motion. The
+                       reactive gate also cancels an undock on a new command. -->
+                  <ReactiveSequence name="CriticalResumeMow">
+                    <IsCommand command="1"/>
+                    <Sequence>
+                      <IsResumeUndockAllowed max_attempts="3"/>
+                      <PublishHighLevelStatus state="2" state_name="RESUMING_UNDOCKING"/>
+                      <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
+                      <PublishHighLevelStatus state="2" state_name="MOWING"/>
+                    </Sequence>
+                  </ReactiveSequence>
                 </Sequence>
                 <AlwaysSuccess/>
               </IfThenElse>
@@ -605,6 +641,13 @@
              steps are not replayed while a later action is RUNNING. -->
         <ReactiveSequence name="MowingSequence">
           <IsCommand command="1"/>
+          <!-- A restored charge sample can arrive while startup is already
+               running. Yield to shared battery recovery before undocking.
+               Preserve an in-flight low-battery safety docking action. -->
+          <Fallback name="MowChargeRecoveryGate">
+            <Inverter><IsBatteryChargePending/></Inverter>
+            <IsDocking/>
+          </Fallback>
           <Sequence name="MowingAction">
 
           <!-- Wait for Nav2 to be fully active. Polled check: finishes in
@@ -899,9 +942,13 @@
                   <MarkGuardHalt reason="battery"/>
                   <SetMowerEnabled enabled="false"/>
                   <StopMoving/>
+                  <SetBatteryChargePending pending="true"/>
                   <PublishHighLevelStatus state="2" state_name="LOW_BATTERY_DOCKING"/>
                   <ClearCostmap/>
-                  <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                  <ReactiveFallback name="LowBatteryDockOrCharging">
+                    <ConfirmChargingDock/>
+                    <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                  </ReactiveFallback>
                   <PublishHighLevelStatus state="1" state_name="CHARGING"/>
                   <!-- Charge hold until battery_full_pct AND the charge current
                        has tapered (IsChargeCurrentBelow) — battery_full_pct
@@ -946,11 +993,14 @@
                     </RetryUntilSuccessful>
                     <Sequence name="ChargerFailed">
                       <PublishHighLevelStatus state="1" state_name="CHARGER_FAILED"/>
+                      <SetBatteryChargePending pending="false"/>
                       <ClearCommand/>
                       <AlwaysFailure/>
                     </Sequence>
                     </Fallback>
                   </ReactiveSequence>
+                  <SetBatteryChargePending pending="false"/>
+                  <IsCommand command="1"/>
                   <IsResumeUndockAllowed max_attempts="3"/>
                   <PublishHighLevelStatus state="2" state_name="RESUMING_UNDOCKING"/>
                   <WaitForDuration duration_sec="1.0"/>

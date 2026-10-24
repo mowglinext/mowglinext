@@ -98,6 +98,18 @@ bool hasCoverageResumeState(const BTContext& ctx)
                      });
 }
 
+void observeRestoredMowPower(BTContext& ctx, bool charging)
+{
+  if (!ctx.restored_mow_charge_check_pending)
+    return;
+  ctx.restored_mow_charge_check_pending = false;
+  if (charging && ctx.current_command == 1)
+  {
+    ctx.battery_charge_pending = true;
+    ctx.critical_dock_failure_persistence_requested = true;
+  }
+}
+
 bool beginCoverageOrientation(BTContext& ctx, uint32_t area)
 {
   auto it = ctx.cross_hatch.find(area);
@@ -177,6 +189,7 @@ bool saveCoverageResumeState(const BTContext& ctx)
   // the cursors, retaining only cross-hatch metadata when needed.
   out << "current_command " << static_cast<unsigned>(ctx.current_command) << '\n';
   out << "critical_charge_stop_latched " << (ctx.critical_charge_stop_latched ? 1 : 0) << '\n';
+  out << "battery_charge_pending " << (ctx.battery_charge_pending ? 1 : 0) << '\n';
   out << "critical_dock_failure_latched " << (ctx.critical_dock_failure_latched ? 1 : 0) << '\n';
   // Single-area mode (a ~/start_in_area targeted run). Persisted for the same
   // reason as current_command: a restart mid-run auto-re-enters MowingSequence,
@@ -314,6 +327,13 @@ bool loadCoverageResumeState(BTContext& ctx)
       int v;
       if (ls >> v && (v == 0 || v == 1))
         ctx.critical_charge_stop_latched = v != 0;
+    }
+    else if (tag == "battery_charge_pending")
+    {
+      // Optional v3 row: older snapshots remain resumable unchanged.
+      int v = 0;
+      if (ls >> v && (v == 0 || v == 1))
+        ctx.battery_charge_pending = v != 0;
     }
     else if (tag == "critical_dock_failure_latched")
     {

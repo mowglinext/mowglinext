@@ -44,6 +44,17 @@ BT::NodeStatus IsEmergency::tick()
 }
 
 // ---------------------------------------------------------------------------
+// HasPowerSample
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus HasPowerSample::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  return ctx->power_sample_received ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+// ---------------------------------------------------------------------------
 // IsCharging
 // ---------------------------------------------------------------------------
 
@@ -312,6 +323,46 @@ BT::NodeStatus LatchCriticalDockFailure::tick()
   std::lock_guard<std::mutex> lock(ctx->context_mutex);
   ctx->critical_dock_failure_latched = true;
   ctx->critical_dock_failure_persistence_requested = true;
+  return BT::NodeStatus::SUCCESS;
+}
+
+BT::NodeStatus ConfirmChargingDock::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  if (!ctx->latest_power.charger_enabled)
+  {
+    return BT::NodeStatus::FAILURE;
+  }
+  ctx->last_dock_succeeded = true;
+  if (ctx->critical_dock_failure_latched)
+  {
+    ctx->battery_charge_pending = true;
+    ctx->critical_dock_failure_latched = false;
+    ctx->critical_dock_failure_persistence_requested = true;
+  }
+  return BT::NodeStatus::SUCCESS;
+}
+
+BT::NodeStatus IsBatteryChargePending::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  return ctx->battery_charge_pending ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
+BT::NodeStatus SetBatteryChargePending::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  const auto pending = getInput<bool>("pending");
+  if (!pending)
+    return BT::NodeStatus::FAILURE;
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  if (ctx->battery_charge_pending != pending.value())
+  {
+    ctx->battery_charge_pending = pending.value();
+    ctx->critical_dock_failure_persistence_requested = true;
+  }
   return BT::NodeStatus::SUCCESS;
 }
 
