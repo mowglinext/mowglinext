@@ -1,5 +1,5 @@
 import {describe, expect, it, vi, beforeEach} from "vitest";
-import {renderHook, waitFor, screen, fireEvent} from "@testing-library/react";
+import {act, renderHook, waitFor, screen, fireEvent} from "@testing-library/react";
 import {App} from "antd";
 import React from "react";
 import {useDigObstructionAck} from "./useDigObstructionAck.ts";
@@ -36,11 +36,30 @@ describe("useDigObstructionAck", () => {
         const start = vi.fn().mockResolvedValue(undefined);
         const {result} = renderHook(() => useDigObstructionAck("DIG_OBSTRUCTION"), {wrapper});
 
-        const pending = result.current(start)();
-        fireEvent.click((await screen.findByText(/resume mowing/i)).closest("button")!);
-        await pending;
+        let pending: Promise<void>;
+        await act(async () => {
+            pending = result.current(start)();
+            await Promise.resolve(); // Yield without waiting for the user-dependent confirmation.
+        });
+        const dialog = await screen.findByRole("dialog");
+        expect(dialog).toHaveTextContent(/resume from the blocked spot/i);
+        // jsdom does not run CSS animations or emit their completion events.
+        // rc-motion selects the WebKit event when AnimationEvent is unavailable.
+        const animationEnd = "AnimationEvent" in window ? "animationend" : "webkitAnimationEnd";
+        await waitFor(() => expect(dialog).toHaveClass("ant-zoom-appear-active"));
+        fireEvent(dialog, new Event(animationEnd, {bubbles: true}));
+        await waitFor(() => expect(dialog).toBeVisible());
+        const confirmButton = (await screen.findByText(/resume mowing/i)).closest("button")!;
+        await act(async () => {
+            fireEvent.click(confirmButton);
+            await pending;
+        });
+        await waitFor(() => expect(dialog).toHaveClass("ant-zoom-leave-active"));
+        fireEvent(dialog, new Event(animationEnd, {bubbles: true}));
+        await waitFor(() => expect(screen.queryByRole("dialog", {hidden: true})).not.toBeInTheDocument());
 
         expect(callCreateMock).toHaveBeenCalledWith("clear_dig_escalation", {});
+        expect(callCreateMock).toHaveBeenCalledTimes(1);
         expect(start).toHaveBeenCalledTimes(1);
     });
 

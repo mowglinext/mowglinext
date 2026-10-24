@@ -1,3 +1,8 @@
+import {DiagnosticHealthSummary} from '../components/diagnostics/DiagnosticHealthSummary';
+import {deriveDiagnosticHealth, diagnosticTelemetryFresh, containerObservationLevel, unavailableReport, mavrosWheelRequirement} from '../utils/diagnosticHealth';
+import {useMultiplexStatus} from '../hooks/useWS';
+import {powerDisplayValue} from '../utils/physicalTelemetry';
+import {emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
 import {useBladeTelemetry} from '../hooks/useBladeTelemetry';
 import {useHardwareBackend} from '../hooks/useHardwareBackend';
 import {motorDisplayValue, wheelControllerFromDiagnostics, wheelControllerFields, showEncoderWheel, type WheelRole} from '../utils/motorTelemetry';
@@ -37,16 +42,15 @@ import {
     StopOutlined,
     ThunderboltOutlined,
     VideoCameraOutlined,
-    WarningOutlined,
 } from "@ant-design/icons";
 import {ContentType} from "../api/Api.ts";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
-import {useEmergency} from "../hooks/useEmergency.ts";
-import {usePower} from "../hooks/usePower.ts";
+import {useEmergencyState} from "../hooks/useEmergency.ts";
+import {usePowerState} from "../hooks/usePower.ts";
 import {useStatus} from "../hooks/useStatus.ts";
 import {BladeDirectionDisplay} from "../components/BladeDirectionDisplay.tsx";
 import {useGPS} from "../hooks/useGPS.ts";
-import {useGnssStatus} from "../hooks/useGnssStatus.ts";
+import {useGnssStatusState} from "../hooks/useGnssStatus.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
 import {useBTLog, isBTNodeStale} from "../hooks/useBTLog.ts";
 import {useCogHeading} from "../hooks/useCogHeading.ts";
@@ -55,8 +59,8 @@ import {useCalibrationStatus} from "../hooks/useCalibrationStatus.ts";
 import {useWheelOdom} from "../hooks/useWheelOdom.ts";
 import {useWheelTicks} from "../hooks/useWheelTicks.ts";
 import {useWheelRpm} from "../hooks/useWheelRpm.ts";
-import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
-import {useDiagnostics} from "../hooks/useDiagnostics.ts";
+import {useDiagnosticsSnapshot, SNAPSHOT_STALE_MS} from "../hooks/useDiagnosticsSnapshot.ts";
+import {useDiagnostics, type TimestampedDiagnosticStatus} from "../hooks/useDiagnostics.ts";
 import {useTimeFormat} from "../hooks/useTimeFormat.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
@@ -69,7 +73,7 @@ import {useSearchParams} from "react-router-dom";
 import {App} from "antd";
 import {useTranslation} from "react-i18next";
 import {useSettings} from "../hooks/useSettings.ts";
-import {computeBatteryPercent, getBatteryLevel, hasBatteryReading} from "../utils/battery.ts";
+import {computeBatteryPercent} from "../utils/battery.ts";
 import {yawFromQuaternion, rollFromQuaternion, pitchFromQuaternion, wrapDeg180} from "../utils/quaternion.ts";
 import {useApi} from "../hooks/useApi.ts";
 import {useFusionGraphDiagnostics} from "../hooks/useFusionGraphDiagnostics.ts";
@@ -83,13 +87,15 @@ import {TelemetryStat} from "../components/TelemetryStat.tsx";
 import {BTStateGraph} from "../components/BTStateGraph.tsx";
 import {RobotAnatomy} from "../components/RobotAnatomy.tsx";
 import {AlertOutlined} from "@ant-design/icons";
-import {DashCard} from "../components/dashboard/Card.tsx";
 import {GnssLiveDiagnosticsCard} from "../components/gnss/GnssLiveDiagnosticsCard.tsx";
 import {clampTinyToZero} from "../utils/telemetryFormat.ts";
 import {detectNav2Recovery} from "../utils/nav2Recovery.ts";
-import {groupAlertsByComponent} from "../utils/diagnosticsAlerts.ts";
+import {autonomousReceptionRequired, backendReceptionReports, type RequiredDiagnosticSource} from '../utils/diagnosticAlertPresentation';
+import type {ValidatedTelemetry} from '../hooks/useValidatedTelemetry';
+import {DiagnosticAlertsPanel} from '../components/diagnostics/DiagnosticAlertsPanel';
 import {deriveLidarAnchor} from "../utils/lidarAnchor.ts";
 import {useValueSince} from "../hooks/useValueSince.ts";
+import {apiHost} from "../utils/apiHost.ts";
 import {SystemPowerCard} from "../components/SystemPowerCard.tsx";
 import {BlackboxPanel} from "../components/BlackboxPanel.tsx";
 import "./DiagnosticsPage.css";
@@ -147,28 +153,12 @@ const ESC_STATUS: Record<number, {labelKey: string; color: string}> = {
 
 // ── sub-components ───────────────────────────────────────────────────────────
 
-const HEALTH_BADGE_VALUE_MARKER = "\uFFF0";
-
-function HealthBadge({label, color, numericValue, valueWidth = 3}: {
-    label: string;
-    color: string;
-    numericValue?: string;
-    valueWidth?: number;
-}) {
-    const parts = label.split(HEALTH_BADGE_VALUE_MARKER);
-    return (
-        <Tag color={color} style={{fontSize: 12, padding: "2px 8px"}}>
-            {parts.length > 1 && numericValue !== undefined ? (
-                <>{parts[0]}<span className="diagnostics-health-badge-number" style={{inlineSize: `${valueWidth}ch`}}>{numericValue}</span>{parts.slice(1).join(HEALTH_BADGE_VALUE_MARKER)}</>
-            ) : label}
-        </Tag>
-    );
-}
-
 // A Tag whose color is not the sole signal: the label text never changes
 // (e.g. "ESC power"), so pair it with a check/cross icon whose SHAPE (not
 // just color) carries the on/off state for color-blind / low-vision users.
-function BoolStatusTag({label, ok}: {label: string; ok: boolean}) {
+function BoolStatusTag({label, ok}: {label: string; ok: boolean | undefined}) {
+    const {t} = useTranslation();
+    if (ok === undefined) return <Tag color="warning">{label}: {t('telemetry.statusUnknown')}</Tag>;
     return (
         <Tag color={ok ? "success" : "default"} icon={ok ? <CheckCircleOutlined/> : <CloseCircleOutlined/>}>
             {label}
@@ -193,37 +183,41 @@ export const DiagnosticsPage = () => {
     const {formatAbsolute, formatLogTime} = useTimeFormat();
     const isMobile = useIsMobile();
 
-    const {highLevelStatus} = useHighLevelStatus();
-    const emergency = useEmergency();
-    const power = usePower();
+    const {highLevelStatus, telemetry: highLevelTelemetry} = useHighLevelStatus();
+    const {emergency, telemetry: emergencyTelemetry} = useEmergencyState();
+    const {telemetry: powerTelemetry} = usePowerState();
+    const power = powerTelemetry.data;
+    const connected = useMultiplexStatus() === 'open';
     const status = useStatus();
     const hardware = useHardwareBackend();
     const blade = useBladeTelemetry(hardware.loading ? undefined : hardware.backend);
     const bladeEscStatus = blade.fresh ? status.mower_esc_status : undefined;
     const gps = useGPS();
-    const gnssStatus = useGnssStatus();
+    const {status: gnssStatus, telemetry: gnssTelemetry} = useGnssStatusState();
     const pose = useFusionOdom();
     const btNodeStates = useBTLog();
     const {imu: cogImu, lastMessageAt: cogLastAt} = useCogHeading();
     const {imu: magImu, lastMessageAt: magLastAt} = useMagYaw();
     const wheelOdom = useWheelOdom();
     const wheelTicks = useWheelTicks();
-    const {status: calibrationStatus, error: calibrationError, refresh: refreshCalibration} = useCalibrationStatus();
+    const {status: calibrationStatus, readError: calibrationReadError, refresh: refreshCalibration} = useCalibrationStatus();
 
     // Tick state once a second so the "Live/Stale" tags update even when no
     // new message has arrived (staleness is time-based, not message-driven).
-    const [nowMs, setNowMs] = useState(Date.now());
+    // Keep the existing pulse even when civil time is frozen or corrected.
+    const [{nowMs}, setClock] = useState(() => ({nowMs: Date.now()}));
     useEffect(() => {
-        const id = setInterval(() => setNowMs(Date.now()), 1000);
+        const id = setInterval(() => setClock({nowMs: Date.now()}), 1000);
         return () => clearInterval(id);
     }, []);
     const {modal} = App.useApp();
-    const {snapshot, loading, error: snapshotError, refresh} = useDiagnosticsSnapshot();
-    const {diagnostics} = useDiagnostics();
-    const wheelControllers = {left_wheel: wheelControllerFromDiagnostics(diagnostics, 'left_wheel', nowMs),
-        right_wheel: wheelControllerFromDiagnostics(diagnostics, 'right_wheel', nowMs)};
-    const finitePower = (value: number | undefined) =>
-        typeof value === "number" && Number.isFinite(value) ? value : undefined;
+    const {snapshot, receivedAt: snapshotReceivedAt, loading, error: snapshotError, readError: snapshotReadError, refresh} = useDiagnosticsSnapshot();
+    const {settings, loading: episodeSettingsLoading} = useSettings();
+    const {diagnostics, disconnectedAt: diagnosticsDisconnectedAt} = useDiagnostics(JSON.stringify([apiHost(), hardware.robotName, hardware.backend]),
+        {connected, lidarEnabled: settings.lidar_enabled, ready: hardware.backend !== 'unknown' && !episodeSettingsLoading});
+    const nowMonotonic = performance.now();
+    const wheelControllers = {left_wheel: wheelControllerFromDiagnostics(diagnostics, 'left_wheel', nowMonotonic),
+        right_wheel: wheelControllerFromDiagnostics(diagnostics, 'right_wheel', nowMonotonic)};
     // Mobile uses collapsible panels; desktop shows sensors in the Robot tab.
     // Subscribe to the high-rate IMU stream only in the visible sensor view.
     // ?tab=parameters opens the advanced ROS parameters editor (formerly its
@@ -234,7 +228,6 @@ export const DiagnosticsPage = () => {
     const [activeTab, setActiveTab] = useState(requestedTab ?? "system");
     const sensorsPanelOpen = isMobile ? openPanels.includes("sensors") : activeTab === "robot";
     const imu = useImu(sensorsPanelOpen);
-    const {settings} = useSettings();
     const guiApi = useApi();
     const wheelRpm = useWheelRpm({wheelRadiusM: (settings?.wheel_radius as number | undefined) ?? 0.04475});
     const {stats: fusionStats} = useFusionGraphDiagnostics();
@@ -242,15 +235,15 @@ export const DiagnosticsPage = () => {
 
     // ── derived values ───────────────────────────────────────────────────────
 
-    const batteryPercent = useMemo(
-        () => computeBatteryPercent(highLevelStatus.battery_percent, power.v_battery, settings),
-        [highLevelStatus.battery_percent, power.v_battery, settings],
-    );
-
-    const batteryKnown = hasBatteryReading(power.v_battery);
+    const highLevelFresh = diagnosticTelemetryFresh(highLevelTelemetry, nowMonotonic);
+    const powerFresh = diagnosticTelemetryFresh(powerTelemetry, nowMonotonic);
+    const batteryPercent = computeBatteryPercent(highLevelFresh ? highLevelStatus.battery_percent : undefined,
+        powerFresh ? power.v_battery : undefined, settings);
+    const batteryKnown = connected && Number.isFinite(batteryPercent);
 
     const gpsFix = useMemo(() => deriveGpsStatus(gnssStatus), [gnssStatus]);
     const gpsFixType = gpsFix.label;
+    const gpsAccuracy = displayHorizontalAccuracyM(gnssStatus);
 
     const orientation = pose.pose?.pose?.orientation;
     const qx = orientation?.x ?? 0;
@@ -262,23 +255,10 @@ export const DiagnosticsPage = () => {
     const pitch = pitchFromQuaternion(qx, qy, qz, qw);
     const poseZ = pose.pose?.pose?.position?.z ?? 0;
 
-    const allContainersOk = !snapshot?.containers?.length || snapshot.containers.every(c => c.state === "running");
-    const gpsAccuracy = displayHorizontalAccuracyM(gnssStatus);
-    const gpsFixValid = gnssStatus.fix_valid ?? false;
-    const gpsOk = gpsFixValid && gpsAccuracy !== undefined && gpsAccuracy <= 0.1;
-    const gpsWarn = gpsFixValid && (gpsAccuracy === undefined || gpsAccuracy > 0.1);
-    const cpuTemp = snapshot?.system?.cpu_temperature ?? 0;
-    const cpuUsage = snapshot?.system?.cpu_usage;
-
-    const alerts = useMemo(
-        () => (diagnostics.status ?? []).filter(s =>
-            s.level >= 1 &&
-            // Filter out transient "no data since last update" from ublox driver
-            !s.message?.toLowerCase().includes("no data since last update")
-        ),
-        [diagnostics.status]
-    );
-    const alertGroups = useMemo(() => groupAlertsByComponent(alerts), [alerts]);
+    const snapshotFresh = !snapshotError && snapshotReceivedAt !== null && nowMonotonic >= snapshotReceivedAt
+        && nowMonotonic - snapshotReceivedAt < SNAPSHOT_STALE_MS;
+    const cpuTemp = snapshotFresh ? snapshot?.system?.cpu_temperature : undefined;
+    const cpuUsage = snapshotFresh ? snapshot?.system?.cpu_usage : undefined;
 
     // Nav2 recovery tracking (from /behavior_tree_log — Nav2's tree, not the
     // Mowgli BT). A long-running recovery is the "robot is stuck" signal.
@@ -297,121 +277,72 @@ export const DiagnosticsPage = () => {
     };
     const stateSinceLabel = stateSince !== null ? formatDuration(nowMs - stateSince) : undefined;
 
-    // ── Health Verdict Hero ──────────────────────────────────────────────────
-    // A single beginner-readable tile derived from the same booleans the
-    // expert health bar uses. Emergency (or a stopped container / no GPS) is
-    // "Urgence"; a soft warning (RTK-Float, warm CPU, low battery) is
-    // "Attention requise"; otherwise "Tout va bien".
-
-    const cpuHot = cpuTemp > 70;
-    const cpuWarm = cpuTemp > 55 && cpuTemp <= 70;
-    const batteryLevel = getBatteryLevel(batteryPercent);
-    const batteryLow = batteryKnown && batteryLevel === "danger";
-    const batteryMid = batteryKnown && batteryLevel === "warn";
-
-    // The emergency signal proper — only this drives the big "Emergency"
-    // wording. Other danger causes (low battery, hot CPU, stopped container,
-    // no GPS) surface as "Critical".
-    const emergencyActive = (emergency.active_emergency ?? highLevelStatus.emergency) ?? false;
-
-    const healthLevel: "ok" | "warn" | "danger" =
-        emergencyActive || !allContainersOk || (!gpsOk && !gpsWarn) || cpuHot || batteryLow
-            ? "danger"
-            : gpsWarn || cpuWarm || batteryMid || recoveryStuck || alerts.length > 0
-                ? "warn"
-                : "ok";
-
-    const healthVerdict =
-        healthLevel === "danger"
-            ? (emergencyActive ? t('diagnosticsPage.verdictEmergency') : t('diagnosticsPage.verdictCritical'))
-            : healthLevel === "warn"
-                ? (recoveryStuck ? t('diagnosticsPage.verdictStuck') : t('diagnosticsPage.verdictAttention'))
-                : t('diagnosticsPage.verdictAllGood');
-
-    const healthColor =
-        healthLevel === "danger" ? colors.danger :
-        healthLevel === "warn" ? colors.warning :
-        colors.primary;
-
-    const healthSubtitle = emergencyActive
-        ? t('diagnosticsPage.subtitleEmergency')
-        : !allContainersOk
-            ? t('diagnosticsPage.subtitleContainerStopped')
-            : healthLevel === "danger"
-                ? t('diagnosticsPage.subtitleOutOfRange')
-                : recoveryStuck
-                    ? t('diagnosticsPage.subtitleRecoveryStuck', {duration: formatDuration(recoveryDurationMs)})
-                    : gpsWarn || cpuWarm || batteryMid
-                        ? t('diagnosticsPage.subtitleWatch')
-                        : alerts.length > 0
-                            ? t('diagnosticsPage.subtitleAlerts', {count: alerts.length})
-                            : t('diagnosticsPage.subtitleAllOperational');
-
-    const healthHero = (
-        <DashCard tone={healthLevel === "danger" ? "danger" : "glow"} style={{marginBottom: 4}}>
-            <div style={{
-                fontSize: 11, color: colors.textMuted, letterSpacing: "0.08em",
-                textTransform: "uppercase" as const, fontWeight: 600, marginBottom: 8,
-            }}>
-                {t('diagnosticsPage.robotStatus')}
-            </div>
-            <div className="mn-num" style={{fontSize: isMobile ? 40 : 56, lineHeight: 1, color: healthColor}}>
-                {healthVerdict}
-            </div>
-            <div style={{fontSize: 13, color: colors.textSecondary, marginTop: 10}}>
-                {healthSubtitle}
-            </div>
-        </DashCard>
-    );
-
-    // ── Health Summary Bar ───────────────────────────────────────────────────
-
-    const healthBar = (
-        <Card size="small" style={{marginBottom: 12}}>
-            <Flex wrap gap="small" align="center">
-                <Typography.Text type="secondary" style={{fontSize: 12, marginRight: 4}}>{t('diagnosticsPage.statusLabel')}</Typography.Text>
-                <HealthBadge
-                    label={allContainersOk ? t('diagnosticsPage.containersOk') : t('diagnosticsPage.containerProblem')}
-                    color={allContainersOk ? "success" : "error"}
-                />
-                <HealthBadge
-                    label={t('diagnosticsPage.gpsBadge', {value: gpsFixType})}
-                    color={gpsOk ? "success" : gpsWarn ? "warning" : "error"}
-                />
-                <HealthBadge
-                    label={
-                        batteryKnown
-                            ? t('diagnosticsPage.batteryBadge', {value: HEALTH_BADGE_VALUE_MARKER})
-                            : t('diagnosticsPage.battery')
-                    }
-                    color={
-                        !batteryKnown
-                            ? "warning"
-                            : batteryLevel === "ok"
-                                ? "success"
-                                : batteryLevel === "warn"
-                                    ? "warning"
-                                    : "error"
-                    }
-                    numericValue={batteryKnown ? batteryPercent.toFixed(0) : undefined}
-                />
-                <HealthBadge
-                    label={emergencyActive ? t('diagnosticsPage.emergencyUpper') : t('diagnosticsPage.noEmergency')}
-                    color={emergencyActive ? "error" : "success"}
-                />
-                <HealthBadge
-                    label={cpuTemp > 0 ? t('diagnosticsPage.cpuTemp', {value: cpuTemp.toFixed(1)}) : t('diagnosticsPage.cpuTempUnknown')}
-                    color={cpuTemp > 70 ? "error" : cpuTemp > 55 ? "warning" : "success"}
-                />
-                <HealthBadge
-                    label={cpuUsage != null ? t('diagnosticsPage.cpuUsageBadge', {value: HEALTH_BADGE_VALUE_MARKER}) : t('diagnosticsPage.cpuUsageUnknown')}
-                    color="default"
-                    numericValue={cpuUsage != null ? cpuUsage.toFixed(0) : undefined}
-                    valueWidth={4}
-                />
-            </Flex>
-        </Card>
-    );
+    const emergencyKnown = emergencyIsKnown(emergency, highLevelStatus);
+    const clearanceUnverified = emergencyClearanceUnverified(emergency, highLevelStatus);
+    const health = deriveDiagnosticHealth({emergency, highLevel: highLevelStatus, connected,
+        emergencyFresh: diagnosticTelemetryFresh(emergencyTelemetry, nowMonotonic), operationalFresh: highLevelFresh,
+        batteryFresh: highLevelFresh || powerFresh, batteryPercent, gnss: gnssStatus,
+        snapshot, snapshotFresh, diagnostics: diagnostics.status ?? [], nowMs,
+        nowMonotonic, diagnosticsDisconnectedAt, settings, recoveryStuck, fusion: fusionStats});
+    // Display-only reception watches. Never feed these deadlines back into health.
+    const source = (key: string, at: number | null, ageMs = at === null ? 0 : nowMonotonic - at): RequiredDiagnosticSource =>
+        ({key, label: t(`diagnosticReception.source.${key}`), publication: at, ageMs});
+    const telemetryAt = <T,>(value: ValidatedTelemetry<T>) => value.condition !== 'valid' || value.publicationBlocked === true
+        ? null : value.publicationPolicy === 'receipt' ? value.lastValidReceiptAt
+            : value.publicationProgressAt ?? value.stampChangedAt ?? value.lastValidReceiptAt;
+    const receptionSources = [source('operation', telemetryAt(highLevelTelemetry)),
+        source('emergency', telemetryAt(emergencyTelemetry)),
+        source('system', snapshotError ? null : snapshotReceivedAt)];
+    // Sensor requirements follow explicit configuration and the standard core
+    // monitoring producers. Do not declare every arbitrary ROS report required.
+    const [backendContext, setBackendContext] = useState(() => ({backend: hardware.backend, required: false, baseline: {} as Record<string, number>}));
+    let context = backendContext;
+    if (context.backend !== hardware.backend) {
+        context = {backend: hardware.backend, required: false, baseline: Object.fromEntries((diagnostics.status ?? [])
+            .filter(entry => entry.name === 'Hardware Bridge' || entry.name === 'Odometry'
+                || entry.name === 'mowgli_mavros_bridge/wheel_odometry_source')
+            .map(entry => [JSON.stringify([entry.hardware_id, entry.name]), entry.healthProgressAt ?? entry.receivedMonotonic]))};
+        setBackendContext(context);
+    }
+    const inBackendContext = (entry: TimestampedDiagnosticStatus) => (entry.healthProgressAt ?? entry.receivedMonotonic)
+        > (context.baseline[JSON.stringify([entry.hardware_id, entry.name])] ?? -Infinity);
+    const wheelRequirementReport = diagnostics.status?.find(entry => entry.name === 'mowgli_mavros_bridge/wheel_odometry_source' && entry.hardware_id === '');
+    // Accumulated diagnostics from the preceding backend cannot declare a new requirement.
+    const wheelRequirement = hardware.backend === 'mavros' && connected && wheelRequirementReport
+        && wheelRequirementReport.healthBlocked !== true
+        && inBackendContext(wheelRequirementReport)
+        ? mavrosWheelRequirement(wheelRequirementReport) : undefined;
+    if (wheelRequirement !== undefined && wheelRequirement !== context.required) {
+        context = {...context, required: wheelRequirement};
+        setBackendContext(context);
+    }
+    const requiredReports = [...backendReceptionReports(hardware.backend, context.required),
+        ...(settings.lidar_enabled === true ? [['lidar', 'LiDAR', 'mowgli/lidar']] : [])];
+    for (const [key, name, hardwareId] of requiredReports) {
+        const entry = diagnostics.status?.find(item => item.name === name && item.hardware_id === hardwareId);
+        const at = connected && entry && (key !== 'hardware' && key !== 'odometry'
+            || inBackendContext(entry))
+            && entry.healthBlocked !== true && entry.level !== 3 && !unavailableReport(entry)
+            ? entry.healthProgressAt ?? entry.receivedMonotonic : null;
+        receptionSources.push({...source(key, at, at === null ? 0 : nowMonotonic - at),
+            context: key === 'hardware' || key === 'odometry' ? hardware.backend : undefined});
+    }
+    if (settings.gnss_stack === 'universal' || hardware.backend === 'mavros') {
+        receptionSources.push(source('gnss', telemetryAt(gnssTelemetry)));
+    }
+    // Loss of context is not evidence that an autonomous requirement ended.
+    const [localizerRequired, setLocalizerRequired] = useState(false);
+    const reportedState = highLevelTelemetry.condition === 'valid' ? highLevelStatus.state : undefined;
+    const requirement = autonomousReceptionRequired(localizerRequired, reportedState);
+    if (requirement !== localizerRequired) setLocalizerRequired(requirement);
+    if (requirement) {
+        const at = connected && fusionStats && fusionStats.healthBlocked !== true && fusionStats.level !== 3
+            ? fusionStats.healthProgressAt ?? fusionStats.distinctMonotonic ?? null : null;
+        receptionSources.push(source('localizer', at));
+    }
+    const alerts = health.alerts;
+    const healthSummary = <DiagnosticHealthSummary health={health} gpsLabel={gpsFixType}
+        batteryPercent={batteryPercent} cpuTemp={cpuTemp} cpuUsage={cpuUsage}/>;
 
     // ── Section 1: System ────────────────────────────────────────────────────
 
@@ -426,7 +357,7 @@ export const DiagnosticsPage = () => {
             title: t('diagnosticsPage.colState'),
             dataIndex: "state",
             key: "state",
-            render: (v: string) => <Tag color={v === "running" ? "success" : "error"}>{v}</Tag>,
+            render: (v: string) => <Tag color={containerObservationLevel(v) === "ok" ? "success" : containerObservationLevel(v) === "unknown" ? "default" : "error"}>{v || t("telemetry.statusUnknown")}</Tag>,
         },
         {
             title: t('diagnosticsPage.colStatus'),
@@ -468,17 +399,19 @@ export const DiagnosticsPage = () => {
     const imuAlive =
         imuStatus != null &&
         imuStatus.level < 2 && // OK or WARN; ERROR (2) / STALE (3) mean no fresh data
-        (nowMs - imuStatus.receivedAt) < 15_000;
+        (nowMonotonic - imuStatus.receivedMonotonic) < 15_000;
     const anatomyInputs = {
         batteryPct: batteryKnown ? batteryPercent : Number.NaN,
         vBattery: batteryKnown ? (power.v_battery ?? Number.NaN) : Number.NaN,
         motorTempC: blade.motorTemp,
         escTempC: blade.escTemp,
         gpsLabel: anatomyGps.label,
-        gpsOk: anatomyGps.percent >= 50,
+        gpsOk: health.checks.find(c => c.id === 'gnss')?.level === 'unknown' ? undefined
+            : health.checks.find(c => c.id === 'gnss')?.level === 'ok' ? true : false,
         imuYawDeg: yaw,
-        imuOk: imuAlive,
-        lidarOk: lidarEnabled === false ? false : (lidarStreaming ? true : undefined),
+        imuOk: imuStatus ? imuAlive : undefined,
+        lidarDisabled: lidarEnabled === false,
+        lidarOk: lidarStreaming ? true : undefined,
         // Mowgli is rear-axle drive: only the rear wheels are encoded (the
         // fronts are unencoded casters whose RPM is always 0).
         wheelLeftRpm: wheelRpm.rl,
@@ -557,15 +490,8 @@ export const DiagnosticsPage = () => {
                         </Button>
                     }
                 >
-                    {snapshotError && (
-                        <Alert
-                            type="error"
-                            showIcon
-                            style={{marginBottom: 12}}
-                            message={t('diagnosticsPage.snapshotErrorTitle')}
-                            description={snapshotError}
-                        />
-                    )}
+                    {snapshotReadError && <Alert data-testid="diagnostic-snapshot-read-error" type="error" showIcon
+                        style={{marginBottom: 12}} message={t('diagnosticsPage.snapshotErrorTitle')} description={snapshotReadError}/>}
                     <Table
                         size="small"
                         dataSource={snapshot?.containers ?? []}
@@ -590,10 +516,10 @@ export const DiagnosticsPage = () => {
                     </Typography.Paragraph>
                     <Statistic
                         title={t('diagnosticsPage.temperature')}
-                        value={cpuTemp > 0 ? cpuTemp : undefined}
+                        value={health.checks.find(c => c.id === 'cpu')?.level !== 'unknown' ? cpuTemp : '—'}
                         precision={1}
                         valueStyle={{
-                            color: cpuTemp > 70 ? colors.danger : cpuTemp > 55 ? colors.warning : undefined,
+                            color: cpuTemp !== undefined && cpuTemp > 70 ? colors.danger : cpuTemp !== undefined && cpuTemp > 55 ? colors.warning : undefined,
                         }}
                     />
                 </Card>
@@ -1027,7 +953,7 @@ export const DiagnosticsPage = () => {
                             <CompassOutlined/>
                             {t('diagnosticsPage.fusionGraphTitle')}
                             <Tag color={fusionStale ? "default" : (fusionStats?.level ?? 0) >= 1 ? "warning" : "success"}>
-                                {fusionStale ? t('diagnosticsPage.stale') : (fusionStats?.message ?? t('diagnosticsPage.running'))}
+                                {fusionStale ? '—' : (fusionStats?.message ?? t('diagnosticsPage.running'))}
                             </Tag>
                         </Space>
                     }
@@ -1189,7 +1115,7 @@ export const DiagnosticsPage = () => {
                                 <Space>
                                     <Typography.Text strong>{t('diagnosticsPage.cogGps')}</Typography.Text>
                                     <Tag color={cogStale ? "default" : "processing"}>
-                                        {cogStale ? t('diagnosticsPage.stale') : t('diagnosticsPage.live')}
+                                        {cogStale ? '—' : t('diagnosticsPage.live')}
                                     </Tag>
                                 </Space>
                                 <Statistic
@@ -1212,7 +1138,7 @@ export const DiagnosticsPage = () => {
                                 <Space>
                                     <Typography.Text strong>{t('diagnosticsPage.magnetometer')}</Typography.Text>
                                     <Tag color={magStale ? "default" : "processing"}>
-                                        {magStale ? t('diagnosticsPage.stale') : t('diagnosticsPage.live')}
+                                        {magStale ? '—' : t('diagnosticsPage.live')}
                                     </Tag>
                                 </Space>
                                 <Statistic
@@ -1286,7 +1212,7 @@ export const DiagnosticsPage = () => {
                                 suffix={batteryKnown ? "%" : undefined}
                                 valueStyle={{
                                     color: batteryKnown
-                                        ? batteryPercent < 20 ? colors.danger : batteryPercent < 50 ? colors.warning : undefined
+                                        ? batteryPercent <= 20 ? colors.danger : batteryPercent <= 50 ? colors.warning : undefined
                                         : undefined,
                                 }}
                             />
@@ -1294,7 +1220,7 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.voltage')}
-                                value={finitePower(power.v_battery)}
+                                value={powerDisplayValue(power.v_battery)}
                                 precision={2}
 
                             />
@@ -1311,7 +1237,7 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.chargeCurrent')}
-                                value={finitePower(clampTinyToZero(power.charge_current) ?? undefined)}
+                                value={powerDisplayValue(clampTinyToZero(power.charge_current) ?? undefined)}
                                 precision={2}
                                 valueStyle={{
                                     color: highLevelStatus.is_charging && (power.charge_current ?? 0) > 0
@@ -1323,7 +1249,7 @@ export const DiagnosticsPage = () => {
                         <Col span={8}>
                             <Statistic
                                 title={t('diagnosticsPage.chargerVoltage')}
-                                value={finitePower(clampTinyToZero(power.v_charge) ?? undefined)}
+                                value={powerDisplayValue(clampTinyToZero(power.v_charge) ?? undefined)}
                                 precision={2}
                             />
                         </Col>
@@ -1332,11 +1258,11 @@ export const DiagnosticsPage = () => {
                         <Space wrap>
                             <Typography.Text type="secondary" style={{fontSize: 12}}>{t('diagnosticsPage.emergency')}</Typography.Text>
                             <Tag color={emergency.active_emergency ? "error" : emergency.latched_emergency ? "warning" : "default"}>
-                                {emergency.active_emergency
+                                {clearanceUnverified ? t("telemetry.emergencyClearanceUnverified") : emergency.active_emergency
                                     ? (emergency.reason ?? t('diagnosticsPage.emergencyActive'))
                                     : emergency.latched_emergency
                                         ? t('diagnosticsPage.latched')
-                                        : t('diagnosticsPage.clear')}
+                                        : emergencyKnown ? t('diagnosticsPage.clear') : t('telemetry.statusUnknown')}
                             </Tag>
                             {(emergency.active_emergency || emergency.latched_emergency) && (
                                 <AsyncButton
@@ -1428,8 +1354,8 @@ export const DiagnosticsPage = () => {
     // occupancy grid is now published by map_server_node from recorded area
     // polygons, so there is no pbstream to save/delete.
 
-    const crossChecks = snapshot?.cross_checks;
-    const crossCheckStatus = crossChecks?.overall_status ?? "ok";
+    const crossChecks = snapshotFresh ? snapshot?.cross_checks : undefined;
+    const crossCheckStatus = crossChecks?.overall_status ?? "unknown";
 
     const sectionCrossChecks = (
         <Row gutter={[12, 12]}>
@@ -1440,11 +1366,11 @@ export const DiagnosticsPage = () => {
                     extra={
                         <Tag color={
                             crossCheckStatus === "ok" ? "success" :
-                            crossCheckStatus === "warn" ? "warning" : "error"
+                            crossCheckStatus === "warn" ? "warning" : crossCheckStatus === "unknown" ? "default" : "error"
                         }>
                             {crossCheckStatus === "ok" ? t('diagnosticsPage.crossCheckOk') :
                                 crossCheckStatus === "warn" ? t('diagnosticsPage.crossCheckWarn') :
-                                    t('diagnosticsPage.crossCheckError')}
+                                    crossCheckStatus === "unknown" ? t("telemetry.statusUnknown") : t('diagnosticsPage.crossCheckError')}
                         </Tag>
                     }
                 >
@@ -1456,7 +1382,7 @@ export const DiagnosticsPage = () => {
                         </Space>
                     ) : (
                         <Typography.Text type="secondary" style={{fontSize: 12, display: "block", marginBottom: 12}}>
-                            {t('diagnosticsPage.noWarnings')}
+                            {crossCheckStatus === 'unknown' ? t('telemetry.statusUnknown') : t('diagnosticsPage.noWarnings')}
                         </Typography.Text>
                     )}
                     {crossChecks?.dock_pose && (
@@ -1605,16 +1531,8 @@ export const DiagnosticsPage = () => {
 
     const sectionCalibrationStatus = (
         <Row gutter={[12, 12]}>
-            {calibrationError && (
-                <Col xs={24}>
-                    <Alert
-                        type="error"
-                        showIcon
-                        message={t('diagnosticsPage.calibrationStatusErrorTitle')}
-                        description={calibrationError}
-                    />
-                </Col>
-            )}
+            {calibrationReadError && <Col xs={24}><Alert data-testid="diagnostic-calibration-read-error" type="error" showIcon
+                message={t('diagnosticsPage.calibrationStatusErrorTitle')} description={calibrationReadError}/></Col>}
             <Col xs={24} lg={8}>
                 <Card
                     title={<Space><CompassOutlined/> {t('diagnosticsPage.dockCalibration')}</Space>}
@@ -1849,9 +1767,9 @@ export const DiagnosticsPage = () => {
                                         }}
                                     />
                                     <Typography.Text className="diagnostics-live-value" type="secondary" style={{fontSize: 11}}>
-                                        {valid ? (
+                                        {valid && w.ticks !== undefined && (w.dir === 0 || w.dir === 1) ? (
                                             <>
-                                                {t('diagnosticsPage.ticksWithDirection', {ticks: (w.ticks ?? 0).toLocaleString(), direction: w.dir === 1 ? t('diagnosticsPage.directionForward') : t('diagnosticsPage.directionReverse')})}
+                                                {t('diagnosticsPage.ticksWithDirection', {ticks: w.ticks?.toLocaleString() ?? '—', direction: w.dir === 1 ? t('diagnosticsPage.directionForward') : t('diagnosticsPage.directionReverse')})}
                                             </>
                                         ) : (
                                             t('diagnosticsPage.noEncoderReading')
@@ -1888,14 +1806,14 @@ export const DiagnosticsPage = () => {
                         <Col xs={12} lg={4}>
                             <Statistic
                                 title={t('diagnosticsPage.mowerStatus')}
-                                value={status.mower_status === 255 ? t('diagnosticsPage.statusOk') : t('diagnosticsPage.initializing')}
+                                value={status.mower_status === 255 ? t('diagnosticsPage.statusOk') : status.mower_status === 0 ? t('diagnosticsPage.initializing') : t('telemetry.statusUnknown')}
                                 valueStyle={{color: status.mower_status === 255 ? undefined : colors.warning}}
                             />
                         </Col>
                         <Col xs={12} lg={4}>
                             <Statistic
                                 title={t('diagnosticsPage.rain')}
-                                value={status.rain_detected ? t('diagnosticsPage.detected') : t('diagnosticsPage.none')}
+                                value={status.rain_detected === true ? t('diagnosticsPage.detected') : status.rain_detected === false ? t('diagnosticsPage.none') : t('telemetry.statusUnknown')}
                                 valueStyle={{color: status.rain_detected ? colors.warning : undefined}}
                             />
                         </Col>
@@ -1926,11 +1844,11 @@ export const DiagnosticsPage = () => {
                         </Col>
                     </Row>
                     <Flex wrap gap="small" style={{marginTop: 12}}>
-                        <BoolStatusTag label={t('diagnosticsPage.rpiPower')} ok={!!status.raspberry_pi_power}/>
-                        <BoolStatusTag label={t('diagnosticsPage.escPower')} ok={!!status.esc_power}/>
-                        <BoolStatusTag label={t('diagnosticsPage.uiBoard')} ok={!!status.ui_board_available}/>
-                        <BoolStatusTag label={t('diagnosticsPage.soundModule')} ok={!!status.sound_module_available}/>
-                        <BoolStatusTag label={t('diagnosticsPage.mowEnabled')} ok={!!status.mow_enabled}/>
+                        <BoolStatusTag label={t('diagnosticsPage.rpiPower')} ok={status.raspberry_pi_power}/>
+                        <BoolStatusTag label={t('diagnosticsPage.escPower')} ok={status.esc_power}/>
+                        <BoolStatusTag label={t('diagnosticsPage.uiBoard')} ok={status.ui_board_available}/>
+                        <BoolStatusTag label={t('diagnosticsPage.soundModule')} ok={status.sound_module_available}/>
+                        <BoolStatusTag label={t('diagnosticsPage.mowEnabled')} ok={status.mow_enabled}/>
                     </Flex>
                 </Card>
             </Col>
@@ -1978,54 +1896,15 @@ export const DiagnosticsPage = () => {
 
     // ── Section 6: Alerts ────────────────────────────────────────────────────
 
-    // Alerts collapse to one row per source component (a GNSS hiccup emits
-    // 8 related messages at once — stacking them pushed the actual
-    // diagnostics content below the fold).
-    const sectionAlerts = alertGroups.length > 0 ? (
-        <Card title={<Space><WarningOutlined/> {t('diagnosticsPage.alerts')}</Space>} size="small">
-            <Collapse
-                size="small"
-                ghost
-                items={alertGroups.map(group => ({
-                    key: group.component,
-                    label: (
-                        <Space>
-                            <Tag color={group.worstLevel === 2 ? "error" : group.worstLevel === 3 ? "default" : "warning"}>
-                                {group.worstLevel === 2 ? t('diagnosticsPage.diagLevelError')
-                                    : group.worstLevel === 3 ? t('diagnosticsPage.diagLevelStale')
-                                    : t('diagnosticsPage.diagLevelWarn')}
-                            </Tag>
-                            <Typography.Text style={{fontSize: 13}}>{group.component}</Typography.Text>
-                            <Typography.Text type="secondary" style={{fontSize: 12}}>
-                                {t('diagnosticsPage.alertGroupCount', {count: group.items.length})}
-                            </Typography.Text>
-                        </Space>
-                    ),
-                    children: (
-                        <Space direction="vertical" style={{width: "100%"}}>
-                            {group.items.map((item, idx) => (
-                                <Alert
-                                    key={idx}
-                                    type={item.level === 2 ? "error" : item.level === 3 ? "info" : "warning"}
-                                    message={item.name}
-                                    description={item.message}
-                                    showIcon
-                                />
-                            ))}
-                        </Space>
-                    ),
-                }))}
-            />
-        </Card>
-    ) : null;
+    const sectionAlerts = <DiagnosticAlertsPanel alerts={alerts} observations={diagnostics.status}
+        connected={connected} now={nowMonotonic} sources={receptionSources}/>;
 
     // ── layout ───────────────────────────────────────────────────────────────
 
     if (isMobile) {
         return (
             <div className="diagnostics-page" style={{display: "flex", flexDirection: "column", gap: 12, paddingBottom: 8}}>
-                {healthHero}
-                {healthBar}
+                {healthSummary}
                 {sectionAlerts}
                 <Collapse
                     activeKey={openPanels}
@@ -2139,12 +2018,11 @@ export const DiagnosticsPage = () => {
     ];
 
     return (
-        <Space className="diagnostics-page" direction="vertical" size="middle" style={{width: "100%"}}>
-            {healthHero}
-            {healthBar}
+        <div className="diagnostics-page" style={{display: "flex", flexDirection: "column", gap: 16, width: "100%"}}>
+            {healthSummary}
             {sectionAlerts}
             <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} size="large"/>
-        </Space>
+        </div>
     );
 };
 

@@ -31,6 +31,7 @@ function freshFusion(values: Record<string, string>): FusionGraphStats {
 function passingSnapshot(overrides: Partial<ReadinessSnapshot> = {}): ReadinessSnapshot {
     return {
         gnss: {
+            fix_valid: true,
             rtk_mode: GnssStatusConstants.RTK_MODE_FIXED,
             correction_stream_status: GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE,
         },
@@ -68,6 +69,10 @@ describe("computeReadinessChecks — all-pass baseline", () => {
 });
 
 describe("RTK check", () => {
+    it("does not pass on RTK mode alone without positioning evidence", () => {
+        const snap = passingSnapshot({gnss: {rtk_mode: GnssStatusConstants.RTK_MODE_FIXED}});
+        expect(stateOf(computeReadinessChecks(snap), "rtk")).toBe("pending");
+    });
     it("passes on RTK fixed", () => {
         expect(stateOf(computeReadinessChecks(passingSnapshot()), "rtk")).toBe("pass");
     });
@@ -84,6 +89,11 @@ describe("RTK check", () => {
 });
 
 describe("NTRIP corrections check (recommended)", () => {
+    it("does not pass on a correction scalar marked unavailable", () => {
+        const snap = passingSnapshot({gnss: {correction_stream_status: GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE,
+            capability_flags: GnssStatusConstants.CAP_CORRECTION_STREAM, value_flags: 0}});
+        expect(stateOf(computeReadinessChecks(snap), "corrections")).toBe("pending");
+    });
     it("passes when the correction stream is active", () => {
         expect(stateOf(computeReadinessChecks(passingSnapshot()), "corrections")).toBe("pass");
     });

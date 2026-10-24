@@ -1,4 +1,7 @@
-import {isDiagnosticStale, type DiagnosticArray} from '../hooks/useDiagnostics';
+import {isDiagnosticStale} from '../hooks/useDiagnostics';
+import {isJsonObject} from './json';
+import {isTimestampedDiagnosticStatus} from './diagnosticTelemetry';
+import {isRosStamp, decodeWheelTicks} from './physicalTelemetry';
 import type {Status, WheelTick} from '../types/ros';
 
 /** Display liveness only; never participates in motor control or safety. */
@@ -6,7 +9,7 @@ export const MOTOR_DISPLAY_STALE_MS = 5000;
 const finite = (v: unknown): number => typeof v === 'number' && Number.isFinite(v) ? v : NaN;
 export const motorDisplayValue = (v: number, precision = 0): string => Number.isFinite(v) ? v.toFixed(precision) : '—';
 const stampSeconds = (stamp: Status['stamp']): number =>
-    stamp && Number.isFinite(stamp.sec) && Number.isFinite(stamp.nanosec)
+    isRosStamp(stamp)
         ? stamp.sec + stamp.nanosec * 1e-9 : NaN;
 
 export function bladeTelemetry(status: Status, receivedAt: number | null, now: number, backend?: string) {
@@ -23,10 +26,11 @@ export function bladeTelemetry(status: Status, receivedAt: number | null, now: n
         fresh,
         rpm: fresh ? finite(status.mower_motor_rpm) : NaN,
         current: fresh ? finite(status.mower_esc_current) : NaN,
-        escTemp: fresh ? finite(status.mower_esc_temperature) : NaN,
+        // Native Status never populates ESC temperature; its default zero is not measured.
+        escTemp: fresh && (backend === 'mavros' || backend === 'openmower') ? finite(status.mower_esc_temperature) : NaN,
         // MAVROS reports ESC temperature, not winding temperature. Its default
         // scalar zero cannot prove a measurement of the motor winding.
-        motorTemp: fresh && backend !== 'mavros' && backend !== undefined ? finite(status.mower_motor_temperature) : NaN,
+        motorTemp: fresh && (backend === 'mowgli' || backend === 'openmower') ? finite(status.mower_motor_temperature) : NaN,
     };
 }
 
@@ -34,6 +38,7 @@ export const unknownWheelRpm = () => ({fl: NaN, fr: NaN, rl: NaN, rr: NaN, bodyO
 
 export function wheelRpmBetween(previous: WheelTick, current: WheelTick, radius: number) {
     const result = unknownWheelRpm();
+    if (decodeWheelTicks(previous) === undefined || decodeWheelTicks(current) === undefined) return result;
     const factor = finite(current.wheel_tick_factor);
     const dt = stampSeconds(current.stamp) - stampSeconds(previous.stamp);
     if (!(factor > 0) || factor !== previous.wheel_tick_factor || !(radius > 0) || !Number.isFinite(radius)
@@ -61,26 +66,35 @@ export interface WheelControllerTelemetry {
     temperature: number; current: number; voltage: number; ampHours: number; motorRpmAbs: number;
     failureFlags: number; errorCount: number;
 }
-function numberValue(value: string | undefined) {
-    return value !== undefined && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : NaN;
+function numberValue(value: unknown) {
+    return typeof value === 'string' && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim()) && Number.isFinite(Number(value)) ? Number(value) : NaN;
 }
 /** Role-based display only. No assumptions about physical ESC indices or calibrated wheel speed. */
-export function wheelControllerFromDiagnostics(diagnostics: DiagnosticArray, role: WheelRole, now: number): WheelControllerTelemetry | undefined {
-    const entry = diagnostics.status?.find(status => status.name === `mowgli_mavros_bridge/vesc_${role}`);
-    if (!entry) return undefined;
+export function wheelControllerFromDiagnostics(diagnostics: unknown, role: WheelRole, now: number): WheelControllerTelemetry | undefined {
+    if (!isJsonObject(diagnostics) || !Array.isArray(diagnostics.status)) return undefined;
+    const entries: unknown[] = diagnostics.status;
+    const entry = entries.find(item => isJsonObject(item) && item.name === `mowgli_mavros_bridge/vesc_${role}`);
+    if (!isTimestampedDiagnosticStatus(entry)) return undefined;
     const values = new Map(entry.values.map(value => [value.key, value.value]));
     const field = (key: string) => numberValue(values.get(key));
-    const elapsed = now - entry.receivedAt;
+    const elapsed = now - entry.receivedMonotonic;
     const age = field('age_ms');
     const ageMs = age >= 0 && Number.isFinite(elapsed) && elapsed >= 0 ? age + elapsed : NaN;
-    const receiptFresh = Number.isFinite(entry.receivedAt) && elapsed >= 0 && !isDiagnosticStale(entry, now)
+    const receiptFresh = Number.isFinite(entry.receivedMonotonic) && elapsed >= 0 && !isDiagnosticStale(entry, now)
         && elapsed < MOTOR_DISPLAY_STALE_MS;
     const online = values.get('online') === 'true';
     const absent = !online && values.get('stale') === 'false' && age < 0;
     // A newly republished diagnostic preserves acquisition age; receipt is not acquisition.
     const fresh = receiptFresh && online && values.get('stale') === 'false' && [0, 1, 2].includes(entry.level)
         && Number.isFinite(ageMs) && ageMs < MOTOR_DISPLAY_STALE_MS;
-    const valid = (key: string, flag?: string) => fresh && (!flag || values.get(flag) === 'true') ? field(key) : NaN;
+    const valid = (key: string, flag?: string) => {
+        if (!fresh || (flag && values.get(flag) !== 'true')) return NaN;
+        const value = field(key);
+        if ((key === 'rpm_abs' || key === 'voltage_v') && value < 0) return NaN;
+        if ((key === 'failure_flags' || key === 'error_count')
+            && (!Number.isInteger(value) || value < 0 || value > 0xffffffff)) return NaN;
+        return value;
+    };
     const failureFlags = valid('failure_flags', 'failure_flags_valid');
     const fault = entry.level === 1 || entry.level === 2 || (Number.isFinite(failureFlags) && failureFlags !== 0);
     return {state: !receiptFresh ? 'stale' : absent ? 'absent' : !fresh ? 'stale' : fault ? 'fault' : 'online',

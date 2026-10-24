@@ -1,18 +1,23 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React from "react";
 import { Card, Col, Form, InputNumber, Row, Switch, Typography } from "antd";
 import { AimOutlined, RadarChartOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { RobotComponentEditor } from "../RobotComponentEditor.tsx";
+import type {PersistedDockPose} from '../../utils/robotEditorContract';
 import type {SettingsValues} from "../../types/settings.generated";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: number | boolean | null) => void;
+    onDockPosePersisted?: (pose: PersistedDockPose) => void;
+    onDockCaptureStart?: () => boolean;
+    onDockCaptureFinished?: () => void;
 };
 
-export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
+export const SensorsSection: React.FC<Props> = ({ values, onChange, onDockPosePersisted, onDockCaptureStart, onDockCaptureFinished }) => {
     const { t } = useTranslation();
     const handleLidarToggle = (enabled: boolean) => {
         onChange("lidar_enabled", enabled);
@@ -41,7 +46,7 @@ export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
             </Card>
 
             {/* Sensor placement visual editor */}
-            <RobotComponentEditor values={values} onChange={onChange} />
+            <RobotComponentEditor values={values} onChange={onChange} onDockPosePersisted={onDockPosePersisted} onDockCaptureStart={onDockCaptureStart} onDockCaptureFinished={onDockCaptureFinished} />
 
             {/* IMU bias calibration (hardware_bridge_node, auto-triggered on dock) */}
             <Card size="small" style={{ marginTop: 16 }} title={
@@ -67,21 +72,21 @@ export const SensorsSection: React.FC<Props> = ({ values, onChange }) => {
                         </Col>
                         <Col xs={24} sm={8}>
                             <Form.Item htmlFor="setting-imu_cal_auto_rest_sec" data-setting-key="imu_cal_auto_rest_sec" label={t("settingsSensors.restWindowBeforeCal")} tooltip={t("settingsSensors.restWindowBeforeCalTooltip")}>
-                                <InputNumber aria-label={t("settingsSensors.restWindowBeforeCal") + ", s"} aria-description={t("settingsSensors.restWindowBeforeCalTooltip")}  id="setting-imu_cal_auto_rest_sec"
+                                <NumberWithAddon aria-label={t("settingsSensors.restWindowBeforeCal") + ", s"} aria-description={t("settingsSensors.restWindowBeforeCalTooltip")}  id="setting-imu_cal_auto_rest_sec"
                                     value={values.imu_cal_auto_rest_sec}
                                     onChange={(v) => onChange("imu_cal_auto_rest_sec", v)}
                                     min={1} max={120} step={1} precision={0}
-                                    style={{ width: "100%" }} addonAfter="s"
+                                    style={{ width: "100%" }} after="s"
                                 />
                             </Form.Item>
                         </Col>
                         <Col xs={24} sm={8}>
                             <Form.Item htmlFor="setting-imu_cal_periodic_recal_sec" data-setting-key="imu_cal_periodic_recal_sec" label={t("settingsSensors.periodicRecalInterval")} tooltip={t("settingsSensors.periodicRecalIntervalTooltip")}>
-                                <InputNumber aria-label={t("settingsSensors.periodicRecalInterval") + ", s"} aria-description={t("settingsSensors.periodicRecalIntervalTooltip")}  id="setting-imu_cal_periodic_recal_sec"
+                                <NumberWithAddon aria-label={t("settingsSensors.periodicRecalInterval") + ", s"} aria-description={t("settingsSensors.periodicRecalIntervalTooltip")}  id="setting-imu_cal_periodic_recal_sec"
                                     value={values.imu_cal_periodic_recal_sec}
                                     onChange={(v) => onChange("imu_cal_periodic_recal_sec", v)}
                                     min={0} max={3600} step={30} precision={0}
-                                    style={{ width: "100%" }} addonAfter="s"
+                                    style={{ width: "100%" }} after="s"
                                 />
                             </Form.Item>
                         </Col>

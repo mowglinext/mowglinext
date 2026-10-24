@@ -2,14 +2,15 @@ package types
 
 import (
 	"context"
-	"fmt"
 	"sync"
 )
 
 // MockDBProvider is an in-memory mock of IDBProvider for testing.
 type MockDBProvider struct {
-	mu   sync.RWMutex
-	data map[string][]byte
+	mu     sync.RWMutex
+	data   map[string][]byte
+	GetErr error
+	SetErr error
 }
 
 func NewMockDBProvider() *MockDBProvider {
@@ -21,6 +22,9 @@ func NewMockDBProvider() *MockDBProvider {
 func (m *MockDBProvider) Set(key string, value []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.SetErr != nil {
+		return m.SetErr
+	}
 	m.data[key] = value
 	return nil
 }
@@ -28,9 +32,12 @@ func (m *MockDBProvider) Set(key string, value []byte) error {
 func (m *MockDBProvider) Get(key string) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if m.GetErr != nil {
+		return nil, m.GetErr
+	}
 	v, ok := m.data[key]
 	if !ok {
-		return nil, fmt.Errorf("key %s not found", key)
+		return nil, KeyNotFoundError{Key: key}
 	}
 	return v, nil
 }

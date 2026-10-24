@@ -254,7 +254,7 @@ the LowLevel board and three xESC controllers with the firmware rules above,
 plus a differential-drive plant with deliberately imperfect motors (0.85 m/s
 per unit duty, a deadband, a 120 ms lag) so an open-loop bridge visibly misses
 its target. It drives the bridge over ROS like the stack does and checks what
-the emulated hardware received, timed on the emulator's clock: boot handshake
+the emulated hardware received, with motor receipts timed on the emulator's clock: boot handshake
 and the config the board keeps, closed-loop speed and yaw rate, the
 acceleration limit, cmd_vel / behaviour-tree / LowLevel / controller timeouts,
 stop button, lift and tilt, software e-stop, the release-while-held case, blade
@@ -278,6 +278,31 @@ controller still runs, and the overall result stays failed.
 Ground history uses monotonic time mapped to ROS stamps through independently
 measured clock bounds. A clock-epoch change invalidates the crossing measurement
 and remains a fixture failure.
+
+The simulation build enables `OPENMOWER_SIMULATION_TRACE` to record native
+heartbeat write timestamps, HLS/LowLevel receipts and blade decisions in
+`*.native.jsonl` beside the bridge logs. The 150 ms cadence bound applies to
+completed native UART writes, including a silent tail; Python service gaps
+are reported independently. A status-only LowLevel interruption tests the
+immediate blade inhibit and its qualified recovery, then HLS expiry is measured
+from the actual receipt and zero commands must persist until a new HLS arrives.
+Missing, truncated or replaced native evidence cannot silently pass the test.
+Blade receipts are correlated with the complete successful-write prefix on
+their dedicated ordered UART, including direct emergency/destructor writes
+outside control ticks. A fresh nonzero command still in transit at
+HLS expiry is reported as such, rather than attributed to a later stale
+decision; mismatched or truncated packet histories fail the measurement.
+The 350 ms starvation scenario starts its nominal phase with a new LowLevel
+receipt. A separate phase deliberately ages that status before suspension
+and requires the real guard stop, original acceleration ramp and recovered
+speed with the original tolerance. Requested suspension, observed stopped
+state and native control gap are recorded separately. Blade packets and
+starvation commands/heartbeats/physical history are retained as JSON beside
+the logs, so a lower real speed cannot be explained away by matching odometry.
+Use a fresh log directory for each run. The trace option defaults to OFF and
+is compiled out of production/image builds; it changes no safety thresholds.
+Use a separate simulation workspace and do not deploy its instrumented binary.
+For a previously instrumented CMake cache, explicitly set the option back to OFF.
 
 `sim/run_stack_integration.py` adds the real `mowgli_bringup/launch/mowgli.launch.py`:
 exactly one `/hardware_bridge` with `HARDWARE_BACKEND=openmower`, a command on
@@ -313,7 +338,9 @@ colcon test --packages-select mowgli_openmower_bridge && colcon test-result --ve
 python3 -m pytest sensors/openmower/mowgli_openmower_bridge/test/test_launch_config.py  # launch layering
 
 # simulation (needs the workspace above + mowgli_bringup for the stack check)
-python3 -m unittest discover -s sensors/openmower/sim -p 'test_*.py'  # measurement regressions, no ROS
+colcon build --packages-select mowgli_openmower_bridge --cmake-args -DOPENMOWER_SIMULATION_TRACE=ON
+source install/setup.bash
+python3 -m unittest discover -s sensors/openmower/sim -p 'test_*.py'  # measurement and native trace regressions
 python3 sensors/openmower/sim/run_simulation.py            # both controller types
 python3 sensors/openmower/sim/run_stack_integration.py
 ```

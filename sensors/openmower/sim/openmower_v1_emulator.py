@@ -414,6 +414,7 @@ class LowLevelBoard:
         self._charging_disabled_ms = -1e12
         self.gyro_bias_z = 0.0
         self.paused = False                    # cable unplugged: no bytes either way
+        self.status_paused = False             # test fault: status TX only; heartbeat still serviced
         self._last_status_ms = 0.0
         self._last_imu_ms = 0.0
         self.status_sent = 0
@@ -534,6 +535,8 @@ class LowLevelBoard:
                 self._charging_disabled_ms = now
 
     def _send_status(self):
+        if self.status_paused:
+            return
         bits = ST_INITIALIZED | ST_RASPI_POWER | ST_UI_AVAIL
         if self.charging_allowed:
             bits |= ST_CHARGING
@@ -647,7 +650,6 @@ class XescMini(_Esc):
         super().__init__(port, motor)
         self.reader = VescReader()
         self._pending_values = 0
-        self._ticks_at_receive = 0.0
 
     def effective_duty(self, now: float) -> float:
         return self.motor.duty if now - self.last_command_ms <= self.TIMEOUT_MSEC else 0.0
@@ -657,7 +659,6 @@ class XescMini(_Esc):
         self.last_command_ms = -1e12
 
     def receive(self, now: float):
-        self._ticks_at_receive = self.motor.ticks
         for p in self.reader.feed(self.port.read()):
             if p[0] == 5 and len(p) >= 5:
                 self._record(now, struct.unpack('>i', p[1:5])[0] / 100000.0)
@@ -669,14 +670,12 @@ class XescMini(_Esc):
                 self._pending_values += 1
 
     def transmit(self, now: float):
-        # Requests that queued up while this thread was starved arrived spread
-        # over the stall; the real controller answers each one at once, so
-        # answer the k-th of n with the count reached k/n of the way through
-        # the elapsed time, not all of them with the count from its end.
+        # Queued requests have no individual receive times in this emulator.
+        # Report the actual count now; do not invent historical observations
+        # by interpolating one count for each buffered request.
         n, self._pending_values = self._pending_values, 0
-        before, after = self._ticks_at_receive, self.motor.ticks
-        for k in range(1, n + 1):
-            self.port.write(vesc_frame(self._values(now, int(before + (after - before) * k / n))))
+        for _ in range(n):
+            self.port.write(vesc_frame(self._values(now, int(self.motor.ticks))))
 
     def _values(self, now: float, tacho: int) -> bytes:
         duty = self.effective_duty(now)
@@ -754,9 +753,6 @@ class OpenMowerV1Rig:
                 if clock_changed:
                     self.clock_steps.append((now, host, self.clock.bounds))
                     self.motion.rows.clear()
-                for esc in self.escs.values():
-                    esc.receive(now)
-                self.ll.service(now)
                 # Integrate ALL the elapsed wall time, in small substeps. A
                 # starved thread (a 2-vCPU CI runner, the GIL shared with the
                 # ROS probe) used to cap the step at 50 ms and silently drop
@@ -764,10 +760,15 @@ class OpenMowerV1Rig:
                 # time, and every speed check compared two different clocks.
                 steps = max(1, math.ceil(elapsed / self.PERIOD_S))
                 dt = elapsed / steps
-                duty = {n: self.escs[n].effective_duty(now) for n in ('left', 'right', 'mow')}
                 for i in range(steps):
+                    # Evolve the already received command, not the UART data
+                    # waiting at this wake. A new command cannot change the
+                    # past. Evaluate the hardware watchdog at each substep so
+                    # its expiry stops only the remaining part of a stall.
+                    stamp = t - (steps - i - 1) * dt
                     for name in ('left', 'right', 'mow'):
-                        self.motors[name].step(dt, duty[name])
+                        duty = self.escs[name].effective_duty((stamp - self._t0) * 1000.0)
+                        self.motors[name].step(dt, duty)
                     # Real wiring: right wheel forward on a NEGATIVE controller duty.
                     self.plant.step(dt, self.motors['left'].speed, -self.motors['right'].speed)
                     self.distance += self.plant.v * dt
@@ -775,9 +776,13 @@ class OpenMowerV1Rig:
                     # only the current endpoint; a crossing measurement fails
                     # for missing history, and the scenario stays red.
                     if not clock_changed or i == steps - 1:
-                        stamp = t - (steps - i - 1) * dt
                         self.motion.append(stamp, self.distance, self.plant.theta,
                                            (int(self.motors['left'].ticks), int(self.motors['right'].ticks)))
+                # UART receive timestamps are actual service times. Do not
+                # backdate queued commands or create intermediate replies.
+                for esc in self.escs.values():
+                    esc.receive(now)
+                self.ll.service(now)
                 # Report AFTER integrating: a status sent before it would carry
                 # the counts from before a stall, and the next one the whole
                 # stall's ticks at a normal 20 ms spacing — a jump no real
@@ -791,7 +796,9 @@ class OpenMowerV1Rig:
         with self.lock:
             now = self.now_ms()
             return {
-                't': now,
+                # Date the physical state, which can precede this observer
+                # when the integration thread has not yet been scheduled.
+                't': (self.motion.rows[-1][0] - self._t0) * 1000.0,
                 'x': self.plant.x, 'y': self.plant.y, 'theta': self.plant.theta,
                 'v': self.plant.v, 'w': self.plant.w,
                 'duty': {n: e.motor.duty for n, e in self.escs.items()},

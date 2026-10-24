@@ -280,7 +280,7 @@ export const MapToolbarMobile = ({
 
     const handleMowClick: MenuProps["onClick"] = ({key}: MenuInfo) => {
         setMowLoading(true);
-        onMowArea(key).finally(() => setMowLoading(false));
+        safeCall(() => onMowArea(key).finally(() => setMowLoading(false)));
     };
 
     const editMenuItems: MenuProps["items"] = [

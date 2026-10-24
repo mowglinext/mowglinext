@@ -1,5 +1,8 @@
+import {NumberWithAddon} from '../components/inputs/NumberWithAddon';
+import {AsyncPopconfirm} from "../components/AsyncPopconfirm";
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {useMemo, useState} from "react";
-import {Alert, App, Button, Card, Col, Input, InputNumber, Popconfirm, Progress, Row, Space, Switch, Tag, Tooltip, Typography} from "antd";
+import {Alert, App, Button, Card, Col, Input, Progress, Row, Space, Switch, Tag, Tooltip, Typography} from "antd";
 import {CloudUploadOutlined, DeleteOutlined, ExportOutlined, HomeOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, RedoOutlined} from "@ant-design/icons";
 import {useTranslation} from "react-i18next";
 import {useFleet} from "../hooks/useFleet.ts";
@@ -9,6 +12,7 @@ import type {FleetPhase, FleetRow} from "../utils/fleet.ts";
 import {FleetMapMini} from "../components/fleet/FleetMapMini.tsx";
 import {StatusOrb} from "../concept/components/StatusOrb.tsx";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
+import {requestErrorMessage} from "../utils/errors";
 
 const {Text, Title} = Typography;
 
@@ -41,6 +45,7 @@ const PHASE_TAG: Record<FleetPhase, string> = {
  * never talks to another robot directly (docs/MULTI_ROBOT.md).
  */
 export default function FleetPage() {
+    const asyncHandler = useAsyncHandler();
     const {t} = useTranslation();
     const {message} = App.useApp();
     const {colors} = useThemeMode();
@@ -68,8 +73,8 @@ export default function FleetPage() {
             } else if (okText) {
                 message.success(okText);
             }
-        } catch (e: any) {
-            message.error(e?.message ?? String(e));
+        } catch (e: unknown) {
+            message.error(requestErrorMessage(e) ?? String(e));
         } finally {
             setBusy(null);
         }
@@ -84,7 +89,7 @@ export default function FleetPage() {
         void run("add", async () => {
             const warning = await fleet.addPeer(value);
             setAddress("");
-            return warning;
+            return warning === null ? t("fleetPage.peerAddWarningUnusable") : warning;
         }, t("fleetPage.peerAdded"));
     };
 
@@ -98,6 +103,9 @@ export default function FleetPage() {
             />
             {fleet.error && (
                 <Alert type="warning" showIcon message={t("fleetPage.pollError")} description={fleet.error}/>
+            )}
+            {fleet.rejectedRobots.length > 0 && (
+                <Alert type="warning" showIcon message={t("fleetPage.rejectedRobots", {names: fleet.rejectedRobots.join(", ")})}/>
             )}
 
             <Row gutter={[16, 16]}>
@@ -124,12 +132,12 @@ export default function FleetPage() {
                                         </Tooltip>
                                     )}
                                     {!row.self && (
-                                        <Popconfirm
+                                        <AsyncPopconfirm
                                             title={t("fleetPage.removeConfirm", {robot: row.name})}
                                             onConfirm={() => run(`rm:${row.id}`, () => fleet.removePeer(row.id), t("fleetPage.peerRemoved"))}
                                         >
                                             <Button size="small" type="text" danger icon={<DeleteOutlined/>} loading={busy === `rm:${row.id}`}/>
-                                        </Popconfirm>
+                                        </AsyncPopconfirm>
                                     )}
                                 </Space>
                             }
@@ -165,15 +173,15 @@ export default function FleetPage() {
                                         icon={<PlayCircleOutlined/>} size="small" type="primary"
                                         disabled={!canCommand(row) || row.phase === "mowing"}
                                         loading={busy === `${row.id}:1`}
-                                        onClick={() => command(row, 1, t("fleetPage.play"))}
+                                        onClick={asyncHandler(() => command(row, 1, t("fleetPage.play")))}
                                     >{t("fleetPage.play")}</Button>
                                     <Button
                                         icon={<PauseCircleOutlined/>} size="small"
                                         disabled={!canCommand(row) || !(row.phase === "mowing" || row.phase === "returning" || row.phase === "manual")}
                                         loading={busy === `${row.id}:8`}
-                                        onClick={() => command(row, 8, t("fleetPage.pause"))}
+                                        onClick={asyncHandler(() => command(row, 8, t("fleetPage.pause")))}
                                     >{t("fleetPage.pause")}</Button>
-                                    <Popconfirm
+                                    <AsyncPopconfirm
                                         title={t("fleetPage.homeConfirm", {robot: row.name})}
                                         onConfirm={() => command(row, 2, t("fleetPage.home"))}
                                         disabled={!canCommand(row)}
@@ -183,7 +191,7 @@ export default function FleetPage() {
                                             disabled={!canCommand(row) || row.phase === "charging" || row.phase === "returning"}
                                             loading={busy === `${row.id}:2`}
                                         >{t("fleetPage.home")}</Button>
-                                    </Popconfirm>
+                                    </AsyncPopconfirm>
                                 </Space>
                             </Space>
                         </Card>
@@ -205,7 +213,7 @@ export default function FleetPage() {
                         unCheckedChildren={t("fleetPage.coordinationOff")}
                         loading={busy === "coord"}
                         disabled={rows.length < 2}
-                        onChange={(enabled) => run("coord", () => fleet.setCoordination({...coordination.settings, enabled}))}
+                        onChange={asyncHandler((enabled) => run("coord", () => fleet.setCoordination({...coordination.settings, enabled})))}
                     />
                 }
             >
@@ -244,23 +252,23 @@ export default function FleetPage() {
                     <Row gutter={[12, 8]}>
                         <Col xs={12} md={6}>
                             <Text type="secondary" style={{fontSize: 11}}>{t("fleetPage.yieldDistance")}</Text>
-                            <InputNumber
-                                min={1} max={20} step={0.5} addonAfter="m" style={{width: "100%"}}
+                            <NumberWithAddon
+                                min={1} max={20} step={0.5} after="m" style={{width: "100%"}}
                                 value={coordination.settings.yield_distance_m}
-                                onChange={(v) => v != null && run("coord", () => fleet.setCoordination({...coordination.settings, yield_distance_m: v}))}
+                                onChange={asyncHandler((v) => v != null && run("coord", () => fleet.setCoordination({...coordination.settings, yield_distance_m: v})))}
                             />
                         </Col>
                         <Col xs={12} md={6}>
                             <Text type="secondary" style={{fontSize: 11}}>{t("fleetPage.resumeDistance")}</Text>
-                            <InputNumber
-                                min={2} max={30} step={0.5} addonAfter="m" style={{width: "100%"}}
+                            <NumberWithAddon
+                                min={2} max={30} step={0.5} after="m" style={{width: "100%"}}
                                 value={coordination.settings.resume_distance_m}
-                                onChange={(v) => v != null && run("coord", () => fleet.setCoordination({...coordination.settings, resume_distance_m: v}))}
+                                onChange={asyncHandler((v) => v != null && run("coord", () => fleet.setCoordination({...coordination.settings, resume_distance_m: v})))}
                             />
                         </Col>
                     </Row>
                     <Space wrap>
-                        <Popconfirm
+                        <AsyncPopconfirm
                             title={t("fleetPage.pushMapConfirm")}
                             onConfirm={() => run("push", async () => {
                                 const res = await fleet.pushMap();
@@ -272,13 +280,13 @@ export default function FleetPage() {
                             <Button icon={<CloudUploadOutlined/>} loading={busy === "push"} disabled={rows.length < 2}>
                                 {t("fleetPage.pushMap")}
                             </Button>
-                        </Popconfirm>
-                        <Popconfirm
+                        </AsyncPopconfirm>
+                        <AsyncPopconfirm
                             title={t("fleetPage.startFreshConfirm")}
                             onConfirm={() => run("fresh", () => fleet.startFresh(), t("fleetPage.startFreshDone"))}
                         >
                             <Button icon={<RedoOutlined/>} loading={busy === "fresh"}>{t("fleetPage.startFresh")}</Button>
-                        </Popconfirm>
+                        </AsyncPopconfirm>
                     </Space>
                     <ul style={{margin: 0, paddingLeft: 18, color: colors.textSecondary, fontSize: 12}}>
                         <li>{t("fleetPage.coordRuleAreas")}</li>

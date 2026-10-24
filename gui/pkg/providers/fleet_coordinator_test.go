@@ -58,11 +58,11 @@ func TestUpdateCompletedMemory_AddsAndExpires(t *testing.T) {
 	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 	old := map[uint32]time.Time{7: now.Add(-13 * time.Hour), 8: now.Add(-1 * time.Hour)}
 	members := []fleetMember{
-		{ID: "a", Online: true, Completed: []uint32{1, 2}},
+		{ID: "a", Online: true, Completed: []uint32{1, 2}, SessionState: coverageFresh, SessionObservation: &coverageObservation{receivedAt: now}},
 		{ID: "b", Online: false, Completed: []uint32{9}},
 	}
 
-	got := updateCompletedMemory(old, members, now, 12*time.Hour)
+	got := updateCompletedMemory(old, members, now, 12*time.Hour, map[string]completionObservation{})
 
 	assert.Equal(t, []uint32{1, 2, 8}, sortedAreas(got), "expired 7 dropped, offline b's 9 ignored")
 	assert.Equal(t, now, got[1])
@@ -93,6 +93,7 @@ func TestMemberFromRobot_ReadsTopics(t *testing.T) {
 			"gps":             json.RawMessage(`{"pose":{"pose":{"position":{"x":48.5,"y":2.5,"z":0}}}}`),
 		},
 	}
+	row.coverageObservation = &coverageObservation{receivedAt: time.Now()}
 	row.TopicAgeS = map[string]float64{"highLevelStatus": 0, "coverageSession": 0, "gps": 0.5}
 	m := memberFromRobotAt(row, LatLon{Lat: 48.5, Lon: 2.5}, peerPoseMaxAge)
 	assert.True(t, m.Autonomous)
@@ -192,6 +193,8 @@ func TestCoordinatorTick_PushesExclusionsAndRemembersCompletion(t *testing.T) {
 			"gps":             gpsTopic(48.0001, 2.0),
 		}},
 	}
+	rows[1].TopicAgeS = map[string]float64{"coverageSession": 0, "highLevelStatus": 0}
+	rows[1].coverageObservation = &coverageObservation{receivedAt: time.Now()}
 	c, db, ros := newTestCoordinator(t, &rows)
 	require.NoError(t, c.SetSettings(CoordinatorSettings{Enabled: true}))
 
@@ -245,12 +248,15 @@ func TestCoordinator_ResetForgetsCompletedAreas(t *testing.T) {
 			"coverageSession": json.RawMessage(`{"session_active":false,"current_area":-1,"completed_areas":[2]}`),
 		}},
 	}
+	rows[0].TopicAgeS = map[string]float64{"coverageSession": 0}
+	rows[0].coverageObservation = &coverageObservation{receivedAt: time.Now()}
 	c, db, _ := newTestCoordinator(t, &rows)
 	require.NoError(t, c.SetSettings(CoordinatorSettings{Enabled: true}))
 	require.Equal(t, []uint32{2}, c.Status().CompletedAreas)
 
 	// The member has cleared its own session; reset must not re-learn area 2.
 	rows[0].Topics["coverageSession"] = json.RawMessage(`{"session_active":false,"current_area":-1,"completed_areas":[]}`)
+	rows[0].coverageObservation = &coverageObservation{receivedAt: time.Now()}
 	require.NoError(t, c.Reset())
 
 	assert.Empty(t, c.Status().CompletedAreas)

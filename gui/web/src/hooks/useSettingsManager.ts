@@ -1,6 +1,8 @@
+import {validAdvancedKeyName, type AdvancedKeyError} from '../components/settings/advancedSettings';
+import type {PersistedDockPose} from '../utils/robotEditorContract';
 import {DOCK_VISUAL_KEYS} from "../components/robot/dockGeometry";
 import {materializeLegacyCasterPosition} from "../utils/casterPosition";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApi } from "./useApi.ts";
 import { App } from "antd";
@@ -26,11 +28,29 @@ import {
     YAW_LOOP_GROUP,
     groupKeys,
 } from "../components/settings/settingsFieldGroups.ts";
-import { liveHardwareParameters, settingsSectionsForBackend } from "../constants/hardwareBackends.ts";
+import { planHardwareParameters, settingsSectionsForBackend } from "../constants/hardwareBackends.ts";
 import { useHardwareBackend } from "./useHardwareBackend.ts";
+import {isJsonObject} from '../utils/json';
 import {apiErrorMessage, errorMessage} from "../utils/errors";
 import type {SettingsValues} from "../types/settings.generated";
 
+
+// The canonical YAML write precedes sidecar/env synchronization. A failed
+// response may explicitly confirm persistence; never infer it from error text.
+const persistedFailure = (response: unknown): string | undefined => {
+    if (typeof response !== 'object' || response === null || !('error' in response)) return undefined;
+    const body: unknown = response.error;
+    return isJsonObject(body) && body.persisted === true && typeof body.error === 'string' ? body.error : undefined;
+};
+
+// A hardware node may accept a live write at a different value than requested
+// (e.g. clamped). POST /params then lists it under `adjustments` and echoes the
+// applied value; a refused write is an error response instead.
+const adjustedLiveValue = (response: Record<string, unknown>, name: string): {applied: unknown} | undefined => {
+    if (!Array.isArray(response.adjustments)) return undefined;
+    const match: unknown = response.adjustments.find(item => isJsonObject(item) && item.name === name);
+    return isJsonObject(match) && 'applied_value' in match ? {applied: match.applied_value} : undefined;
+};
 
 /** A section that saves outside mowgli_robot.yaml but wants the page's Save button. */
 export interface ExternalSaver {
@@ -338,12 +358,76 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
 ];
 
 
+const HIDDEN_FROM_ADVANCED = new Set([
+    "dock_pose_x",
+    "dock_pose_y",
+    "slam_mode",
+    "map_save_on_dock",
+    "map_save_path",
+    "gps_antenna_x",
+    "gps_antenna_y",
+    "gps_antenna_z",
+    "automatic_mode",
+    // Retired in issue #195: removed from the ROS2 template AND the GUI
+    // schema because no node ever read them. Belt-and-braces for a robot
+    // whose installed yaml still carries them between the schema removal
+    // and the retired-key scrub that runs on the next Settings save
+    // (gui/pkg/api/settings.go retiredParamKeys) — same rationale as
+    // slam_mode / map_save_on_dock above: dead config that would silently
+    // mislead anyone who edits it.
+    "outline_passes",
+    "outline_offset",
+    "outline_overlap",
+    "mow_angle_offset_deg",
+    "mow_angle_increment_deg",
+    "motor_temp_high_c",
+    "motor_temp_low_c",
+    // Also block retired localizer keys scrubbed by the YAML producer.
+    "use_scan_matching",
+    "use_loop_closure",
+    "icp_max_iter",
+    "icp_max_corresp_dist",
+    "icp_source_subsample",
+    "scan_min_inliers",
+    "icp_sigma_xy_base",
+    "icp_sigma_theta_base",
+    "icp_max_rmse_m",
+    "icp_max_delta_xy_m",
+    "icp_max_delta_theta_rad",
+    "icp_max_divergence_xy_m",
+    "icp_max_divergence_theta_rad",
+    "scan_yield_to_rtk",
+    "scan_yield_timeout_s",
+    "scan_yield_sigma_xy",
+    "scan_yield_sigma_theta",
+    "scan_yaw_sigma_floor_rad",
+    "lc_max_dist_m",
+    "lc_min_age_s",
+    "lc_max_candidates",
+    "lc_min_delta_m",
+    "lc_min_delta_theta",
+    "lc_max_rmse",
+    "lc_sigma_xy",
+    "lc_sigma_theta",
+    "lc_skip_when_rtk_fixed",
+    "lc_min_travel_m",
+    "lc_min_interval_s",
+    "lc_gps_sigma_ratio",
+    "scan_retention_nodes",
+    "lidar_map_half_extent_m",
+    "ticks_per_revolution",
+]);
+
 export const useSettingsManager = () => {
     const { t } = useTranslation();
     const guiApi = useApi();
     const hardware = useHardwareBackend();
     const { notification } = App.useApp();
     const [savedValues, setSavedValues] = useState<SettingsValues>({});
+    // A GPS write can have persisted even when its acknowledgement/readback fails.
+    const dockCaptureUnconfirmed = useRef(false);
+    const dockCapturePending = useRef(false);
+    const settingsWritesInFlight = useRef(0);
     const [localValues, setLocalValues] = useState<SettingsValues>({});
     // Schema defaults = the GUI's source of "default value" for each key.
     // (The backend derives these from the JSON schema, which stands in for the
@@ -377,26 +461,41 @@ export const useSettingsManager = () => {
 
 
     // Load values on mount
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('settingsSections.toasts.loadFailed'), description: errorMessage(error)});
+    });
+
+    const adoptInitialValues = useEffectEvent((data: SettingsValues) => {
+        const baseline = savedValues;
+        setSavedValues(data);
+        setLocalValues(current => {
+            const merged = {...data};
+            for (const [key, value] of Object.entries(current)) {
+                if (!valuesMatch(value, baseline[key])) merged[key] = value;
+            }
+            return merged;
+        });
+        initialLoadDone.current = true;
+    });
+
     useEffect(() => {
+        let active = true;
         void (async () => {
             try {
                 setLoading(true);
                 const res = await guiApi.settings.yamlList();
+                if (!active) return;
                 if (res.error) throw new Error(apiErrorMessage(res.error));
                 const data = (res.data) || {};
-                setSavedValues(data);
-                setLocalValues(data);
-                initialLoadDone.current = true;
+                adoptInitialValues(data);
             } catch (e) {
-                notification.error({
-                    message: t("settingsSections.toasts.loadFailed"),
-                    description: errorMessage(e),
-                });
+                if (active) reportLoadError(e);
             } finally {
-                setLoading(false);
+                if (active) setLoading(false);
             }
         })();
-    }, []);
+        return () => { active = false; };
+    }, [guiApi.settings]);
 
     // The reset value follows the draft preset, including before Save.
     // Discard responses from an earlier selection to avoid stale defaults.
@@ -550,7 +649,13 @@ export const useSettingsManager = () => {
 
 
     const persistSettings = useCallback(async (options?: { forceGpsRestart?: boolean }) => {
+        let yamlPersisted = false;
+        settingsWritesInFlight.current++;
         try {
+            if (dockCapturePending.current) {
+                notification.warning({message: t('settingsSections.toasts.dockCapturePending')});
+                return;
+            }
             setSaving(true);
             const forceGpsRestart = options?.forceGpsRestart ?? false;
             // Capture which keys were dirty BEFORE we mark them saved, so we
@@ -562,18 +667,15 @@ export const useSettingsManager = () => {
                 dirtyKeys.has("dock_pose_x") ||
                 dirtyKeys.has("dock_pose_y") ||
                 dirtyKeys.has("dock_pose_yaw");
+            if (dockDirty && dockCaptureUnconfirmed.current) {
+                notification.warning({message: t('settingsSections.toasts.dockCaptureUnconfirmed')});
+                return;
+            }
             // Only runtime-confirmed routes may be pushed live. OpenMower and
             // pending MAVROS routes must be persisted and applied on restart.
-            const liveParameters = liveHardwareParameters(
-                dirtyKeys,
-                localValues,
-                hardware.parameterRoutes,
-            );
-            const liveHardwareKeys = new Set(
-                [...dirtyKeys].filter((key) =>
-                    hardware.parameterRoutes[key]?.runtime === "available" && key in localValues,
-                ),
-            );
+            const plan = planHardwareParameters(dirtyKeys, localValues, hardware);
+            const liveParameters = plan.parameters;
+            const liveHardwareKeys = plan.liveKeys;
             const liveHardwareDirty = liveHardwareKeys.size > 0;
             // Appearance-only changes are persisted without restarting ROS;
             // geometry and unavailable runtime routes still require a restart.
@@ -597,12 +699,22 @@ export const useSettingsManager = () => {
             const dirtyPayload: SettingsValues = {};
             for (const key of dirtyKeys) {
                 if (key in localValues) {
-                    dirtyPayload[key] = localValues[key];
+                    const value = localValues[key];
+                    if (typeof value === 'number' && !Number.isFinite(value)) throw new Error(t('settingsSections.toasts.invalidNumericValue'));
+                    dirtyPayload[key] = value;
                 }
             }
             if (hasDirtyChanges) {
-                const res = await guiApi.settings.yamlCreate(dirtyPayload);
-                if (res.error) throw new Error(apiErrorMessage(res.error));
+                let synchronizationFailure: string | undefined;
+                try {
+                    const res = await guiApi.settings.yamlCreate(dirtyPayload);
+                    synchronizationFailure = persistedFailure(res);
+                    if (res.error && synchronizationFailure === undefined) throw new Error(apiErrorMessage(res.error));
+                } catch (e) {
+                    synchronizationFailure = persistedFailure(e);
+                    if (synchronizationFailure === undefined) throw e;
+                }
+                yamlPersisted = true;
                 // AdvancedSection deletes surface as null-valued keys. The
                 // backend drops null keys from the YAML on save, so prune them
                 // from local state too — otherwise the deleted rows reappear.
@@ -613,18 +725,72 @@ export const useSettingsManager = () => {
                     }
                 }
                 setSavedValues(pruned);
-                setLocalValues(pruned);
-                if (requiresRosRestart) setRestartRequired(true);
-                notification.success({
-                    message: t("settingsSections.toasts.saved"),
-                    description: shouldRestartGps
-                        ? t("settingsSections.toasts.savedGpsRestartDescription")
-                        : t(requiresRosRestart ? "settingsSections.toasts.savedDescription" : liveHardwareDirty ? "settingsSections.toasts.savedApplyingLive" : "settingsSections.toasts.savedDisplaySettings"),
+                setLocalValues(previous => {
+                    const next = {...previous};
+                    for (const [key, value] of Object.entries(localValues)) {
+                        if (value === null && previous[key] === null) delete next[key];
+                    }
+                    return next;
                 });
+                if (requiresRosRestart || synchronizationFailure !== undefined) setRestartRequired(true);
+                if (synchronizationFailure !== undefined) {
+                    notification.warning({message: t('settingsSections.toasts.savedRuntimeFailed'), description: synchronizationFailure});
+                    return;
+                }
+                if (plan.deferredState !== undefined) {
+                    notification.warning({message: t('settingsSections.toasts.saved'),
+                        description: t(`settingsSections.toasts.routing.${plan.deferredState}`)});
+                } else {
+                    notification.success({
+                        message: t("settingsSections.toasts.saved"),
+                        description: shouldRestartGps
+                            ? t("settingsSections.toasts.savedGpsRestartDescription")
+                            : t(requiresRosRestart ? "settingsSections.toasts.savedDescription" : liveHardwareDirty ? "settingsSections.toasts.savedApplyingLive" : "settingsSections.toasts.savedDisplaySettings"),
+                    });
+                }
             } else if (shouldRestartGps) {
                 notification.info({
                     message: t("settingsSections.toasts.restartingGps"),
                 });
+            }
+            // Persisting YAML does not guarantee the runtime accepted a live
+            // parameter update. Only send routes the active backend reports as available.
+            if (hasDirtyChanges && liveParameters.length > 0) {
+                try {
+                    const liveResponse = await guiApi.request({
+                        path: "/params",
+                        method: "POST",
+                        type: ContentType.Json,
+                        format: "json",
+                        body: { parameters: liveParameters },
+                    });
+
+                    if (liveResponse.error) throw new Error(apiErrorMessage(liveResponse.error));
+                    const raw: unknown = liveResponse.data;
+                    if (!isJsonObject(raw) || !Array.isArray(raw.parameters)) throw new Error(t('settingsSections.toasts.runtimeUnconfirmed'));
+                    const echoed: unknown[] = raw.parameters;
+                    const expectedValue = (want: {name: string; value: unknown}) =>
+                        adjustedLiveValue(raw, want.name)?.applied ?? want.value;
+                    if (!liveParameters.every(want => echoed.some(item => isJsonObject(item)
+                        && item.name === want.name && item.value === expectedValue(want)))) throw new Error(t('settingsSections.toasts.runtimeUnconfirmed'));
+                    const adjusted = liveParameters.flatMap(want => {
+                        const adjustment = adjustedLiveValue(raw, want.name);
+                        return adjustment === undefined ? [] : [t('settingsSections.toasts.liveAdjustedItem',
+                            {name: want.name, applied: String(adjustment.applied), requested: String(want.value)})];
+                    });
+                    if (adjusted.length > 0) {
+                        notification.warning({message: t('settingsSections.toasts.liveAdjusted'), description: adjusted.join('; ')});
+                    } else {
+                        notification.success({message: t('settingsSections.toasts.liveApplied')});
+                    }
+                } catch (e) {
+                    setRestartRequired(true);
+                    notification.warning({
+                        message: t("settingsSections.toasts.drivePidUpdateFailed"),
+                        description: errorMessage(e) ??
+                            t("settingsSections.toasts.drivePidUpdateFailedDescription"),
+                    });
+                }
             }
             // Sections that persist outside the yaml (IrriSense) save through
             // their own endpoint; each reports its own toast on failure.
@@ -673,36 +839,16 @@ export const useSettingsManager = () => {
                     });
                 }
             }
-            // Persisting YAML does not guarantee the runtime accepted a live
-            // parameter update. Only send routes the active backend reports as available.
-            if (hasDirtyChanges && liveParameters.length > 0) {
-                try {
-                    const liveResponse = await guiApi.request({
-                        path: "/params",
-                        method: "POST",
-                        type: ContentType.Json,
-                        format: "json",
-                        body: { parameters: liveParameters },
-                    });
 
-                    if (liveResponse.error) {
-                        throw new Error(apiErrorMessage(liveResponse.error));
-                    }
-                } catch (e) {
-                    setRestartRequired(true);
-                    notification.warning({
-                        message: t("settingsSections.toasts.drivePidUpdateFailed"),
-                        description: errorMessage(e) ??
-                            t("settingsSections.toasts.drivePidUpdateFailedDescription"),
-                    });
-                }
-            }
         } catch (e) {
-            notification.error({
-                message: t("settingsSections.toasts.saveFailed"),
-                description: errorMessage(e),
-            });
+            if (yamlPersisted) {
+                setRestartRequired(true);
+                notification.warning({message: t('settingsSections.toasts.savedRuntimeFailed'), description: errorMessage(e)});
+            } else {
+                notification.error({message: t("settingsSections.toasts.saveFailed"), description: errorMessage(e)});
+            }
         } finally {
+            settingsWritesInFlight.current--;
             setSaving(false);
         }
     }, [
@@ -712,8 +858,7 @@ export const useSettingsManager = () => {
         notification,
         gpsRestart,
         t,
-        hardware.parameterRoutes,
-        hardware.backend,
+        hardware,
     ]);
 
 
@@ -727,7 +872,16 @@ export const useSettingsManager = () => {
             markRestartRequired?: boolean;
         },
     ) => {
+        settingsWritesInFlight.current++;
         try {
+            if (dockCapturePending.current) {
+                notification.warning({message: t('settingsSections.toasts.dockCapturePending')});
+                return false;
+            }
+            if (dockCaptureUnconfirmed.current && ['dock_pose_x', 'dock_pose_y', 'dock_pose_yaw'].some(key => key in partialValues)) {
+                notification.warning({message: t('settingsSections.toasts.dockCaptureUnconfirmed')});
+                return false;
+            }
             const changedPayload: SettingsValues = {};
             for (const [key, value] of Object.entries(partialValues)) {
                 if (JSON.stringify(value) !== JSON.stringify(savedValues[key])) {
@@ -742,9 +896,14 @@ export const useSettingsManager = () => {
 
 
             setSaving(true);
-            const res = await guiApi.settings.yamlCreate(changedPayload);
-            if (res.error) {
-                throw new Error(apiErrorMessage(res.error));
+            let synchronizationFailure: string | undefined;
+            try {
+                const res = await guiApi.settings.yamlCreate(changedPayload);
+                synchronizationFailure = persistedFailure(res);
+                if (res.error && synchronizationFailure === undefined) throw new Error(apiErrorMessage(res.error));
+            } catch (e) {
+                synchronizationFailure = persistedFailure(e);
+                if (synchronizationFailure === undefined) throw e;
             }
 
 
@@ -752,11 +911,15 @@ export const useSettingsManager = () => {
             setLocalValues((prev) => ({ ...prev, ...changedPayload }));
 
 
-            if (options?.markRestartRequired ?? true) {
+            if (synchronizationFailure !== undefined || (options?.markRestartRequired ?? true)) {
                 setRestartRequired(true);
             }
 
 
+            if (synchronizationFailure !== undefined) {
+                notification.warning({message: t('settingsSections.toasts.savedRuntimeFailed'), description: synchronizationFailure});
+                return false;
+            }
             if (!options?.silentSuccess) {
                 notification.success({
                     message: options?.successMessage ?? t("settingsSections.toasts.saved"),
@@ -773,6 +936,7 @@ export const useSettingsManager = () => {
             });
             return false;
         } finally {
+            settingsWritesInFlight.current--;
             setSaving(false);
         }
     }, [guiApi, notification, savedValues, t]);
@@ -781,6 +945,21 @@ export const useSettingsManager = () => {
         setLocalValues((prev) => ({ ...prev, ...persistedValues }));
     }, []);
 
+
+    const beginDockCapture = useCallback(() => {
+        if (settingsWritesInFlight.current > 0 || dockCapturePending.current) {
+            notification.warning({message: t('settingsSections.toasts.dockCaptureWhileSaving')});
+            return false;
+        }
+        dockCaptureUnconfirmed.current = true;
+        dockCapturePending.current = true;
+        return true;
+    }, [notification, t]);
+    const finishDockCapture = useCallback(() => {dockCapturePending.current = false;}, []);
+    const acceptPersistedDockPose = useCallback((pose: PersistedDockPose) => {
+        acceptPersistedValues(pose);
+        dockCaptureUnconfirmed.current = false;
+    }, [acceptPersistedValues]);
 
     const save = useCallback(async () => {
         await persistSettings();
@@ -811,39 +990,18 @@ export const useSettingsManager = () => {
     // we read/write the new names and hide the old ones so operators don't
     // edit a key that has no consumer. automatic_mode is OpenMower legacy
     // only consumed by the migration script, not by ROS2 itself.
-    const HIDDEN_FROM_ADVANCED = new Set([
-        "dock_pose_x",
-        "dock_pose_y",
-        "slam_mode",
-        "map_save_on_dock",
-        "map_save_path",
-        "gps_antenna_x",
-        "gps_antenna_y",
-        "gps_antenna_z",
-        "automatic_mode",
-        // Retired in issue #195: removed from the ROS2 template AND the GUI
-        // schema because no node ever read them. Belt-and-braces for a robot
-        // whose installed yaml still carries them between the schema removal
-        // and the retired-key scrub that runs on the next Settings save
-        // (gui/pkg/api/settings.go retiredParamKeys) — same rationale as
-        // slam_mode / map_save_on_dock above: dead config that would silently
-        // mislead anyone who edits it.
-        "outline_passes",
-        "outline_offset",
-        "outline_overlap",
-        "mow_angle_offset_deg",
-        "mow_angle_increment_deg",
-        "motor_temp_high_c",
-        "motor_temp_low_c",
-    ]);
-    const advancedKeys = useMemo(() => {
-        const knownKeys = new Set(
-            SECTION_DEFINITIONS.filter((s) => s.id !== "advanced").flatMap((s) => s.keys)
-        );
-        return Object.keys(localValues).filter(
-            (k) => !knownKeys.has(k) && !HIDDEN_FROM_ADVANCED.has(k),
-        );
-    }, [localValues]);
+    const protectedAdvancedKeys = useMemo(() => new Set([
+        ...SECTION_DEFINITIONS.filter(section => section.id !== 'advanced').flatMap(section => section.keys),
+        ...HIDDEN_FROM_ADVANCED,
+    ]), []);
+    const validateAdvancedKey = useCallback((key: string): AdvancedKeyError | undefined => {
+        if (!validAdvancedKeyName(key)) return 'invalidName';
+        if (protectedAdvancedKeys.has(key)) return 'protectedKey';
+        if (Object.prototype.hasOwnProperty.call(localValues, key)) return 'duplicateKey';
+        return undefined;
+    }, [localValues, protectedAdvancedKeys]);
+    const advancedKeys = useMemo(() => Object.keys(localValues).filter(key => !protectedAdvancedKeys.has(key)),
+        [localValues, protectedAdvancedKeys]);
 
 
     // Search filtering
@@ -879,6 +1037,7 @@ export const useSettingsManager = () => {
         acknowledgeRestart,
         searchQuery,
         advancedKeys,
+        validateAdvancedKey,
         setSearchQuery,
         handleChange,
         handleBulkChange,
@@ -892,6 +1051,9 @@ export const useSettingsManager = () => {
         savePartialValues,
         saveAndRestartGps,
         acceptPersistedValues,
+        acceptPersistedDockPose,
+        beginDockCapture,
+        finishDockCapture,
         revert,
     };
 };
