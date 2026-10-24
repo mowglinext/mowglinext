@@ -72,11 +72,25 @@ button for 0.8 seconds. These call the existing `high_level_control` commands
 3, 5 and 6. STOP calls command 8 immediately. If a recording request is still pending, STOP
 is also reasserted after that request completes so a late start cannot win.
 
-The controller cannot start Manual Mowing or enable/reset blades or emergency
-interlocks. **Manual Mowing must be started explicitly from the GUI and runs the
-blade.** Deadman release during Manual Mowing ends the controller session and
-requests the existing STOP command, so restarting requires another deliberate
-GUI action. Recording deadman release stops driving while preserving recording.
+**Initially select Manual Mowing explicitly from the GUI; it runs the blade.**
+During Manual Mowing, releasing the physical deadman sends zero and the existing
+STOP command (8). The controller stays connected. The panel shows stopping,
+paused and starting states. A pause becomes resumable only after STOP succeeds
+and a subsequent fresh IDLE status arrives. At that pause, release all controls,
+then press and hold the deadman again with centered sticks to request Manual
+Mowing (7), including its blade. Holding deadman before the pause is ready does
+not queue a restart. Keep the sticks centered until the command succeeds and a
+subsequent MANUAL_MOWING status confirms the mode, then drive.
+
+This permission belongs only to this controller's own manual pause. The mapped
+STOP, **Stop Manual Mowing** map button, another mode selection, emergency,
+disable, disconnect or input/status loss cancels it. Explicit STOP leaves the
+controller connected but requires an explicit new Manual Mowing selection.
+A new connection never inherits restart permission. Release during a pending
+restart requests STOP immediately and again after that request settles, so a
+late command cannot leave Manual Mowing selected. There is no blade override or
+emergency reset in the controller. The existing map emergency stop acts immediately;
+its reset remains separate. Recording deadman release stops driving while preserving recording.
 The BT/map server retain all recording geometry, validation and persistence.
 A successful command response acknowledges the command; it is not proof that a
 valid polygon was saved. Check the resulting map.
@@ -99,16 +113,17 @@ valid polygon was saved. Check the resulting map.
   merely because its values remain unchanged. No timestamp is replaced with
   callback/poll time. See the [Gamepad timestamp contract](https://www.w3.org/TR/gamepad/#dom-gamepad-timestamp)
   and [WebKit's timestamp implementation](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/Modules/gamepad/Gamepad.h).
-- Loss of live GUI status delivery (>2.5 s on the monotonic browser clock),
-  emergency status or an outstanding action suppresses motion and requires neutral rearming. This checks delivery
+- Loss of live GUI status delivery (>2.5 s on the monotonic browser clock)
+  or emergency status revokes the controller session. An outstanding action
+  suppresses motion and requires neutral rearming. This checks delivery
   liveness, not physical acquisition provenance. Robot-side interlocks remain
   authoritative.
 - Movement is never queued by the browser, buffered for reconnect or replayed.
   A nonempty WebSocket send buffer terminates the session. Recovery requires
   explicit Enable, neutral inputs and a new deadman press.
 - The backend's dedicated `/api/mowglinext/publish/gamepad` socket first sends
-  `{type: "gamepadHello", challenge: <random 32-character hex>, version: 2}`. The current
-  browser attempt must return `{type: "gamepadClaim", challenge: <same>, version: 2}` from a
+  `{type: "gamepadHello", challenge: <random 32-character hex>, version: 3}`. The current
+  browser attempt must return `{type: "gamepadClaim", challenge: <same>, version: 3}` from a
   valid native-input poll within 300 ms of server challenge issuance. An HTTP
   upgrade alone reserves no ownership and performs no ROS subscription, zero
   publish or STOP. A canceled browser ignores a late Hello; invalid, expired or
@@ -121,14 +136,29 @@ valid polygon was saved. Check the resulting map.
   timestamp ordering, poll history or terminal faults. The entire browser
   startup remains bounded at two seconds, including Ready. Handshake writes
   are bounded at 100 ms. This internal protocol requires matching GUI/backend
-  builds. Version 2 rejects cached clients that still send browser-side delayed
-  STOP compensation; an older page fails closed and must be reloaded.
+  builds. Version 3 requires physical deadman state and pause epochs, excluding cached
+  clients with older lifecycle semantics; an older page fails closed and must be reloaded.
 - After Ready, the socket accepts only bounded, finite teleop frames
-  `{twist: <TwistStamped>, deadman: <boolean>}`.
+  `{twist: <TwistStamped>, deadman: <boolean>, physicalDeadman: <boolean>,
+  neutral: <boolean>, epoch: <nonnegative integer>}`. Effective `deadman` is the
+  drive authorization; `physicalDeadman` preserves the actual button state even
+  while a mode or neutral interlock blocks driving. `neutral` describes centered
+  drive axes with mapped action buttons released (deadman is reported separately). The server sends bounded, serialized
+  `{type: "gamepadControl", epoch, phase}` notices for `inactive`, `active`,
+  `pausing`, `paused` and `resuming`. Ready starts at epoch 0, inactive; each
+  phase change increments the epoch, and inactive revocation also increments it.
+  An active notice includes `resumed: true` only for a successful, confirmed
+  deadman resume. This preserves command provenance if intermediate phase
+  notices are coalesced; initial activation and explicit GUI Manual Mowing do
+  not carry it and still require normal neutral rearming.
+  The browser echoes the latest epoch. A release/press from an older epoch cannot
+  grant or consume a current pause capability. These are session identities,
+  not proof of physical input freshness.
   A 300 ms monotonic session lease expires independently of the read/publish
   loop. Disconnect, malformed input and lease expiry close the session, send
   zero and request STOP if this session has observed Manual Mowing. Transient
-  NULL/IDLE guard states retain that responsibility; explicit RECORDING clears it.
+  NULL/IDLE guard states retain that responsibility. A successful explicit mode
+  command supersedes it; an uncorrelated status cannot erase explicit ownership.
   Each publish carries that accepted frame's fixed deadline through transport
   selection, relay writing and Foxglove advertisement/publication. Both writers
   recheck validity after acquiring their shared lock; an expired queued motion
@@ -301,9 +331,17 @@ least two controller families:
    never save/discard merely because input was lost.
 4. Start/finish/cancel deliberately. Each gesture sends one existing command;
    simultaneous buttons cannot save/discard. Confirm the expected map result.
-5. In explicitly GUI-started Manual Mowing, repeat release/disconnect/network
-   loss; verify STOP is accepted and wheels and blade stop. A failed STOP or
-   continuing blade fails acceptance; do not proceed to normal use.
+5. Start Manual Mowing explicitly from the GUI. Release deadman with the sticks
+   still deflected; verify wheels and blade stop while the controller stays
+   connected. After the paused message, center/release all controls, then hold
+   deadman again. Verify one restart, with no wheel motion before new mode
+   confirmation. Repeat several cycles without reopening settings or enabling.
+   Holding deadman early must never start later on its own. Release while a
+   restart is pending and verify the final mode stays stopped. Verify explicit
+   STOP, emergency/reset and another mode prevent deadman restart. Repeat with
+   disconnect/network loss; these must stop and require explicit Enable and mode
+   selection. A failed STOP or continuing blade fails acceptance; do not proceed
+   to normal use.
 6. Confirm fresh status/interlocks, physical emergency stop and touch controls
    still work after controller shutdown. Leave centered controls unchanged before
    enabling, hold a steady stick for several seconds and complete each 0.8-second

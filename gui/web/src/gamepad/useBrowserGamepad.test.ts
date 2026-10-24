@@ -38,7 +38,7 @@ class FakeWebSocket {
     message(value: unknown) { this.onmessage?.({data: JSON.stringify(value)} as MessageEvent); }
     open(hello = true) {
         this.readyState = FakeWebSocket.OPEN;
-        if (hello) this.message({type: 'gamepadHello', version: 2, challenge: '0123456789abcdef0123456789abcdef'});
+        if (hello) this.message({type: 'gamepadHello', version: 3, challenge: '0123456789abcdef0123456789abcdef'});
     }
     send(value: string) {
         const parsed: unknown = JSON.parse(value);
@@ -164,7 +164,7 @@ describe('useBrowserGamepad session ownership', () => {
         poll(100);
         expect(socket.claims).toHaveLength(0);
         expect(socket.sent).toHaveLength(0);
-        act(() => { socket.message({type: 'gamepadHello', version: 2, challenge: '0123456789abcdef0123456789abcdef'}); });
+        act(() => { socket.message({type: 'gamepadHello', version: 3, challenge: '0123456789abcdef0123456789abcdef'}); });
         expect(socket.claims).toHaveLength(0);
         poll();
         expect(socket.claims).toHaveLength(1);
@@ -193,7 +193,7 @@ describe('useBrowserGamepad session ownership', () => {
         const replacement = enable(hook);
         poll();
         act(() => {
-            retired.message({type: 'gamepadHello', version: 2, challenge: 'fedcba9876543210fedcba9876543210'});
+            retired.message({type: 'gamepadHello', version: 3, challenge: 'fedcba9876543210fedcba9876543210'});
             retired.message({type: 'gamepadReady'});
         });
         expect(retired.claims).toHaveLength(0);
@@ -221,8 +221,8 @@ describe('useBrowserGamepad session ownership', () => {
         {type: 'gamepadReady'},
         {type: 'gamepadHello', challenge: '0123456789abcdef0123456789abcdef'},
         {type: 'gamepadHello', version: 1, challenge: '0123456789abcdef0123456789abcdef'},
-        {type: 'gamepadHello', version: 2, challenge: 'too-short'},
-        {type: 'gamepadHello', version: 2, challenge: '0123456789abcdef0123456789abcdef', unexpected: true},
+        {type: 'gamepadHello', version: 3, challenge: 'too-short'},
+        {type: 'gamepadHello', version: 3, challenge: '0123456789abcdef0123456789abcdef', unexpected: true},
         {type: 'unknown'},
     ])('fails closed on an invalid or out-of-order server handshake: %j', message => {
         const {hook, runAction} = mount();
@@ -473,7 +473,7 @@ describe('useBrowserGamepad session ownership', () => {
 
         poll();
         const control = parseControl(socket.sent[socket.sent.length - 1]);
-        expect(Object.keys(control).sort()).toEqual(['deadman', 'twist']);
+        expect(Object.keys(control).sort()).toEqual(['deadman', 'epoch', 'neutral', 'physicalDeadman', 'twist']);
         expect(control).toMatchObject({deadman: false, twist: {twist: {linear: {x: 0}, angular: {z: 0}}}});
 
         act(() => { hook.result.current.disable(); });
@@ -555,7 +555,9 @@ describe('useBrowserGamepad session ownership', () => {
         poll();
         setAxis(1, -1);
         poll();
-        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(true);
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(false);
+        expect(hook.result.current.enabled).toBe(false);
+        expect(socket.closeCount).toBe(1);
     });
 
     it('reports a browser permission-policy failure before enabling', () => {
@@ -770,5 +772,152 @@ describe('useBrowserGamepad session ownership', () => {
         expect(socket.sent).toHaveLength(sentWhenClosed);
         expect(onOwnershipChange.mock.calls.map(([owns]) => owns)).toEqual([true, false]);
         expect(hook.result.current.fault).toBe('connectionLost');
+    });
+});
+
+describe('manual control notices', () => {
+    it('keeps one session through pause/resume, echoes epochs, and confirms centered held input', () => {
+        topics.status.data.state_name = 'MANUAL_MOWING';
+        const {hook, runAction, onOwnershipChange} = mount();
+        const socket = enable(hook);
+        poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true); poll();
+        act(() => socket.message({type: 'gamepadControl', epoch: 1, phase: 'active'}));
+        setAxis(1, -1); poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({deadman: true, physicalDeadman: true, neutral: false, epoch: 1});
+        setButton(DEFAULT_PROFILE.buttons.deadman, false); poll();
+        act(() => socket.message({type: 'gamepadControl', epoch: 2, phase: 'pausing'}));
+        poll();
+        expect(hook.result.current.state).toBe('manualPausing');
+        expect(hook.result.current.enabled).toBe(true);
+        topics.status.data.state_name = 'IDLE';
+        topics.status.lastMessageAt = performance.now();
+        act(() => socket.message({type: 'gamepadControl', epoch: 3, phase: 'paused'}));
+        setAxis(1, 0); poll(100);
+        expect(hook.result.current.state).toBe('manualPaused');
+        setButton(DEFAULT_PROFILE.buttons.deadman, true); poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({deadman: false, physicalDeadman: true, neutral: true, epoch: 3});
+        act(() => socket.message({type: 'gamepadControl', epoch: 4, phase: 'resuming'}));
+        poll();
+        expect(hook.result.current.state).toBe('manualResuming');
+        act(() => socket.message({type: 'gamepadControl', epoch: 5, phase: 'active', resumed: true}));
+        poll(250); // server confirmation precedes the browser multiplex status
+        expect(hook.result.current.state).toBe('manualResuming');
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({deadman: false, physicalDeadman: true, neutral: true, epoch: 5});
+        topics.status.data.state_name = 'MANUAL_MOWING';
+        topics.status.lastMessageAt = performance.now();
+        poll(); // new centered native sample consumes confirmation, still zero
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({deadman: false, physicalDeadman: true, neutral: true, epoch: 5});
+        setAxis(1, -1); poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({deadman: true, physicalDeadman: true, neutral: false, epoch: 5});
+        expect(runAction).not.toHaveBeenCalled(); // resume7 belongs to server
+        expect(onOwnershipChange.mock.calls).toEqual([[true]]);
+        expect(socket.closeCount).toBe(0);
+    });
+
+    it('handles notices after the two-second startup window and ignores stale snapshots', () => {
+        const {hook} = mount();
+        const socket = enable(hook);
+        for (let i = 0; i < 60; i++) { topics.status.lastMessageAt = performance.now(); poll(); }
+        act(() => socket.message({type: 'gamepadControl', epoch: 2, phase: 'inactive'}));
+        act(() => socket.message({type: 'gamepadControl', epoch: 1, phase: 'paused'}));
+        poll();
+        expect(hook.result.current.enabled).toBe(true);
+        expect(hook.result.current.manualPhase).toBe('inactive');
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({epoch: 2});
+        expect(socket.closeCount).toBe(0);
+    });
+
+    it('keeps raw held intent separate while a mapped command is pending', () => {
+        const runAction = vi.fn<RunAction>(() => new Promise(() => {}));
+        const {hook} = mount(runAction);
+        const socket = enable(hook); poll(100);
+        setButton(DEFAULT_PROFILE.buttons.recordStart, true); poll(850);
+        expect(runAction).toHaveBeenCalledTimes(1);
+        setButton(DEFAULT_PROFILE.buttons.recordStart, false);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true); poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({deadman: false, physicalDeadman: true, neutral: true});
+    });
+
+    it('does not let a retired socket or status recovery reinstall a paused capability', () => {
+        const {hook} = mount();
+        const old = enable(hook); poll(100);
+        act(() => old.message({type: 'gamepadControl', epoch: 3, phase: 'paused'}));
+        act(() => hook.result.current.disable());
+        const current = enable(hook); poll(100);
+        act(() => old.message({type: 'gamepadControl', epoch: 20, phase: 'paused'}));
+        expect(hook.result.current.manualPhase).toBe('inactive');
+        expect(parseControl(current.sent[current.sent.length - 1])).toMatchObject({epoch: 0});
+        topics.status.data.emergency = true;
+        topics.status.lastMessageAt = performance.now(); poll();
+        expect(hook.result.current.enabled).toBe(false);
+        topics.status.data.emergency = false;
+        topics.status.lastMessageAt = performance.now(); poll();
+        act(() => current.message({type: 'gamepadControl', epoch: 30, phase: 'active'}));
+        expect(hook.result.current.enabled).toBe(false);
+        expect(hook.result.current.manualPhase).toBe('inactive');
+    });
+
+    it('rejects a protocol v2 server before acquiring a claim', () => {
+        const {hook} = mount();
+        act(() => hook.result.current.enable());
+        const socket = FakeWebSocket.instances[0]; socket.open(false);
+        act(() => socket.message({type: 'gamepadHello', version: 2, challenge: SESSION_TOKEN}));
+        expect(hook.result.current.enabled).toBe(false);
+        expect(socket.claims).toHaveLength(0);
+    });
+});
+
+describe('coalesced manual phase provenance', () => {
+    it.each([true, false])('distinguishes owned resume from ordinary GUI7 when intermediate phases coalesce (resumed=%s)', resumed => {
+        const {hook} = mount();
+        const socket = enable(hook); poll(100);
+        act(() => socket.message({type: 'gamepadControl', epoch: 3, phase: 'paused'}));
+        poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true); poll();
+        // The server may omit resuming, or omit inactive for an ordinary GUI7.
+        act(() => socket.message({type: 'gamepadControl', epoch: 5, phase: 'active', ...(resumed ? {resumed: true} : {})}));
+        poll(200); // browser ROS status is still IDLE
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(false);
+        topics.status.data.state_name = 'MANUAL_MOWING';
+        topics.status.lastMessageAt = performance.now(); poll();
+        setAxis(1, -1); poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(resumed);
+        expect(hook.result.current.enabled).toBe(true);
+    });
+
+    it.each([
+        {type: 'gamepadControl', epoch: 5, phase: 'active', resumed: false},
+        {type: 'gamepadControl', epoch: 5, phase: 'paused', resumed: true},
+        {type: 'gamepadControl', epoch: 5, phase: 'active', resumed: 'true'},
+        {type: 'gamepadControl', epoch: 5, phase: 'active', resumed: true, extra: true},
+    ])('rejects malformed resume provenance %o', notice => {
+        const {hook} = mount(); const socket = enable(hook); poll(100);
+        act(() => socket.message(notice));
+        expect(hook.result.current.enabled).toBe(false);
+        expect(hook.result.current.fault).toBe('connectionLost');
+    });
+});
+
+
+describe('new active epochs require new operator input', () => {
+    it.each([3, 4])('rearms after coalesced ordinary GUI7 at epoch %s while the old stick remains held', epoch => {
+        topics.status.data.state_name = 'MANUAL_MOWING';
+        const {hook} = mount();
+        const socket = enable(hook); poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true); poll();
+        act(() => socket.message({type: 'gamepadControl', epoch: 1, phase: 'active'}));
+        setAxis(1, -1); poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(true);
+        // Generic GUI7, with or without a preceding STOP, revokes intermediate
+        // epochs. Those snapshots may be coalesced before the next active notice.
+        act(() => socket.message({type: 'gamepadControl', epoch, phase: 'active'}));
+        poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1])).toMatchObject({deadman: false, twist: {twist: {linear: {x: 0}}}});
+        expect(hook.result.current.state).toBe('releaseControls');
+        setAxis(1, 0); setButton(DEFAULT_PROFILE.buttons.deadman, false); poll(100);
+        setButton(DEFAULT_PROFILE.buttons.deadman, true); poll();
+        setAxis(1, -1); poll();
+        expect(parseControl(socket.sent[socket.sent.length - 1]).deadman).toBe(true);
     });
 });

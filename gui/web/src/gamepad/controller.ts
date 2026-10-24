@@ -53,13 +53,15 @@ export function teleopTwist(linear = 0, angular = 0): TwistStamped {
 function axis(value: number, deadzone: number): number {
     return Math.abs(value) <= deadzone ? 0 : Math.sign(value) * (Math.abs(value) - deadzone) / (1 - deadzone);
 }
+export type ManualPhase = 'inactive' | 'active' | 'pausing' | 'paused' | 'resuming';
 export interface ControllerContext {
+    manualPhase?: ManualPhase;
     stateName: string;
     statusFresh: boolean;
     emergency: boolean;
     pending: boolean;
 }
-export type ControllerState = 'releaseControls' | 'ready' | 'driving' | 'inputLost' | 'waitingForMode' | 'holding' | 'connecting' | 'statusLost' | 'emergency' | 'actionPending';
+export type ControllerState = 'releaseControls' | 'ready' | 'driving' | 'inputLost' | 'waitingForMode' | 'holding' | 'connecting' | 'statusLost' | 'emergency' | 'actionPending' | 'manualPausing' | 'manualPaused' | 'manualResuming';
 export type InputLossReason = 'pollGap' | 'clockInvalid' | 'disconnected' | 'identityChanged' | 'mappingChanged' |
     'timestampInvalid' | 'timestampRegressed' | 'axisInvalid' | 'buttonInvalid' |
     'focusLost' | 'pageHidden' | 'pageExit' | 'controllerChanged';
@@ -76,6 +78,8 @@ export interface InputLoss {
     inputValue?: number;
 }
 export interface ControllerFrame {
+    physicalDeadman: boolean;
+    neutral: boolean;
     linear: number;
     angular: number;
     deadman: boolean;
@@ -97,21 +101,32 @@ export class ControllerDriver {
     private held: {action: ControllerAction; since: number; fired: boolean} | null = null;
     private previousMode: string | null = null;
     private deadmanHeld = false;
+    private resumeConfirmationPending = false;
 
     constructor(private profile: ControllerProfile, private identity: ControllerIdentity) {}
 
     /** Ownership confirmation requires new neutral input, while all polling,
      * timestamp-order and terminal-fault evidence stays intact. */
     requireNeutral() {
+        this.resumeConfirmationPending = false;
         this.neutralSeen = false;
         this.held = null;
         this.previousMode = null;
         this.deadmanHeld = false;
     }
 
+    /** Server confirmed this deliberate resume. Preserve the held deadman,
+     * but consume a new centered native sample before enabling velocity. */
+    confirmManualResume() {
+        this.resumeConfirmationPending = true;
+        this.neutralSeen = false;
+    }
+
     step(pad: ControllerSample | null, now: number, ctx: ControllerContext): ControllerFrame {
+        let physicalDeadman = false;
+        let neutral = false;
         const zero = (state: ControllerState, action?: ControllerAction): ControllerFrame =>
-            ({linear: 0, angular: 0, deadman: false, state, ...(action ? {action} : {})});
+            ({linear: 0, angular: 0, deadman: false, physicalDeadman, neutral, state, ...(action ? {action} : {})});
         const lost = (inputLoss: InputLoss): ControllerFrame => {
             this.inputLoss ??= inputLoss;
             return {...zero('inputLost'), inputLoss: this.inputLoss};
@@ -139,17 +154,46 @@ export class ControllerDriver {
         // Track physical edges even while STOP or another interlock inhibits motion.
         const wasHeld = this.deadmanHeld;
         this.deadmanHeld = pressed('deadman');
+        physicalDeadman = this.deadmanHeld;
+        neutral = linear === 0 && angular === 0 && !Object.keys(ACTION_COMMANDS).some(key => pressed(key as ControllerAction));
         // STOP is immediate, once per press, and takes precedence over every other input.
         if (pressed('stop')) {
+            this.resumeConfirmationPending = false;
             const fire = this.held?.action !== 'stop';
             this.held = {action: 'stop', since: now, fired: true};
             this.neutralSeen = false;
             return zero('releaseControls', fire ? 'stop' : undefined);
         }
         if (!ctx.statusFresh || ctx.emergency || ctx.pending) {
+            this.resumeConfirmationPending = false;
             this.neutralSeen = false;
             this.held = null;
             return zero(!ctx.statusFresh ? 'statusLost' : ctx.emergency ? 'emergency' : 'actionPending');
+        }
+        if (ctx.manualPhase === 'pausing' || ctx.manualPhase === 'resuming') {
+            this.neutralSeen = false;
+            this.held = null;
+            return zero(ctx.manualPhase === 'pausing' ? 'manualPausing' : 'manualResuming');
+        }
+        if (this.resumeConfirmationPending) {
+            this.held = null;
+            if (physicalDeadman && neutral) {
+                // The controller socket and multiplexed ROS status travel
+                // independently. Keep the confirmation until this stream also
+                // observes MANUAL, while continuing to send only zero motion.
+                if (ctx.stateName !== 'MANUAL_MOWING') return zero('manualResuming');
+                this.resumeConfirmationPending = false;
+                this.neutralSeen = true;
+                this.previousMode = 'MANUAL_MOWING';
+                return zero('ready');
+            }
+            this.resumeConfirmationPending = false;
+            this.neutralSeen = false;
+        }
+        if (ctx.manualPhase === 'paused' && physicalDeadman) {
+            this.neutralSeen = false;
+            this.held = null;
+            return zero('manualPaused');
         }
         if (this.previousMode !== ctx.stateName) {
             this.neutralSeen = false;
@@ -173,7 +217,7 @@ export class ControllerDriver {
             this.held = null;
             if (!recording && ctx.stateName !== 'MANUAL_MOWING') return zero('waitingForMode');
             // Axis must be neutral on each new deadman press. After release, rearm below.
-            return {linear: linear * MAX_LINEAR_MPS * p.speedScale,
+            return {physicalDeadman, neutral, linear: linear * MAX_LINEAR_MPS * p.speedScale,
                 angular: angular * MAX_ANGULAR_RAD_S * p.speedScale, deadman: true, state: 'driving'};
         }
         if (linear !== 0 || angular !== 0) {
@@ -186,7 +230,7 @@ export class ControllerDriver {
         const down = (Object.keys(ACTION_COMMANDS) as ControllerAction[]).filter(key => pressed(key));
         if (down.length !== 1 || !allowed.includes(down[0])) {
             this.held = null;
-            return zero(recording || ctx.stateName === 'MANUAL_MOWING' ? 'ready' : 'waitingForMode');
+            return zero(ctx.manualPhase === 'paused' ? 'manualPaused' : recording || ctx.stateName === 'MANUAL_MOWING' ? 'ready' : 'waitingForMode');
         }
         const action = down[0];
         if (this.held?.action !== action) this.held = {action, since: now, fired: false};

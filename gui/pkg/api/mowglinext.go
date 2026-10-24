@@ -781,6 +781,7 @@ func registerServiceRoutes(group *gin.RouterGroup, provider types.IRosProvider, 
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
+			teleop.revokeManualIntent()
 			err = providers.CallEmergencyStop(ctx, provider, &CallReq)
 		case "mow_enabled":
 			var CallReq mowgli.MowerControlReq

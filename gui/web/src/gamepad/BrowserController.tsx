@@ -4,6 +4,7 @@ import {Alert, App, Button, Drawer, Form, Select, Slider, Space, Switch, Tag, Ty
 import {ControlOutlined} from '@ant-design/icons';
 import {useTranslation} from 'react-i18next';
 import {useBrowserGamepad} from './useBrowserGamepad';
+import {AsyncButton} from '../components/AsyncButton';
 import {
     ACTION_COMMANDS, BUTTON_BINDINGS, DEFAULT_PROFILE, MAX_LINEAR_MPS, POLL_MAX_GAP_MS, controllerKey, loadProfile, loadSelectedControllerKey,
     profileFits, saveProfile, saveSelectedControllerKey, validProfile,
@@ -149,6 +150,10 @@ export function BrowserController({mowerAction, onOwnershipChange}: Props) {
                         selectionExplicit.current = true;
                         controller.enable();
                     }}>{t(controller.enabled ? 'gamepad.disable' : 'gamepad.enable')}</Button>}
+                {controller.enabled && controller.manualPhase !== 'inactive' && <AsyncButton danger size="large"
+                    title={t('gamepad.stopManualHint')} onAsyncClick={mowerAction('high_level_control', {Command: 8})}>
+                    {t('gamepad.stopManual')}
+                </AsyncButton>}
             </Space>
             {selected && <Typography.Text type="secondary" ellipsis style={{maxWidth: 320}}>
                 {selected.index + 1}: {selected.id}

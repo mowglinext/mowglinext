@@ -108,7 +108,7 @@ func TestGamepadConcurrentClaimsHaveOneOwner(t *testing.T) {
 						case <-keepaliveDone:
 							return
 						case <-ticker.C:
-							if conn.WriteJSON(map[string]any{"twist": gamepadVelocity(0), "deadman": false}) != nil {
+							if conn.WriteJSON(gamepadWire(gamepadVelocity(0), false)) != nil {
 								return
 							}
 						}
@@ -144,7 +144,7 @@ func TestGamepadConcurrentClaimsHaveOneOwner(t *testing.T) {
 
 func TestGamepadBinaryVelocityFrameIsTerminal(t *testing.T) {
 	p, _, conn := gamepadHarness(t, 4)
-	raw, err := json.Marshal(map[string]any{"twist": gamepadVelocity(0.1), "deadman": true})
+	raw, err := json.Marshal(gamepadWire(gamepadVelocity(0.1), true))
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, raw))
 	require.Zero(t, readGamepadVelocity(t, p).Twist.Linear.X)
@@ -153,10 +153,10 @@ func TestGamepadBinaryVelocityFrameIsTerminal(t *testing.T) {
 
 func FuzzDecodeGamepadFrame(f *testing.F) {
 	for _, x := range []float64{-0.25, -0.0, 0, 0.25, 0.250001} {
-		raw, _ := json.Marshal(map[string]any{"twist": gamepadVelocity(x), "deadman": true})
+		raw, _ := json.Marshal(gamepadWire(gamepadVelocity(x), true))
 		f.Add(raw)
 	}
-	zero, _ := json.Marshal(map[string]any{"twist": gamepadVelocity(0), "deadman": false})
+	zero, _ := json.Marshal(gamepadWire(gamepadVelocity(0), false))
 	f.Add(zero)
 	for _, raw := range []string{"{}", "null", "[]", "{", `{"twist":{},"deadman":true}`, `{"twist":null,"deadman":false}`, `{"twist":{"twist":{"linear":{"x":1e309,"y":0,"z":0},"angular":{"x":0,"y":0,"z":0}}},"deadman":true}`} {
 		f.Add([]byte(raw))
@@ -185,7 +185,7 @@ func FuzzDecodeGamepadFrame(f *testing.F) {
 		if !deadman && (twist.Linear.X != 0 || twist.Angular.Z != 0) {
 			t.Fatal("accepted motion without deadman")
 		}
-		canonical, err := json.Marshal(map[string]any{"twist": msg, "deadman": deadman})
+		canonical, err := json.Marshal(gamepadWire(msg, deadman))
 		if err != nil {
 			t.Fatal(err)
 		}
