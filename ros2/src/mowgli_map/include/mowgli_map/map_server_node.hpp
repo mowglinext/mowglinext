@@ -69,6 +69,7 @@
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
 #include <mowgli_interfaces/srv/get_recovery_point.hpp>
 #include <mowgli_interfaces/srv/promote_obstacle.hpp>
+#include <mowgli_interfaces/srv/replace_lidar_ignore_corridors.hpp>
 #include <mowgli_interfaces/srv/set_area_coverage_lines.hpp>
 #include <mowgli_interfaces/srv/set_docking_point.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -95,6 +96,8 @@ inline constexpr const char* kRuntimeRobotYaml = "/ros2_ws/config/mowgli_robot.y
 /// are offered as services.
 class MapServerNode : public rclcpp::Node
 {
+  friend class CorridorTransactionTest;
+
 public:
   /// @brief Construct the node, declare parameters, create map, wire up all
   ///        publishers, subscribers, services, and timers.
@@ -577,6 +580,15 @@ private:
   void on_clear_lidar_ignore_corridors(
       const mowgli_interfaces::srv::ClearLidarIgnoreCorridors::Request::SharedPtr req,
       mowgli_interfaces::srv::ClearLidarIgnoreCorridors::Response::SharedPtr res);
+  void on_replace_lidar_ignore_corridors(
+      const mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors::Request::SharedPtr req,
+      mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors::Response::SharedPtr res);
+  void commit_corridors(std::vector<LidarIgnoreCorridorEntry> candidate,
+                        uint64_t next_id,
+                        mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors::Response& result,
+                        bool require_persistence);
+  std::vector<mowgli_interfaces::msg::LidarIgnoreCorridor> corridor_snapshot() const;
+
   /// Republish the full current list on lidar_ignore_corridors_pub_
   /// (transient_local) — called after every add/clear/load, so a late
   /// subscriber always has the current list.
@@ -771,7 +783,7 @@ private:
   static geometry_msgs::msg::Polygon parse_polygon_string(const std::string& s);
 
   /// Serialize a polygon to "x1,y1;x2,y2;..." string format.
-  static std::string polygon_to_string(const geometry_msgs::msg::Polygon& poly);
+  static std::string polygon_to_string(const geometry_msgs::msg::Polygon& poly, int precision = 6);
 
   /// Save areas and docking point to a YAML file.
   /// Atomically write the areas file. Unless `allow_empty_overwrite`, REFUSES (throws) to
@@ -781,13 +793,19 @@ private:
   /// the first add_area, or after a failed load — writing that out destroyed the operator's
   /// map and left only the ignore lines. The file being replaced is kept as <path>.bak.
   void save_areas_to_file(const std::string& path, bool allow_empty_overwrite = false);
+  // Caller holds areas_state_mutex_. Candidate corridors never enter live memory before commit.
+  // Returns directory-sync confirmation; pre-Rename failures throw, post-Rename never throw.
+  bool write_areas_candidate(const std::string& path,
+                             bool allow_empty_overwrite,
+                             const std::vector<LidarIgnoreCorridorEntry>& corridors,
+                             uint64_t next_corridor_id);
   /// area_count recorded in an areas file, or 0 when it is missing/unreadable.
   static int count_areas_in_file(const std::string& path);
 
   /// fsync `tmp_path`, rename it over `path`, fsync the directory. Throws (and
-  /// removes the temp file) if the data cannot be made durable; `path` is then
-  /// untouched.
-  static void commit_file_atomically(const std::string& tmp_path, const std::string& path);
+  /// removes the temp file) on failure before Rename; `path` is then untouched.
+  /// Returns false if directory open/fsync fails AFTER Rename; file is already committed.
+  static bool commit_file_atomically(const std::string& tmp_path, const std::string& path);
 
   /// Which datum frame the in-memory dock pose is expressed in when a load
   /// finds an areas.dat stamped with a different datum.
@@ -990,6 +1008,15 @@ private:
   /// "Start occupied".
   double boundary_inner_margin_m_{0.3};
 
+  /// Soft TRANSIT margin (m) around every drawn obstacle, outside its lethal keepout band
+  /// (keepout_obstacle_margin_m_): cells up to keepout_obstacle_margin_m_ + this far from the
+  /// polygon get kSoftPenaltyMaskCost in the keepout mask — the same mid-cost as the boundary
+  /// bands, NEVER lethal. It nudges the global planner (Smac, point-to-point TRANSIT) towards a
+  /// wider berth around drawn obstacles where there is room, because the lethal band is only the
+  /// body half-width while the controller tests the whole footprint against the real object. 0
+  /// disables it. Read declare_parameters(), not this initialiser (mowglinext#975).
+  double obstacle_transit_margin_m_{0.0};
+
   /// Cells within this distance of docking_pose_ are exempt from the
   /// boundary_inner_margin_m_ penalty above, regardless of direction — kept
   /// even though the mid-cost design no longer strictly needs it for
@@ -1068,6 +1095,10 @@ private:
 
   // ── State ─────────────────────────────────────────────────────────────────
   grid_map::GridMap map_;
+  // Lock order: areas_state_mutex_ BEFORE map_mutex_. Covers every mutation of
+  // the state serialized in areas.dat, the shared .tmp writer and corridor publication.
+  // Recursive because load/migration/save and obstacle helpers share this boundary.
+  mutable std::recursive_mutex areas_state_mutex_;
   mutable std::mutex map_mutex_;
 
   /// Dedicated grid accumulating the mowed area, published as an OccupancyGrid
@@ -1128,7 +1159,11 @@ private:
   /// Next id to mint for a new corridor — same contract as next_area_id_
   /// (persisted in areas.dat, recovered on load as max(loaded ids) + 1,
   /// never reset by ~/clear_map or ~/clear_lidar_ignore_corridors).
-  uint32_t next_lidar_corridor_id_{1};
+  // uint32 IDs plus one representable exhaustion sentinel; never wrap to zero.
+  uint64_t next_lidar_corridor_id_{1};
+  std::string corridor_server_instance_id_;
+  uint64_t corridor_revision_{0};
+  bool corridor_publication_pending_{false};
 
   /// Bumped on every successful ~/add_area (mowglinext#637 phase 2) and
   /// published on area_list_generation_pub_ (transient_local — a late
@@ -1403,6 +1438,9 @@ private:
       get_lidar_ignore_corridors_srv_;
   rclcpp::Service<mowgli_interfaces::srv::ClearLidarIgnoreCorridors>::SharedPtr
       clear_lidar_ignore_corridors_srv_;
+
+  rclcpp::Service<mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors>::SharedPtr
+      replace_lidar_ignore_corridors_srv_;
 
   // ── TF ────────────────────────────────────────────────────────────────────
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

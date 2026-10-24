@@ -514,7 +514,7 @@ func TestReplaceMap_SaveRefusedReportsLiveButNotPersisted(t *testing.T) {
 	err := replaceMapInternal(context.Background(), srv, &mowgli.ReplaceMapReq{Areas: []mowgli.ReplaceMapArea{testArea("new", 0)}})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "NOT written to disk")
+	assert.Contains(t, err.Error(), "persistence was NOT confirmed")
 	assert.Contains(t, err.Error(), "areas.dat.tmp")
 	assert.Equal(t, []string{"new"}, areaNames(srv.live), "the new map stays live; only the commit failed")
 }

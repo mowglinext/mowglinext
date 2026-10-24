@@ -107,8 +107,8 @@ export type GnssSelectFieldOption = {
     description?: string;
 };
 
-export const pickGnssActionSettings = (values: Record<string, any>): Record<string, any> => {
-    const partial: Record<string, any> = {};
+export const pickGnssActionSettings = (values: Record<string, unknown>): Record<string, unknown> => {
+    const partial: Record<string, unknown> = {};
     for (const key of GNSS_ACTION_SETTINGS_KEYS) {
         if (Object.prototype.hasOwnProperty.call(values, key)) {
             partial[key] = values[key];

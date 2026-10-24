@@ -1,4 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import {observeAsync} from "../utils/async";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {decodeDriveTuningStatus, decodeDriveTuningReport, decodeDriveTuningRollback, decodeDriveTuningStart,
+    validateDriveTuningRequest, type DriveFeedForwardRequest, type DrivePIDRequest} from '../utils/driveTuningContract';
+import {requestErrorMessage} from '../utils/errors';
 import { ContentType } from "../api/Api.ts";
 import { useApi } from "./useApi.ts";
 
@@ -139,74 +143,109 @@ export const useDriveTuning = () => {
     const [latestReport, setLatestReport] = useState<DriveTuningLatestReportResponse | null>(null);
     const [loadingLatestReport, setLoadingLatestReport] = useState(false);
 
+    const active = useRef(true);
+    const statusRequest = useRef(0);
+    const reportRequest = useRef(0);
     const refresh = useCallback(async () => {
+        if (!active.current) return;
+        const request = ++statusRequest.current;
         try {
-            const response = await guiApi.request<DriveTuningStatusResponse>({
+            const response = await guiApi.request<unknown>({
                 path: "/tools/drive/tuning/status",
                 method: "GET",
                 format: "json",
             });
-            setStatus(response.data);
-            setError(null);
+            if (response.error) throw new Error(requestErrorMessage(response) ?? "Drive tuning request failed");
+            const decoded = decodeDriveTuningStatus(response.data);
+            if (active.current && request === statusRequest.current) {
+                setStatus(decoded);
+                setError(null);
+            }
         } catch (e) {
-            setError(e instanceof Error ? e.message : "Failed to fetch drive tuning status");
+            if (active.current && request === statusRequest.current) {
+                setStatus(null);
+                setError(requestErrorMessage(e) ?? "Failed to fetch drive tuning status");
+            }
         }
     }, [guiApi]);
 
+    const invalidateRequests = useCallback(() => {
+        ++statusRequest.current;
+        ++reportRequest.current;
+    }, []);
     useEffect(() => {
-        refresh();
-        const id = setInterval(refresh, POLL_INTERVAL_MS);
-        return () => clearInterval(id);
-    }, [refresh]);
+        active.current = true;
+        observeAsync(refresh());
+        const id = setInterval(() => observeAsync(refresh()), POLL_INTERVAL_MS);
+        return () => {
+            active.current = false;
+            invalidateRequests();
+            clearInterval(id);
+        };
+    }, [refresh, invalidateRequests]);
 
-    const startFeedForward = useCallback(async (payload: Record<string, any>) => {
-        const response = await guiApi.request({
+    const startFeedForward = useCallback(async (payload: DriveFeedForwardRequest) => {
+        validateDriveTuningRequest(payload);
+        const response = await guiApi.request<unknown>({
             path: "/tools/drive/ff-calibration/start",
             method: "POST",
             type: ContentType.Json,
             body: payload,
             format: "json",
         });
+        if (response.error) throw new Error(requestErrorMessage(response) ?? "Drive tuning request failed");
+        const decoded = decodeDriveTuningStart(response.data, 'ff');
         await refresh();
-        return response.data;
+        return decoded;
     }, [guiApi, refresh]);
 
-    const startPID = useCallback(async (payload: Record<string, any>) => {
-        const response = await guiApi.request({
+    const startPID = useCallback(async (payload: DrivePIDRequest) => {
+        validateDriveTuningRequest(payload);
+        const response = await guiApi.request<unknown>({
             path: "/tools/drive/pid-tuning/start",
             method: "POST",
             type: ContentType.Json,
             body: payload,
             format: "json",
         });
+        if (response.error) throw new Error(requestErrorMessage(response) ?? "Drive tuning request failed");
+        const decoded = decodeDriveTuningStart(response.data, 'pid');
         await refresh();
-        return response.data;
+        return decoded;
     }, [guiApi, refresh]);
 
     const rollback = useCallback(async () => {
-        const response = await guiApi.request<DriveTuningRollbackResponse>({
+        const response = await guiApi.request<unknown>({
             path: "/tools/drive/tuning/rollback",
             method: "POST",
             type: ContentType.Json,
             body: { confirm: true },
             format: "json",
         });
+        if (response.error) throw new Error(requestErrorMessage(response) ?? "Drive tuning request failed");
+        const decoded = decodeDriveTuningRollback(response.data);
         await refresh();
-        return response.data;
+        return decoded;
     }, [guiApi, refresh]);
 
     const loadLatestReport = useCallback(async () => {
-        setLoadingLatestReport(true);
+        const request = ++reportRequest.current;
+        if (active.current) setLoadingLatestReport(true);
         try {
-            const response = await guiApi.request<DriveTuningLatestReportResponse>({
+            const response = await guiApi.request<unknown>({
                 path: "/tools/drive/tuning/report/latest",
                 method: "GET",
                 format: "json",
             });
-            setLatestReport(response.data);
-            return response.data;
+            if (response.error) throw new Error(requestErrorMessage(response) ?? "Drive tuning request failed");
+            const decoded = decodeDriveTuningReport(response.data);
+            if (active.current && request === reportRequest.current) setLatestReport(decoded);
+            return decoded;
+        } catch (e) {
+            if (active.current && request === reportRequest.current) setLatestReport(null);
+            throw e;
         } finally {
-            setLoadingLatestReport(false);
+            if (active.current && request === reportRequest.current) setLoadingLatestReport(false);
         }
     }, [guiApi]);
 

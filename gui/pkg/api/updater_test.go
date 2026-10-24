@@ -39,7 +39,7 @@ func TestUpdaterMutationsRequireSameOriginJSON(t *testing.T) {
 func TestUpdateReadinessRequiresLiveStoppedHardware(t *testing.T) {
 	ros := types.NewMockRosProvider()
 	r := gin.New()
-	UpdaterRoutes(r.Group("/api"), ros)
+	UpdaterRoutes(r.Group("/api"), ros, types.NewMockDBProvider())
 	now := time.Now()
 	stamp := map[string]any{"sec": now.Unix(), "nanosec": now.Nanosecond()}
 	emit := func(topic string, data any) { body, _ := json.Marshal(data); ros.Dispatch(topic, body) }
@@ -156,10 +156,19 @@ func TestUpdateReadinessOnOpenMowerNeedsNoMowgliProtocol(t *testing.T) {
 		{"mowgli", true, false},
 		{"", true, false},
 	} {
-		t.Setenv("HARDWARE_BACKEND", test.backend)
+		// The GUI container gets no HARDWARE_BACKEND: only docker/.env names it.
+		t.Setenv("HARDWARE_BACKEND", "")
+		envFile := filepath.Join(t.TempDir(), ".env")
+		if err := os.WriteFile(envFile, []byte("HARDWARE_BACKEND="+test.backend+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		db := types.NewMockDBProvider()
+		if err := db.Set("system.mower.runtimeEnvFile", []byte(envFile)); err != nil {
+			t.Fatal(err)
+		}
 		ros := types.NewMockRosProvider()
 		r := gin.New()
-		UpdaterRoutes(r.Group("/api"), ros)
+		UpdaterRoutes(r.Group("/api"), ros, db)
 		now := time.Now()
 		stamp := map[string]any{"sec": now.Unix(), "nanosec": now.Nanosecond()}
 		emit := func(topic string, data any) { body, _ := json.Marshal(data); ros.Dispatch(topic, body) }
@@ -216,7 +225,7 @@ func startFakeUpdater(t *testing.T) *fakeUpdater {
 func TestUpdaterStateIsRevalidatedWithETag(t *testing.T) {
 	fake := startFakeUpdater(t)
 	r := gin.New()
-	UpdaterRoutes(r.Group("/api"), types.NewMockRosProvider())
+	UpdaterRoutes(r.Group("/api"), types.NewMockRosProvider(), types.NewMockDBProvider())
 	get := func(inm string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/api/system/updater/state", nil)
 		if inm != "" {
@@ -262,7 +271,7 @@ func TestUpdaterStateErrorsAreNotCachedOrRevalidated(t *testing.T) {
 	fake := startFakeUpdater(t)
 	fake.status = 409
 	r := gin.New()
-	UpdaterRoutes(r.Group("/api"), types.NewMockRosProvider())
+	UpdaterRoutes(r.Group("/api"), types.NewMockRosProvider(), types.NewMockDBProvider())
 	req := httptest.NewRequest("GET", "/api/system/updater/state", nil)
 	req.Header.Set("If-None-Match", "*")
 	w := httptest.NewRecorder()

@@ -17,6 +17,7 @@
 
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_behavior/stop_reason.hpp"
 
 namespace mowgli_behavior
 {
@@ -102,6 +103,7 @@ BT::NodeStatus PublishHighLevelStatus::tick()
   {
     std::lock_guard<std::mutex> lock(ctx->context_mutex);
     msg = withLiveStatusFields(identity, *ctx);
+    ctx->fleet_yield.observeStatus(msg.state, msg.state_name);
     ctx->last_high_level_status = msg;
     ctx->has_high_level_status = true;
     ctx->high_level_status_pub->publish(msg);
@@ -141,7 +143,11 @@ BT::NodeStatus ClearCommand::tick()
   RCLCPP_INFO(ctx->node->get_logger(),
               "ClearCommand: resetting current_command from %u to 0",
               ctx->current_command);
-  ctx->current_command = 0;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->fleet_yield.revoke();
+    ctx->current_command = 0;
+  }
   // Note: session-scoped flags (yaw_seeded_this_session, skipped_swaths) are
   // intentionally NOT touched here. ClearCommand is invoked from mid-session
   // error handlers (UndockFailed, RainTimeout, ChargerFailed,
@@ -149,6 +155,28 @@ BT::NodeStatus ClearCommand::tick()
   // SeedYawFromMotion to re-drive 1 m forward on the next ReactiveSequence
   // re-tick of UndockOrSkip — even when the dock_yaw seed was already healthy.
   // Use EndSession at the real session boundaries instead.
+  return BT::NodeStatus::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// SetStopReason
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus SetStopReason::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::string reason;
+  std::string detail;
+  bool overwrite = true;
+  getInput<std::string>("reason", reason);
+  getInput<std::string>("detail", detail);
+  getInput<bool>("overwrite", overwrite);
+  recordStopReason(*ctx, reason, detail, overwrite);
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "SetStopReason: %s%s%s",
+              ctx->stop_reason.c_str(),
+              ctx->stop_detail.empty() ? "" : " — ",
+              ctx->stop_detail.c_str());
   return BT::NodeStatus::SUCCESS;
 }
 
@@ -166,6 +194,10 @@ BT::NodeStatus MarkGuardHalt::tick()
                  "MarkGuardHalt: missing required port 'reason': %s",
                  reason.error().c_str());
     return BT::NodeStatus::FAILURE;
+  }
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->fleet_yield.safetyHold();
   }
   // Log only on the first tick of a halt — the handler re-runs every tick
   // while the fault holds, and the guard already logs its own condition.
@@ -195,6 +227,10 @@ BT::NodeStatus EndSession::tick()
               ctx->skipped_swaths,
               ctx->undock_start_recorded ? "true" : "false",
               ctx->obstacle_backoff_count);
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->fleet_yield.revoke();
+  }
   ctx->yaw_seeded_this_session = false;
   ctx->blade_direction.endSession();
   ctx->skipped_swaths = 0;
@@ -296,6 +332,7 @@ BT::NodeStatus EndSession::tick()
   ctx->area_completed_swaths.clear();
   ctx->area_swath_count.clear();
   ctx->area_resume_pose_index.clear();
+  ctx->area_unit_progress.clear();
   ctx->area_path_pose_count.clear();
   ctx->area_plan_fingerprint.clear();
   ctx->completed_areas.clear();

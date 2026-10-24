@@ -1,3 +1,7 @@
+import {NumberWithAddon} from './inputs/NumberWithAddon';
+import {requestErrorMessage} from '../utils/errors';
+import {finiteNumber, geometryNumber, roundTo, radToDeg, degToRad, yawRadToCompassBearing, compassBearingToYawRad, decodeStoredDockPose, decodeDockWriteAcknowledgement, type PersistedDockPose} from '../utils/robotEditorContract';
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {DEFAULT_DOCK_STYLE} from "./robot/dockAssets";
 import {resolveDockAppearance} from "../constants/mowerAppearances";
 import {DockGraphic} from "./robot/DockGraphic";
@@ -8,7 +12,7 @@ import {previewRobotGeometry, type Bounds} from "../utils/robotModel";
 import {useMowerVisual} from "../hooks/useMowerVisual";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, App, Card, InputNumber, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
+import { Alert, App, Card, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
 import { AimOutlined, CompassOutlined, EnvironmentOutlined, UndoOutlined } from "@ant-design/icons";
 import { useThemeMode } from "../theme/ThemeContext.tsx";
 import { getColors, inkAlpha } from "../theme/colors.ts";
@@ -98,33 +102,16 @@ const SENSORS: SensorMeta[] = [
 // the URDF's natural orientation): +X (forward) → up, +Y (left) → left. Drawing
 // the robot facing right made the drive-wheel discs — whose diameter runs along
 // the rolling/forward axis — appear as horizontal bars (issue #404).
-const roundTo = (v: number, decimals: number): number => {
-    const f = Math.pow(10, decimals);
-    return Math.round(v * f) / f;
-};
-
-const radToDeg = (r: number): number => (r * 180) / Math.PI;
-const degToRad = (d: number): number => (d * Math.PI) / 180;
-
-// dock_pose_yaw is stored as ROS/ENU yaw in radians (0 = +X / East,
-// CCW positive). Operators set the dock with a real compass, which
-// reads bearings in 0–360° clockwise from North. These helpers translate
-// between the two so the UI can speak compass while the YAML/firmware
-// keeps speaking ROS yaw.
-const yawRadToCompassBearing = (yawRad: number): number => {
-    const yawDeg = radToDeg(yawRad);
-    return ((90 - yawDeg) % 360 + 360) % 360;
-};
-const compassBearingToYawRad = (bearing: number): number => {
-    return degToRad(90 - bearing);
-};
-
 type Props = {
-    values: Record<string, any>;
-    onChange: (name: string, value: any) => void;
+    values: Record<string, unknown>;
+    onChange: (name: string, value: number | null) => void;
+    onDockPosePersisted?: (pose: PersistedDockPose) => void;
+    onDockCaptureStart?: () => boolean;
+    onDockCaptureFinished?: () => void;
 };
 
-export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
+export const RobotComponentEditor: React.FC<Props> = ({ values, onChange, onDockPosePersisted, onDockCaptureStart, onDockCaptureFinished }) => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const { colors, mode } = useThemeMode();
     const isMobile = useIsMobile();
@@ -139,25 +126,25 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const hwStatus = useStatus();
     const [settingDock, setSettingDock] = useState(false);
 
-    // Pull the robot's current map-frame pose. Yaw is the EKF-fused
-    // motion_heading on AbsolutePose. We capture all three (x, y, yaw)
-    // because the operator's mental model when clicking "Set dock from
-    // current pose" is "treat where the robot is sitting right now as the
-    // canonical dock position and orientation".
+    // The fused pose supplies the required request shape. The service captures
+    // GPS position and preserves the independently calibrated dock yaw.
     const robotX = pose.pose?.pose?.position?.x;
     const robotY = pose.pose?.pose?.position?.y;
     const robotYaw = pose.motion_heading;
-    const poseAvailable = robotX != null && robotY != null && robotYaw != null;
+    const poseAvailable = finiteNumber(robotX) && finiteNumber(robotY) && finiteNumber(robotYaw);
     // Require physical charging contact when calibrating the dock pose.
     // Without this guard, operators sometimes clicked "Set dock pose"
     // while the robot was close-but-not-charging (visually parked on the
     // dock, but the contacts hadn't seated). The stored dock_pose then
     // pointed to that off-contact location, and every subsequent
     // re-docking aimed there — robot stopping 1-3 cm short of the
-    // charging cradle on every run. By gating the action on
-    // is_charging=true we guarantee the captured pose is the exact
-    // physical contact point, removing one source of dock-approach drift.
-    const isCharging = !!hwStatus.is_charging;
+    // charging cradle on every run. Require is_charging=true both before confirmation and before writing.
+    const isCharging = hwStatus.is_charging === true;
+    const charging = useRef(isCharging);
+    const active = useRef(true);
+    const dockWriteLock = useRef(false);
+    useEffect(() => {charging.current = isCharging;}, [isCharging]);
+    useEffect(() => {active.current = true; return () => {active.current = false;};}, []);
 
     const writeDockPose = useCallback(
         async (px: number, py: number, yaw: number) => {
@@ -187,53 +174,58 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             // mowgli_robot.yaml) and reflect THAT in the form — this also
             // correctly reflects the now-unchanged yaw.
             const q = getQuaternionFromHeading(yaw);
+            if (!active.current || dockWriteLock.current) return;
+            if (!charging.current || ![px, py, yaw].every(finiteNumber)) {
+                notification.warning({message: t('robotComponentEditor.tooltipNotCharging')});
+                return;
+            }
+            if (onDockCaptureStart && !onDockCaptureStart()) return;
+            dockWriteLock.current = true;
+            let acknowledged = false;
             try {
                 setSettingDock(true);
-                await guiApi.mowglinext.mapDockingCreate({
-                    docking_pose: {
-                        orientation: {x: q.x!, y: q.y!, z: q.z!, w: q.w!},
-                        position: {x: px, y: py, z: 0},
-                    },
-                    use_gps_position: true,
+                const write = await guiApi.mowglinext.mapDockingCreate({
+                    docking_pose: {orientation: {x: q.x!, y: q.y!, z: q.z!, w: q.w!}, position: {x: px, y: py, z: 0}},
+                    use_gps_position: true, yaw_source: 0,
                 });
-                // Read back the value the service actually stored (GPS-averaged),
-                // not the fused px/py we sent.
-                let storedX = px;
-                let storedY = py;
-                let storedYaw = yaw;
-                try {
-                    const resp = await guiApi.request<{
-                        dock?: {dock_pose_x?: number; dock_pose_y?: number; dock_pose_yaw_rad?: number};
-                    }>({path: "/calibration/status", method: "GET", format: "json"});
-                    const d = resp.data?.dock;
-                    if (d?.dock_pose_x != null) storedX = d.dock_pose_x;
-                    if (d?.dock_pose_y != null) storedY = d.dock_pose_y;
-                    if (d?.dock_pose_yaw_rad != null) storedYaw = d.dock_pose_yaw_rad;
-                } catch {
-                    // Read-back failed; fall back to the sent values for the form.
-                    // The service still persisted the GPS value to yaml.
+                if (!active.current) return;
+                if (write.error || write.ok === false || write.status >= 400) throw new Error(requestErrorMessage(write) ?? 'Dock write was not confirmed');
+                decodeDockWriteAcknowledgement(write.data);
+                acknowledged = true;
+                const read = await guiApi.request<unknown>({path: '/calibration/status', method: 'GET', format: 'json'});
+                if (!active.current) return;
+                if (read.error || read.ok === false || read.status >= 400) throw new Error(requestErrorMessage(read) ?? 'Dock readback was not confirmed');
+                const stored = decodeStoredDockPose(read.data);
+                // Preserve canonical precision, including independently stored yaw.
+                // A readback is not a transaction/observation identifier for this write.
+                if (onDockPosePersisted) {
+                    onDockPosePersisted({dock_pose_x: stored.x, dock_pose_y: stored.y, dock_pose_yaw: stored.yaw});
+                } else {
+                    // Onboarding owns its form independently of the Settings manager.
+                    onChange('dock_pose_x', stored.x);
+                    onChange('dock_pose_y', stored.y);
+                    onChange('dock_pose_yaw', stored.yaw);
                 }
-                onChange("dock_pose_x", roundTo(storedX, 3));
-                onChange("dock_pose_y", roundTo(storedY, 3));
-                onChange("dock_pose_yaw", roundTo(storedYaw, 4));
-                notification.success({
-                    message: t("robotComponentEditor.dockPoseSetFromGps"),
-                    description: t("robotComponentEditor.dockPoseSetFromGpsDescription"),
+                notification.success({message: t('robotComponentEditor.savedDockLoaded'), description: t('robotComponentEditor.savedDockLoadedDesc')});
+            } catch (error) {
+                if (active.current) notification.warning({
+                    message: t(acknowledged ? 'robotComponentEditor.dockReadbackUnconfirmed' : 'robotComponentEditor.dockWriteUnconfirmed'),
+                    description: t('robotComponentEditor.dockUnconfirmedDesc', {reason: requestErrorMessage(error) ?? t('robotComponentEditor.unknownError')}),
                 });
-            } catch (e: unknown) {
-                const message = e instanceof Error ? e.message : t("robotComponentEditor.unknownError");
-                notification.error({message: t("robotComponentEditor.failedToSetDockPose"), description: message});
             } finally {
-                setSettingDock(false);
+                dockWriteLock.current = false;
+                onDockCaptureFinished?.();
+                if (active.current) setSettingDock(false);
             }
         },
-        [guiApi, notification, onChange, t],
+        [guiApi, notification, onChange, onDockPosePersisted, onDockCaptureStart, onDockCaptureFinished, t],
     );
 
     // Open a confirmation modal that previews the change and spells out
     // exactly what gets written. The previous tiny icon-only button buried
     // this action without a confirm step (#173).
     const handleSetDockAtRobot = useCallback(() => {
+        if (!isCharging || settingDock) return;
         if (!poseAvailable) {
             notification.warning({message: t("robotComponentEditor.noRobotPoseYet")});
             return;
@@ -244,9 +236,11 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const yawDeg = roundTo(yawRadToCompassBearing(yawRad), 1);
         const savedX = values.dock_pose_x;
         const savedY = values.dock_pose_y;
-        const savedYawRad = values.dock_pose_yaw;
-        const fmt = (v: any, suffix: string, digits = 3) =>
-            v == null || isNaN(Number(v)) ? "—" : `${roundTo(Number(v), digits)}${suffix}`;
+        const savedYawRad = geometryNumber(values.dock_pose_yaw);
+        const fmt = (v: unknown, suffix: string, digits = 3) => {
+            const number = geometryNumber(v);
+            return number === undefined ? "—" : `${roundTo(number, digits)}${suffix}`;
+        };
 
         // Use the App-context modal (App.useApp().modal) instead of the
         // static Modal.confirm — antd v5 deprecated the static API and it
@@ -298,15 +292,15 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             ),
             onOk: () => writeDockPose(px, py, yawRad),
         });
-    }, [poseAvailable, robotX, robotY, robotYaw, values.dock_pose_x, values.dock_pose_y, values.dock_pose_yaw, writeDockPose, notification, modal, t]);
+    }, [isCharging, settingDock, poseAvailable, robotX, robotY, robotYaw, values.dock_pose_x, values.dock_pose_y, values.dock_pose_yaw, writeDockPose, notification, modal, t]);
     // Dock yaw lives in mowgli_robot.yaml. It is normally written by the
     // IMU auto-calibration service and the "set dock pose" GUI action,
     // but operators can also override it manually here when calibration
     // is unavailable or wrong.
     const dockCal = calibrationStatus?.dock;
-    const dockYawRad = values.dock_pose_yaw ?? (dockCal?.present && dockCal.dock_pose_yaw_rad != null
-        ? dockCal.dock_pose_yaw_rad
-        : 0);
+    const dockYawRad = values.dock_pose_yaw == null
+        ? geometryNumber(dockCal?.pose_values_valid === true || dockCal?.present && dockCal.pose_values_valid === undefined ? dockCal.dock_pose_yaw_rad : undefined)
+        : geometryNumber(values.dock_pose_yaw);
     const dockYawSource = "mowgli_robot.yaml";
 
     // Shared IMU yaw + dock pose calibration logic. The same hook backs
@@ -324,9 +318,11 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         applyCalibration,
     } = useImuYawCalibration({
         onApplyValue: onChange,
-        currentImuYawRad: values.imu_yaw,
+        currentImuYawRad: geometryNumber(values.imu_yaw),
     });
 
+    const invalidSensorValues = SENSORS.some(meta => [meta.xKey, meta.yKey, meta.zKey, meta.yawKey].filter(Boolean)
+        .some(key => values[key] != null && geometryNumber(values[key]) === undefined));
     const liveRobot = useRobotDescription();
     const robot = useMemo(() => previewRobotGeometry(liveRobot, values), [liveRobot, values]);
     const [visual] = useMowerVisual(values);
@@ -367,10 +363,10 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             const sensor=robot.sensors?.find(s=>s.id === meta.id);
             const mount=sensor?.mount ?? sensor;
             return {
-                x: values[meta.xKey] ?? mount?.x ?? 0,
-                y: values[meta.yKey] ?? mount?.y ?? 0,
-                yaw: meta.yawKey ? (values[meta.yawKey] ?? sensor?.yaw ?? 0) : 0,
-                z: values[meta.zKey] ?? mount?.z ?? 0,
+                x: geometryNumber(values[meta.xKey]) ?? mount?.x ?? 0,
+                y: geometryNumber(values[meta.yKey]) ?? mount?.y ?? 0,
+                yaw: meta.yawKey ? (geometryNumber(values[meta.yawKey]) ?? sensor?.yaw ?? 0) : 0,
+                z: geometryNumber(values[meta.zKey]) ?? mount?.z ?? 0,
             };
         },
         [values, robot.sensors]
@@ -405,6 +401,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             const svg = svgRef.current;
             if (!svg) return;
             const rect = svg.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0 || ![clientX, clientY].every(finiteNumber)) return;
             const sx = (clientX - rect.left) * svgWidth / rect.width;
             const sy = (clientY - rect.top) * svgHeight / rect.height;
 
@@ -430,7 +427,8 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const onMouseMove = (e: MouseEvent) => handleMove(e.clientX, e.clientY);
         const onTouchMove = (e: TouchEvent) => {
             e.preventDefault();
-            handleMove(e.touches[0].clientX, e.touches[0].clientY);
+            const touch = e.touches[0];
+            if (touch) handleMove(touch.clientX, touch.clientY);
         };
         const onUp = () => {
             setDragBounds(null);
@@ -474,7 +472,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             );
         }
         return lines;
-    }, [cx, cy, SCALE, mode, toSvg]);
+    }, [cx, cy, mode, toSvg]);
 
     const robotBody = liveRobot.fromUrdf ? <g transform={`translate(${cx} ${cy}) scale(${SCALE})`}>
         <g opacity={setupDockOpacity(transparent)} pointerEvents="none"><DockGraphic geometry={dockGeometry} style={dockStyle}/></g>
@@ -653,6 +651,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
 
             <MowerVisualControls transparent={transparent} onTransparencyChange={setTransparent}/>
             <Typography.Paragraph type="secondary">{t(liveRobot.fromUrdf ? "mowerVisual.previewNote" : "mowerVisual.waiting")}</Typography.Paragraph>
+            {invalidSensorValues && <Alert type="warning" message={t('robotComponentEditor.invalidGeometry')} />}
             <Row gutter={[16, 16]}>
                 <Col xs={24} lg={14}>
                     <div
@@ -714,32 +713,32 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                 <Row gutter={[8, 4]}>
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.xForward")}</Text>
-                                        <InputNumber
+                                        <NumberWithAddon
                                             data-setting-key={meta.xKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.xForward")}, m`}
-                                            value={val.x} onChange={(v) => onChange(meta.xKey, v ?? 0)}
+                                            value={values[meta.xKey] == null ? val.x : geometryNumber(values[meta.xKey]) ?? null} onChange={(v) => onChange(meta.xKey, finiteNumber(v) ? v : null)}
                                             step={0.005} precision={3} size="small"
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Col>
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.yLeft")}</Text>
-                                        <InputNumber
+                                        <NumberWithAddon
                                             data-setting-key={meta.yKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.yLeft")}, m`}
-                                            value={val.y} onChange={(v) => onChange(meta.yKey, v ?? 0)}
+                                            value={values[meta.yKey] == null ? val.y : geometryNumber(values[meta.yKey]) ?? null} onChange={(v) => onChange(meta.yKey, finiteNumber(v) ? v : null)}
                                             step={0.005} precision={3} size="small"
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Col>
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.zHeight")}</Text>
-                                        <InputNumber
+                                        <NumberWithAddon
                                             data-setting-key={meta.zKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.zHeight")}, m`}
-                                            value={val.z} onChange={(v) => onChange(meta.zKey, v ?? 0)}
+                                            value={values[meta.zKey] == null ? val.z : geometryNumber(values[meta.zKey]) ?? null} onChange={(v) => onChange(meta.zKey, finiteNumber(v) ? v : null)}
                                             step={0.005} precision={3} size="small"
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Col>
                                     {meta.yawKey && (
@@ -747,13 +746,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                             <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.yaw")}</Text>
                                             {meta.id === "imu" ? (
                                                 <Space.Compact style={{ width: "100%" }}>
-                                                    <InputNumber
+                                                    <NumberWithAddon
                                                         data-setting-key={meta.yawKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.yaw")}, °`}
-                                                        value={roundTo(radToDeg(val.yaw), 1)}
-                                                        onChange={(v) => onChange(meta.yawKey, roundTo(degToRad(v ?? 0), 4))}
+                                                        value={values[meta.yawKey] != null && geometryNumber(values[meta.yawKey]) === undefined ? null : roundTo(radToDeg(val.yaw), 1)}
+                                                        onChange={(v) => onChange(meta.yawKey, finiteNumber(v) ? roundTo(degToRad(v), 4) : null)}
                                                         step={1} precision={1} size="small"
-                                                        style={{ width: "100%" }} addonAfter="°"
+                                                        style={{ width: "100%" }} after="°"
                                                     />
                                                     <Tooltip title={t("robotComponentEditor.autoCalibrateImuTooltip")}>
                                                         <Button
@@ -765,13 +764,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                                     </Tooltip>
                                                 </Space.Compact>
                                             ) : (
-                                                <InputNumber
+                                                <NumberWithAddon
                                                     data-setting-key={meta.yawKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.yaw")}, °`}
-                                                        value={roundTo(radToDeg(val.yaw), 1)}
-                                                    onChange={(v) => onChange(meta.yawKey, roundTo(degToRad(v ?? 0), 4))}
+                                                        value={values[meta.yawKey] != null && geometryNumber(values[meta.yawKey]) === undefined ? null : roundTo(radToDeg(val.yaw), 1)}
+                                                    onChange={(v) => onChange(meta.yawKey, finiteNumber(v) ? roundTo(degToRad(v), 4) : null)}
                                                     step={1} precision={1} size="small"
-                                                    style={{ width: "100%" }} addonAfter="°"
+                                                    style={{ width: "100%" }} after="°"
                                                 />
                                             )}
                                         </Col>
@@ -797,11 +796,12 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                         <Row gutter={[8, 4]} align="middle">
                             <Col span={12}>
                                 <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.bearingCompass")}</Text>
-                                <InputNumber
+                                <NumberWithAddon
                                     aria-label={t("robotComponentEditor.dockHeading")}
-                                    value={roundTo(yawRadToCompassBearing(dockYawRad), 1)}
+                                    value={dockYawRad === undefined ? null : roundTo(yawRadToCompassBearing(dockYawRad), 1)}
                                     onChange={(v) => {
-                                        const bearing = ((Number(v ?? 0) % 360) + 360) % 360;
+                                        if (!finiteNumber(v)) {onChange('dock_pose_yaw', null); return;}
+                                        const bearing = ((v % 360) + 360) % 360;
                                         onChange("dock_pose_yaw", roundTo(compassBearingToYawRad(bearing), 4));
                                     }}
                                     step={1}
@@ -810,7 +810,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                     max={360}
                                     size="small"
                                     style={{ width: "100%" }}
-                                    addonAfter="°"
+                                    after="°"
                                 />
                             </Col>
                             <Col span={12}>
@@ -834,6 +834,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                             Compass bearing → SVG angle: bearing 0°=N=up, SVG 0°=right (CW),
                                             so svgAngle = bearing - 90. */}
                                         {(() => {
+                                            if (dockYawRad === undefined) return null;
                                             const bearing = yawRadToCompassBearing(dockYawRad);
                                             const svgAngle = bearing - 90;
                                             const rad = svgAngle * Math.PI / 180;
@@ -901,7 +902,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                                 size="small"
                                                 icon={<EnvironmentOutlined />}
                                                 loading={settingDock}
-                                                disabled={!poseAvailable || !isCharging}
+                                                disabled={!poseAvailable || !isCharging || settingDock}
                                                 onClick={handleSetDockAtRobot}
                                             >
                                                 {t("robotComponentEditor.setDockPose")}
@@ -926,7 +927,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                 maskClosable={!calibRunning}
                 closable={!calibRunning}
                 footer={null}
-                destroyOnClose
+                destroyOnHidden
             >
                 <Typography.Paragraph>
                     {t("robotComponentEditor.imuCalibIntro1")}{" "}
@@ -948,7 +949,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                     <div style={{ textAlign: "right", marginTop: 16 }}>
                         <Space>
                             <Button onClick={closeCalibration}>{t("robotComponentEditor.cancel")}</Button>
-                            <Button type="primary" icon={<CompassOutlined />} onClick={startCalibration}>
+                            <Button type="primary" icon={<CompassOutlined />} onClick={asyncHandler(startCalibration)}>
                                 {t("robotComponentEditor.start")}
                             </Button>
                         </Space>
@@ -977,7 +978,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                         {t("robotComponentEditor.calibConfidence", {dev: calibResult.std_dev_deg.toFixed(2), samples: calibResult.samples_used})}
                                         <br />
                                         <Typography.Text type="secondary">
-                                            {t("robotComponentEditor.calibCurrentValue", {value: roundTo(radToDeg(values.imu_yaw ?? 0), 2)})}
+                                            {t("robotComponentEditor.calibCurrentValue", {value: geometryNumber(values.imu_yaw) === undefined ? '—' : roundTo(radToDeg(geometryNumber(values.imu_yaw) ?? 0), 2)})}
                                         </Typography.Text>
                                     </>
                                 }

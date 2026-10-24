@@ -13,6 +13,9 @@
 - [Transit authorization](../TRANSIT_AUTHORIZATION.md) — **current**, operator/contributor:
   normal transit polygon authorization, bounded terminal legs, explicit recovery,
   and required physical acceptance procedure.
+  perf/authorized-transit-planning
+- [Transit planner performance](../TRANSIT_PLANNER_PERFORMANCE.md) — **current**, contributor:
+  optimization evidence, reproducible benchmarks and required Pi 4 validation.
 - [Automatic blackbox](../BLACKBOX.md) — **current**, operator/contributor:
   passive RAM recorder, triggers, Diagnostics controls, resource/storage limits
   and target-system validation procedure.

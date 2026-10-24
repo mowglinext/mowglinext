@@ -1,4 +1,9 @@
 {
+  "telemetry": {
+    "emergencyClearanceUnverified": "Urgence signalée · levée non vérifiée",
+    "statusUnknown": "État inconnu",
+    "freshnessUnverified": "État rapporté · fraîcheur non vérifiée"
+  },
   "blackbox": {
     "title": "Boîte noire automatique",
     "recordingsTab": "Enregistrements",
@@ -106,25 +111,37 @@
     }
   },
   "settingsHardwareBackend": {
+    "title": "Pont matériel",
     "active": "Pont matériel actif",
     "names": {
       "mowgli": "Carte Mowgli (STM32)",
       "openmower": "OpenMower v1 (carte LowLevel + xESC)",
-      "mavros": "Pixhawk (MAVROS)"
+      "mavros": "Pixhawk (MAVROS)",
+      "unknown": "Matériel non confirmé"
     },
     "descriptions": {
       "mowgli": "Le firmware STM32 Mowgli pilote les moteurs et garde la sécurité de la lame et des arrêts d'urgence. Aucun réglage de câblage n'est nécessaire ici.",
       "openmower": "L'électronique OpenMower d'origine garde son propre firmware ; un conteneur pont la pilote. Les réglages que MowgliNext possède déjà (limites de charge, délais de soulèvement, impulsions par mètre…) restent dans leurs sections habituelles et sont appliqués au matériel OpenMower.",
-      "mavros": "Un contrôleur de vol pilote le robot via le conteneur MAVROS, configuré par l'installateur."
+      "mavros": "Un contrôleur de vol pilote le robot via le conteneur MAVROS, configuré par l'installateur.",
+      "unknown": "Matériel non confirmé"
     },
     "choiceNote": "Le pont matériel est choisi à l'installation du robot.",
     "openmowerRestartNote": "Le pont OpenMower lit ces réglages au démarrage : utilisez « Redémarrer ROS2 » après l'enregistrement, ce qui redémarre aussi le pont.",
     "shortNames": {
       "mowgli": "Mowgli",
       "openmower": "OpenMower v1",
-      "mavros": "MAVROS"
+      "mavros": "MAVROS",
+      "unknown": "Matériel non confirmé"
     },
-    "badgeTooltip": "Backend matériel : {{name}} — ouvrir les réglages matériel"
+    "badgeTooltip": "Backend matériel : {{name}} — ouvrir les réglages matériel",
+    "presetsUnavailable": "Valeurs matérielles par défaut indisponibles ; préréglages désactivés.",
+    "authority": {
+      "loading": "Identification du matériel en cours",
+      "legacy_absent": "Métadonnées anciennes absentes ; écritures matérielles désactivées",
+      "unavailable": "Métadonnées indisponibles ; écritures matérielles désactivées",
+      "malformed": "Métadonnées invalides ; écritures matérielles désactivées",
+      "unsupported": "Matériel non pris en charge ; écritures matérielles désactivées"
+    }
   },
   "settingsMavrosDrive": {
     "notice": {
@@ -265,7 +282,8 @@
       "ntrip": "NTRIP",
       "vesc": "VESC",
       "tfluna-front": "TF-Luna avant",
-      "tfluna-edge": "TF-Luna de bord"
+      "tfluna-edge": "TF-Luna de bord",
+      "openmower": "Pont OpenMower"
     },
     "containerStates": {
       "running": "En cours",
@@ -973,6 +991,29 @@
     "sourceIdentityUnknown": "Horodatage du producteur absent. L’âge de mesure du capteur est inconnu.",
     "sourceUnchanged": "Publication inchangée depuis {{seconds}} s",
     "lidarNoEstimate": "Pas encore d’estimation"
+  },
+  "stopReason": {
+    "genericTitle": "La tondeuse s'est arrêtée",
+    "AREA_START_BLOCKED": {
+      "title": "Arrêt : la position de la tondeuse est bloquée",
+      "hint": "Chaque passage a été refusé car la tondeuse se trouve sur un endroit bloqué, souvent juste devant la base. Déplacez-la d'un ou deux mètres et appuyez sur Lecture : la progression est conservée."
+    },
+    "AREA_NO_PROGRESS": {
+      "title": "Arrêt : une zone n'a pas pu être tondue",
+      "hint": "Plusieurs passages de suite n'ont rien tondu de nouveau, la zone a donc été abandonnée. Vérifiez la carte et les obstacles autour, puis appuyez sur Lecture pour réessayer."
+    },
+    "DOCK_NAV_FAILED": {
+      "title": "Arrêt : la tondeuse n'a pas pu retourner à la base",
+      "hint": "Elle est restée là où elle s'est arrêtée. Conduisez-la ou portez-la à la base, ou appuyez sur Lecture pour continuer à tondre."
+    },
+    "UNDOCK_FAILED": {
+      "title": "Arrêt : la tondeuse n'a pas pu sortir de la base",
+      "hint": "Vérifiez que rien ne bloque la sortie de la base, puis appuyez sur Lecture."
+    },
+    "CHARGER_FAILED": {
+      "title": "Arrêt : la tondeuse est à la base mais ne charge pas",
+      "hint": "Vérifiez les contacts de charge et que la tondeuse est bien droite dans la base."
+    }
   },
   "mowgliNextPage": {
     "mowerOnDockTop": "Tondeuse sur sa station — vue de dessus",
@@ -1948,7 +1989,10 @@
   "mapOffsetPanel": {
     "mapOffset": "Décalage de la carte",
     "mapRotation": "Rotation de la carte",
-    "resetToNorthUp": "Réinitialiser vers le nord"
+    "resetToNorthUp": "Réinitialiser vers le nord",
+    "lockRotation": "Verrouiller la rotation de la carte",
+    "unlockRotation": "Déverrouiller la rotation de la carte",
+    "rotationLockSaveError": "Échec de l'enregistrement du verrouillage de la rotation"
   },
   "mapEditArea": {
     "areaTypeMowing": "Zone de tonte",
@@ -2013,7 +2057,16 @@
     "colApproxArea": "Surface approx. (m²)",
     "warningCount_one": "{{count}} avertissement",
     "warningCount_other": "{{count}} avertissements",
-    "applyFailed": "Échec de l'application"
+    "applyFailed": "Import incomplet ou non confirmé",
+    "legacyApplied": "L'ancien serveur a accepté l'import, mais la persistance détaillée de la carte et de la base ne peut pas être confirmée. Votre brouillon local est conservé et peut différer du robot. Vérifiez la carte et la base avant une nouvelle opération ; aucune écriture du datum n'a été tentée.",
+    "notStarted": "L'import n'a pas commencé ; cette requête n'a modifié ni la carte ni la base.",
+    "mapRestored": "L'import a échoué ; la restauration des zones précédentes a été confirmée. Votre brouillon local est conservé.",
+    "outcomeUnknown": "Résultat de l'import non confirmé ; le serveur peut avoir modifié la carte ou la base. Votre brouillon local est conservé et peut différer du robot. Vérifiez les deux avant une nouvelle opération ; ne démarrez pas la tonte.",
+    "mapPersistenceUnconfirmed": "La nouvelle carte est active, mais sa persistance n'est pas confirmée. La base n'a pas été mise à jour. Votre brouillon local est conservé ; vérifiez la carte et la base avant une nouvelle opération.",
+    "dockRejected": "La nouvelle carte a été sauvegardée, mais la modification de la base a été explicitement refusée. Votre brouillon local est conservé et peut différer du robot. Vérifiez la carte et la base avant une nouvelle opération.",
+    "dockUnconfirmed": "La nouvelle carte a été sauvegardée, mais le résultat pour la base n'est pas confirmé. Votre brouillon local est conservé et peut différer du robot. Vérifiez la carte et la base avant une nouvelle opération.",
+    "dockNotAttempted": "Le service a confirmé la sauvegarde des zones. La mise à jour de la base n'a pas été tentée. Votre brouillon local est conservé. Vérifiez l'état du robot avant de recommencer. Aucun nouvel import ni aucune écriture du datum ne sont lancés automatiquement.",
+    "dockPersistenceUnconfirmed": "La nouvelle carte a été sauvegardée et la modification de la base acceptée en mémoire, mais la persistance de la base n'est pas confirmée. Votre brouillon local est conservé ; vérifiez la carte et la base avant une nouvelle opération."
   },
   "mapAreasList": {
     "typeWorkArea": "Zone de travail",
@@ -2147,6 +2200,16 @@
   "mapFiles": {
     "areaSaved": "Zone enregistrée",
     "failedToSaveArea": "Échec de l'enregistrement de la zone",
+    "unsupportedGeometry": "Les polygones avec anneaux intérieurs (trous) et les géométries MultiPolygon ne sont pas pris en charge sans perte d'exclusions. Aucun remplacement de carte ni aucune écriture de la base n'ont été envoyés. Le fichier source et le brouillon local sont inchangés. Vérifiez les exclusions avant de choisir une représentation prise en charge.",
+    "invalidGeometry": "Géométrie cartographique ou transformation de coordonnées invalide ou non représentable. Aucun remplacement de carte ni aucune écriture de la base n'ont été envoyés. Le fichier source et le brouillon local sont inchangés.",
+    "obstacleParentMissing": "Carte non sauvegardée : les obstacles {{ids}} n'ont pas de zone parente correspondante. Le brouillon local est inchangé ; aucune exclusion n'a été supprimée et aucun remplacement de carte ni aucune écriture de la base n'ont été envoyés.",
+    "affectedPolygons": "Polygones concernés : {{polygons}}. Corrigez leur contour (aucun côté qui se croise ou se touche) puis enregistrez à nouveau.",
+    "polygonArea": "zone « {{name}} »",
+    "polygonNavigation": "zone de navigation « {{name}} »",
+    "polygonObstacle": "obstacle {{index}} de la zone « {{area}} »",
+    "unnamedPolygon": "sans nom",
+    "preExistingInvalidGeometryTitle": "Carte enregistrée, polygones invalides laissés inchangés",
+    "preExistingInvalidGeometry": "Ces polygones étaient déjà invalides (côtés qui se croisent ou se touchent) et n'ont pas été modifiés : ils ont été enregistrés tels quels : {{polygons}}. Redessinez-les pour que la planification de la tonte puisse les utiliser de façon fiable.",
     "restoreFailed": "Impossible de restaurer cette sauvegarde de carte",
     "restoreOriginalsFailed": "La carte a été restaurée, mais les contours d'obstacles enregistrés de la sauvegarde n'ont pas pu être stockés",
     "restoreCorridorsFailed": "La carte a été restaurée, mais les lignes d'exclusion LiDAR de la sauvegarde n'ont pas pu être écrites",
@@ -2155,6 +2218,7 @@
     "openMowerImportFailed": "Échec de l'import OpenMower",
     "openMowerMapImported": "Carte OpenMower importée",
     "openMowerMapImportedDescription": "Zones + pose de la base écrites. /map devrait se rafraîchir sous peu.",
+    "openMowerMapImportedWithoutDock": "Zones sauvegardées. Aucune modification de la base demandée. /map devrait se rafraîchir sous peu.",
     "unknownType": "Type inconnu {{type}}",
     "obstaclesDropped": "Certains obstacles ont été ignorés",
     "obstaclesDroppedDescription": "Ces zones d’exclusion sans zone parente correspondante n’ont pas été enregistrées : {{ids}}",
@@ -2979,6 +3043,14 @@
       }
     },
     "backend": {
+      "invalidStatus": "Réponse d’état du réglage moteur invalide",
+      "invalidReport": "Réponse du rapport de réglage moteur invalide",
+      "invalidParsedReport": "Données du rapport de réglage moteur invalides",
+      "invalidRollback": "Réponse de restauration du réglage moteur invalide",
+      "rollbackFailed": "Échec de restauration du réglage moteur",
+      "invalidStart": "Démarrage du réglage moteur non confirmé",
+      "invalidRequest": "Valeurs du réglage moteur invalides ; aucune requête envoyée",
+      "requestFailed": "Échec de la requête de réglage moteur",
       "statusFetchFailed": "Échec de récupération de l'état du réglage drive",
       "rollback": {
         "successMessage": "Le rollback du réglage drive a été appliqué en direct et sauvegardé dans mowgli_robot.yaml"
@@ -3173,6 +3245,8 @@
     "boundaryClearanceDescription": "À quelle distance les trajets de transit entre deux emplacements préfèrent rester de la limite enregistrée. C'est une préférence souple, pas une règle stricte — le transit peut toujours franchir la marge si c'est la seule option (par ex. juste après le débranchement). La tonte elle-même n'est pas affectée — le robot coupe toujours jusqu'au bord réel comme configuré ailleurs ; seuls les déplacements point à point sont légèrement rappelés vers l'intérieur.",
     "boundaryInnerMargin": "Marge de transit à la limite",
     "boundaryInnerMarginTooltip": "Distance (m) à laquelle les trajets de transit sont incités à rester à l'intérieur de la limite enregistrée. 0 désactive ce réglage et laisse le transit longer ou couper la ligne enregistrée, comme avant l'existence de ce réglage.",
+    "obstacleTransitMargin": "Marge de transit autour des obstacles",
+    "obstacleTransitMarginTooltip": "Distance supplémentaire (m) au-delà de la bande d'exclusion d'un obstacle dessiné que les trajets de transit préfèrent garder. Une préférence souple, jamais un blocage. Elle existe car la bande d'exclusion ne couvre que la demi-largeur du châssis alors que le contrôleur vérifie toute l'empreinte par rapport à l'objet réel. 0 la désactive. La tonte n'est pas affectée.",
     "dockExemptRadius": "Rayon d'exemption autour du socle",
     "dockExemptRadiusTooltip": "Rayon (m) autour de la position du socle, dans toutes les directions, exempté de la marge de transit ci-dessus — pour que l'approche du socle ne subisse aucun biais, pas seulement « jamais bloquée ». Élargissez ce rayon si votre socle subit beaucoup de dérive GNSS (par ex. sous un auvent). Ne prend effet qu'une fois une position de socle définie."
   },
@@ -3221,6 +3295,19 @@
     "externalExpiryTooltip": "Minutes après lesquelles un « oui » externe est ignoré s'il n'a pas été rafraîchi (0 = n'expire jamais). Évite qu'une automatisation défaillante bloque la tondeuse dans l'attente de pluie."
   },
   "settingsAdvanced": {
+    "valueFor": "Valeur de {{key}}",
+    "numberCommitHint": "Validez un nombre complet avec Entrée ou en quittant ce champ.",
+    "invalidNumber": "Nombre invalide ou incomplet ignoré. Saisissez un nombre décimal fini et complet.",
+    "structuredReadOnly": "Valeur structurée (lecture seule)",
+    "unsupportedReadOnly": "Valeur non prise en charge (lecture seule)",
+    "deleteKey": "Supprimer {{key}}",
+    "newKey": "Nom du nouveau paramètre",
+    "newValue": "Valeur du nouveau paramètre",
+    "valueType": "Type de valeur",
+    "types": {"string": "Chaîne", "number": "Nombre", "boolean": "Booléen"},
+    "invalidName": "Utilisez un nom de paramètre simple et exact : lettres, chiffres et underscores ; commencez par une lettre ou un underscore. Aucun renommage automatique.",
+    "duplicateKey": "Ce paramètre existe déjà, y compris en attente de suppression.",
+    "protectedKey": "Ce paramètre appartient à une autre section ou est masqué/retiré.",
     "advancedParameters": "Paramètres avancés",
     "advancedParametersDescription": "Ce sont des paramètres YAML bruts non couverts par les sections ci-dessus. Modifiez avec précaution — des valeurs invalides peuvent casser la configuration du robot.",
     "noExtraParameters": "Aucun paramètre supplémentaire défini",
@@ -3321,12 +3408,13 @@
     "rawValueFallback": "{{label}} valeur brute"
   },
   "gnssRuntimeConfig": {
+    "invalidResponse": "Réponse de configuration runtime GNSS invalide.",
     "detectedDevicesLabel": "Périphérique série détecté",
     "detectedDevicesPlaceholder": "Sélectionner un périphérique série détecté",
     "manualSerialPathLabel": "Surcharge manuelle du chemin série",
-    "activeLinkLabel": "Lien runtime actif",
+    "activeLinkLabel": "Configuration GNSS résolue",
     "resolvedTarget": "Cible résolue : {{path}}",
-    "envFallbackMessage": "Le runtime utilise actuellement le fallback `.env` pour la famille GNSS, le périphérique et le baud car aucune surcharge YAML GUI n'est encore enregistrée : {{family}} / {{device}} / {{baud}}.",
+    "envFallbackMessage": "La configuration GNSS résout la famille, le port et le débit depuis .env car aucune surcharge YAML GUI n’est enregistrée : {{family}} / {{device}} / {{baud}}.",
     "configuredDeviceMissing": "Le périphérique série GNSS sélectionné n'existe plus : {{device}}.",
     "activeDeviceMissing": "Le périphérique série GNSS actif n'existe pas : {{device}}.",
     "familyMismatch": "La famille de récepteur détectée {{detected}} diffère de la famille sélectionnée {{selected}}.",
@@ -3335,7 +3423,8 @@
     "source": {
       "config": "GUI/YAML",
       "env": "fallback .env",
-      "default": "valeur par défaut"
+      "default": "valeur par défaut",
+      "unknown": "indisponible / inconnu"
     }
   },
   "settingsGnssSignalHelp": {},
@@ -3348,6 +3437,14 @@
     "actionFactoryReset": "Reset usine + application du profil",
     "actionRestart": "Redémarrer le GPS",
     "cancel": "Annuler",
+    "invalidResponse": "Réponse GNSS absente ou malformée.",
+    "operationUnconfirmed": "Résultat de l’opération GNSS non confirmé",
+    "operationUnconfirmedDesc": "Le serveur ou le récepteur peut déjà avoir exécuté l’opération. Vérifiez son état avant de réessayer ; aucune nouvelle tentative automatique n’a été envoyée.",
+    "persistenceInProgressDesc": "Sauvegarde préalable des paramètres avant l’envoi de l’action GNSS.",
+    "persistenceUnconfirmed": "Enregistrement des paramètres non confirmé",
+    "persistenceUnconfirmedDesc": "La sauvegarde préalable n’a pas été confirmée ; aucune requête d’action GNSS n’a été envoyée.",
+    "restartUnconfirmed": "Fin du redémarrage GPS non confirmée",
+    "planOnlyDesc": "Planification terminée sans modification du récepteur.",
     "unknownApiError": "Erreur API GNSS inconnue",
     "backendRequestFailed": "Échec de la requête vers le backend GNSS",
     "summaryPartialFailure": "L'action GNSS s'est terminée avec un échec partiel",
@@ -3362,12 +3459,12 @@
     "notifyFailedDesc": "Consultez le panneau d'action GNSS pour stdout/stderr et les avertissements.",
     "notifyCompleted": "{{action}} terminé",
     "confirmApplyTitle": "Appliquer le profil GNSS au récepteur ?",
-    "confirmApplyBody": "Le sidecar GPS sera arrêté, le profil du récepteur sera appliqué dans un conteneur GNSS à usage unique, et le sidecar GPS ne sera redémarré que si l'application réussit.",
+    "confirmApplyBody": "Le service GPS en cours sera arrêté avant l’application du profil enregistré. Le backend tente ensuite de restaurer GPS, y compris en cas d’échec.",
     "confirmApplyWarning": "Ne débranchez pas l'alimentation ni le câblage USB/série pendant l'application du profil du récepteur.",
     "confirmApplyOk": "Appliquer le profil",
     "confirmFactoryResetTitle": "Reset usine du récepteur et réapplication du profil ?",
     "confirmFactoryResetDanger": "Le reset usine efface les réglages du récepteur avant de reconstruire le profil sélectionné.",
-    "confirmFactoryResetBody": "Le backend arrêtera le sidecar GPS, exécutera le flux persistant de reset usine, puis réappliquera le profil sauvegardé sélectionné et ne redémarrera le GPS que si ce flux réussit.",
+    "confirmFactoryResetBody": "Le backend arrêtera le service GPS en cours, réinitialisera le récepteur et réappliquera le profil enregistré, puis tentera de restaurer GPS même en cas d’échec.",
     "confirmFactoryResetWarning": "À utiliser uniquement lorsque vous voulez intentionnellement reconstruire la configuration du récepteur à partir d'un état vierge.",
     "confirmFactoryResetOk": "Reset usine et application",
     "actionInProgress": "{{action}} en cours",
@@ -3480,6 +3577,12 @@
     "yourRobot": "Votre robot"
   },
   "robotComponentEditor": {
+    "savedDockLoaded": "Coordonnées enregistrées du dock chargées",
+    "savedDockLoadedDesc": "Les valeurs relues dans mowgli_robot.yaml sont affichées, y compris le cap enregistré indépendamment. Cette relecture ne permet pas d’identifier une nouvelle acquisition GPS.",
+    "dockWriteUnconfirmed": "Écriture du dock non confirmée",
+    "dockReadbackUnconfirmed": "Écriture du dock acceptée ; coordonnées enregistrées non confirmées",
+    "dockUnconfirmedDesc": "Les coordonnées locales restent inchangées. L’action a pu être exécutée ; aucune nouvelle tentative automatique. {{reason}}",
+    "invalidGeometry": "Certaines valeurs des capteurs sont invalides. Les champs restent indisponibles ; l’aperçu utilise la géométrie du robot par défaut.",
     "dockPoseSetFromGps": "Pose de la base définie (depuis le GPS)",
     "dockPoseSetFromGpsDescription": "Position de la base capturée depuis le fix GPS moyenné et enregistrée dans mowgli_robot.yaml. L'indicateur sur la carte se place sur la nouvelle pose au prochain envoi /map.",
     "unknownError": "Erreur inconnue",
@@ -3488,14 +3591,14 @@
     "setDockFromPoseTitle": "Définir la position de la base depuis la position actuelle du robot ?",
     "setDockPose": "Définir la position de la base",
     "cancel": "Annuler",
-    "setDockConfirmIntro1": "Cela capture uniquement la",
+    "setDockConfirmIntro1": "Cette action demande de capturer la position GPS moyennée du robot :",
     "setDockConfirmXYHeading": "position x, y",
-    "setDockConfirmIntro2": "du robot maintenant et l'écrit dans",
+    "setDockConfirmIntro2": "et demande au service de l’enregistrer dans",
     "setDockConfirmIntro3": "comme nouvelle position de la base. Le cap n'est PAS modifié par cette action — le cap fusionné est verrouillé sur le cap de base existant pendant la charge, donc une capture en direct ne pourrait jamais le corriger. Recalibrez le cap séparément via « Lancer la calibration » (basé sur le mouvement, non affecté par ce verrouillage).",
     "currentRobot": "Robot actuel",
     "bearing": "cap",
     "savedDock": "Base enregistrée (cap non modifié par cette action)",
-    "setDockConfirmFooter": "Assurez-vous que le robot est posé sur la base afin que la capture de position corresponde au point de contact de charge réel. La nouvelle position persiste au redémarrage des conteneurs.",
+    "setDockConfirmFooter": "Conservez le contact de charge pendant l’action. Le GUI reprend uniquement des coordonnées valides relues dans le YAML ; un résultat non confirmé conserve les coordonnées locales.",
     "sensorPlacement": "Placement des capteurs",
     "metersFromUrdf": "m (géométrie du robot)",
     "dragSensorsHint": "Faites glisser les capteurs sur la vue de dessus du robot pour définir leur position X/Y. Utilisez la poignée de rotation (petit cercle) pour régler le lacet du capteur. L'espacement de la grille est de 5 cm. Les dimensions du robot sont lues depuis le topic /robot_description.",
@@ -3511,8 +3614,8 @@
     "source": "source",
     "captureFromRobot": "Capturer depuis la position actuelle du robot",
     "captureIntro1": "Garez le robot sur la base, face à la direction d'approche, puis cliquez ci-dessous. Capture",
-    "captureXYYaw": "x, y ET lacet",
-    "captureIntro2": "d'un coup — c'est la façon la plus fiable d'initialiser la pose de la base pour une nouvelle carte.",
+    "captureXYYaw": "position GPS (cap conservé)",
+    "captureIntro2": "pendant la charge. Confirmez l’action, puis vérifiez les valeurs du YAML relues par le GUI.",
     "robotNow": "Robot actuel : x={{x}} m, y={{y}} m, cap={{bearing}}°",
     "waitingForPose": "En attente de la pose du robot…",
     "tooltipNotCharging": "Placez le robot sur la base avec les contacts de charge engagés avant de définir la pose de référence",
@@ -4127,13 +4230,28 @@
       "savedDescription": "Redémarrez ROS2 pour appliquer les modifications.",
       "savedGpsRestartDescription": "Redémarrage du GPS pour appliquer les modifications GNSS. Redémarrez ROS2 pour appliquer les autres modifications enregistrées.",
       "restartingGps": "Redémarrage du GPS avec les réglages actuels",
+      "dockCapturePending": "La capture du dock est en cours. Attendez sa relecture avant d’enregistrer les réglages.",
+      "dockCaptureUnconfirmed": "Le résultat de la capture du dock n’est pas confirmé. Rechargez les réglages ou effectuez une capture confirmée avant d’enregistrer des modifications du dock. Les valeurs locales restent inchangées.",
+      "dockCaptureWhileSaving": "Une écriture des réglages ou une capture du dock est déjà en cours. Attendez sa fin avant de capturer le dock.",
       "dockRefreshFailed": "Réglages enregistrés, mais l'actualisation à chaud de map_server a échoué",
       "dockRefreshFailedDescription": "Redémarrez ROS2 (ou appelez /map_server_node/set_docking_point manuellement) pour prendre en compte la nouvelle pose de la base.",
       "drivePidUpdateFailed": "Réglages enregistrés, mais la mise à jour à chaud du PID des moteurs a échoué",
       "drivePidUpdateFailedDescription": "Redémarrez ROS2 pour appliquer les nouveaux gains PID des moteurs.",
       "saveFailed": "Échec de l'enregistrement des réglages",
-      "savedApplyingLive": "Enregistré. Application des réglages moteurs au robot en cours…",
-      "savedDisplaySettings": "Enregistré. Apparence de la station mise à jour ; aucun redémarrage du robot nécessaire."
+      "savedApplyingLive": "YAML enregistré ; application active encore en attente.",
+      "savedDisplaySettings": "Enregistré. Apparence de la station mise à jour ; aucun redémarrage du robot nécessaire.",
+      "runtimeUnconfirmed": "Mise à jour active non confirmée ; le YAML reste enregistré.",
+      "liveApplied": "Paramètres actifs confirmés",
+      "liveAdjusted": "Paramètres actifs appliqués, ajustés par le robot",
+      "liveAdjustedItem": "{{name}} réglé à {{applied}} (demandé {{requested}}, ajusté par le pont matériel)",
+      "invalidNumericValue": "Valeur numérique invalide ; rien n’a été enregistré.",
+      "savedRuntimeFailed": "YAML enregistré, mais une opération suivante a échoué",
+      "routing": {
+        "unconfirmed": "Backend non confirmé. YAML enregistré ; aucune mise à jour matérielle à chaud envoyée.",
+        "pending_image": "YAML enregistré. Le routage à chaud nécessite une image compatible ; redémarrage requis.",
+        "restart_required": "YAML enregistré. Ces modifications matérielles nécessitent un redémarrage.",
+        "unavailable": "YAML enregistré. Routage matériel à chaud indisponible ; redémarrage requis."
+      }
     }
   },
   "displayMode": {
@@ -4169,6 +4287,8 @@
     "Motor control": "Contrôle moteur",
     "IMU": "IMU",
     "Diagnostics": "Diagnostics",
+    "Navigation": "Navigation",
+    "Obstacles": "Obstacles",
     "Other": "Autre"
   },
   "hookNotifications": {
@@ -4860,8 +4980,10 @@
     "openGui": "Ouvrir l'interface de ce robot",
     "removeConfirm": "Retirer {{robot}} de la flotte ? Il oubliera aussi ce robot.",
     "peerAdded": "Robot ajouté à la flotte",
+    "peerAddWarningUnusable": "La demande d'ajout a renvoyé un avertissement inexploitable. Vérifiez la liste des robots et l'état de l'enregistrement réciproque.",
     "peerRemoved": "Robot retiré de la flotte",
     "pollError": "État de la flotte indisponible",
+    "rejectedRobots": "Masqué : état illisible reçu de {{names}}. Les autres robots sont affichés normalement.",
     "apiMismatch": "Version logicielle différente",
     "battery": "Batterie",
     "gps": "GPS",
@@ -5194,6 +5316,64 @@
     "mapAlt": "Tondeuse assemblée selon la description du robot en service",
     "dockStyle": "Base stylisée",
     "dockNote": "Base illustrative · 67 × 46 cm. Associée au châssis dans Matériel et affichée automatiquement sur la carte."
+  },
+  "diagnosticHealth": {
+    "operation": "État opérationnel",
+    "allConfirmed": "Tous les contrôles requis de cet affichage disposent d’éléments positifs actuels. Ce verdict n’autorise aucun mouvement.",
+    "level": {
+      "critical": "Critique",
+      "warning": "Attention",
+      "unknown": "Inconnu",
+      "ok": "OK",
+      "not_applicable": "Non applicable"
+    },
+    "containers": "Conteneurs",
+    "ros": "Diagnostics ROS",
+    "localizer": "Localisation",
+    "lastReported": "Dernier niveau ROS reçu : {{level}}",
+    "reason": {
+      "configuration": "Les contrôles de configuration signalent un avertissement ou des informations indisponibles.",
+      "clearance": "L’effacement d’une urgence antérieure reste non vérifié.",
+      "emergency": "Le statut d’urgence détermine ce verdict.",
+      "operation": "L’état opérationnel est absent, en initialisation ou non vérifié.",
+      "containers": "L’état des conteneurs ou la disponibilité des services requis détermine ce verdict.",
+      "cpu": "La température CPU détermine ce verdict ; une mesure indisponible reste inconnue.",
+      "battery": "L’estimation de batterie détermine ce verdict ; une télémétrie indisponible reste inconnue.",
+      "gnss": "La qualité GNSS est dégradée, absente ou non vérifiée. Son absence seule ne prouve pas une panne du robot.",
+      "ros": "Les diagnostics ROS signalent une dégradation ou des informations indisponibles.",
+      "lidar": "Le statut LiDAR est absent ou dégradé ; non applicable uniquement si sa désactivation est explicite.",
+      "localizer": "Le mode autonome nécessite un diagnostic de localisation actuel.",
+      "recovery": "La récupération de navigation dure plus longtemps que prévu."
+    }
+  },
+  "diagnosticAlertHistory": {
+    "currentCause": "Cause du verdict courant",
+    "active": "En cours",
+    "resolved": "Résolue",
+    "unverified": "État non vérifié",
+    "recent": "Récentes ({{count}})",
+    "showRecent": "Afficher les alertes récentes ({{count}})",
+    "hideRecent": "Masquer les alertes récentes",
+    "collapseAll": "Replier tous les groupes",
+    "empty": "Aucune alerte à afficher. L’historique récent reste consultable ici.",
+    "episode": "Épisode {{count}}",
+    "source": "Source déclarée",
+    "unknownSource": "Source non fournie",
+    "unknownComponent": "Composant sans nom"
+  },
+  "diagnosticReception": {
+    "communication": "Communication avec le robot interrompue depuis au moins 60 secondes.",
+    "missing": "Aucune donnée reçue de {{source}} depuis au moins 60 secondes.",
+    "source": {
+      "operation": "l’état du robot",
+      "emergency": "l’état d’urgence",
+      "system": "la supervision système",
+      "hardware": "la liaison matérielle",
+      "odometry": "l’odométrie",
+      "lidar": "LiDAR",
+      "gnss": "GNSS",
+      "localizer": "la localisation"
+    }
   },
   "digObstructionAck": {
     "title": "Reprendre depuis le point bloqué ?",

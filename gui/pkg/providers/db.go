@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"git.mills.io/prologic/bitcask"
-	"golang.org/x/xerrors"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"io"
 	"log"
 	"os"
@@ -72,7 +72,7 @@ func (d *DBProvider) Get(key string) ([]byte, error) {
 		if Defaults[key] != "" {
 			return []byte(Defaults[key]), nil
 		}
-		return nil, xerrors.Errorf("config key %s not found", key)
+		return nil, fmt.Errorf("config %w", types.KeyNotFoundError{Key: key})
 	}
 	return value, nil
 }

@@ -51,5 +51,19 @@ export function deriveIsMoving(
     if (isCharging) {
         return false;
     }
+    return isSessionActive(stateNum);
+}
+
+/**
+ * True while a session is in progress: the numeric state is one of the
+ * self-propelled states, whether or not the mower is on the charger. Unlike
+ * deriveIsMoving, charging does NOT clear it: a mid-mission recharge
+ * (ManualChargeGuard) keeps state 2 and the mission resumes by itself.
+ *
+ * Hides the stop-reason banner while the mower is working: the tree records
+ * AREA_START_BLOCKED / AREA_NO_PROGRESS when it retires ONE area and then
+ * keeps mowing the others, so "the mower stopped" would be false there.
+ */
+export function isSessionActive(stateNum: number | undefined | null): boolean {
     return MOVING_STATES.some((state) => state === stateNum);
 }

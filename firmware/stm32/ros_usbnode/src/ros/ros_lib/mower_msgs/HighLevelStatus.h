@@ -43,6 +43,10 @@ namespace mower_msgs
       _is_charging_type is_charging;
       typedef bool _emergency_type;
       _emergency_type emergency;
+      typedef const char* _stop_reason_type;
+      _stop_reason_type stop_reason;
+      typedef const char* _stop_detail_type;
+      _stop_detail_type stop_detail;
       enum { HIGH_LEVEL_STATE_NULL = 0 };
       enum { HIGH_LEVEL_STATE_IDLE = 1 };
       enum { HIGH_LEVEL_STATE_AUTONOMOUS = 2 };
@@ -63,7 +67,9 @@ namespace mower_msgs
       gps_quality_percent(0),
       battery_percent(0),
       is_charging(0),
-      emergency(0)
+      emergency(0),
+      stop_reason(""),
+      stop_detail("")
     {
     }
 
@@ -174,6 +180,16 @@ namespace mower_msgs
       u_emergency.real = this->emergency;
       *(outbuffer + offset + 0) = (u_emergency.base >> (8 * 0)) & 0xFF;
       offset += sizeof(this->emergency);
+      uint32_t length_stop_reason = strlen(this->stop_reason);
+      varToArr(outbuffer + offset, length_stop_reason);
+      offset += 4;
+      memcpy(outbuffer + offset, this->stop_reason, length_stop_reason);
+      offset += length_stop_reason;
+      uint32_t length_stop_detail = strlen(this->stop_detail);
+      varToArr(outbuffer + offset, length_stop_detail);
+      offset += 4;
+      memcpy(outbuffer + offset, this->stop_detail, length_stop_detail);
+      offset += length_stop_detail;
       return offset;
     }
 
@@ -303,11 +319,29 @@ namespace mower_msgs
       u_emergency.base |= ((uint8_t) (*(inbuffer + offset + 0))) << (8 * 0);
       this->emergency = u_emergency.real;
       offset += sizeof(this->emergency);
+      uint32_t length_stop_reason;
+      arrToVar(length_stop_reason, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_stop_reason; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_stop_reason-1]=0;
+      this->stop_reason = (char *)(inbuffer + offset-1);
+      offset += length_stop_reason;
+      uint32_t length_stop_detail;
+      arrToVar(length_stop_detail, (inbuffer + offset));
+      offset += 4;
+      for(unsigned int k= offset; k< offset+length_stop_detail; ++k){
+          inbuffer[k-1]=inbuffer[k];
+      }
+      inbuffer[offset+length_stop_detail-1]=0;
+      this->stop_detail = (char *)(inbuffer + offset-1);
+      offset += length_stop_detail;
      return offset;
     }
 
     virtual const char * getType() override { return "mower_msgs/HighLevelStatus"; };
-    virtual const char * getMD5() override { return "14974e4fd4dd241ab72394ba95ad123f"; };
+    virtual const char * getMD5() override { return "835a3eb35f23fa28781afed388a0f170"; };
 
   };
 

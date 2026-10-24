@@ -1,33 +1,9 @@
 import { useEffect, useState } from "react";
 import { useApi } from "./useApi.ts";
 
-export type GnssRuntimeValue = {
-    configured_value?: string;
-    fallback_env_value?: string;
-    active_value?: string;
-    // Known values are "config" | "env" | "default"; the backend may add
-    // more, so this stays an open string rather than a closed union that
-    // TypeScript would collapse to `string` anyway.
-    source?: string;
-};
-
-export type GnssSerialDeviceOption = {
-    path: string;
-    resolved_path?: string;
-    display_label: string;
-    exists: boolean;
-};
-
-export type GnssRuntimeConfig = {
-    receiver_family?: GnssRuntimeValue;
-    serial_device?: GnssRuntimeValue;
-    serial_baud?: GnssRuntimeValue;
-    serial_devices?: GnssSerialDeviceOption[];
-    configured_serial_device_exists?: boolean;
-    active_serial_device_exists?: boolean;
-    configured_serial_resolved_path?: string;
-    active_serial_resolved_path?: string;
-};
+export type {GnssRuntimeValue, GnssSerialDeviceOption, GnssRuntimeConfig} from '../utils/gnssConfigContract';
+import {decodeGnssRuntimeConfig, type GnssRuntimeConfig} from '../utils/gnssConfigContract';
+import {requestErrorMessage} from '../utils/errors';
 
 export const useGnssRuntimeConfig = () => {
     const guiApi = useApi();
@@ -36,26 +12,33 @@ export const useGnssRuntimeConfig = () => {
 
     useEffect(() => {
         let cancelled = false;
+        let latestCompleted = 0;
+        let nextRequest = 0;
 
         const load = async () => {
+            const request = ++nextRequest;
             try {
-                const response = await guiApi.request({
+                const response = await guiApi.request<unknown>({
                     path: "/settings/gnss/runtime-config",
                     method: "GET",
                     format: "json",
                 });
-                if (cancelled) {
+                if (cancelled || request < latestCompleted) {
                     return;
                 }
 
-                const payload = ((response as any)?.data ?? response) as GnssRuntimeConfig;
+                if (response.error || response.ok === false || response.status >= 400) throw new Error(requestErrorMessage(response) ?? 'Failed to load GNSS runtime config');
+                const payload = decodeGnssRuntimeConfig(response.data);
+                latestCompleted = request;
                 setRuntimeConfig(payload);
                 setError(null);
-            } catch (nextError: any) {
-                if (cancelled) {
+            } catch (nextError) {
+                if (cancelled || request < latestCompleted) {
                     return;
                 }
-                setError(nextError?.error?.error ?? nextError?.message ?? "Failed to load GNSS runtime config");
+                latestCompleted = request;
+                setRuntimeConfig(null);
+                setError(requestErrorMessage(nextError) ?? 'Failed to load GNSS runtime config');
             }
         };
 

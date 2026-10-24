@@ -73,6 +73,10 @@ func (f *FleetProvider) PushMap(ctx context.Context) (MapPushResult, error) {
 		switch {
 		case err != nil:
 			row.Error = "unreachable: " + err.Error()
+		case remote.ID != peer.ID:
+			row.Error = fmt.Sprintf("identity differs: expected %s, received %s; map not sent", peer.ID, remote.ID)
+		case remote.APIVersion != FleetAPIVersion:
+			row.Error = fmt.Sprintf("peer fleet API v%d is incompatible with ours (v%d); map not sent", remote.APIVersion, FleetAPIVersion)
 		case !sameDatum(datum, LatLon{Lat: remote.DatumLat, Lon: remote.DatumLon}):
 			row.Error = fmt.Sprintf("datum differs (%.8f, %.8f vs ours %.8f, %.8f); align the datums first",
 				remote.DatumLat, remote.DatumLon, datum.Lat, datum.Lon)

@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import {useEffect, useRef, useState} from "react";
 import {useApi} from "./useApi.ts";
 import {useWS} from "./useWS.ts";
@@ -74,11 +75,12 @@ export const useFirmwareDebugLogs = (enabled: boolean) => {
         },
     );
 
+    const {start: startStream, stop: stopStream} = stream;
     useEffect(() => {
         let cancelled = false;
 
         const stop = () => {
-            stream.stop();
+            stopStream();
             setLoading(false);
         };
 
@@ -107,7 +109,7 @@ export const useFirmwareDebugLogs = (enabled: boolean) => {
                 }
                 nextIdRef.current = 0;
                 setLines([]);
-                stream.start(`/api/containers/${containerId}/logs`);
+                startStream(`/api/containers/${containerId}/logs`);
             } catch (err) {
                 if (!cancelled) {
                     setError(err instanceof Error ? err.message : String(err));
@@ -119,12 +121,12 @@ export const useFirmwareDebugLogs = (enabled: boolean) => {
             }
         }
 
-        connect();
+        observeAsync(connect());
         return () => {
             cancelled = true;
             stop();
         };
-    }, [enabled, guiApi]);
+    }, [enabled, guiApi, startStream, stopStream]);
 
     return {lines, loading, error};
 };

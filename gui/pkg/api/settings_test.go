@@ -17,6 +17,10 @@ import (
 )
 
 func setupSettingsRouter(dbProvider types.IDBProvider) *gin.Engine {
+	// These legacy settings fixtures have no installer env file unless explicitly supplied.
+	if _, err := dbProvider.Get("system.mower.runtimeEnvFile"); err != nil {
+		_ = dbProvider.Set("system.mower.runtimeEnvFile", []byte(""))
+	}
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	group := r.Group("/api")
@@ -123,6 +127,84 @@ func TestGetSettings_NoConfigKey(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+func TestGetSettings_EmptyHTTPEnvelope(t *testing.T) {
+	for _, scenario := range []string{"missing file", "empty file", "comments only"} {
+		t.Run(scenario, func(t *testing.T) {
+			seedSchemaCache(t)
+			path := t.TempDir() + "/mower_config.sh"
+			if scenario != "missing file" {
+				content := ""
+				if scenario == "comments only" {
+					content = "# No legacy shell overrides\n\n"
+				}
+				require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+			}
+			db := types.NewMockDBProvider()
+			require.NoError(t, db.Set("system.mower.configFile", []byte(path)))
+			w := httptest.NewRecorder()
+			setupSettingsRouter(db).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+
+			require.Equal(t, http.StatusOK, w.Code)
+			// Decoding into GetSettingsResponse cannot distinguish {} from
+			// {"settings":{}}. Assert the actual HTTP JSON contract instead.
+			assert.JSONEq(t, `{"settings":{}}`, w.Body.String())
+		})
+	}
+}
+
+func TestGetSettings_HTTPReadErrors(t *testing.T) {
+	for _, scenario := range []string{"missing DB key", "unreadable file", "invalid shell"} {
+		t.Run(scenario, func(t *testing.T) {
+			db := types.NewMockDBProvider()
+			switch scenario {
+			case "unreadable file":
+				// Reading a directory reliably fails, without relying on Unix permissions.
+				require.NoError(t, db.Set("system.mower.configFile", []byte(t.TempDir())))
+			case "invalid shell":
+				path := createTempConfigFile(t, `INVALID="unterminated`)
+				require.NoError(t, db.Set("system.mower.configFile", []byte(path)))
+			}
+			w := httptest.NewRecorder()
+			setupSettingsRouter(db).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+
+			require.Equal(t, http.StatusInternalServerError, w.Code)
+			var body map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+			require.Contains(t, body, "error")
+			var message string
+			require.NoError(t, json.Unmarshal(body["error"], &message))
+			assert.NotEmpty(t, message)
+			assert.NotContains(t, body, "settings")
+		})
+	}
+}
+
+func TestGetSettings_HTTPValues(t *testing.T) {
+	for _, backend := range []string{"mowgli", "mavros", "openmower"} {
+		t.Run(backend, func(t *testing.T) {
+			t.Setenv("HARDWARE_BACKEND", backend)
+			seedSchemaCache(t)
+			// Model the schema types used by the existing shell coercion path.
+			schemaCacheMu.Lock()
+			schemaCache = map[string]any{"type": "object", "properties": map[string]any{
+				"WIDTH":   map[string]any{"type": "number", "x-environment-variable": "WIDTH"},
+				"ENABLED": map[string]any{"type": "boolean", "x-environment-variable": "ENABLED"},
+				"COUNT":   map[string]any{"type": "integer", "x-environment-variable": "COUNT"},
+				"NAME":    map[string]any{"type": "string", "x-environment-variable": "NAME"},
+			}}
+			schemaCacheMu.Unlock()
+			path := createTempConfigFile(t, "export WIDTH=0\nENABLED=false\nCOUNT=2\nNAME=\nEXTRA=fictional\n")
+			db := types.NewMockDBProvider()
+			require.NoError(t, db.Set("system.mower.configFile", []byte(path)))
+			w := httptest.NewRecorder()
+			setupSettingsRouter(db).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/settings", nil))
+
+			require.Equal(t, http.StatusOK, w.Code)
+			assert.JSONEq(t, `{"settings":{"WIDTH":0,"ENABLED":false,"COUNT":2,"NAME":"","custom_environment":{"EXTRA":"fictional"}}}`, w.Body.String())
+		})
+	}
 }
 
 func TestPostSettings_NewFile(t *testing.T) {

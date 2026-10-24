@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/providers"
+	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
 type Schedule struct {
@@ -49,7 +49,7 @@ const maxAreaNameLength = 200
 
 // scheduleWriteMu serialises check-then-write so two concurrent saves (HTTP
 // and MQTT) cannot both pass the overlap check against the same stored state.
-var scheduleWriteMu sync.Mutex
+var scheduleWriteMu = &providers.ScheduleWriteMu
 
 // ScheduleConflictError reports that saving would make two enabled schedules overlap.
 type ScheduleConflictError struct {
@@ -144,13 +144,6 @@ func updateSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
 
-		// Verify schedule exists
-		existing, err := getSchedule(dbProvider, id)
-		if err != nil {
-			c.JSON(http.StatusNotFound, ErrorResponse{Error: "schedule not found"})
-			return
-		}
-
 		var sched Schedule
 		if err := c.BindJSON(&sched); err != nil {
 			c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
@@ -163,15 +156,15 @@ func updateSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 		}
 
 		sched.ID = id
-		sched.CreatedAt = existing.CreatedAt
-		sched.LastRun = existing.LastRun
-		sched.LastSkipReason = existing.LastSkipReason
-		sched.LastSkippedAt = existing.LastSkippedAt
-
-		if err := saveScheduleChecked(dbProvider, &sched); err != nil {
-			writeScheduleSaveError(c, err)
+		if err := updateScheduleChecked(dbProvider, &sched); err != nil {
+			if errors.Is(err, types.ErrKeyNotFound) {
+				c.JSON(http.StatusNotFound, ErrorResponse{Error: "schedule not found"})
+			} else {
+				writeScheduleSaveError(c, err)
+			}
 			return
 		}
+
 		notifyScheduleChanged()
 
 		c.JSON(http.StatusOK, sched)
@@ -191,7 +184,7 @@ func updateSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 func deleteSchedule(dbProvider types.IDBProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.Param("id")
-		if err := dbProvider.Delete(scheduleKeyPrefix + id); err != nil {
+		if err := deleteScheduleRecord(dbProvider, id); err != nil {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 			return
 		}
@@ -301,6 +294,11 @@ func findOverlappingSchedule(candidate *Schedule, existing []Schedule) *Schedule
 func saveScheduleChecked(dbProvider types.IDBProvider, s *Schedule) error {
 	scheduleWriteMu.Lock()
 	defer scheduleWriteMu.Unlock()
+	return saveScheduleCheckedLocked(dbProvider, s)
+}
+
+// Called only while the shared store lock is held.
+func saveScheduleCheckedLocked(dbProvider types.IDBProvider, s *Schedule) error {
 	existing, err := getAllSchedules(dbProvider)
 	if err != nil {
 		return err
@@ -309,6 +307,27 @@ func saveScheduleChecked(dbProvider types.IDBProvider, s *Schedule) error {
 		return &ScheduleConflictError{With: *other}
 	}
 	return saveSchedule(dbProvider, s)
+}
+
+// Re-read editable data and metadata within the same transaction as the save.
+func updateScheduleChecked(dbProvider types.IDBProvider, s *Schedule) error {
+	scheduleWriteMu.Lock()
+	defer scheduleWriteMu.Unlock()
+	current, err := getSchedule(dbProvider, s.ID)
+	if err != nil {
+		return err
+	}
+	s.CreatedAt = current.CreatedAt
+	s.LastRun = current.LastRun
+	s.LastSkipReason = current.LastSkipReason
+	s.LastSkippedAt = current.LastSkippedAt
+	return saveScheduleCheckedLocked(dbProvider, s)
+}
+
+func deleteScheduleRecord(dbProvider types.IDBProvider, id string) error {
+	scheduleWriteMu.Lock()
+	defer scheduleWriteMu.Unlock()
+	return dbProvider.Delete(scheduleKeyPrefix + id)
 }
 
 func saveSchedule(dbProvider types.IDBProvider, s *Schedule) error {

@@ -1,4 +1,6 @@
-import {Status} from "../types/ros.ts";
-import {useTopic} from "./useTopic.ts";
+import type {Status} from '../types/ros';
+import {useValidatedTelemetry} from './useValidatedTelemetry';
+import {decodeStatus, retainStatusWarning} from '../utils/statusTelemetry';
 
-export const useStatus = (): Status => useTopic<Status>("status", {}).data;
+export const useStatus = (): Status =>
+    useValidatedTelemetry<Status>('status', {}, decodeStatus, retainStatusWarning).telemetry.data;

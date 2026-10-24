@@ -19,7 +19,9 @@ export const BLACKBOX_STATUS: BlackboxStatus = {
 const DEFAULT_REST: Record<string, unknown> = {
     // Critical: keeps AppShell from redirecting to /onboarding.
     "/api/settings/status": {onboarding_completed: true},
-    "/api/settings": {},
+    // Nominal shell settings envelope. Malformed/legacy responses belong to
+    // explicit scenarios; otherwise load-error toasts can cover header menus.
+    "/api/settings": {settings: {}},
     "/api/settings/yaml": {},
     "/api/settings/yaml/defaults": {},
     "/api/settings/schema": {properties: {}},

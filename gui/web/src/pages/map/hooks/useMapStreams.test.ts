@@ -1,4 +1,4 @@
-import {useRef, type Dispatch, type SetStateAction} from 'react';
+import {useRef, useState, type Dispatch, type SetStateAction} from 'react';
 import {act, cleanup, renderHook} from '@testing-library/react';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {PathFeature, type MowingFeature} from '../../../types/map.ts';
@@ -30,7 +30,10 @@ vi.mock('../../../hooks/useHighLevelStatus.ts', () => ({
 vi.mock('../../../hooks/useRobotDescription.ts', () => ({useRobotDescription: () => ({})}));
 vi.mock('../../../theme/ThemeContext.tsx', () => ({useThemeMode: () => ({displayMode: 'balanced'})}));
 vi.mock('./useGridImageStream.ts', () => ({
-    useGridImageStream: () => ({image: null, stream: {start: vi.fn(), stop: vi.fn()}, cancel: vi.fn()}),
+    useGridImageStream: () => {
+        const [stream] = useState(() => ({image: null, stream: {start: vi.fn(), stop: vi.fn()}, cancel: vi.fn()}));
+        return stream;
+    },
 }));
 
 type Features = Record<string, MowingFeature>;

@@ -226,6 +226,13 @@ TEST_F(MapServerTest, GuiAreaReplacementPreservesCalibratedDockGeometry)
   EXPECT_EQ(node_->docking_pose_for_test().position.x, -3.0);
   EXPECT_EQ(node_->docking_pose_for_test().position.y, -4.0);
   ASSERT_EQ(latest->markers.size(), dock_before.size());
+  // The dock body travels in its own namespace so the transit planner can let a start inside it
+  // plan its way out, while goals and paths keep it forbidden.
+  ASSERT_EQ(dock_before.size(), 3U);
+  EXPECT_EQ(dock_before[0].ns, "area");
+  EXPECT_EQ(dock_before[1].ns, "dock_corridor");
+  EXPECT_EQ(dock_before[2].ns, "dock_body");
+  EXPECT_EQ(dock_before[2].scale.x, 0.0);
   for (std::size_t i = 0; i < dock_before.size(); ++i)
   {
     EXPECT_EQ(latest->markers[i].ns, dock_before[i].ns);
@@ -1931,6 +1938,110 @@ TEST_F(ObstacleMarginTest, DrawnObstacleGetsLethalMarginBand)
       << "cell inside the keepout_obstacle_margin band must be lethal";
   // Well outside the margin band (edge + 0.3 m + slack) → FREE lawn.
   EXPECT_EQ(mask_at(mask, 1.5, 0.0), 0) << "lawn beyond the margin band must stay free";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Soft transit margin around drawn obstacles (obstacle_transit_margin_m, mowglinext#975): the
+// obstacle counterpart of boundary_inner_margin_m. The lethal band stays the body half-width; a
+// non-lethal band of the SAME mid-cost sits outside it, so the transit planner prefers a wider
+// berth without ever being blocked from starting, ending or passing through it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+class ObstacleTransitMarginTest : public AreaTypeTest
+{
+protected:
+  static constexpr int8_t kSoftPenalty = 50;  // mirrors kSoftPenaltyMaskCost
+
+  static std::shared_ptr<mowgli_map::MapServerNode> make_node(double transit_margin_m)
+  {
+    rclcpp::NodeOptions opts;
+    opts.append_parameter_override("resolution", 0.1);
+    opts.append_parameter_override("map_size_x", 10.0);
+    opts.append_parameter_override("map_size_y", 10.0);
+    opts.append_parameter_override("map_frame", "map");
+    opts.append_parameter_override("tool_width", 0.2);
+    opts.append_parameter_override("map_file_path", "");
+    opts.append_parameter_override("areas_file_path", "");
+    opts.append_parameter_override("publish_rate", 1.0);
+    opts.append_parameter_override("keepout_obstacle_margin", 0.3);
+    opts.append_parameter_override("obstacle_transit_margin_m", transit_margin_m);
+    return std::make_shared<mowgli_map::MapServerNode>(opts);
+  }
+
+  // 8x8 m lawn with a 1x1 m drawn obstacle (a tree) centred at the origin.
+  bool add_lawn_with_tree()
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+    req->area.name = "lawn_with_tree";
+    req->area.area = make_rect(-4, -4, 4, 4);
+    req->area.obstacles.push_back(make_rect(-0.5, -0.5, 0.5, 0.5));
+    req->is_navigation_area = false;
+    auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+    node_->add_area_for_test(req, res);
+    return res->success;
+  }
+};
+
+TEST_F(ObstacleTransitMarginTest, SoftBandSitsOutsideTheLethalBandAndNeverReplacesIt)
+{
+  node_ = make_node(0.4);
+  ASSERT_TRUE(add_lawn_with_tree());
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+
+  EXPECT_EQ(mask_at(mask, 0.0, 0.0), 100) << "inside the drawn obstacle must stay lethal";
+  // 0.25 m outside the polygon edge: inside the 0.3 m lethal band.
+  EXPECT_EQ(mask_at(mask, 0.75, 0.0), 100) << "the lethal band must not be softened";
+  // 0.5 m outside the edge: past the lethal band (0.3), inside the soft reach (0.3 + 0.4).
+  EXPECT_EQ(mask_at(mask, 1.0, 0.0), kSoftPenalty)
+      << "between the lethal band and the soft reach the mask must be the soft mid-cost";
+  // 1.0 m outside the edge: beyond the soft reach.
+  EXPECT_EQ(mask_at(mask, 1.5, 0.0), 0) << "lawn beyond the soft reach must stay free";
+}
+
+TEST_F(ObstacleTransitMarginTest, SoftBandIsNeverLethal)
+{
+  node_ = make_node(0.4);
+  ASSERT_TRUE(add_lawn_with_tree());
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+
+  // Every cell on the +x ray from the obstacle edge outwards, past the lethal band, must be soft
+  // or free, never lethal: a start or goal pose there must stay plannable.
+  for (double x = 0.9; x <= 3.5; x += 0.1)
+  {
+    EXPECT_NE(mask_at(mask, x, 0.0), 100) << "lethal cell at x=" << x << " beyond the lethal band";
+  }
+}
+
+TEST_F(ObstacleTransitMarginTest, ZeroDisablesTheSoftBand)
+{
+  node_ = make_node(0.0);
+  ASSERT_TRUE(add_lawn_with_tree());
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+
+  EXPECT_EQ(mask_at(mask, 0.75, 0.0), 100);
+  EXPECT_EQ(mask_at(mask, 1.0, 0.0), 0) << "with the margin at 0 nothing is added past the band";
+}
+
+TEST_F(ObstacleTransitMarginTest, BandDoesNotLeakOutsideTheArea)
+{
+  // Obstacle 0.4 m inside the +x edge of a 4 m half-width lawn; the soft reach (0.7 m) crosses the
+  // recorded edge. Cells outside every area keep their lethal value.
+  node_ = make_node(0.4);
+  auto req = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+  req->area.name = "edge_tree";
+  req->area.area = make_rect(-4, -4, 4, 4);
+  req->area.obstacles.push_back(make_rect(3.0, -0.2, 3.4, 0.2));
+  req->is_navigation_area = false;
+  auto res = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+  node_->add_area_for_test(req, res);
+  ASSERT_TRUE(res->success);
+
+  const auto mask = node_->build_keepout_mask_for_test();
+  ASSERT_FALSE(mask.data.empty());
+  EXPECT_EQ(mask_at(mask, 4.8, 0.0), 100) << "outside every area must stay lethal";
 }
 
 TEST_F(AreaTypeTest, DrawnObstacleWithDefaultMarginDerivesFromTheChassis)

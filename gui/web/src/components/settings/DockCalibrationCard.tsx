@@ -1,3 +1,4 @@
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import React from "react";
 import {useTranslation} from "react-i18next";
 import { Alert, Button, Card, Progress, Space, Typography } from "antd";
@@ -17,6 +18,7 @@ const { Text, Paragraph } = Typography;
  * then persist the dock pose. Blade stays OFF throughout.
  */
 export const DockCalibrationCard: React.FC = () => {
+    const asyncHandler = useAsyncHandler();
     const {t, i18n} = useTranslation();
     const number = (n: number) => n.toLocaleString(i18n.language, {maximumFractionDigits: 2});
     const { colors } = useThemeMode();
@@ -51,7 +53,7 @@ export const DockCalibrationCard: React.FC = () => {
                     icon={<AimOutlined />}
                     loading={starting || running}
                     disabled={running}
-                    onClick={start}
+                    onClick={asyncHandler(start)}
                 >
                     {t(running ? 'dockCalibration.running' : 'dockCalibration.start')}
                 </Button>

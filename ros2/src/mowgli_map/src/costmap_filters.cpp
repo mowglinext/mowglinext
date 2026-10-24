@@ -394,6 +394,62 @@ void MapServerNode::publish_keepout_mask()
            point_to_polygon_distance(static_cast<double>(pt.x), static_cast<double>(pt.y), obs) <=
                keepout_obstacle_margin_m_;
   };
+  // Soft TRANSIT margin around every drawn obstacle (mowglinext#975), painted BEFORE the lethal
+  // passes below so the lethal band always wins. The lethal band is only the body half-width: the
+  // transit planner (a point check) may run a path right along its edge, while the controller tests
+  // the whole footprint against the LiDAR cells of the real object, which a drawn polygon only
+  // approximates. The soft band is built exactly like the inner boundary margin: the same
+  // kSoftPenaltyMaskCost, never lethal (so it cannot create START_OCCUPIED or GOAL_OCCUPIED, and a
+  // coverage ring planned inside it stays reachable) — Smac prefers a wider berth where there is
+  // room and still routes through the band when the alternative is much longer. Only free cells
+  // inside an area are touched (cells outside every area stay lethal, soft cells stay soft) and the
+  // dock approach stays bias-free like the boundary band. Pending proposals are not drawn
+  // obstacles.
+  const double transit_margin = std::max(obstacle_transit_margin_m_, 0.0);
+  if (transit_margin > 0.0)
+  {
+    const double soft_reach = obstacle_band + transit_margin;
+    const auto stamp_soft_band = [&](const geometry_msgs::msg::Polygon& polygon)
+    {
+      const raster::CellWindow w = raster::polygon_window(polygon, axes, window, soft_reach);
+      for (int r = w.rows.first; r <= w.rows.last; ++r)
+      {
+        for (int c = w.cols.first; c <= w.cols.last; ++c)
+        {
+          const std::size_t k = og_cell(r, c);
+          if (mask.data[k] != 0 || (dock_exempts && near_dock(r, c)))
+          {
+            continue;
+          }
+          geometry_msgs::msg::Point32 pt;
+          pt.x = static_cast<float>(axes.x_of_row[static_cast<std::size_t>(r)]);
+          pt.y = static_cast<float>(axes.y_of_col[static_cast<std::size_t>(c)]);
+          pt.z = 0.0F;
+          if (point_in_polygon(pt, polygon) || point_to_polygon_distance(static_cast<double>(pt.x),
+                                                                         static_cast<double>(pt.y),
+                                                                         polygon) <= soft_reach)
+          {
+            mask.data[k] = kSoftPenaltyMaskCost;
+          }
+        }
+      }
+    };
+    for (const auto& obs : obstacle_polygons_)
+    {
+      stamp_soft_band(obs);
+    }
+    for (const auto& area : areas_)
+    {
+      for (const auto& obs : area.obstacles)
+      {
+        if (!obs.pending)
+        {
+          stamp_soft_band(obs.polygon);
+        }
+      }
+    }
+  }
+
   for (const auto& obs : obstacle_polygons_)
   {
     stamp_window_cells(obs, obstacle_band, 100, cell_hits_obstacle);
@@ -487,8 +543,9 @@ void MapServerNode::publish_transit_geometry()
     // as the keepout mask; for allowed rings it is visualization only.
     marker.scale.x = margin;
     marker.color.a = 1;
-    marker.color.g = kind == "obstacle" ? 0 : 1;
-    marker.color.r = kind == "obstacle" ? 1 : 0;
+    const bool forbidden = kind == "obstacle" || kind == "dock_body";
+    marker.color.g = forbidden ? 0 : 1;
+    marker.color.r = forbidden ? 1 : 0;
     for (const auto& p : polygon.points)
     {
       geometry_msgs::msg::Point point;
@@ -510,7 +567,9 @@ void MapServerNode::publish_transit_geometry()
   if (has_dock_exclusion_)
   {
     append(dock_corridor_polygon_, "dock_corridor", 0.01);
-    append(dock_body_polygon_, "obstacle", 0);
+    // Its own namespace: still a forbidden ring for the transit planner, but a START inside it
+    // may plan its way out (the robot ends coverage units in front of the dock).
+    append(dock_body_polygon_, "dock_body", 0);
   }
   transit_geometry_pub_->publish(snapshot);
 }

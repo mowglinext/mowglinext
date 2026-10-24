@@ -1,7 +1,10 @@
-import {useCallback, useEffect, useState} from "react";
+import {observeAsync} from "../utils/async";
+import {apiErrorMessage} from "../utils/errors";
+import {AsyncPopconfirm} from "../components/AsyncPopconfirm";
+import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
 import i18n from "../i18n";
-import {Table, Tag, Button, Popconfirm, message} from "antd";
+import {Table, Tag, Button, message} from "antd";
 import {DeleteOutlined} from "@ant-design/icons";
 import {useApi} from "../hooks/useApi.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
@@ -81,37 +84,82 @@ export const StatisticsPage = () => {
   const {colors} = useThemeMode();
   const isMobile = useIsMobile();
 
-  const [sessions, setSessions] = useState<MowingSession[]>([]);
-  const [stats, setStats] = useState<SessionStats | null>(null);
+  const [{sessions, stats}, setHistory] = useState<{sessions: MowingSession[]; stats: SessionStats | null}>({sessions: [], stats: null});
   const [loading, setLoading] = useState(false);
   const [hoveredBar, setHoveredBar] = useState<number | null>(null);
+  const lifetimeRef = useRef<object | null>(null);
+  const readRef = useRef(0);
+  const clearRef = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    lifetimeRef.current = {};
+    return () => {
+      lifetimeRef.current = null;
+      clearRef.current = null;
+    };
+  }, []);
 
   const fetchData = useCallback(async () => {
+    const lifetime = lifetimeRef.current;
+    if (lifetime === null || clearRef.current !== null) return;
+    const request = ++readRef.current;
+    const isCurrent = () => lifetimeRef.current === lifetime
+      && readRef.current === request && clearRef.current === null;
     setLoading(true);
     try {
       const [sessionsRes, statsRes] = await Promise.all([
         guiApi.request<SessionsResponse>({path: "/diagnostics/sessions", method: "GET", format: "json"}),
         guiApi.request<SessionStats>({path: "/diagnostics/sessions/stats", method: "GET", format: "json"}),
       ]);
-      setSessions(sessionsRes.data?.sessions ?? []);
-      setStats(statsRes.data ?? null);
-    } catch { /* silently degrade */ }
-    finally { setLoading(false); }
-  }, []);
+      if (!isCurrent()) return;
+      if (sessionsRes.error) throw sessionsRes.error;
+      if (statsRes.error) throw statsRes.error;
+      const error = apiErrorMessage(sessionsRes.data) ?? apiErrorMessage(statsRes.data);
+      if (error !== undefined) throw new Error(error);
+      if (!Array.isArray(sessionsRes.data?.sessions) || !Number.isFinite(statsRes.data?.total_sessions)) {
+        throw new Error('Invalid mowing statistics response');
+      }
+      setHistory({sessions: sessionsRes.data.sessions, stats: statsRes.data});
+    } catch (error) {
+      if (isCurrent()) console.error('Failed to refresh mowing statistics', error);
+    }
+    finally { if (isCurrent()) setLoading(false); }
+  }, [guiApi]);
 
   const clearStats = useCallback(async () => {
+    const lifetime = lifetimeRef.current;
+    if (lifetime === null || clearRef.current !== null) return;
+    const operation = {};
+    clearRef.current = operation;
+    // Retire reads at intent, before DELETE can complete. Polls are skipped
+    // during the mutation; network cancellation is not needed for this guard.
+    ++readRef.current;
+    const isCurrent = () => lifetimeRef.current === lifetime && clearRef.current === operation;
+    let cleared = false;
+    setLoading(true);
     try {
-      await guiApi.request({path: "/diagnostics/sessions", method: "DELETE", format: "json"});
+      const res = await guiApi.request<{ok: boolean}>({path: "/diagnostics/sessions", method: "DELETE", format: "json"});
+      if (!isCurrent()) return;
+      if (res.error || apiErrorMessage(res.data) !== undefined || res.data?.ok !== true) {
+        throw new Error('Failed to clear mowing statistics');
+      }
+      // Deletion is confirmed even if its subsequent read is unavailable.
+      setHistory({sessions: [], stats: null});
+      cleared = true;
       message.success(t('statisticsPage.statisticsCleared'));
-      await fetchData();
     } catch {
-      message.error(t('statisticsPage.failedToClearStatistics'));
+      if (isCurrent()) message.error(t('statisticsPage.failedToClearStatistics'));
+    } finally {
+      if (isCurrent()) {
+        clearRef.current = null;
+        setLoading(false);
+      }
     }
-  }, [fetchData, t]);
+    if (cleared && lifetimeRef.current === lifetime) await fetchData();
+  }, [fetchData, guiApi, t]);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
+    observeAsync(fetchData());
+    const interval = setInterval(() => observeAsync(fetchData()), 30000);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -359,7 +407,7 @@ export const StatisticsPage = () => {
                 {t('statisticsPage.sessionsRecorded', {count: sessions.length})}
               </div>
             </div>
-            <Popconfirm
+            <AsyncPopconfirm
               title={t('statisticsPage.clearAllTitle')}
               description={t('statisticsPage.clearAllDescription')}
               okText={t('statisticsPage.clear')}
@@ -370,7 +418,7 @@ export const StatisticsPage = () => {
               <Button size="small" danger icon={<DeleteOutlined/>} disabled={sessions.length === 0}>
                 {t('statisticsPage.clear')}
               </Button>
-            </Popconfirm>
+            </AsyncPopconfirm>
           </div>
           <Table
             size="small"

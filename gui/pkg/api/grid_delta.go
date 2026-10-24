@@ -95,7 +95,7 @@ func (g *gridDelta) next(msg []byte) (frame gridFrame, ok bool) {
 		w.Info.Width == g.width && w.Info.Height == g.height && w.Info.Resolution == g.res &&
 		bytes.Equal(w.Info.Origin, g.origin)
 	if sameShape && g.sinceFull < gridDeltaFullEvery {
-		var gaps, vals []int
+		gaps, vals := make([]int, 0), make([]int, 0)
 		prev := 0
 		for i, v := range w.Data {
 			if v != g.cells[i] {

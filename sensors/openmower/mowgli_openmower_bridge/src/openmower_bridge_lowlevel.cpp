@@ -14,6 +14,7 @@
 #include "mowgli_interfaces/update_maintenance.hpp"
 #include "mowgli_openmower_bridge/blade_policy.hpp"
 #include "mowgli_openmower_bridge/openmower_bridge_node.hpp"
+#include "mowgli_openmower_bridge/simulation_trace.hpp"
 
 namespace mowgli_openmower_bridge
 {
@@ -182,6 +183,7 @@ void OpenMowerBridgeNode::handle_ll_status(const uint8_t* data, std::size_t len)
     ll_config_tries_left_ = kConfigTries;
   }
   ll_last_status_ = stamp;
+  OM_SIM_TRACE("ll_rx", "\"ros_ns\":%lld", static_cast<long long>(stamp.nanoseconds()));
   ll_initialized_ = (pkt.status_bitmask & mowgli_hardware::STATUS_BIT_INITIALIZED) != 0u;
   last_ll_status_bitmask_ = pkt.status_bitmask;
   last_ll_emergency_bitmask_ = pkt.emergency_bitmask;
@@ -549,7 +551,16 @@ void OpenMowerBridgeNode::send_heartbeat()
   pkt.type = mowgli_hardware::PACKET_ID_LL_HEARTBEAT;
   pkt.emergency_requested = bits.request ? 1u : 0u;
   pkt.emergency_release_requested = bits.release ? 1u : 0u;
+#ifdef OPENMOWER_SIMULATION_TRACE
+  const auto begin = SimulationMonotonicNs();
+  const bool written =
+      lowlevel_send(reinterpret_cast<const uint8_t*>(&pkt), sizeof(pkt) - sizeof(uint16_t));
+  const auto end = SimulationMonotonicNs();
+  OM_SIM_TRACE(
+      "heartbeat_write", "\"begin_ns\":%lld,\"end_ns\":%lld,\"written\":%d", begin, end, written);
+#else
   lowlevel_send(reinterpret_cast<const uint8_t*>(&pkt), sizeof(pkt) - sizeof(uint16_t));
+#endif
 }
 
 void OpenMowerBridgeNode::send_high_level_state()

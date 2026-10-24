@@ -24,3 +24,8 @@ describe('existing anatomy motor display', () => {
         expect(container.textContent).not.toContain('NaN');
     });
 });
+it('keeps a reported battery percentage when voltage is unavailable',()=>{
+    const {container}=render(<RobotAnatomy inputs={{...inputs,vBattery:NaN}}/>);
+    fireEvent.mouseEnter(container.querySelectorAll('svg > g')[3]);
+    expect(container.textContent).toContain('80');expect(container.textContent).not.toContain('NaN');
+});

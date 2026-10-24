@@ -1,16 +1,16 @@
 import {describe, it, expect, vi, beforeEach} from 'vitest';
 import {renderHook, act} from '@testing-library/react';
 import {useMapEditHistory} from './useMapEditHistory.ts';
-import type {MowingFeature} from '../../../types/map.ts';
+import {MowingAreaFeature, cloneFeature, type MowingFeature} from '../../../types/map.ts';
 
 // Mock antd App.useApp to provide modal.confirm
 const mockConfirm = vi.fn(({onOk}: {onOk: () => void}) => onOk());
 vi.mock('antd', async () => {
-    const actual = await vi.importActual('antd');
+    const actual = await vi.importActual<typeof import('antd')>('antd');
     return {
         ...actual,
         App: {
-            ...((actual as Record<string, unknown>).App as Record<string, unknown>),
+            ...actual.App,
             useApp: () => ({
                 notification: {},
                 message: {},
@@ -28,7 +28,7 @@ describe('useMapEditHistory', () => {
 
     beforeEach(() => {
         features = {};
-        setFeatures = vi.fn((updater) => {
+        setFeatures = vi.fn<typeof setFeatures>((updater) => {
             if (typeof updater === 'function') {
                 features = updater(features);
             } else {
@@ -36,7 +36,7 @@ describe('useMapEditHistory', () => {
             }
         });
         editMap = false;
-        setEditMap = vi.fn((val) => {
+        setEditMap = vi.fn<typeof setEditMap>((val) => {
             editMap = val;
         });
     });
@@ -108,6 +108,28 @@ describe('useMapEditHistory', () => {
             result.current.setHasUnsavedChanges(true);
         });
         expect(result.current.hasUnsavedChanges).toBe(true);
+    });
+
+    it('retains both interior rings through editing, undo, redo and rehydration of an older draft', () => {
+        const ring = (x: number, y: number, size: number) => [[x,y],[x+size,y],[x+size,y+size],[x,y+size],[x,y]];
+        const original = new MowingAreaFeature('recoverable', 1); original.setName('Original');
+        original.setGeometry({type: 'Polygon', coordinates: [ring(0,0,20),ring(2,2,2),ring(10,10,2)]});
+        const before = structuredClone(original.geometry);
+        features = {recoverable: original};
+        const {result, rerender} = renderHistory();
+        act(() => result.current.handleEditMap()); rerender();
+        const changed = cloneFeature(original); changed.setName('Edited');
+        changed.geometry.coordinates[1][0][0] += .25; changed.geometry.coordinates[1][4][0] += .25;
+        features = {recoverable: changed}; rerender();
+        expect(result.current.editHistory).toHaveLength(2);
+        act(() => result.current.handleUndo()); rerender();
+        expect(features.recoverable).toBeInstanceOf(MowingAreaFeature);
+        expect(features.recoverable.geometry).toEqual(before);
+        expect(features.recoverable.properties.name).toBe('Original');
+        act(() => result.current.handleRedo()); rerender();
+        expect(features.recoverable.geometry).toEqual(changed.geometry);
+        expect(features.recoverable.properties.name).toBe('Edited');
+        expect(original.geometry).toEqual(before);
     });
 
     it('calls onDiscard when cancelling with nothing to confirm', () => {

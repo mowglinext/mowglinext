@@ -25,7 +25,7 @@ describe("GnssLiveStatusSummaryCard", () => {
         expect(screen.getByText(en.settingsGnssLiveStatus.cardTitle)).toBeInTheDocument();
         expect(screen.getByText(en.gpsStatus.compactUnknown)).toBeInTheDocument();
         expect(screen.getAllByText(en.settingsGnssLiveStatus.unknown).length).toBeGreaterThan(0);
-        expect(screen.getByText("auto")).toBeInTheDocument();
+        expect(screen.queryByText("auto")).not.toBeInTheDocument();
         expect(screen.queryByText(en.settingsGnssLiveStatus.satelliteSectionTitle)).not.toBeInTheDocument();
         expect(screen.queryByText(en.settingsGnssLiveStatus.signalQualitySectionTitle)).not.toBeInTheDocument();
         expect(screen.queryByText(en.settingsGnssLiveStatus.correctionMsmSectionTitle)).not.toBeInTheDocument();
@@ -41,4 +41,13 @@ describe("GnssLiveStatusSummaryCard", () => {
         expect(screen.queryByText(en.settingsGnssLiveStatus.satelliteSectionTitle)).not.toBeInTheDocument();
         expect(screen.queryByText(en.settingsGnssLiveStatus.signalQualitySectionTitle)).not.toBeInTheDocument();
     });
+});
+
+it('does not present configured family as the detected physical receiver', () => {
+    renderCard(undefined, 'ublox');
+    expect(screen.queryByText('ublox')).not.toBeInTheDocument();
+});
+it('does not display a Fixed RTK mode beside an explicit invalid fix', () => {
+    renderCard({...gnssStatusSamples.correction_stream_active, fix_valid: false, rtk_mode: 3});
+    expect(screen.queryByText(en.gpsStatus.rtkFixed)).not.toBeInTheDocument();
 });

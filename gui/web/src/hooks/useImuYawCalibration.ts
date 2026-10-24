@@ -1,4 +1,6 @@
-import {useCallback, useState} from "react";
+import {errorMessage, isAbortError} from "../utils/errors";
+import {isJsonObject} from "../utils/json";
+import {useCallback, useEffect, useRef, useState} from "react";
 import {App} from "antd";
 import {useTranslation} from "react-i18next";
 
@@ -19,8 +21,8 @@ import {useTranslation} from "react-i18next";
 // (which already persisted them to `mowgli_robot.yaml`). Settings save is
 // the caller's responsibility.
 
-export interface ImuYawCalibrationResult {
-    success: boolean;
+export type ImuYawCalibrationResult = {success: false; message: string} | {
+    success: true;
     message: string;
     imu_yaw_rad: number;
     imu_yaw_deg: number;
@@ -39,6 +41,28 @@ export interface ImuYawCalibrationResult {
     dock_pose_yaw_deg?: number;
     dock_yaw_sigma_deg?: number;
     dock_undock_displacement_m?: number;
+}
+
+/** Only admit results the existing render/apply branches can consume safely.
+ * Keep optional measurements optional; a business failure needs only its message. */
+function isImuYawCalibrationResult(raw: unknown): raw is ImuYawCalibrationResult {
+    if (!isJsonObject(raw) || typeof raw.success !== 'boolean' || typeof raw.message !== 'string') return false;
+    const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+    const numericFields = ['imu_yaw_rad', 'imu_yaw_deg', 'samples_used', 'std_dev_deg',
+        'imu_pitch_rad', 'imu_pitch_deg', 'imu_roll_rad', 'imu_roll_deg', 'stationary_samples_used',
+        'gravity_mag_mps2', 'dock_pose_x', 'dock_pose_y', 'dock_pose_yaw_rad', 'dock_pose_yaw_deg',
+        'dock_yaw_sigma_deg', 'dock_undock_displacement_m'];
+    if (numericFields.some(key => raw[key] !== undefined && !finite(raw[key]))
+        || raw.dock_valid !== undefined && typeof raw.dock_valid !== 'boolean') return false;
+    if (!raw.success) return true;
+    if (!['imu_yaw_rad', 'imu_yaw_deg', 'samples_used', 'std_dev_deg'].every(key => finite(raw[key]))) return false;
+    // Match the existing applicability conditions, including the 150-sample gate.
+    const stationary = finite(raw.stationary_samples_used) && raw.stationary_samples_used >= 150
+        && finite(raw.imu_pitch_rad) && finite(raw.imu_roll_rad);
+    if (stationary && (!finite(raw.imu_pitch_deg) || !finite(raw.imu_roll_deg))) return false;
+    if (raw.dock_valid && finite(raw.dock_pose_yaw_rad)
+        && (!finite(raw.dock_pose_yaw_deg) || !finite(raw.dock_yaw_sigma_deg))) return false;
+    return true;
 }
 
 const CALIB_DURATION_SEC = 30;
@@ -71,8 +95,14 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
     const [calibOpen, setCalibOpen] = useState(false);
     const [calibRunning, setCalibRunning] = useState(false);
     const [calibResult, setCalibResult] = useState<ImuYawCalibrationResult | null>(null);
+    // Own only the local result; invalidating an invocation does not cancel
+    // the calibration already requested from the server.
+    const currentInvocation = useRef<symbol | null>(null);
+
+    useEffect(() => () => {currentInvocation.current = null;}, []);
 
     const resetCalibration = useCallback(() => {
+        currentInvocation.current = null;
         setCalibRunning(false);
         setCalibResult(null);
     }, []);
@@ -89,6 +119,8 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
     }, [resetCalibration]);
 
     const startCalibration = useCallback(async () => {
+        const invocation = Symbol();
+        currentInvocation.current = invocation;
         setCalibRunning(true);
         setCalibResult(null);
         const controller = new AbortController();
@@ -100,23 +132,27 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
                 body: JSON.stringify({duration_sec: CALIB_DURATION_SEC}),
                 signal: controller.signal,
             });
+            if (currentInvocation.current !== invocation) return;
             if (!res.ok) {
                 const errBody = await res.text();
                 throw new Error(`HTTP ${res.status}: ${errBody}`);
             }
-            const data = (await res.json()) as ImuYawCalibrationResult;
+            const data: unknown = await res.json();
+            if (currentInvocation.current !== invocation) return;
+            if (!isImuYawCalibrationResult(data)) throw new Error("Invalid IMU yaw calibration response");
             setCalibResult(data);
-        } catch (e: any) {
-            const msg = e?.name === "AbortError"
+        } catch (e: unknown) {
+            if (currentInvocation.current !== invocation) return;
+            const msg = isAbortError(e)
                 ? t("imuYawCalibration.timedOut")
-                : (e?.message || String(e));
+                : (errorMessage(e) || String(e));
             notification.error({
                 message: t("imuYawCalibration.failed"),
                 description: msg,
             });
         } finally {
             clearTimeout(timeoutId);
-            setCalibRunning(false);
+            if (currentInvocation.current === invocation) setCalibRunning(false);
         }
     }, [notification, t]);
 
@@ -125,7 +161,7 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
 
         const appliedBits: string[] = [];
 
-        onApplyValue("imu_yaw", roundTo(calibResult.imu_yaw_rad, 4));
+        const candidates: [string, number][] = [["imu_yaw", roundTo(calibResult.imu_yaw_rad, 4)]];
         appliedBits.push(`imu_yaw = ${calibResult.imu_yaw_deg.toFixed(2)}°`);
 
         // Pitch/roll: node returns these only when the stationary baseline
@@ -136,13 +172,26 @@ export const useImuYawCalibration = ({onApplyValue, currentImuYawRad}: UseImuYaw
             && Number.isFinite(calibResult.imu_pitch_rad)
             && Number.isFinite(calibResult.imu_roll_rad);
         if (stationaryOk) {
-            onApplyValue("imu_pitch", roundTo(calibResult.imu_pitch_rad!, 4));
-            onApplyValue("imu_roll", roundTo(calibResult.imu_roll_rad!, 4));
+            candidates.push(
+                ["imu_pitch", roundTo(calibResult.imu_pitch_rad!, 4)],
+                ["imu_roll", roundTo(calibResult.imu_roll_rad!, 4)],
+            );
             appliedBits.push(
                 `imu_pitch = ${calibResult.imu_pitch_deg!.toFixed(2)}°`,
                 `imu_roll = ${calibResult.imu_roll_deg!.toFixed(2)}°`,
             );
         }
+
+        // Finite source measurements can overflow during rounding. Validate
+        // the whole batch before applying even its first value.
+        if (candidates.some(([, value]) => !Number.isFinite(value))) {
+            notification.error({
+                message: t("imuYawCalibration.failed"),
+                description: t("asyncButton.errorOccurred"),
+            });
+            return;
+        }
+        for (const [key, value] of candidates) onApplyValue(key, value);
 
         // Dock pose: server pre-phase already wrote it to mowgli_robot.yaml.
         // Surface the result for verification — there is no form value to

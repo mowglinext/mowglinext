@@ -5,38 +5,77 @@ import type {IJoystickUpdateEvent} from "react-joystick-component/build/lib/Joys
 import {MAX_LINEAR_MPS, MAX_ANGULAR_RAD_S} from "../../../gamepad/controller";
 
 const JOY_SEND_INTERVAL_MS = 100;
-// How long a sustained non-MANUAL_MOWING state must persist before we tear
-// down the manual UI. A single stray guard frame (EMERGENCY/battery/boundary
-// blip emits one non-MANUAL tick) must NOT collapse manual mode and kill the
-// joystick socket mid-drive — only a genuine, sustained exit should.
+// Keep the existing UI latch through short telemetry blips. Motion itself is
+// invalidated immediately on a mode change and requires a new pointer gesture.
 const MANUAL_EXIT_DEBOUNCE_MS = 1200;
+
 interface UseManualModeOptions {
     mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
-    joyStream: { sendJsonMessage: (msg: unknown) => void; start: (uri: string) => void };
+    joyStream: {
+        sendJsonMessage: (msg: unknown, keep?: boolean) => void;
+        start: (uri: string) => void;
+        motionSession?: () => {connected: boolean; generation: number};
+    };
     stateName?: string;
     controllerOwnsInput?: boolean;
 }
 
+const neutralTwist = (): TwistStamped => ({
+    header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
+    twist: {linear: {x: 0, y: 0, z: 0}, angular: {z: 0, x: 0, y: 0}},
+});
+
 export function useManualMode({mowerAction, joyStream, stateName, controllerOwnsInput = false}: UseManualModeOptions) {
     const controllerOwnsRef = useRef(controllerOwnsInput);
-    useLayoutEffect(() => { controllerOwnsRef.current = controllerOwnsInput; });
     const [manualMode, setManualMode] = useState(() => stateName === "MANUAL_MOWING");
     const exitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+    const lastTwistRef = useRef<TwistStamped | null>(null);
+    const joyIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+    const gestureRef = useRef(false);
+    const gestureGenerationRef = useRef<number | undefined>(undefined);
+    const stopBlockedRef = useRef(false);
+    const stopPendingRef = useRef(false);
+    const intentRef = useRef(0);
+    const mountedRef = useRef(true);
+    const previousStateRef = useRef(stateName);
+    const eligibleRef = useRef(false);
+    const {sendJsonMessage, motionSession} = joyStream;
 
-    // LATCH + DEBOUNCE manual mode. Entering MANUAL_MOWING latches it ON
-    // immediately; leaving it only tears the UI down after a sustained
-    // (debounced) window of non-MANUAL frames. This keeps a single stray guard
-    // frame (EMERGENCY/battery/boundary blip ahead of MainLogic) from collapsing
-    // the manual UI and killing the joystick socket mid-drive. The explicit Stop
-    // button flips manualMode directly, so it doesn't depend on this debounce.
+    const neutralizeMotion = useCallback(() => {
+        clearInterval(joyIntervalRef.current);
+        joyIntervalRef.current = undefined;
+        lastTwistRef.current = null;
+        gestureRef.current = false;
+        gestureGenerationRef.current = undefined;
+        // Best effort only: an unavailable socket cannot attest physical STOP.
+        // Never queue a Twist for a later WebSocket reconnection.
+        try { sendJsonMessage(neutralTwist(), false); } catch { /* stream unavailable */ }
+    }, [sendJsonMessage]);
+
+    // Revoke before passive socket teardown and controller polling. Returning
+    // ownership never restores the old touch gesture or its repeat timer.
+    useLayoutEffect(() => {
+        controllerOwnsRef.current = controllerOwnsInput;
+        if (controllerOwnsInput) neutralizeMotion();
+    }, [controllerOwnsInput, neutralizeMotion]);
+
+    useLayoutEffect(() => {
+        eligibleRef.current = stateName === "MANUAL_MOWING" || stateName === "RECORDING" ||
+            (stateName === undefined && manualMode);
+        if (previousStateRef.current !== stateName) {
+            neutralizeMotion();
+            if (eligibleRef.current && !stopPendingRef.current) stopBlockedRef.current = false;
+            previousStateRef.current = stateName;
+        }
+    }, [stateName, manualMode, neutralizeMotion]);
+
     useEffect(() => {
         if (stateName === "MANUAL_MOWING") {
             clearTimeout(exitTimerRef.current);
             exitTimerRef.current = undefined;
-            setManualMode(true);
+            if (!stopBlockedRef.current) setManualMode(true);
             return;
         }
-        // Non-MANUAL frame while latched: arm (or keep) the debounce timer.
         if (manualMode && exitTimerRef.current === undefined) {
             exitTimerRef.current = setTimeout(() => {
                 exitTimerRef.current = undefined;
@@ -45,91 +84,85 @@ export function useManualMode({mowerAction, joyStream, stateName, controllerOwns
         }
     }, [stateName, manualMode]);
 
-    const lastTwistRef = useRef<TwistStamped | null>(null);
-    const joyIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
-
-    const startJoyInterval = useCallback(() => {
-        clearInterval(joyIntervalRef.current);
-        joyIntervalRef.current = setInterval(() => {
-            if (!controllerOwnsRef.current && lastTwistRef.current) {
-                joyStream.sendJsonMessage(lastTwistRef.current);
-            }
-        }, JOY_SEND_INTERVAL_MS);
-    }, [joyStream]);
-
-    const stopJoyInterval = useCallback(() => {
-        clearInterval(joyIntervalRef.current);
-        joyIntervalRef.current = undefined;
-    }, []);
-
-    // Cleanup on unmount — stop joy interval and any pending exit debounce
-    useEffect(() => {
+    // Run before passive stream teardown so neutral can still use an open socket.
+    useLayoutEffect(() => {
+        mountedRef.current = true;
         return () => {
-            clearInterval(joyIntervalRef.current);
+            mountedRef.current = false;
             clearTimeout(exitTimerRef.current);
+            neutralizeMotion();
         };
-    }, []);
+    }, [neutralizeMotion]);
 
     const handleManualMode = async () => {
-        // Joy stream is auto-started by useMapStreams when state becomes MANUAL_MOWING.
-        // Send the command first — the BT will transition to MANUAL_MOWING state.
+        if (stopPendingRef.current) throw new Error("STOP request is still pending");
+        const intent = ++intentRef.current;
+        neutralizeMotion();
         await mowerAction("high_level_control", {Command: 7})();
-        // The BT owns the blade: once state=4 (MANUAL_MOWING) it re-ticks
-        // SetMowerEnabled(true) ~10 Hz. We deliberately do NOT send mow_enabled=1
-        // from the client here — that call races the firmware, which zeroes the
-        // blade while the HL mode is still IDLE (this immediate send + a 10 s
-        // keepalive was documented as REMOVED in main_tree.xml). Latch the UI.
+        if (!mountedRef.current || intent !== intentRef.current) return;
+        // The BT owns blade authorization. Starting this UI never enables it
+        // directly, and still requires a fresh joystick pointer-down.
+        stopBlockedRef.current = false;
         setManualMode(true);
     };
 
-    const handleStopManualMode = async () => {
-        // STOP (COMMAND_STOP=8 → StopHoldSequence): from MANUAL_MOWING (state 4)
-        // this halts in place and turns the mower off, exiting manual — no dock
-        // drive.
-        await mowerAction("high_level_control", {Command: 8})();
-        // Explicit Stop: drop the manual UI immediately and cancel any pending
-        // debounce so a lingering timer can't re-toggle it.
+    const handleStopIntent = useCallback(() => {
+        ++intentRef.current;
+        stopBlockedRef.current = true;
         clearTimeout(exitTimerRef.current);
         exitTimerRef.current = undefined;
-        stopJoyInterval();
-        lastTwistRef.current = null;
+        neutralizeMotion();
         setManualMode(false);
-        await mowerAction("mow_enabled", {mow_enabled: 0, mow_direction: 0})();
+    }, [neutralizeMotion]);
+
+    const handleStopManualMode = async () => {
+        handleStopIntent();
+        stopPendingRef.current = true;
+        try {
+            await mowerAction("high_level_control", {Command: 8})();
+            await mowerAction("mow_enabled", {mow_enabled: 0, mow_direction: 0})();
+        } finally {
+            stopPendingRef.current = false;
+        }
     };
 
+    const gestureAllowed = useCallback(() => {
+        const session = motionSession?.();
+        return mountedRef.current && eligibleRef.current && !controllerOwnsRef.current && !stopBlockedRef.current &&
+            (!session || (session.connected && session.generation === gestureGenerationRef.current));
+    }, [motionSession]);
+
+    const handleJoyStart = useCallback(() => {
+        neutralizeMotion();
+        const session = motionSession?.();
+        if (!mountedRef.current || !eligibleRef.current || controllerOwnsRef.current || stopBlockedRef.current || (session && !session.connected)) return;
+        gestureGenerationRef.current = session?.generation;
+        gestureRef.current = true;
+    }, [motionSession, neutralizeMotion]);
+
     const handleJoyMove = useCallback((event: IJoystickUpdateEvent) => {
-        if (controllerOwnsRef.current) return;
-        const linear = (event.y ?? 0) * MAX_LINEAR_MPS;
-        const angular = (event.x ?? 0) * -1 * MAX_ANGULAR_RAD_S;
+        if (!gestureRef.current) return;
+        if (!gestureAllowed()) { neutralizeMotion(); return; }
         const msg: TwistStamped = {
             header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
-            twist: {linear: {x: linear, y: 0, z: 0}, angular: {z: angular, x: 0, y: 0}},
+            twist: {
+                linear: {x: (event.y ?? 0) * MAX_LINEAR_MPS, y: 0, z: 0},
+                angular: {x: 0, y: 0, z: (event.x ?? 0) * -MAX_ANGULAR_RAD_S},
+            },
         };
         lastTwistRef.current = msg;
-        joyStream.sendJsonMessage(msg);
-        if (!joyIntervalRef.current) {
-            startJoyInterval();
+        try { sendJsonMessage(msg, false); } catch { neutralizeMotion(); return; }
+        if (joyIntervalRef.current === undefined) {
+            joyIntervalRef.current = setInterval(() => {
+                if (!gestureAllowed()) { neutralizeMotion(); return; }
+                if (lastTwistRef.current) {
+                    try { sendJsonMessage(lastTwistRef.current, false); } catch { neutralizeMotion(); }
+                }
+            }, JOY_SEND_INTERVAL_MS);
         }
-    }, [joyStream, startJoyInterval]);
+    }, [gestureAllowed, neutralizeMotion, sendJsonMessage]);
 
-    const handleJoyStop = useCallback(() => {
-        const msg: TwistStamped = {
-            header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
-            twist: {linear: {x: 0, y: 0, z: 0}, angular: {z: 0, x: 0, y: 0}},
-        };
-        lastTwistRef.current = null;
-        stopJoyInterval();
-        joyStream.sendJsonMessage(msg);
-    }, [joyStream, stopJoyInterval]);
+    const handleJoyStop = useCallback(() => neutralizeMotion(), [neutralizeMotion]);
 
-    // Revoke the touch repeater before controller polling starts. The backend also
-    // excludes every legacy publisher while a controller session owns teleop.
-    useEffect(() => {
-        if (controllerOwnsInput) {
-            lastTwistRef.current = null;
-            stopJoyInterval();
-        }
-    }, [controllerOwnsInput, stopJoyInterval]);
-
-    return {manualMode, handleManualMode, handleStopManualMode, handleJoyMove, handleJoyStop};
+    return {manualMode, handleManualMode, handleStopManualMode, handleStopIntent, handleJoyStart, handleJoyMove, handleJoyStop};
 }

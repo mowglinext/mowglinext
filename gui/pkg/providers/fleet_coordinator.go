@@ -18,7 +18,8 @@ import (
 // it reads the fleet snapshot, decides which areas this robot must leave to
 // the others, pushes that to the local BT, publishes the peers' poses into
 // the local ROS graph for the costmap, and applies the proximity yield rule.
-// docs/MULTI_ROBOT.md § 3b/3c. While disabled, only reconciles an empty assignment.
+// docs/MULTI_ROBOT.md § 3b/3c. While disabled, reconciles an empty
+// assignment and cancels any fleet-owned pause without resuming it.
 
 const (
 	coordinationSettingsKey   = "fleet.coordination"
@@ -27,11 +28,7 @@ const (
 	assignmentRefresh         = 30 * time.Second
 	setFleetAssignmentService = "/behavior_tree_node/set_fleet_assignment"
 	setFleetAssignmentType    = "mowgli_interfaces/srv/SetFleetAssignment"
-	highLevelControlService   = "/behavior_tree_node/high_level_control"
-	highLevelControlType      = "mowgli_interfaces/srv/HighLevelControl"
 	coordinatorCallTimeout    = 5 * time.Second
-	hlCommandStart            = 1
-	hlCommandStop             = 8
 )
 
 // CoordinatorStatus is the live state shown on the Fleet page.
@@ -52,14 +49,15 @@ type FleetCoordinator struct {
 	identity func() (RobotIdentity, error)
 	now      func() time.Time
 
-	tickMu     sync.Mutex // serialize ticker and immediate settings/reset ticks
-	mu         sync.Mutex
-	memory     map[uint32]time.Time
-	lastPushed *FleetAssignment
-	lastPushAt time.Time
-	yield      yieldState
-	wasEnabled bool
-	lastError  string
+	tickMu                 sync.Mutex // serialize ticker and immediate settings/reset ticks
+	mu                     sync.Mutex
+	memory                 map[uint32]time.Time
+	completionObservations map[string]completionObservation
+	lastPushed             *FleetAssignment
+	lastPushAt             time.Time
+	yield                  yieldState
+	wasEnabled             bool
+	lastError              string
 	// Disabled startup or transition is not finished until the BT accepts the
 	// empty assignment. Failed calls may have applied, so retain explicit intent.
 	clearPending     bool
@@ -78,14 +76,15 @@ func NewFleetCoordinator(db types.IDBProvider, ros types.IRosProvider, fleet *Fl
 
 func newFleetCoordinator(db types.IDBProvider, ros types.IRosProvider, snapshot func() ([]FleetRobot, error), identity func() (RobotIdentity, error), now func() time.Time) *FleetCoordinator {
 	c := &FleetCoordinator{
-		db:       db,
-		ros:      ros,
-		snapshot: snapshot,
-		identity: identity,
-		now:      now,
-		memory:   map[uint32]time.Time{},
-		stop:     make(chan struct{}),
-		done:     make(chan struct{}),
+		db:                     db,
+		ros:                    ros,
+		snapshot:               snapshot,
+		identity:               identity,
+		now:                    now,
+		memory:                 map[uint32]time.Time{},
+		completionObservations: map[string]completionObservation{},
+		stop:                   make(chan struct{}),
+		done:                   make(chan struct{}),
 		// The BT can outlive the GUI process with an earlier assignment. On
 		// disabled startup, reconcile it until acknowledged; enabled startup
 		// supersedes this intent before computing its current assignment.
@@ -174,11 +173,23 @@ func (c *FleetCoordinator) Status() CoordinatorStatus {
 // a true "start fresh" also clear each member's coverage resume (the Fleet
 // page does both).
 func (c *FleetCoordinator) Reset() error {
+	// Do not let an in-flight tick persist its pre-reset memory afterwards.
+	c.tickMu.Lock()
 	c.mu.Lock()
 	c.memory = map[uint32]time.Time{}
+	// Keep receipt identity and membership as a replay barrier. Forget only
+	// completion times: the still-cached set must not undo Start fresh.
+	// A subsequently observed absence then completion gets a new timestamp.
+	for _, observation := range c.completionObservations {
+		for area := range observation.areas {
+			observation.areas[area] = time.Time{}
+		}
+	}
 	c.lastPushed = nil
 	c.mu.Unlock()
-	if err := c.saveMemory(map[uint32]time.Time{}); err != nil {
+	err := c.saveMemory(map[uint32]time.Time{})
+	c.tickMu.Unlock()
+	if err != nil {
 		return err
 	}
 	c.tick(c.now())
@@ -198,7 +209,6 @@ func (c *FleetCoordinator) tick(now time.Time) {
 			c.nextClearAttempt = now
 		}
 		c.wasEnabled = false
-		c.yield = yieldState{}
 		mustClear := c.clearPending && !now.Before(c.nextClearAttempt)
 		if mustClear {
 			c.nextClearAttempt = now.Add(coordinatorTick)
@@ -213,6 +223,7 @@ func (c *FleetCoordinator) tick(now time.Time) {
 				c.mu.Unlock()
 			}
 		}
+		c.stepYield(fleetMember{}, nil, settings, now)
 		return
 	}
 	c.mu.Lock()
@@ -227,6 +238,12 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	rows, err := c.snapshot()
 	if err != nil {
 		c.setError("fleet snapshot: " + err.Error())
+		c.mu.Lock()
+		cancelling := c.yield.Yielded && c.yield.Operation == fleetCancel
+		c.mu.Unlock()
+		if cancelling {
+			c.stepYield(fleetMember{}, nil, settings, now)
+		}
 		return
 	}
 	// Positions are placed in OUR map frame; without a datum there is no
@@ -242,13 +259,12 @@ func (c *FleetCoordinator) tick(now time.Time) {
 	self, peers := splitMembers(members)
 
 	c.mu.Lock()
-	memory := updateCompletedMemory(c.memory, members, now, time.Duration(settings.CompletedTTLHours*float64(time.Hour)))
+	memory := updateCompletedMemory(c.memory, members, now, time.Duration(settings.CompletedTTLHours*float64(time.Hour)), c.completionObservations)
 	memoryChanged := !reflect.DeepEqual(memory, c.memory)
 	c.memory = memory
 	assignment := computeAssignment(self, peers, memory)
 	mustPush := c.lastPushed == nil || !assignmentEqual(*c.lastPushed, assignment) ||
 		now.Sub(c.lastPushAt) >= assignmentRefresh
-	yieldBefore := c.yield
 	c.mu.Unlock()
 
 	if memoryChanged {
@@ -260,18 +276,7 @@ func (c *FleetCoordinator) tick(now time.Time) {
 		c.pushAssignment(assignment, "fleet coordinator", now)
 	}
 
-	next, action := decideYield(self, peers, yieldBefore, settings, now)
-	c.mu.Lock()
-	c.yield = next
-	c.mu.Unlock()
-	switch action {
-	case YieldStop:
-		logrus.Info("fleet coordinator: a peer with priority is close — pausing this mower (COMMAND_STOP)")
-		c.sendHighLevel(hlCommandStop)
-	case YieldStart:
-		logrus.Info("fleet coordinator: peers are clear — resuming this mower (COMMAND_START)")
-		c.sendHighLevel(hlCommandStart)
-	}
+	c.stepYield(self, peers, settings, now)
 }
 
 func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now time.Time) bool {
@@ -298,15 +303,6 @@ func (c *FleetCoordinator) pushAssignment(a FleetAssignment, reason string, now 
 	c.lastError = ""
 	c.mu.Unlock()
 	return true
-}
-
-func (c *FleetCoordinator) sendHighLevel(command uint8) {
-	ctx, cancel := context.WithTimeout(context.Background(), coordinatorCallTimeout)
-	defer cancel()
-	req := mowgli.HighLevelControlReq{Command: command}
-	if err := c.ros.CallService(ctx, highLevelControlService, &req, &mowgli.HighLevelControlRes{}, highLevelControlType); err != nil {
-		c.setError("high_level_control: " + err.Error())
-	}
 }
 
 func (c *FleetCoordinator) setError(msg string) {

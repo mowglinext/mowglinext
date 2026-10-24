@@ -20,3 +20,10 @@ float32 gps_quality_percent
 float32 battery_percent
 bool is_charging
 bool emergency
+# Why the mower is not mowing, for the operator. Set when a session ends or a hold begins without
+# finishing (an area given up on, a dock or undock that failed, a charger that never charged);
+# cleared by the next command. stop_reason is a stable machine code (AREA_START_BLOCKED,
+# AREA_NO_PROGRESS, DOCK_NAV_FAILED, UNDOCK_FAILED, CHARGER_FAILED), stop_detail a short English
+# sentence with the numbers. Both are empty when there is nothing to report.
+string stop_reason
+string stop_detail

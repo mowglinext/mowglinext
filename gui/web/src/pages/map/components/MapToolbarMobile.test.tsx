@@ -1,5 +1,9 @@
+import type AsyncButton from '../../../components/AsyncButton.tsx';
+import type {ShapePickerDropdown} from './ShapePickerDropdown.tsx';
+import {App} from "antd";
+import type {ComponentProps} from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MapToolbarMobile } from "./MapToolbarMobile.tsx";
 import en from "../../../i18n/locales/en.json";
@@ -18,15 +22,16 @@ vi.mock("../../../theme/ThemeContext.tsx", () => ({
 }));
 
 vi.mock("../../../components/AsyncButton.tsx", () => ({
-  default: ({ children, onAsyncClick, ...props }: any) => (
-    <button onClick={onAsyncClick} {...props}>
+  default: ({ children, onAsyncClick, ...props }: Pick<ComponentProps<typeof AsyncButton>, 'children' | 'onAsyncClick' | 'danger'>) => {
+    delete props.danger;
+    return <button onClick={event => {void onAsyncClick(event);}} {...props}>
       {children}
-    </button>
-  ),
+    </button>;
+  },
 }));
 
 vi.mock("./ShapePickerDropdown.tsx", () => ({
-  ShapePickerDropdown: ({ children }: any) => children,
+  ShapePickerDropdown: ({ children }: Pick<ComponentProps<typeof ShapePickerDropdown>, 'children'>) => children,
 }));
 
 describe("MapToolbarMobile", () => {
@@ -46,6 +51,7 @@ describe("MapToolbarMobile", () => {
     onUndo: vi.fn(),
     onRedo: vi.fn(),
     onToggleSatellite: vi.fn(),
+    onToggleRotationLocked: vi.fn(),
     onManualMode: vi.fn().mockResolvedValue(undefined),
     onStopManualMode: vi.fn().mockResolvedValue(undefined),
     onBackupMap: vi.fn(),
@@ -70,6 +76,23 @@ describe("MapToolbarMobile", () => {
         expect(screen.queryByText(en.mapToolbar.mowerAppearance)).not.toBeInTheDocument();
     });
 
+  it("reports a rejected area start and clears its loading state", async () => {
+    const user = userEvent.setup();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const onMowArea = vi.fn().mockRejectedValueOnce(new Error('Cannot start this area'));
+    const mowingAreas: ComponentProps<typeof MapToolbarMobile>['mowingAreas'] = [{
+      key: 'area-7', label: 'Front lawn',
+      feat: {type: 'Feature', geometry: {type: 'Polygon', coordinates: []}, properties: {}},
+    }];
+    render(<App><MapToolbarMobile {...defaultProps} mowingAreas={mowingAreas} onMowArea={onMowArea}/></App>);
+    await user.click(screen.getByRole('button', {name: en.mapToolbarMobile.mowArea}));
+    await user.click(screen.getByText('Front lawn'));
+    expect(await screen.findByText('Cannot start this area')).toBeInTheDocument();
+    expect(onMowArea).toHaveBeenCalledExactlyOnceWith('area-7');
+    await waitFor(() => expect(screen.getByRole('button', {name: en.mapToolbarMobile.mowArea})).not.toHaveClass('ant-btn-loading'));
+    log.mockRestore();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -82,5 +105,15 @@ describe("MapToolbarMobile", () => {
     await user.click(screen.getByText(en.resetMowingProgress.action));
 
     expect(defaultProps.onResetMowingProgress).toHaveBeenCalledOnce();
+  });
+
+  it("offers the mower-wide rotation lock in the mobile display menu", async () => {
+    const user = userEvent.setup();
+    render(<MapToolbarMobile {...defaultProps} rotationLocked />);
+
+    await user.click(screen.getByLabelText(en.mapToolbarMobile.more));
+    await user.click(screen.getByText(en.mapOffsetPanel.unlockRotation));
+
+    expect(defaultProps.onToggleRotationLocked).toHaveBeenCalledOnce();
   });
 });

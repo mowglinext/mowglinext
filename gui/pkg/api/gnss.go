@@ -531,6 +531,8 @@ func serialDeviceAccess(device string) (string, string, error) {
 }
 
 func syncGNSSDeviceRuntimeEnv(cfg gnssSavedConfig) error {
+	settingsYAMLWriteMu.Lock()
+	defer settingsYAMLWriteMu.Unlock()
 	deviceGID, _, err := gnssSerialDeviceAccess(cfg.SerialDevice)
 	if err != nil {
 		return err
@@ -1020,6 +1022,8 @@ func mergeGNSSWarnings(existing []string, additions []string) []string {
 }
 
 func persistGNSSRuntimeBaud(dbProvider pkgtypes.IDBProvider, runtimeBaud string) error {
+	settingsYAMLWriteMu.Lock()
+	defer settingsYAMLWriteMu.Unlock()
 	doc, err := loadGNSSSettingsDocument(dbProvider)
 	if err != nil {
 		return err

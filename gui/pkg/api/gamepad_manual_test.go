@@ -29,6 +29,7 @@ type manualTestProvider struct {
 
 func (p *manualTestProvider) CallService(ctx context.Context, service string, req, res any, _ ...string) error {
 	if service == "/hardware_bridge/emergency_stop" {
+		res.(*mowgli.EmergencyStopRes).Success = true
 		return nil
 	}
 	cmd := req.(*mowgli.HighLevelControlReq).Command
