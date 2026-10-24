@@ -615,7 +615,8 @@ struct BTContext
   bool coverage_plausibility_warning{false};
   /// Why the mower is not mowing (HighLevelStatus.stop_reason / stop_detail). Written by
   /// recordStopReason (stop_reason.hpp) where a session ends or a hold begins without finishing,
-  /// cleared by the next HighLevelControl command. Empty = nothing to report.
+  /// cleared by the next HighLevelControl command or accepted ~/goto_pose. Empty = nothing to
+  /// report.
   std::string stop_reason;
   std::string stop_detail;
 
@@ -659,6 +660,12 @@ struct BTContext
   /// comparing against a voltage threshold. Raw latest_power.v_battery swings
   /// 0.5-1 V on motor transients; see battery_filter.hpp.
   float battery_voltage_filtered{0.0f};
+
+  /// Steady-clock time of the last valid /hardware_bridge/power sample (the one
+  /// battery_voltage_filtered was last updated from). Default-constructed until
+  /// the first valid sample. Read by ~/goto_pose to refuse a GOTO on stale
+  /// battery data.
+  std::chrono::steady_clock::time_point last_power_time{};
 
   float gps_quality{0.0f};
 
@@ -931,10 +938,11 @@ struct BTContext
   /// whenever a RUNNING StatefulActionNode is halted by a parent.
   ///
   /// Consumed by IsDocking, which BoundaryGuard uses to EXEMPT the blade-off
-  /// dock transit (command 1) from the SoftBoundaryHandler: every DockRobot
-  /// is entered only after SetMowerEnabled(false) and can never overlap the
-  /// blade-on FollowStrip subtree, so "docking_active under command 1" is
-  /// provably a blade-OFF transit — the boundary handler must NOT cancel it.
+  /// dock transit (command 1, or command 9 for a GOTO) from the
+  /// SoftBoundaryHandler: every DockRobot is entered only after
+  /// SetMowerEnabled(false) and can never overlap the blade-on FollowStrip
+  /// subtree, so "docking_active under command 1 or 9" is provably a blade-OFF
+  /// transit — the boundary handler must NOT cancel it.
   /// Blade-ON mowing (FollowStrip) keeps full boundary protection because
   /// docking_active is false there. See main_tree.xml BoundaryGuard.
   bool docking_active{false};
@@ -1010,6 +1018,14 @@ struct BTContext
   /// Transit goal to reach the coverage path start (populated by
   /// PlanCoverageArea, consumed by TransitToStrip).
   geometry_msgs::msg::PoseStamped current_transit_goal;
+  /// Target pose for COMMAND_GOTO (9), set once by ~/goto_pose under
+  /// context_mutex and consumed by NavigateToPose's onStart() when its
+  /// `goal` port is absent. Map frame. Left unset (nullopt) outside an
+  /// active GOTO. Dropped once current_command is no longer COMMAND_GOTO.
+  std::optional<geometry_msgs::msg::PoseStamped> goto_target_pose;
+  /// True when the last tick ended with the tree parked in a rest branch;
+  /// required by ~/goto_pose. Computed after each tick (see GotoRestObserver).
+  bool tree_at_rest{false};
   /// Where TransitToStrip last FAILED to take the robot (map frame), if it did.
   /// FollowStrip consumes it to skip — not repeat — the identical transit to its
   /// first unit (field 2026-09-21: 53 s in TransitToStrip, then 43 s more in

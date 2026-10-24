@@ -273,12 +273,18 @@ if(BUILD_TESTING)
   ament_add_ros_isolated_gtest(test_cancel_on_halt
     test/test_cancel_on_halt.cpp
     src/docking_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
     TIMEOUT 120
   )
 
   target_include_directories(test_cancel_on_halt PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
+  )
+
+  # The GOTO dock-transit exemption is read from the shipped tree.
+  target_compile_definitions(test_cancel_on_halt PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
 
   target_link_libraries(test_cancel_on_halt
@@ -875,6 +881,74 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_localization_health
     ${mowgli_interfaces_TARGETS}
+  )
+
+  # ---- test_goto_tree ----
+  # COMMAND_GOTO (9): every ~/goto_pose refusal reason, and the real
+  # GotoSequence / CriticalBatteryDock GOTO exit cut out of main_tree.xml — one
+  # Nav2 attempt, low-battery interruption and dock, no resume, blade never
+  # enabled.
+  ament_add_ros_isolated_gtest(test_goto_tree
+    test/test_goto_tree.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+  )
+
+  target_include_directories(test_goto_tree PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_compile_definitions(test_goto_tree PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+
+  target_link_libraries(test_goto_tree
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
+  # ---- test_goto_navigate_to_pose ----
+  # NavigateToPose as used by GOTO, against a fake /navigate_to_pose server:
+  # the GOTO target goes through bt_navigator's default tree, and a goal halted
+  # before the server answers is cancelled on acceptance (PR #972 class, #943).
+  ament_add_ros_isolated_gtest(test_goto_navigate_to_pose
+    test/test_goto_navigate_to_pose.cpp
+    src/navigation_nodes.cpp
+    TIMEOUT 120
+  )
+
+  target_include_directories(test_goto_navigate_to_pose PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_goto_navigate_to_pose
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
   )
 
   # ---- test_battery_critical_resume ----
