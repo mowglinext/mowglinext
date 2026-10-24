@@ -196,6 +196,19 @@ type GetRecoveryPointRes struct {
 	DistanceOutside           float64                        `json:"distance_outside"`
 }
 
+// GotoPoseReq for mowgli_interfaces/srv/GotoPose request.
+type GotoPoseReq struct {
+	X                         float64                        `json:"x"`
+	Y                         float64                        `json:"y"`
+	Yaw                       float64                        `json:"yaw"`
+}
+
+// GotoPoseRes for mowgli_interfaces/srv/GotoPose response.
+type GotoPoseRes struct {
+	Success                   bool                           `json:"success"`
+	Reason                    string                         `json:"reason"`
+}
+
 // HighLevelControlReq for mowgli_interfaces/srv/HighLevelControl request.
 type HighLevelControlReq struct {
 	Command                   uint8                          `json:"command"`
