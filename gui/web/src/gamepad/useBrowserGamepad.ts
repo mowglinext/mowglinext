@@ -5,7 +5,7 @@ import {GamepadDiagnostics} from './diagnostics';
 import type {Emergency, HighLevelStatus} from '../types/ros';
 import {
     ControllerDriver, profileFits, teleopTwist,
-    type ControllerAction, type ControllerIdentity, type ControllerProfile, type ControllerSample, type ControllerState, type InputLoss,
+    type ManualPhase, type ControllerAction, type ControllerIdentity, type ControllerProfile, type ControllerSample, type ControllerState, type InputLoss,
 } from './controller';
 
 interface Options {
@@ -35,6 +35,8 @@ interface ControllerSession {
     attempt: string;
     phase: 'hello' | 'claim' | 'ready';
     challenge: string | null;
+    epoch: number;
+    manualPhase: ManualPhase;
 }
 
 /** Browser-only input adapter. No queued sends, replay interval, or automatic reconnect.
@@ -50,6 +52,7 @@ export function useBrowserGamepad(options: Options) {
     const [pads, setPads] = useState<ControllerSample[]>([]);
     const [enabled, setEnabled] = useState(false);
     const [state, setState] = useState<ControllerState>('releaseControls');
+    const [manualPhase, setManualPhase] = useState<ManualPhase>('inactive');
     const [fault, setFault] = useState<ControllerFault>(null);
     // Retain the first cause when configuration is reopened, until Enable is retried.
     const [inputLoss, setInputLoss] = useState<InputLoss | null>(null);
@@ -67,7 +70,7 @@ export function useBrowserGamepad(options: Options) {
         if (active) {
             try {
                 if (active.phase === 'ready' && active.socket.readyState === WebSocket.OPEN && active.socket.bufferedAmount === 0) {
-                    active.socket.send(JSON.stringify({twist: teleopTwist(), deadman: false}));
+                    active.socket.send(JSON.stringify({twist: teleopTwist(), deadman: false, physicalDeadman: false, neutral: false, epoch: active.epoch}));
                 }
             } catch { /* The server lease also handles an unusable socket. */ }
             const report = detail ? `input:${detail.reason}${detail.pollGapMs === undefined ? '' : `:${Math.round(detail.pollGapMs)}ms`}` +
@@ -84,6 +87,7 @@ export function useBrowserGamepad(options: Options) {
         if (mounted.current) {
             setEnabled(false);
             setState('releaseControls');
+            setManualPhase('inactive');
             setFault(reason);
             if (detail) setInputLoss(detail);
         }
@@ -118,7 +122,7 @@ export function useBrowserGamepad(options: Options) {
         try { socket = new WebSocket(`${wsBase()}/api/mowglinext/publish/gamepad?client=${encodeURIComponent(attempt)}`); }
         catch { reject('connectionLost'); return; }
         const active: ControllerSession = {socket, driver: new ControllerDriver(structuredClone(profile), selected),
-            identity: selected, opened: performance.now(), attempt, phase: 'hello', challenge: null};
+            identity: selected, opened: performance.now(), attempt, phase: 'hello', challenge: null, epoch: 0, manualPhase: 'inactive'};
         session.current = active;
         diagnostics.update({enabled: true, controller: pad.id.slice(0, 128), index: pad.index, mapping: pad.mapping,
             deadmanButton: profile.buttons.deadman, linearAxis: profile.linearAxis, angularAxis: profile.angularAxis});
@@ -135,7 +139,7 @@ export function useBrowserGamepad(options: Options) {
             // A timed-out/disabled attempt must never claim a late upgrade or
             // gain the backend's zero/STOP responsibility for a later mode.
             if (session.current !== active) return;
-            if (performance.now() - active.opened > 2000) {
+            if (active.phase !== 'ready' && performance.now() - active.opened > 2000) {
                 diagnostics.record('connectTimeout', {phase: active.phase}); cancel('connectionLost'); return;
             }
             try {
@@ -143,15 +147,31 @@ export function useBrowserGamepad(options: Options) {
                 if (typeof data !== 'string' || data.length > 256) throw new Error('invalid server handshake');
                 const parsed: unknown = JSON.parse(data);
                 if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid server handshake');
-                const message = parsed as {type?: unknown; challenge?: unknown; version?: unknown};
+                const message = parsed as {type?: unknown; challenge?: unknown; version?: unknown; epoch?: unknown; phase?: unknown; resumed?: unknown};
                 if (message.type === 'gamepadHello' && active.phase === 'hello' && active.challenge === null &&
-                    Object.keys(message).length === 3 && message.version === 2 && typeof message.challenge === 'string' && /^[0-9a-f]{32}$/.test(message.challenge)) {
+                    Object.keys(message).length === 3 && message.version === 3 && typeof message.challenge === 'string' && /^[0-9a-f]{32}$/.test(message.challenge)) {
                     active.challenge = message.challenge;
                     diagnostics.record('helloReceived', {attempt, handshakeMs: Math.round(performance.now() - active.opened)});
                 } else if (message.type === 'gamepadReady' && active.phase === 'claim' && Object.keys(message).length === 1) {
                     active.driver.requireNeutral();
                     active.phase = 'ready';
                     diagnostics.record('serverReady', {attempt, handshakeMs: Math.round(performance.now() - active.opened)});
+                } else if (message.type === 'gamepadControl' && active.phase === 'ready' && (Object.keys(message).length === 3 ||
+                    (Object.keys(message).length === 4 && message.phase === 'active' && message.resumed === true)) &&
+                    Number.isSafeInteger(message.epoch) && Number(message.epoch) > 0 &&
+                    ['inactive', 'active', 'pausing', 'paused', 'resuming'].includes(String(message.phase))) {
+                    // Ignore an older snapshot: it can never grant a new capability.
+                    if (Number(message.epoch) <= active.epoch) return;
+                    const phase = message.phase as ManualPhase;
+                    // The very first valid manual deadman poll establishes
+                    // active epoch1; this notice acknowledges that same input.
+                    // Any explicit mode intent first revokes/increments epoch.
+                    const bootstrap = active.epoch === 0 && message.epoch === 1 && active.manualPhase === 'inactive' && phase === 'active' && message.resumed !== true;
+                    if (phase === 'active' && message.resumed === true && ['paused', 'resuming'].includes(active.manualPhase)) active.driver.confirmManualResume();
+                    else if (!bootstrap) active.driver.requireNeutral();
+                    active.epoch = Number(message.epoch);
+                    active.manualPhase = phase;
+                    setManualPhase(phase);
                 } else throw new Error('unexpected server handshake');
             } catch {
                 diagnostics.record('handshakeInvalid', {attempt, phase: active.phase});
@@ -231,7 +251,11 @@ export function useBrowserGamepad(options: Options) {
                 statusFresh: current.status.lastMessageAt !== null && now >= current.status.lastMessageAt && now - current.status.lastMessageAt < 2500,
                 emergency: !!(current.status.data.emergency || current.emergency.data.active_emergency || current.emergency.data.latched_emergency),
                 pending: pending.current,
+                manualPhase: active.manualPhase,
             });
+            if (active.phase === 'ready' && (frame.state === 'statusLost' || frame.state === 'emergency')) {
+                cancel('inputLost'); setState(frame.state); return;
+            }
             if (frame.state === 'inputLost') { cancel('inputLost', frame.inputLoss); return; }
             if (active.phase !== 'ready') {
                 // Claim only from this poll's valid native input. TCP opening
@@ -240,7 +264,7 @@ export function useBrowserGamepad(options: Options) {
                 if (active.phase === 'hello' && active.challenge !== null) {
                     const challenge = active.challenge;
                     active.phase = 'claim';
-                    try { active.socket.send(JSON.stringify({type: 'gamepadClaim', challenge, version: 2})); }
+                    try { active.socket.send(JSON.stringify({type: 'gamepadClaim', challenge, version: 3})); }
                     catch { diagnostics.record('sendFailed'); cancel('connectionLost'); }
                 }
                 return;
@@ -253,7 +277,8 @@ export function useBrowserGamepad(options: Options) {
                 if (['statusLost', 'emergency', 'actionPending'].includes(frame.state)) diagnostics.flushSoon();
             }
             setState(frame.state);
-            try { active.socket.send(JSON.stringify({twist: teleopTwist(frame.linear, frame.angular), deadman: frame.deadman})); }
+            try { active.socket.send(JSON.stringify({twist: teleopTwist(frame.linear, frame.angular), deadman: frame.deadman,
+                physicalDeadman: frame.physicalDeadman, neutral: frame.neutral, epoch: active.epoch})); }
             catch { diagnostics.record('sendFailed'); cancel('connectionLost'); return; }
             if (frame.action && (frame.action === 'stop' || !pending.current)) {
                 const action = frame.action;
@@ -308,5 +333,5 @@ export function useBrowserGamepad(options: Options) {
             cancel();
         };
     }, [cancel, diagnostics]);
-    return {pads, enabled, state, fault, inputLoss, enable, disable};
+    return {pads, enabled, state, manualPhase, fault, inputLoss, enable, disable};
 }

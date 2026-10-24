@@ -4,7 +4,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {App, type DrawerProps} from 'antd';
 import {BrowserController} from './BrowserController';
 import type {ControllerFault, useBrowserGamepad} from './useBrowserGamepad';
-import {controllerKey, DEFAULT_PROFILE, saveProfile, saveSelectedControllerKey, type InputLoss} from './controller';
+import {controllerKey, DEFAULT_PROFILE, saveProfile, saveSelectedControllerKey, type InputLoss, type ManualPhase} from './controller';
 
 type HookOptions = Parameters<typeof useBrowserGamepad>[0];
 
@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
         }],
         enabled: false,
         state: 'ready',
+        manualPhase: 'inactive' as ManualPhase,
         fault: null as ControllerFault,
         inputLoss: null as InputLoss | null,
         enable: vi.fn<() => void>(),
@@ -87,6 +88,7 @@ beforeEach(() => {
     mocks.focusRestored = false;
     mocks.hookOptions = null;
     mocks.controller.enabled = false;
+    mocks.controller.manualPhase = 'inactive';
     mocks.controller.fault = null;
     mocks.controller.inputLoss = null;
     mocks.controller.pads = [structuredClone(initialPad)];
@@ -508,4 +510,25 @@ it('tags controller actions with the live handshake session through mowerAction'
     await act(async () => { await mocks.hookOptions!.runAction('recordStart', 'session-challenge'); });
     expect(mowerAction).toHaveBeenCalledExactlyOnceWith('high_level_control', {Command: 3},
         {headers: {'X-Mowgli-Gamepad-Session': 'session-challenge'}});
+});
+
+describe('manual pause controls', () => {
+    it.each(['active', 'pausing', 'paused', 'resuming'] as const)('offers explicit STOP during %s without disabling the controller', async phase => {
+        mocks.controller.enabled = true;
+        mocks.controller.manualPhase = phase;
+        const invoke = vi.fn().mockResolvedValue(undefined);
+        const mowerAction = vi.fn(() => invoke);
+        render(<App><BrowserController mowerAction={mowerAction} onOwnershipChange={vi.fn()}/></App>);
+        fireEvent.click(screen.getByRole('button', {name: 'Stop Manual Mowing'}));
+        await act(async () => {});
+        expect(mowerAction).toHaveBeenCalledWith('high_level_control', {Command: 8});
+        expect(invoke).toHaveBeenCalledOnce();
+        expect(mocks.controller.disable).not.toHaveBeenCalled();
+        expect(mocks.controller.enabled).toBe(true);
+    });
+    it('does not offer manual STOP without manual ownership', () => {
+        mocks.controller.enabled = true;
+        mount();
+        expect(screen.queryByRole('button', {name: 'Stop Manual Mowing'})).not.toBeInTheDocument();
+    });
 });

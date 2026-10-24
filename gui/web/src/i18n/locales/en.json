@@ -5229,7 +5229,9 @@
     "invalidProfile": "Use a different button for each function and a different axis for driving and steering. All assigned inputs must exist on this controller.",
     "enable": "Enable for this robot",
     "disable": "Disable controller",
-    "safetyHelp": "Choose area recording or Manual Mowing first, then center the sticks and release all buttons after the mode changes. Hold the mapped deadman before moving a stick; release to stop. Manual Mowing starts the blade and deadman release exits that mode. For recording actions, release deadman and hold the assigned button for 0.8 seconds. STOP is immediate. Opening settings stops controller input. Close settings with Done, then tap Enable on the map.",
+    "safetyHelp": "Choose area recording or Manual Mowing first, then center the sticks and release all buttons. Hold the mapped deadman before moving a stick. In Manual Mowing, release stops the wheels and blade but keeps the controller connected. After the pause completes, release all controls, then hold deadman with centered sticks to restart Manual Mowing and the blade. STOP cancels this restart permission. For recording actions, release deadman and hold the assigned button for 0.8 seconds. Opening settings stops controller input. Close settings with Done, then tap Enable on the map.",
+    "stopManual": "Stop Manual Mowing",
+    "stopManualHint": "Stop Manual Mowing and cancel deadman restart. The controller stays connected.",
     "profiles": {
       "default": "Built-in standard mapping",
       "saved": "Saved mapping",
@@ -5252,6 +5254,9 @@
       "connecting": "Connecting controller…",
       "statusLost": "Waiting for live robot status — driving stopped",
       "emergency": "Robot emergency active — driving stopped",
+      "manualPausing": "Stopping Manual Mowing — release all controls and wait for the robot to confirm IDLE",
+      "manualPaused": "Manual Mowing paused — release all controls, then hold {{deadman}} with centered sticks to restart the blade",
+      "manualResuming": "Starting Manual Mowing — keep {{deadman}} held and sticks centered",
       "actionPending": "Waiting for the robot command to finish — driving stopped"
     },
     "inputLossReasons": {

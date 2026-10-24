@@ -11,6 +11,9 @@ interface InputOptions {
 
 interface GamepadFrame {
     deadman?: boolean;
+    physicalDeadman?: boolean;
+    neutral?: boolean;
+    epoch?: number;
     twist?: {twist?: {linear?: {x?: number}; angular?: {z?: number}}};
 }
 
@@ -25,6 +28,7 @@ interface FixtureState {
     commands: number[];
     pageErrors: string[];
     releaseLateHello: (() => void) | null;
+    control: ((epoch: number, phase: 'inactive' | 'active' | 'pausing' | 'paused' | 'resuming', resumed?: true) => void) | null;
     status: {state: number; state_name: string; emergency: boolean};
 }
 
@@ -64,7 +68,7 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
     });
 
     const state: FixtureState = {opened: 0, closed: 0, frames: [], challenges: [], claims: [], echoedHellos: [], preReadyFrames: [], commands: [], pageErrors: [],
-        releaseLateHello: null,
+        releaseLateHello: null, control: null,
         status: {state: 3, state_name: 'RECORDING', emergency: false}};
     page.on('pageerror', error => state.pageErrors.push(error.message));
     await installMockBackend(page, {
@@ -75,6 +79,7 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
             highLevelStatus: [state.status, state.status],
         },
     }, {liveStatusIntervalMs: 200});
+    await page.route('**/api/mowglinext/gamepad/diagnostics', route => route.fulfill({status: 204}));
     await page.route('**/api/mowglinext/call/high_level_control', async route => {
         state.commands.push(route.request().postDataJSON().Command);
         await route.fulfill({json: {}});
@@ -84,11 +89,12 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
         const challenge = state.opened.toString(16).padStart(32, '0');
         state.challenges.push(challenge);
         let ready = false;
+        state.control = (epoch, phase, resumed) => socket.send(JSON.stringify({type: 'gamepadControl', epoch, phase, ...(resumed ? {resumed} : {})}));
         socket.onMessage(raw => {
             const message = JSON.parse(String(raw)) as GamepadFrame & {type?: string; challenge?: string; version?: number};
             if (message.type === 'gamepadClaim') {
                 state.claims.push(message.challenge ?? '');
-                if (message.challenge === challenge && message.version === 2) {
+                if (message.challenge === challenge && message.version === 3) {
                     ready = true;
                     socket.send(JSON.stringify({type: 'gamepadReady'}));
                 }
@@ -101,7 +107,7 @@ async function setup(page: Page, options: InputOptions = {}): Promise<FixtureSta
             if (!ready) state.preReadyFrames.push(message);
             state.frames.push(message);
         });
-        const hello = JSON.stringify({type: 'gamepadHello', challenge, version: 2});
+        const hello = JSON.stringify({type: 'gamepadHello', challenge, version: 3});
         if (options.deferFirstGamepadHello && state.opened === 1) state.releaseLateHello = () => socket.send(hello);
         else socket.send(hello);
         socket.onClose(() => { state.closed++; });
@@ -391,3 +397,78 @@ test('re-enables directly after a focus fault and rearms after switching to manu
     await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0.25);
     expectClean(state);
 });
+
+
+for (const width of [390, 1440]) {
+    test(`manual pause notices keep activation and require a new neutral deadman gesture at ${width}px`, async ({page}, info) => {
+        await page.setViewportSize({width, height: 900});
+        const state = await setup(page);
+        state.status.state = 4;
+        state.status.state_name = 'MANUAL_MOWING';
+        const dialog = await openSettings(page);
+        await selectController(page, dialog);
+        await (await finishSettings(page, dialog)).click();
+        await expect.poll(() => state.frames.length).toBeGreaterThan(2);
+        const disable = page.getByRole('button', {name: 'Disable controller', exact: true});
+        await expect(disable).toBeVisible();
+        await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = true; });
+        await expect.poll(() => state.frames.at(-1)?.deadman).toBe(true);
+        state.control!(1, 'active');
+        await expect.poll(() => state.frames.at(-1)?.epoch).toBe(1);
+        let epoch = 1;
+        for (let cycle = 0; cycle < 2; cycle++) {
+            await page.evaluate(() => { (window as any).controllerFailureInput.axes[1] = -1; });
+            await expect.poll(() => state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0.25);
+            await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = false; });
+            await expect.poll(() => state.frames.at(-1)?.physicalDeadman).toBe(false);
+            expect(state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0);
+            state.control!(++epoch, 'pausing');
+            await expect(page.getByRole('status')).toContainText('Stopping Manual Mowing');
+            await expect(disable).toBeVisible();
+            state.status.state = 1;
+            state.status.state_name = 'IDLE';
+            state.control!(++epoch, 'paused');
+            await expect(page.getByRole('status')).toContainText('Center sticks and release');
+            await expect(page.getByRole('button', {name: 'Stop Manual Mowing', exact: true})).toBeVisible();
+            await page.evaluate(() => { (window as any).controllerFailureInput.axes[1] = 0; });
+            await expect(page.getByRole('status')).toContainText('Manual Mowing paused');
+            // WebKit's screenshot capture can suspend native polling beyond
+            // its real 200ms fail-safe; inspect both layouts in Chromium.
+            if (cycle === 0 && info.project.name === 'chromium') {
+                await page.screenshot({path: info.outputPath(`manual-paused-${width}px.png`)});
+            }
+            await expect.poll(() => state.frames.at(-1)?.neutral).toBe(true);
+            await expect.poll(() => state.frames.at(-1)?.epoch).toBe(epoch);
+            await page.evaluate(() => { (window as any).controllerFailureInput.buttons[5] = true; });
+            await expect.poll(() => state.frames.at(-1)?.physicalDeadman).toBe(true);
+            // The mock server grants resume only after the physical gesture; no HTTP
+            // command 7 may be issued by the browser itself.
+            expect(state.commands).toEqual([]);
+            if (cycle === 0) {
+                state.control!(++epoch, 'resuming');
+                await expect(page.getByRole('status')).toContainText('Starting Manual Mowing');
+            } else {
+                // A fast server may coalesce resuming into the confirmed active
+                // snapshot. Its explicit resume provenance must preserve the flow.
+                epoch++;
+            }
+            expect(state.frames.at(-1)?.twist?.twist?.linear?.x).toBe(0);
+            state.status.state = 4;
+            state.status.state_name = 'MANUAL_MOWING';
+            state.control!(++epoch, 'active', true);
+            await expect.poll(() => state.frames.at(-1)?.epoch).toBe(epoch);
+            await expect.poll(() => state.frames.at(-1)?.deadman).toBe(true);
+        }
+        await page.getByRole('button', {name: 'Stop Manual Mowing', exact: true}).click();
+        await expect.poll(() => state.commands).toEqual([8]);
+        state.control!(++epoch, 'inactive');
+        state.status.state = 1;
+        state.status.state_name = 'IDLE';
+        await expect(page.getByRole('button', {name: 'Stop Manual Mowing', exact: true})).toHaveCount(0);
+        await expect(disable).toBeVisible();
+        expect(state.opened).toBe(1);
+        expect(state.closed).toBe(0);
+        expect(state.pageErrors).toEqual([]);
+        expectReadySessions(state);
+    });
+}

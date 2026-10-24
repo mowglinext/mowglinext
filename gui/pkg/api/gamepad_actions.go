@@ -19,6 +19,9 @@ var errGamepadActionSession = errors.New("controller action session is no longer
 type gamepadModeAction struct {
 	done        chan struct{}
 	changesMode bool
+	resume      bool
+	epoch       uint64
+	command     uint8
 }
 type gamepadStopAction struct {
 	done chan struct{}
@@ -59,12 +62,27 @@ func (c *gamepadCoordinator) beginMode(token string, command uint8) (func(error)
 	if err := c.validateActionLocked(token, command); err != nil {
 		return nil, false, err
 	}
+	if command != 0 && c.actionOwner != nil {
+		owner := c.actionOwner
+		owner.mu.Lock()
+		wasResuming := owner.manualPhase == "resuming" || (c.modeAction != nil && c.modeAction.command == 7)
+		owner.revokeManualLocked()
+		owner.mu.Unlock()
+		if wasResuming {
+			c.startStopLocked()
+		}
+	}
 	if c.modeAction != nil || c.stopAction != nil {
 		return nil, false, errGamepadActionBusy
 	}
-	action := &gamepadModeAction{done: make(chan struct{}), changesMode: command != 0}
+	action := &gamepadModeAction{done: make(chan struct{}), changesMode: command != 0, command: command}
 	c.modeAction = action
 	s := c.actionOwner
+	if s != nil {
+		s.mu.Lock()
+		action.epoch = s.controlEpoch
+		s.mu.Unlock()
+	}
 	if s != nil && command == 7 {
 		// Status delivery can lag or the request can fail after dispatch. Retain the
 		// same conservative manual cleanup obligation in either case.
@@ -73,28 +91,38 @@ func (c *gamepadCoordinator) beginMode(token string, command uint8) (func(error)
 		s.modeCommandOwned = true
 		s.mu.Unlock()
 	}
-	return func(err error) {
-		c.actionMu.Lock()
-		// Failure is not evidence that a dispatched command had no effect. Install
-		// compensation before opening admission, including for disconnected clients.
-		if s != nil {
-			s.mu.Lock()
-			ended := s.ended
-			// A successful explicit mode selection supersedes our admitted
-			// Manual Mowing command. Uncorrelated status callbacks cannot do so.
-			if err == nil && command >= 1 && command <= 6 {
-				s.modeCommandOwned = true
-				s.manualOwned = false
+	return func(err error) { c.finishMode(action, s, command, err) }, s != nil, nil
+}
+
+func (c *gamepadCoordinator) finishMode(action *gamepadModeAction, s *gamepadSession, command uint8, err error) {
+	c.actionMu.Lock()
+	if s != nil {
+		s.mu.Lock()
+		ended := s.ended
+		canceledManual := command == 7 && s.controlEpoch != action.epoch
+		if action.resume && !ended && !canceledManual {
+			if err == nil {
+				s.resumeSucceeded = true
+				s.resumeAfter = s.statusSeq
+			} else {
+				s.revokeManualLocked()
 			}
-			s.mu.Unlock()
-			if action.changesMode && (err != nil || ended) && c.stopAction == nil {
-				c.startStopLocked()
-			}
+		} else if err == nil && command == 7 && !ended && !canceledManual && c.stopAction == nil {
+			s.genericManualPending = true
 		}
-		c.modeAction = nil
-		close(action.done)
-		c.actionMu.Unlock()
-	}, s != nil, nil
+		if err == nil && command >= 1 && command <= 6 {
+			s.modeCommandOwned = true
+			s.manualOwned = false
+		}
+		s.mu.Unlock()
+		// A response is not proof that a canceled start had no physical effect.
+		if action.changesMode && (err != nil || ended || canceledManual) && c.stopAction == nil {
+			c.startStopLocked()
+		}
+	}
+	c.modeAction = nil
+	close(action.done)
+	c.actionMu.Unlock()
 }
 
 func (c *gamepadCoordinator) requestStop(token string) (*gamepadStopAction, error) {
@@ -105,6 +133,11 @@ func (c *gamepadCoordinator) requestStop(token string) (*gamepadStopAction, erro
 		if err := c.validateActionLocked(token, 8); err != nil {
 			return nil, err
 		}
+	}
+	if s := c.actionOwner; s != nil {
+		s.mu.Lock()
+		s.revokeManualLocked()
+		s.mu.Unlock()
 	}
 	return c.startStopLocked(), nil
 }

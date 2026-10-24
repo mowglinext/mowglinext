@@ -329,3 +329,49 @@ describe('ControllerDriver', () => {
         expect(gap.step(sample({timestamp: 1300}), 1300, idle).state).toBe('inputLost');
     });
 });
+
+describe('manual pause physical intent', () => {
+    it('reports held physical deadman and neutral axes while effective motion is interlocked', () => {
+        const driver = new ControllerDriver(DEFAULT_PROFILE, sample());
+        prime(driver, 'MANUAL_MOWING');
+        const held = {...pressed('deadman'), timestamp: 1100};
+        for (const manualPhase of ['pausing', 'paused', 'resuming'] as const) {
+            expect(driver.step(held, 1100, {...idle, stateName: 'IDLE', manualPhase})).toMatchObject({
+                physicalDeadman: true, neutral: true, deadman: false, linear: 0, angular: 0,
+            });
+        }
+        expect(driver.step({...held, axes: [0, -1]}, 1150, {...idle, pending: true})).toMatchObject({
+            physicalDeadman: true, neutral: false, deadman: false,
+        });
+        expect(driver.step(sample({timestamp: 1200, buttons: buttonsDown('deadman', 'stop')}), 1200, idle)).toMatchObject({
+            physicalDeadman: true, neutral: false, deadman: false, action: 'stop',
+        });
+    });
+
+    it('retains server confirmation across old IDLE polls until browser status observes MANUAL', () => {
+        const driver = new ControllerDriver(DEFAULT_PROFILE, sample());
+        prime(driver);
+        driver.confirmManualResume();
+        for (const timestamp of [1100, 1150, 1200, 1250]) {
+            expect(driver.step({...pressed('deadman'), timestamp}, timestamp, {...idle, manualPhase: 'active'})).toMatchObject({
+                deadman: false, physicalDeadman: true, neutral: true, state: 'manualResuming',
+            });
+        }
+        const ctx = {...idle, stateName: 'MANUAL_MOWING', manualPhase: 'active' as const};
+        expect(driver.step({...pressed('deadman'), timestamp: 1300}, 1300, ctx).deadman).toBe(false);
+        expect(driver.step({...pressed('deadman'), timestamp: 1350, axes: [0, -1]}, 1350, ctx)).toMatchObject({deadman: true, linear: MAX_LINEAR_MPS});
+    });
+
+    it('requires a centered held sample at resume confirmation and clears a revoked confirmation', () => {
+        const driver = new ControllerDriver(DEFAULT_PROFILE, sample());
+        prime(driver);
+        driver.confirmManualResume();
+        const ctx = {...idle, stateName: 'MANUAL_MOWING', manualPhase: 'active' as const};
+        expect(driver.step({...pressed('deadman'), timestamp: 1100}, 1100, ctx).deadman).toBe(false);
+        expect(driver.step({...pressed('deadman'), timestamp: 1150, axes: [0, -1]}, 1150, ctx)).toMatchObject({deadman: true, linear: MAX_LINEAR_MPS});
+        driver.confirmManualResume();
+        driver.requireNeutral();
+        expect(driver.step({...pressed('deadman'), timestamp: 1200}, 1200, ctx).deadman).toBe(false);
+        expect(driver.step({...pressed('deadman'), timestamp: 1250, axes: [0, -1]}, 1250, ctx).deadman).toBe(false);
+    });
+});

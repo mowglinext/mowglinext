@@ -757,6 +757,9 @@ func registerServiceRoutes(group *gin.RouterGroup, provider types.IRosProvider, 
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
+			// Emergency intent retires any controller resume capability before
+			// the hardware RPC, including while a manual start is settling.
+			teleop.revokeManualIntent()
 			err = provider.CallService(ctx, "/hardware_bridge/emergency_stop", &CallReq, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
 		case "mow_enabled":
 			var CallReq mowgli.MowerControlReq

@@ -93,15 +93,26 @@ func (p *gamepadTestProvider) CallService(ctx context.Context, service string, r
 	return p.serviceErr
 }
 
+var gamepadTestOwners sync.Map // transport fixtures echo the current control snapshot
+
 func gamepadHarness(t *testing.T, state uint8) (*gamepadTestProvider, *httptest.Server, *websocket.Conn) {
 	t.Helper()
 	p := &gamepadTestProvider{state: state, published: make(chan geometry.TwistStamped, 32), stopped: make(chan struct{}, 8)}
-	server := httptest.NewServer(setupMowgliNextRouter(p))
+	coordinator := &gamepadCoordinator{provider: p}
+	router := gin.New()
+	group := router.Group("/api/mowglinext")
+	registerPublisherRoutes(group, coordinator)
+	registerServiceRoutes(group, p, coordinator)
+	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
 	conn, _, err := websocket.DefaultDialer.Dial(gamepadURL(server), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 	require.NoError(t, completeGamepadHandshake(conn))
+	coordinator.mu.Lock()
+	gamepadTestOwners.Store(conn, coordinator.owner)
+	coordinator.mu.Unlock()
+	t.Cleanup(func() { gamepadTestOwners.Delete(conn) })
 	require.Zero(t, readGamepadVelocity(t, p).Twist.Linear.X) // preemption zero
 	return p, server, conn
 }
@@ -144,9 +155,19 @@ func gamepadVelocity(x float64) geometry.TwistStamped {
 	msg.Twist.Linear.X = x
 	return msg
 }
+func gamepadWire(msg geometry.TwistStamped, deadman bool) map[string]any {
+	return map[string]any{"twist": msg, "deadman": deadman, "physicalDeadman": deadman, "neutral": msg.Twist.Linear.X == 0 && msg.Twist.Angular.Z == 0, "epoch": uint64(0)}
+}
 func writeGamepad(t *testing.T, conn *websocket.Conn, x float64, deadman bool) {
 	t.Helper()
-	require.NoError(t, conn.WriteJSON(map[string]any{"twist": gamepadVelocity(x), "deadman": deadman}))
+	frame := gamepadWire(gamepadVelocity(x), deadman)
+	if value, ok := gamepadTestOwners.Load(conn); ok {
+		s := value.(*gamepadSession)
+		s.mu.Lock()
+		frame["epoch"] = s.controlEpoch
+		s.mu.Unlock()
+	}
+	require.NoError(t, conn.WriteJSON(frame))
 }
 func readGamepadVelocity(t *testing.T, p *gamepadTestProvider) geometry.TwistStamped {
 	t.Helper()
@@ -167,16 +188,16 @@ func awaitGamepadStop(t *testing.T, p *gamepadTestProvider) {
 	}
 }
 
-func TestGamepadManualReleaseStopsAndCloses(t *testing.T) {
+func TestGamepadManualReleaseStopsAndKeepsConnection(t *testing.T) {
 	p, _, conn := gamepadHarness(t, 4)
 	writeGamepad(t, conn, 0.2, true)
 	require.Equal(t, 0.2, readGamepadVelocity(t, p).Twist.Linear.X)
 	writeGamepad(t, conn, 0, false)
 	require.Zero(t, readGamepadVelocity(t, p).Twist.Linear.X)
 	awaitGamepadStop(t, p)
-	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
-	_, _, err := conn.ReadMessage()
-	require.Error(t, err)
+	writeGamepad(t, conn, 0, false)
+	require.Zero(t, readGamepadVelocity(t, p).Twist.Linear.X)
+	require.Zero(t, p.unsubscriptions.Load())
 }
 
 func TestGamepadRecordingReleasePreservesRecording(t *testing.T) {
@@ -209,9 +230,9 @@ func TestGamepadManualGuardDoesNotLoseStopOwnership(t *testing.T) {
 			// A reset cannot revive this session, even if the BT reports the
 			// old manual branch before its STOP acknowledgement propagates.
 			p.emitState(4)
-			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
-			_, _, err := conn.ReadMessage()
-			require.Error(t, err)
+			writeGamepad(t, conn, 0.2, true)
+			require.Zero(t, readGamepadVelocity(t, p).Twist.Linear.X)
+			require.Zero(t, p.unsubscriptions.Load())
 		})
 	}
 }
@@ -269,8 +290,12 @@ func TestGamepadTimeoutAndDisconnectStopManual(t *testing.T) {
 			require.Zero(t, readGamepadVelocity(t, p).Twist.Linear.X)
 			awaitGamepadStop(t, p)
 			_ = conn.SetReadDeadline(time.Now().Add(time.Second))
-			_, _, err := conn.ReadMessage()
-			require.Error(t, err)
+			for {
+				_, _, err := conn.ReadMessage()
+				if err != nil {
+					break
+				}
+			}
 		})
 	}
 }
@@ -322,14 +347,14 @@ func TestGamepadEnvelopeValidation(t *testing.T) {
 	}{
 		{0.25, true, true}, {-0.25, true, true}, {0, false, true}, {0.251, true, false}, {0.1, false, false},
 	} {
-		raw, err := json.Marshal(map[string]any{"twist": gamepadVelocity(item.x), "deadman": item.deadman})
+		raw, err := json.Marshal(gamepadWire(gamepadVelocity(item.x), item.deadman))
 		require.NoError(t, err)
 		_, _, err = decodeGamepadFrame(raw)
 		require.Equal(t, item.valid, err == nil)
 	}
 	msg := gamepadVelocity(0)
 	msg.Twist.Linear.Y = 0.1
-	raw, _ := json.Marshal(map[string]any{"twist": msg, "deadman": true})
+	raw, _ := json.Marshal(gamepadWire(msg, true))
 	_, _, err := decodeGamepadFrame(raw)
 	require.Error(t, err)
 }
@@ -509,15 +534,15 @@ func TestGamepadUnclaimedOrInvalidHandshakeNeverTouchesROS(t *testing.T) {
 				require.Error(t, err)
 				_ = conn.WriteJSON(map[string]any{"type": "gamepadClaim", "challenge": challenge, "version": gamepadProtocolVersion})
 			default:
-				raw := fmt.Sprintf(`{"type":"gamepadClaim","challenge":%q,"version":2}`, challenge)
+				raw := fmt.Sprintf(`{"type":"gamepadClaim","challenge":%q,"version":3}`, challenge)
 				messageType := websocket.TextMessage
 				switch kind {
 				case "unversionedClaim":
-					raw = strings.Replace(raw, `,"version":2`, "", 1)
+					raw = strings.Replace(raw, `,"version":3`, "", 1)
 				case "wrongVersion":
-					raw = strings.Replace(raw, `"version":2`, `"version":1`, 1)
+					raw = strings.Replace(raw, `"version":3`, `"version":1`, 1)
 				case "wrongChallenge":
-					raw = `{"type":"gamepadClaim","challenge":"wrong","version":2}`
+					raw = `{"type":"gamepadClaim","challenge":"wrong","version":3}`
 				case "wrongType":
 					raw = strings.Replace(raw, "gamepadClaim", "gamepadReady", 1)
 				case "unknownField":

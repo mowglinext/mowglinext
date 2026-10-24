@@ -22,7 +22,7 @@ import (
 	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
-const gamepadProtocolVersion = 2
+const gamepadProtocolVersion = 3
 const gamepadLease = 300 * time.Millisecond
 const gamepadStopTimeout = time.Second
 const gamepadHandshakeWriteTimeout = 100 * time.Millisecond
@@ -47,37 +47,56 @@ type gamepadCoordinator struct {
 }
 
 type gamepadSession struct {
-	coordinator      *gamepadCoordinator
-	conn             *websocket.Conn
-	id               string
-	challenge        string
-	ready            bool
-	client           string
-	started          time.Time
-	mu               sync.Mutex
-	ended            bool
-	deadman          bool
-	state            uint8
-	manualOwned      bool
-	modeCommandOwned bool
-	lastValid        time.Time
-	frames           uint64
-	maxGap           time.Duration
-	timer            *time.Timer
-	cancelPublish    context.CancelFunc
-	subscribeDone    chan struct{}
+	coordinator          *gamepadCoordinator
+	conn                 *websocket.Conn
+	id                   string
+	challenge            string
+	ready                bool
+	client               string
+	started              time.Time
+	mu                   sync.Mutex
+	ended                bool
+	deadman              bool
+	state                uint8
+	manualOwned          bool
+	modeCommandOwned     bool
+	lastValid            time.Time
+	frames               uint64
+	maxGap               time.Duration
+	timer                *time.Timer
+	cancelPublish        context.CancelFunc
+	subscribeDone        chan struct{}
+	writeMu              sync.Mutex
+	notices              chan struct{}
+	manualPhase          string
+	manualResumed        bool
+	controlEpoch         uint64
+	neutral              bool
+	resumeReleased       bool
+	pauseStopSucceeded   bool
+	resumeSucceeded      bool
+	resumeAfter          uint64
+	statusSeq            uint64
+	statusAt             time.Time
+	manualBlocked        bool
+	genericManualPending bool
 }
 
 // Wire: echo gamepadHello's challenge in gamepadClaim and wait for gamepadReady,
-// then every <=50 ms send {"twist": <TwistStamped>, "deadman": <bool>}.
+// then every <=50 ms send twist, effective deadman, physicalDeadman, neutral,
+// and the latest server control epoch. Only an active resumed:true notice can
+// confirm a held-deadman restart across coalesced phase snapshots.
 // The initial claim proves a live client after upgrade, not ongoing input age.
 // There is no reconnect/replay support: 300 ms without a validated frame ends
 // the socket permanently. Deadman false carries zero motion and keeps only the
 // connection lease alive. Its falling edge also exits MANUAL_MOWING via STOP.
 func decodeGamepadFrame(raw []byte) (geometry.TwistStamped, bool, error) {
 	var frame struct {
-		Twist   *geometry.TwistStamped `json:"twist"`
-		Deadman *bool                  `json:"deadman"`
+		Twist           *geometry.TwistStamped `json:"twist"`
+		Deadman         *bool                  `json:"deadman"`
+		PhysicalDeadman *bool                  `json:"physicalDeadman"`
+		Neutral         *bool                  `json:"neutral"`
+		Epoch           *uint64                `json:"epoch"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -87,8 +106,8 @@ func decodeGamepadFrame(raw []byte) (geometry.TwistStamped, bool, error) {
 	if err := decoder.Decode(new(any)); err != io.EOF {
 		return geometry.TwistStamped{}, false, errors.New("trailing gamepad JSON")
 	}
-	if frame.Twist == nil || frame.Deadman == nil {
-		return geometry.TwistStamped{}, false, errors.New("twist and deadman are required")
+	if frame.Twist == nil || frame.Deadman == nil || frame.PhysicalDeadman == nil || frame.Neutral == nil || frame.Epoch == nil {
+		return geometry.TwistStamped{}, false, errors.New("twist, deadman, physicalDeadman, neutral and epoch are required")
 	}
 	// Missing/null components must not silently decode to a plausible zero.
 	var fields map[string]json.RawMessage
@@ -116,6 +135,12 @@ func decodeGamepadFrame(raw []byte) (geometry.TwistStamped, bool, error) {
 	}
 	if math.Abs(t.Linear.X) > 0.25 || math.Abs(t.Angular.Z) > 0.6 || t.Linear.Y != 0 || t.Linear.Z != 0 || t.Angular.X != 0 || t.Angular.Y != 0 {
 		return geometry.TwistStamped{}, false, errors.New("gamepad velocity outside teleop envelope")
+	}
+	if *frame.Deadman && !*frame.PhysicalDeadman {
+		return geometry.TwistStamped{}, false, errors.New("effective deadman requires physical deadman")
+	}
+	if *frame.Neutral && (t.Linear.X != 0 || t.Angular.Z != 0) {
+		return geometry.TwistStamped{}, false, errors.New("neutral input with nonzero velocity")
 	}
 	if !*frame.Deadman && (t.Linear.X != 0 || t.Angular.Z != 0) {
 		return geometry.TwistStamped{}, false, errors.New("deadman released with nonzero velocity")
@@ -216,7 +241,7 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 		return
 	}
 	now := time.Now()
-	s := &gamepadSession{coordinator: c, conn: conn, challenge: challenge, id: fmt.Sprintf("gamepad-%p", conn), client: client, started: now, lastValid: now, subscribeDone: make(chan struct{})}
+	s := &gamepadSession{coordinator: c, conn: conn, challenge: challenge, id: fmt.Sprintf("gamepad-%p", conn), client: client, started: now, lastValid: now, subscribeDone: make(chan struct{}), notices: make(chan struct{}, 1), manualPhase: "inactive"}
 	c.owner = s
 	c.actionOwner = s
 	c.actionMu.Unlock()
@@ -238,27 +263,7 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 			if json.Unmarshal(raw, &status) != nil {
 				return
 			}
-			s.mu.Lock()
-			if s.ended {
-				s.mu.Unlock()
-				return
-			}
-			s.state = status.State
-			// Guard states (including emergency NULL and IDLE) can temporarily
-			// mask a still-latched manual command. Retain its cleanup obligation
-			// until the operator explicitly enters recording, whose trajectory a
-			// STOP would discard.
-			// Status carries no command identity and callbacks can arrive after
-			// a newer RPC. Once this session has an explicit mode obligation,
-			// only a subsequent owned command may supersede it in either direction.
-			if !s.modeCommandOwned {
-				if status.State == 4 {
-					s.manualOwned = true
-				} else if status.State == 3 {
-					s.manualOwned = false
-				}
-			}
-			s.mu.Unlock()
+			s.observeStatus(status)
 		})
 	}()
 	if err != nil {
@@ -284,6 +289,7 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 		s.terminate(gamepadServerEvent{Cause: "readyWriteFailed"})
 		return
 	}
+	go s.writeNotices()
 	for {
 		kind, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -304,21 +310,13 @@ func (c *gamepadCoordinator) handle(ctx *gin.Context) {
 			s.terminate(gamepadServerEvent{Cause: "invalidFrame", Error: err.Error()})
 			return
 		}
-		frame, accepted := s.acceptFrame(deadman)
+		var input gamepadPhysicalInput
+		_ = json.Unmarshal(raw, &input) // validated with the velocity above
+		epoch, accepted := s.processInput(&msg, deadman, input)
 		if !accepted {
 			return
 		}
-		// Manual and recording are the existing teleop modes. A false deadman
-		// heartbeat is accepted in any state without initiating robot behavior.
-		if deadman && frame.state != 3 && frame.state != 4 {
-			s.terminate(gamepadServerEvent{Cause: "modeRejected"})
-			return
-		}
-		if frame.released && frame.manualOwned {
-			s.terminate(gamepadServerEvent{Cause: "deadmanReleased"})
-			return
-		}
-		if err := s.publish(&msg); err != nil {
+		if err := s.publish(&msg, epoch); err != nil {
 			s.terminate(gamepadServerEvent{Cause: "publishFailed", Error: err.Error()})
 			return
 		}
@@ -344,9 +342,8 @@ func validGamepadClaim(raw []byte, challenge string) bool {
 }
 
 type gamepadFrameContext struct {
-	state       uint8
-	manualOwned bool
-	released    bool
+	released bool
+	rising   bool
 }
 
 func (s *gamepadSession) acceptFrame(deadman bool) (gamepadFrameContext, bool) {
@@ -362,7 +359,7 @@ func (s *gamepadSession) acceptFrame(deadman bool) (gamepadFrameContext, bool) {
 		s.finishTermination(gamepadServerEvent{Cause: "leaseExpired"})
 		return gamepadFrameContext{}, false
 	}
-	frame := gamepadFrameContext{state: s.state, manualOwned: s.manualOwned, released: s.deadman && !deadman}
+	frame := gamepadFrameContext{released: s.deadman && !deadman, rising: !s.deadman && deadman}
 	s.deadman = deadman
 	if gap := now.Sub(s.lastValid); gap > s.maxGap {
 		s.maxGap = gap
@@ -374,7 +371,7 @@ func (s *gamepadSession) acceptFrame(deadman bool) (gamepadFrameContext, bool) {
 	return frame, true
 }
 
-func (s *gamepadSession) publish(msg *geometry.TwistStamped) error {
+func (s *gamepadSession) publish(msg *geometry.TwistStamped, inputEpoch ...uint64) error {
 	c := s.coordinator
 	c.mu.Lock()
 	c.actionMu.Lock()
@@ -388,6 +385,15 @@ func (s *gamepadSession) publish(msg *geometry.TwistStamped) error {
 		s.mu.Unlock()
 		c.mu.Unlock()
 		return errors.New("gamepad session ended")
+	}
+	// A status callback can retire an accepted input before this writer is
+	// acquired (including a transition to recording, where manualBlocked no
+	// longer applies). Revalidate its exact phase generation here as well.
+	if len(inputEpoch) != 0 && inputEpoch[0] != s.controlEpoch {
+		msg = &geometry.TwistStamped{}
+	}
+	if s.manualPhase == "pausing" || s.manualPhase == "paused" || s.manualPhase == "resuming" || (s.state == 4 && s.manualBlocked) {
+		msg = &geometry.TwistStamped{}
 	}
 	// The provider lock may have delayed a frame after acceptance. Never
 	// publish it after the lease merely because its timer has not run yet.
@@ -411,10 +417,19 @@ func (s *gamepadSession) publish(msg *geometry.TwistStamped) error {
 	deadline := s.lastValid.Add(gamepadLease)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	s.cancelPublish = cancel
+	publishEpoch := s.controlEpoch
 	s.mu.Unlock()
 	err := publisher.PublishContext(ctx, "/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", msg)
 	cancel()
+	s.mu.Lock()
+	// An intentional STOP/status fence cancels a queued velocity without
+	// turning ordinary operator intent into a lost controller connection.
+	revoked := errors.Is(err, context.Canceled) && !s.ended && s.controlEpoch != publishEpoch
+	s.mu.Unlock()
 	c.mu.Unlock()
+	if revoked {
+		err = nil
+	}
 	// A deadline-bounded writer can finish before the watchdog callback gets
 	// CPU. Complete the same lease-expiry transition here, without letting a
 	// transport timeout win the diagnostic cause or revive the session.
@@ -460,6 +475,12 @@ func (s *gamepadSession) terminate(cause gamepadServerEvent) {
 // indivisible with respect to accepting/renewing an input frame.
 func (s *gamepadSession) markEndedLocked(now time.Time) {
 	s.ended = true
+	if s.notices != nil {
+		select {
+		case s.notices <- struct{}{}:
+		default:
+		}
+	}
 	if s.cancelPublish != nil {
 		s.cancelPublish()
 	}

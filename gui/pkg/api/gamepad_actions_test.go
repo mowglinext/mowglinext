@@ -105,7 +105,7 @@ func actionOwner(t *testing.T, server *httptest.Server) (*websocket.Conn, string
 			case <-done:
 				return
 			case <-ticker.C:
-				if conn.WriteJSON(map[string]any{"twist": gamepadVelocity(0), "deadman": false}) != nil {
+				if conn.WriteJSON(gamepadWire(gamepadVelocity(0), false)) != nil {
 					return
 				}
 			}

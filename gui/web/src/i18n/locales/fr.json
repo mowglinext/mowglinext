@@ -5229,7 +5229,9 @@
     "invalidProfile": "Utilisez un bouton différent par fonction et un axe différent pour avancer et tourner. Toutes les entrées affectées doivent exister sur cette manette.",
     "enable": "Activer pour ce robot",
     "disable": "Désactiver la manette",
-    "safetyHelp": "Choisissez d’abord l’enregistrement de zone ou la tonte manuelle, puis centrez les sticks et relâchez tous les boutons après le changement de mode. Maintenez l’homme mort affecté avant de déplacer un stick ; relâchez-le pour arrêter. La tonte manuelle démarre la lame et se termine au relâchement de l’homme mort. Pour les actions d’enregistrement, relâchez l’homme mort et maintenez le bouton affecté pendant 0,8 seconde. STOP est immédiat. Ouvrir les réglages arrête les entrées de la manette. Fermez-les avec Terminé, puis touchez Activer sur la carte.",
+    "safetyHelp": "Choisissez d’abord l’enregistrement de zone ou la tonte manuelle, puis centrez les sticks et relâchez tous les boutons. Maintenez le bouton homme mort avant de déplacer un stick. En tonte manuelle, le relâcher arrête les roues et la lame, mais conserve la connexion de la manette. Une fois la pause confirmée, relâchez toutes les commandes, puis maintenez le bouton homme mort avec les sticks centrés pour redémarrer la tonte manuelle et la lame. STOP annule cette possibilité de reprise. Pour les actions d’enregistrement, relâchez le bouton homme mort et maintenez le bouton affecté pendant 0,8 seconde. Ouvrir les réglages arrête les commandes. Fermez avec Terminé, puis appuyez sur Activer sur la carte.",
+    "stopManual": "Arrêter la tonte manuelle",
+    "stopManualHint": "Arrêter la tonte manuelle et annuler la reprise par le bouton homme mort. La manette reste connectée.",
     "profiles": {
       "default": "Affectations standard intégrées",
       "saved": "Affectations enregistrées",
@@ -5252,6 +5254,9 @@
       "connecting": "Connexion de la manette…",
       "statusLost": "En attente de l’état du robot en direct — conduite arrêtée",
       "emergency": "Arrêt d’urgence du robot actif — conduite arrêtée",
+      "manualPausing": "Arrêt de la tonte manuelle — relâchez toutes les commandes et attendez la confirmation du mode IDLE",
+      "manualPaused": "Tonte manuelle en pause — relâchez toutes les commandes, puis maintenez {{deadman}} avec les sticks centrés pour redémarrer la lame",
+      "manualResuming": "Démarrage de la tonte manuelle — maintenez {{deadman}} et gardez les sticks centrés",
       "actionPending": "En attente de la fin de la commande du robot — conduite arrêtée"
     },
     "inputLossReasons": {
