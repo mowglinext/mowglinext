@@ -236,14 +236,7 @@ export const MapToolbarMobile = ({
                     label: t(rotationLocked ? "mapOffsetPanel.unlockRotation" : "mapOffsetPanel.lockRotation"),
                 } satisfies NonNullable<MenuProps["items"]>[number]]
                 : []),
-            {
-                key: "hardwareAppearance",
-                label: (
-                    <a href="#/settings?section=hardware">
-                        {t("mowerVisual.hardwareLink")}
-                    </a>
-                ),
-            },
+            {key: "hardwareAppearance", label: <a href="#/settings?section=hardware">{t("mowerVisual.hardwareLink")}</a>},
         ]},
         {type: "group", label: t("mapToolbar.motionGroup"), children: [
             {key: "areaRecording", icon: <AimOutlined />, label: t("mapToolbarMobile.areaRecording")},

@@ -134,7 +134,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         type: "FeatureCollection",
         features: []
     })
-    const {config, setConfig} = useConfig(["gui.map.offset.x", "gui.map.offset.y", "gui.map.display.bearing", MAP_ROTATION_LOCKED_KEY, "gui.map.mower.appearance", "gui.map.dock.appearance"])
+    const {config, setConfig} = useConfig(["gui.map.offset.x", "gui.map.offset.y", "gui.map.display.bearing", MAP_ROTATION_LOCKED_KEY])
     const envs = useEnv()
     const guiApi = useApi()
     const obstacleOriginals = useObstacleOriginals();
@@ -1941,10 +1941,6 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onToggleRotationLocked={() => void setConfig({
                             [MAP_ROTATION_LOCKED_KEY]: String(!rotationLocked),
                         })}
-                        mowerAppearanceId={mowerAppearance.id}
-                        onMowerAppearanceChange={handleMowerAppearanceChange}
-                        dockAppearanceId={dockAppearance.id}
-                        onDockAppearanceChange={handleDockAppearanceChange}
                         onManualMode={handleManualMode}
                         onStopManualMode={handleStopManualMode}
                         onBackupMap={handleBackupMap}
