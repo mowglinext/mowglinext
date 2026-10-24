@@ -10,6 +10,11 @@ uint8 COMMAND_MANUAL_MOW=7
 # dock (that is COMMAND_HOME). Routes to the StopHold/IdleSequence branch. Used
 # by the GUI's "Stop Manual" and "Pause" buttons.
 uint8 COMMAND_STOP=8
+# Point-to-point navigation to an arbitrary pose inside an authorized area
+# (mowing or navigation-only). Started only via ~/goto_pose, which carries the
+# target — this service refuses it (success=false). See GotoPose.srv. Routes to
+# GotoSequence; never enables the blade.
+uint8 COMMAND_GOTO=9
 uint8 COMMAND_RESET_EMERGENCY=254
 uint8 COMMAND_DELETE_MAPS=255
 
