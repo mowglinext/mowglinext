@@ -121,7 +121,7 @@ docker restart mowgli-ros2
 | Heads off at an angle right after undocking | IMU yaw not solved or IMU moved. Rerun the calibration step. |
 | Wavy stripes, one wheel hesitates on tight turns | Drive tuning not done. Run both assistants in Settings → Drive Motor. |
 | Mission shows *WAITING_FOR_RTK* on and off | RTK dropping in one corner. Check the sky there, or lower the RTK requirement time-outs in Settings → Localization only if you know what you do. |
-| *DIG_OBSTRUCTION* / repeated stops at one spot | The wheel-slip detector latched three times at the same place (soft ground, a root). HOME drives it out; remove the obstacle or draw a no-go zone. |
+| *DIG_OBSTRUCTION* / repeated stops at one spot | The wheel-slip detector latched three times at the same place (soft ground, a root). Check the spot, then press Play to resume from there (one more dig at that spot stops it again) or HOME to drive it out; remove the obstacle or draw a no-go zone. |
 | Robot idles after 100 % with *START_OCCUPIED* | The last stripe ended on the boundary band; drive it a little forward from the Map page and press Home. |
 
 For anything else: **Diagnostics → Export** produces a redacted bundle to attach to a GitHub issue.`,
@@ -132,7 +132,7 @@ For anything else: **Diagnostics → Export** produces a redacted bundle to atta
 | Part de travers juste après la sortie de station | Cap IMU non résolu ou IMU déplacée. Relancez l'étape de calibration. |
 | Bandes ondulées, une roue hésite dans les virages serrés | Réglage de traction non fait. Lancez les deux assistants dans Réglages → Moteurs de traction. |
 | Mission en *WAITING_FOR_RTK* par intermittence | RTK qui décroche dans un coin. Vérifiez le ciel à cet endroit, ou ajustez les délais RTK dans Réglages → Localisation seulement en connaissance de cause. |
-| *DIG_OBSTRUCTION* / arrêts répétés au même endroit | Le détecteur de patinage s'est verrouillé trois fois au même endroit (sol meuble, racine). HOME l'en sort ; retirez l'obstacle ou dessinez une zone interdite. |
+| *DIG_OBSTRUCTION* / arrêts répétés au même endroit | Le détecteur de patinage s'est verrouillé trois fois au même endroit (sol meuble, racine). Vérifiez l'endroit, puis appuyez sur Play pour reprendre de là (un dig de plus au même endroit l'arrête de nouveau) ou HOME pour l'en sortir ; retirez l'obstacle ou dessinez une zone interdite. |
 | Robot inactif après 100 % avec *START_OCCUPIED* | La dernière bande finit sur la bande de bordure ; avancez-le un peu depuis la page Carte et appuyez sur Home. |
 
 Pour tout le reste : **Diagnostics → Exporter** produit un paquet anonymisé à joindre à un ticket GitHub.`,

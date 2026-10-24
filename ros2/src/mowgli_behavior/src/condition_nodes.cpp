@@ -40,26 +40,7 @@ BT::NodeStatus IsEmergency::tick()
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   std::lock_guard<std::mutex> lock(ctx->context_mutex);
 
-  // Fail-safe: if emergency data is stale (>2 s since last message),
-  // treat as emergency so the robot stops.
-  const auto age = std::chrono::steady_clock::now() - ctx->last_emergency_time;
-  if (age > std::chrono::seconds(2))
-  {
-    return BT::NodeStatus::SUCCESS;  // stale data → assume emergency
-  }
-
-  // Treat a set firmware LATCH as emergency too, not just an actively-asserted
-  // physical trigger. A software e-stop (the /hardware_bridge/emergency_stop
-  // service, used by the GUI stop button and tooling) sets the firmware latch
-  // WITHOUT a physical lift/stop assertion, so active_emergency stays false
-  // while latched_emergency is true. Keying only off active_emergency let the
-  // BT keep ticking MainLogic (flapping into a spurious RECORDING state) while
-  // the firmware held the motors disabled — the BT must instead surface
-  // EMERGENCY and run its stop/auto-reset handler. The firmware remains the
-  // safety authority; this only fixes what the BT reports and does.
-  return (ctx->latest_emergency.active_emergency || ctx->latest_emergency.latched_emergency)
-             ? BT::NodeStatus::SUCCESS
-             : BT::NodeStatus::FAILURE;
+  return ctx->emergencyActiveOrStale() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +128,9 @@ BT::NodeStatus IsBatteryLow::tick()
 BT::NodeStatus IsRainDetected::tick()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-  return ctx->latest_status.rain_detected ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  return ctx->RainingNow(std::chrono::steady_clock::now()) ? BT::NodeStatus::SUCCESS
+                                                           : BT::NodeStatus::FAILURE;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +417,8 @@ BT::NodeStatus IsNewRain::tick()
     return BT::NodeStatus::FAILURE;
   }
 
-  const bool raining_now = ctx->latest_status.rain_detected;
+  const auto now = std::chrono::steady_clock::now();
+  const bool raining_now = ctx->RainingNow(now);
   if (!raining_now)
   {
     // Reset the debounce window the moment we see a dry sample so
@@ -450,7 +434,6 @@ BT::NodeStatus IsNewRain::tick()
   double rain_debounce_sec = 0.0;
   (void)config().blackboard->get<double>("rain_debounce_sec", rain_debounce_sec);
 
-  const auto now = std::chrono::steady_clock::now();
   if (ctx->rain_first_detected_time.time_since_epoch().count() == 0)
   {
     ctx->rain_first_detected_time = now;

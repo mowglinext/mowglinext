@@ -16,6 +16,7 @@
 #include "mowgli_hardware/cmd_vel_validation.hpp"
 #include "mowgli_hardware/timer_period.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
+#include "mowgli_openmower_bridge/simulation_trace.hpp"
 #include "mowgli_openmower_bridge/xesc_2040_link.hpp"
 #include "mowgli_openmower_bridge/xesc_mini_link.hpp"
 
@@ -87,7 +88,15 @@ OpenMowerBridgeNode::~OpenMowerBridgeNode()
   {
     if (motor)
     {
+#ifdef OPENMOWER_SIMULATION_TRACE
+      const bool written = motor->SendDuty(0.0);
+      if (motor.get() == motors_[kMow].get())
+      {
+        OM_SIM_TRACE("blade_direct_write", "\"duty\":0,\"written\":%d", written);
+      }
+#else
       motor->SendDuty(0.0);
+#endif
     }
   }
 }
@@ -423,6 +432,10 @@ void OpenMowerBridgeNode::on_high_level_status(
 {
   current_mode_ = msg->state;
   hl_status_stamp_ = now();
+  OM_SIM_TRACE("hl_rx",
+               "\"ros_ns\":%lld,\"mode\":%u",
+               static_cast<long long>(hl_status_stamp_.nanoseconds()),
+               current_mode_);
 }
 
 void OpenMowerBridgeNode::on_gnss_status(mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
@@ -466,7 +479,15 @@ void OpenMowerBridgeNode::on_emergency_stop(
     {
       if (motor)
       {
+#ifdef OPENMOWER_SIMULATION_TRACE
+        const bool written = motor->SendDuty(0.0);
+        if (motor.get() == motors_[kMow].get())
+        {
+          OM_SIM_TRACE("blade_direct_write", "\"duty\":0,\"written\":%d", written);
+        }
+#else
         motor->SendDuty(0.0);
+#endif
       }
     }
   }

@@ -295,3 +295,47 @@ TEST(DigEscalation, DisabledRadiusNeverClears)
   EXPECT_FALSE(mh::DigEscalationClearedByDisplacement(0.0, 0.0, 50.0, 50.0, 0.0));
   EXPECT_FALSE(mh::DigEscalationClearedByDisplacement(0.0, 0.0, 50.0, 50.0, -1.0));
 }
+
+// ── Operator acknowledgement: probation ─────────────────────────────────────
+// Field report 2026-10-16: on the spot, only HOME acted. An acknowledgement
+// releases the latch but the spot stays on probation: one more dig there
+// re-escalates at once, so the issue #500 grind costs at most one more dig.
+
+TEST(DigEscalation, InactiveProbationNeverReEscalates)
+{
+  const mh::DigProbation none{};
+  EXPECT_FALSE(mh::DigProbationReEscalates(none, 0.0, 0.0, 0.50));
+  EXPECT_FALSE(mh::DigProbationLeft(none, 50.0, 0.0, 0.50));
+}
+
+TEST(DigEscalation, OneDigOnTheAcknowledgedSpotReEscalates)
+{
+  const mh::DigProbation probation{true, -5.39, 11.86};
+  // The 2026-09-04 cluster: the next latch fell within centimetres.
+  EXPECT_TRUE(mh::DigProbationReEscalates(probation, -5.38, 11.84, 0.50));
+  // Exactly at the radius still counts as the same spot (matches
+  // DigNearbyLatchCount's <=).
+  EXPECT_TRUE(mh::DigProbationReEscalates(probation, -4.89, 11.86, 0.50));
+}
+
+TEST(DigEscalation, DigElsewhereIsJudgedNormally)
+{
+  const mh::DigProbation probation{true, 0.0, 0.0};
+  EXPECT_FALSE(mh::DigProbationReEscalates(probation, 0.51, 0.0, 0.50));
+  EXPECT_FALSE(mh::DigProbationReEscalates(probation, 4.7, 0.0, 0.50));
+}
+
+TEST(DigEscalation, DisabledRadiusNeverReEscalatesOnProbation)
+{
+  const mh::DigProbation probation{true, 0.0, 0.0};
+  EXPECT_FALSE(mh::DigProbationReEscalates(probation, 0.0, 0.0, 0.0));
+  EXPECT_FALSE(mh::DigProbationReEscalates(probation, 0.0, 0.0, -1.0));
+}
+
+TEST(DigEscalation, ProbationEndsWhereTheLatchItselfWouldClear)
+{
+  const mh::DigProbation probation{true, 10.0, 5.0};
+  EXPECT_FALSE(mh::DigProbationLeft(probation, 10.6, 5.0, 0.50));  // still the same spot
+  EXPECT_FALSE(mh::DigProbationLeft(probation, 10.99, 5.0, 0.50));  // just inside 2x
+  EXPECT_TRUE(mh::DigProbationLeft(probation, 11.05, 5.0, 0.50));  // past 2x radius
+}

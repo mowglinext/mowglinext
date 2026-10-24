@@ -62,6 +62,9 @@ var topicMap = map[string]topicDef{
 	// the GUI offers "Resume" vs "Start fresh" instead of silently resuming (the
 	// "starts at 2nd/3rd line" report).
 	"coverageResumeAvailable": {"/behavior_tree_node/coverage_resume_available", "std_msgs/msg/Bool"},
+	// Latched std_msgs/String holding JSON: what the mower makes of the external rain
+	// verdict (state, whether it is counted, ages). Feedback only.
+	"externalRainState": {"/behavior_tree_node/external_rain_state", "std_msgs/msg/String"},
 	// Synthetic heading sources fused by fusion_graph_node as yaw unary
 	// factors. Both carry sensor_msgs/Imu with only `orientation` and
 	// `orientation_covariance[8]` populated — see cog_to_imu.py and
@@ -103,8 +106,9 @@ func TopicKeys() []string {
 // ---------------------------------------------------------------------------
 
 // RosSubscriber delivers messages from a ROS2 topic to one registered callback.
-// It runs a background goroutine that drains a single-slot mailbox so that a
-// slow consumer cannot stall the foxglove read pump or other subscribers.
+// It runs a background goroutine so a slow consumer cannot stall the foxglove
+// read pump or other subscribers. Diagnostics use a bounded FIFO; other topics
+// retain their single-slot, latest-value mailbox.
 type RosSubscriber struct {
 	Topic string
 	Id    string
@@ -115,12 +119,13 @@ type RosSubscriber struct {
 	interval    time.Duration // min spacing between deliveries; 0 = unthrottled
 	close       chan struct{}
 	wake        chan struct{} // buffered(1) new-message signal
+	diagnostics *diagnosticQueue
 }
 
 // NewRosSubscriber creates and starts a RosSubscriber. interval is the minimum
-// time between deliveries to cb; messages arriving faster are coalesced so cb
-// always receives the latest value. The caller must eventually call Close to
-// release the background goroutine.
+// time between deliveries to cb. Only the logical "diagnostics" topic preserves
+// accepted messages in FIFO order; other topics coalesce to the latest value.
+// The caller must eventually call Close to release the background goroutine.
 func NewRosSubscriber(topic, id string, interval time.Duration, cb func(msg []byte)) *RosSubscriber {
 	r := &RosSubscriber{
 		Topic:    topic,
@@ -130,14 +135,24 @@ func NewRosSubscriber(topic, id string, interval time.Duration, cb func(msg []by
 		close:    make(chan struct{}),
 		wake:     make(chan struct{}, 1),
 	}
-	go r.run()
+	if topic == "diagnostics" {
+		r.diagnostics = &diagnosticQueue{done: make(chan struct{})}
+		go r.runDiagnostics()
+	} else {
+		go r.run()
+	}
 	return r
 }
 
-// Publish stores msg as the next message to be delivered and signals the
-// delivery loop. If a previous message has not yet been consumed it is silently
-// overwritten (coalesce to latest). Never blocks.
+// Publish queues diagnostics without replacing accepted messages. At a queue
+// limit it rejects the incoming message and counts the transport loss. Other
+// topics keep coalescing to the latest value. It never waits for a callback or
+// queue space.
 func (r *RosSubscriber) Publish(msg []byte) {
+	if r.diagnostics != nil {
+		r.publishDiagnostic(msg)
+		return
+	}
 	r.mtx.Lock()
 	r.nextMessage = msg
 	r.mtx.Unlock()
@@ -149,6 +164,10 @@ func (r *RosSubscriber) Publish(msg []byte) {
 
 // Close stops the background goroutine. It is safe to call from any goroutine.
 func (r *RosSubscriber) Close() {
+	if r.diagnostics != nil {
+		r.closeDiagnostics()
+		return
+	}
 	close(r.close)
 }
 

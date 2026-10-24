@@ -487,8 +487,9 @@ void MapServerNode::publish_transit_geometry()
     // as the keepout mask; for allowed rings it is visualization only.
     marker.scale.x = margin;
     marker.color.a = 1;
-    marker.color.g = kind == "obstacle" ? 0 : 1;
-    marker.color.r = kind == "obstacle" ? 1 : 0;
+    const bool forbidden = kind == "obstacle" || kind == "dock_body";
+    marker.color.g = forbidden ? 0 : 1;
+    marker.color.r = forbidden ? 1 : 0;
     for (const auto& p : polygon.points)
     {
       geometry_msgs::msg::Point point;
@@ -510,7 +511,9 @@ void MapServerNode::publish_transit_geometry()
   if (has_dock_exclusion_)
   {
     append(dock_corridor_polygon_, "dock_corridor", 0.01);
-    append(dock_body_polygon_, "obstacle", 0);
+    // Its own namespace: still a forbidden ring for the transit planner, but a START inside it
+    // may plan its way out (the robot ends coverage units in front of the dock).
+    append(dock_body_polygon_, "dock_body", 0);
   }
   transit_geometry_pub_->publish(snapshot);
 }

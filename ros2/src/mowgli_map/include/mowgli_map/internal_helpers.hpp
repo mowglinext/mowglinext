@@ -24,6 +24,8 @@
 #include <cmath>
 #include <cstddef>
 #include <limits>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <geometry_msgs/msg/point32.hpp>
@@ -216,6 +218,21 @@ inline double point_to_polygon_distance(double px,
                                         const geometry_msgs::msg::Polygon& polygon)
 {
   return closest_edge_point(px, py, polygon).distance;
+}
+
+/// Strip surrounding ASCII whitespace (space, \t, \r, \n, \f, \v). Used for
+/// areas.dat values (a hand-edited or CRLF file must still load) and for
+/// LiDAR-ignore corridor names, which are normalised rather than rejected.
+inline std::string trim_ascii_whitespace(std::string_view text)
+{
+  constexpr std::string_view kWhitespace = " \t\r\n\f\v";
+  const auto first = text.find_first_not_of(kWhitespace);
+  if (first == std::string_view::npos)
+  {
+    return {};
+  }
+  const auto last = text.find_last_not_of(kWhitespace);
+  return std::string(text.substr(first, last - first + 1));
 }
 
 }  // namespace mowgli_map

@@ -13,6 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -37,6 +38,8 @@
 #include "mowgli_behavior/coverage_orientation_service.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/escape_nodes.hpp"
+#include "mowgli_behavior/external_rain_state.hpp"
+#include "mowgli_behavior/fleet_yield_service.hpp"
 #include "mowgli_behavior/localization_health.hpp"
 #include "mowgli_behavior/recording_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
@@ -63,6 +66,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/int32.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/u_int64.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
@@ -182,6 +186,7 @@ public:
 
 private:
   friend struct BladeServiceTestPeer;
+  friend struct FleetYieldServiceTestPeer;
   // ------------------------------------------------------------------
   // ROS2 infrastructure
   // ------------------------------------------------------------------
@@ -197,11 +202,38 @@ private:
                                     {
                                       std::lock_guard<std::mutex> lock(context_->context_mutex);
                                       context_->latest_status = *msg;
+                                      refreshFleetYieldLocked(*context_);
+                                      context_->blade_telemetry_seen =
+                                          context_->blade_telemetry_seen ||
+                                          rclcpp::Time(msg->blade_status_stamp).nanoseconds() > 0;
                                       // Arrival time, so a consumer can tell a
                                       // live blade state from a dead stream
                                       // (issue #487 escape motion).
                                       context_->last_status_time = std::chrono::steady_clock::now();
                                     });
+
+    // External rain verdict (a roof weather station behind Home Assistant,
+    // relayed by mqtt_bridge_node from <prefix>/external_rain). transient_local
+    // on BOTH ends so the last value is delivered even when this node starts
+    // after the bridge. It is only ever OR-ed with the mower's own rain sensor
+    // (BTContext::RainingNow), so it can add a reason to stop but never remove
+    // one.
+    external_rain_sub_ = create_subscription<std_msgs::msg::Bool>(
+        "/external_rain",
+        rclcpp::QoS(1).transient_local(),
+        [this](std_msgs::msg::Bool::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          if (context_->external_rain != msg->data)
+          {
+            RCLCPP_INFO(get_logger(),
+                        "External rain verdict: %s (use_external_rain=%s)",
+                        msg->data ? "wet" : "dry",
+                        context_->use_external_rain ? "true" : "false");
+          }
+          context_->external_rain = msg->data;
+          context_->external_rain_stamp = std::chrono::steady_clock::now();
+        });
 
     // Last commanded MOTION direction, from twist_mux's MERGED output — the
     // direction source for the #487 start-pose escape.
@@ -248,6 +280,7 @@ private:
                                          context_->latest_emergency = *msg;
                                          context_->last_emergency_time =
                                              std::chrono::steady_clock::now();
+                                         refreshFleetYieldLocked(*context_);
                                        });
 
     power_sub_ = create_subscription<Power>(
@@ -257,6 +290,7 @@ private:
         {
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           context_->latest_power = *msg;
+          refreshFleetYieldLocked(*context_);  // Charger authority is independent of valid voltage.
 
           // Smooth the rail voltage before deriving the percent — motor transients
           // sag it 0.5-1 V and used to trip the docking thresholds at a genuine
@@ -301,6 +335,7 @@ private:
                                                    std::lock_guard<std::mutex> lock(
                                                        context_->context_mutex);
                                                    context_->boundary_violation = msg->data;
+                                                   refreshFleetYieldLocked(*context_);
                                                  });
 
     // Lethal boundary: outside the allowed area by more than the
@@ -315,6 +350,7 @@ private:
                                                    std::lock_guard<std::mutex> lock(
                                                        context_->context_mutex);
                                                    context_->lethal_boundary_violation = msg->data;
+                                                   refreshFleetYieldLocked(*context_);
                                                  });
 
     // mowglinext#637 phase 2: map_server's area-list generation counter, so
@@ -726,6 +762,7 @@ private:
 
   void setupServiceServer()
   {
+    fleet_yield_service_ = std::make_unique<FleetYieldService>(*this, context_);
     blade_control_service_ = std::make_unique<BladeControlService>(*this, context_);
     coverage_orientation_service_ = std::make_unique<CoverageOrientationService>(*this, context_);
     using HighLevelControl = mowgli_interfaces::srv::HighLevelControl;
@@ -759,6 +796,7 @@ private:
           bool cleared_dock_failure_latch = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
+            context_->fleet_yield.revoke();  // Every accepted external command, even repeat STOP.
             // Play pressed while parked in a charge hold (CHARGING /
             // CRITICAL_BATTERY_CHARGING): current_command is already 1 there,
             // so the assignment below is a no-op and the tree would keep
@@ -881,6 +919,7 @@ private:
           bool cleared_dock_failure_latch = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
+            context_->fleet_yield.revoke();
             context_->target_area_index = static_cast<int>(req->area);
             context_->resume_after_incomplete_end = false;
             context_->blade_direction.clearOperatorInhibit();
@@ -921,6 +960,10 @@ private:
         [this](const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
                std_srvs::srv::Trigger::Response::SharedPtr resp)
         {
+          {
+            std::lock_guard<std::mutex> lock(context_->context_mutex);
+            context_->fleet_yield.revoke();  // Fence immediately, not at the deferred reset tick.
+          }
           clear_resume_requested_.store(true);
           RCLCPP_INFO(get_logger(),
                       "Coverage resume clear requested — applied before the next BT tick");
@@ -970,6 +1013,46 @@ private:
                                                 });
 
     RCLCPP_DEBUG(get_logger(), "~/clear_coverage_resume service + resume-available signal created");
+
+    // What the mower makes of the external rain verdict, for operator feedback only (GUI,
+    // MQTT <prefix>/external_rain_state, Home Assistant). Latched JSON; read-only, it never
+    // changes what the rain guard does.
+    external_rain_state_pub_ =
+        create_publisher<std_msgs::msg::String>("~/external_rain_state",
+                                                rclcpp::QoS(1).transient_local());
+    external_rain_state_timer_ = create_wall_timer(1s,
+                                                   [this]()
+                                                   {
+                                                     publishExternalRainState();
+                                                   });
+  }
+
+  // Publish the external-rain picture when it changes, and every 30 s otherwise so the ages
+  // stay roughly current without a message per second on the broker.
+  void publishExternalRainState()
+  {
+    if (!external_rain_state_pub_)
+    {
+      return;
+    }
+    ExternalRainStatus status;
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      status = ComputeExternalRainStatus(*context_, std::chrono::steady_clock::now());
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (external_rain_state_published_ &&
+        SameExternalRainPicture(status, last_external_rain_state_) &&
+        now - last_external_rain_state_time_ < std::chrono::seconds(30))
+    {
+      return;
+    }
+    std_msgs::msg::String msg;
+    msg.data = ExternalRainStatusJson(status);
+    external_rain_state_pub_->publish(msg);
+    last_external_rain_state_ = status;
+    last_external_rain_state_time_ = now;
+    external_rain_state_published_ = true;
   }
 
   // Fold the latest observation into the LocalizationGuard latch and log
@@ -1262,6 +1345,13 @@ private:
     context_->transit_speed = declare_parameter<double>("transit_speed", 0.2);
     context_->mowing_speed = declare_parameter<double>("mowing_speed", 0.2);
     context_->blade_auto_reverse = declare_parameter<bool>("blade_auto_reverse", false);
+    context_->mowing_enabled = declare_parameter<bool>("mowing_enabled", true);
+    context_->blade_ready_config.min_rpm = declare_parameter<double>("blade_ready_min_rpm", 1000.0);
+    context_->blade_ready_config.fallback_sec =
+        declare_parameter<double>("blade_spinup_delay_sec", 1.5);
+    context_->blade_ready_config.timeout_sec =
+        declare_parameter<double>("blade_ready_timeout_sec", 6.0);
+    context_->blade_ready_config.validate();
 
     // Rain delay: parameter in minutes, blackboard in seconds.
     const double rain_delay_minutes = declare_parameter<double>("rain_delay_minutes", 30.0);
@@ -1280,6 +1370,14 @@ private:
     // mowing. 0 disables debounce (legacy behaviour).
     const double rain_debounce_sec = declare_parameter<double>("rain_debounce_sec", 0.0);
     blackboard_->set("rain_debounce_sec", rain_debounce_sec);
+
+    // External rain source (/external_rain, fed from MQTT by mqtt_bridge_node).
+    // `use_external_rain` is the master switch; a "wet" verdict older than
+    // `external_rain_max_age_minutes` is ignored (0 = never expires) so a dead
+    // automation cannot hold the mower in RAIN_WAITING forever.
+    context_->use_external_rain = declare_parameter<bool>("use_external_rain", true);
+    context_->external_rain_max_age_sec =
+        std::max(0.0, declare_parameter<double>("external_rain_max_age_minutes", 120.0)) * 60.0;
 
     declare_parameter<double>("tick_rate", 10.0);
 
@@ -1426,10 +1524,7 @@ private:
     coverage_orientation_service_->processPending();
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
-      if (mowgli_interfaces::updateMaintenanceActive())
-      {
-        context_->current_command = 8;  // COMMAND_STOP: hold position, never auto-resume.
-      }
+      refreshFleetYieldLocked(*context_);
       updateLocalizationHealthLocked();
     }
 
@@ -1477,6 +1572,7 @@ private:
       context_->area_completed_swaths.clear();
       context_->area_swath_count.clear();
       context_->area_resume_pose_index.clear();
+      context_->area_unit_progress.clear();
       context_->area_path_pose_count.clear();
       context_->area_plan_fingerprint.clear();
       context_->completed_areas.clear();
@@ -1544,6 +1640,7 @@ private:
   // ------------------------------------------------------------------
 
   std::shared_ptr<BTContext> context_;
+  std::unique_ptr<FleetYieldService> fleet_yield_service_;
   std::unique_ptr<BladeControlService> blade_control_service_;
   std::unique_ptr<CoverageOrientationService> coverage_orientation_service_;
 
@@ -1564,6 +1661,7 @@ private:
 
   // Subscribers
   rclcpp::Subscription<mowgli_interfaces::msg::Status>::SharedPtr status_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr external_rain_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::Emergency>::SharedPtr emergency_sub_;
   /// Merged twist_mux output — direction source for the #487 escape.
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
@@ -1593,6 +1691,11 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::StartInArea>::SharedPtr start_in_area_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_coverage_resume_srv_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr resume_available_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr external_rain_state_pub_;
+  rclcpp::TimerBase::SharedPtr external_rain_state_timer_;
+  ExternalRainStatus last_external_rain_state_;
+  std::chrono::steady_clock::time_point last_external_rain_state_time_{};
+  bool external_rain_state_published_{false};
   rclcpp::TimerBase::SharedPtr resume_available_timer_;
   // Periodic re-publish of the last HighLevelStatus so the topic stays fresh
   // during long-running actions (see setupHighLevelStatusRepublish).

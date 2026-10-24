@@ -1,15 +1,17 @@
 import { useCallback, useRef, useState } from "react";
 import { App } from "antd";
 import { useTranslation } from "react-i18next";
+import {isHttpFailure} from "../utils/containers";
+import {requestErrorMessage} from "../utils/errors";
 import { wsBase } from "../utils/apiHost";
 
 /**
  * Wait for ROS2 to be reachable again after a container restart.
  *
  * Opens a short-lived probe WebSocket to a known mowgli stream. The Go
- * backend only forwards a message once it has reconnected to rosbridge
- * AND received a fresh sample, so the first MessageEvent is a reliable
- * "ROS2 is back" signal. Resolves true on first message, false on timeout.
+ * backend forwards status frames from ROS. Receipt proves stream delivery,
+ * not a new physical observation or that a particular restart occurred.
+ * Resolves true on first message, false on timeout.
  */
 const waitForRos2 = (timeoutMs: number): Promise<boolean> =>
     new Promise((resolve) => {
@@ -89,16 +91,17 @@ export const useContainerRestart = (options: ContainerRestartOptions = {}) => {
                     const ok = await waitForRos2(timeoutMs);
                     if (!ok) {
                         notification.warning({
-                            message: errorText,
-                            description: t("containerRestart.timeoutDescription", {seconds: Math.round(timeoutMs / 1000)}),
+                            message: t("telemetry.statusUnknown"),
                         });
                         return;
                     }
                 }
                 onSuccess?.();
                 notification.success({ message: successText });
-            } catch (e: any) {
-                notification.error({ message: errorText, description: e.message });
+            } catch (e) {
+                const description = requestErrorMessage(e) ?? t("diagnosticsPage.unknownError");
+                if (isHttpFailure(e)) notification.error({message: errorText, description});
+                else notification.warning({message: t("telemetry.statusUnknown"), description});
             } finally {
                 pendingRef.current = false;
                 setPending(false);

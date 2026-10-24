@@ -67,6 +67,7 @@ func TestServiceRoute_HighLevelControl(t *testing.T) {
 
 func TestServiceRoute_Emergency(t *testing.T) {
 	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) { res.(*mowgli.EmergencyStopRes).Success = true }
 	router := setupMowgliNextRouter(mock)
 
 	payload := map[string]any{"Emergency": 1}
@@ -84,6 +85,7 @@ func TestServiceRoute_Emergency(t *testing.T) {
 
 func TestServiceRoute_MowEnabled(t *testing.T) {
 	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) { res.(*mowgli.MowerControlRes).Success = true }
 	router := setupMowgliNextRouter(mock)
 
 	payload := map[string]any{"MowEnabled": 1, "MowDirection": 0}

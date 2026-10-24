@@ -285,6 +285,8 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `rain_mode` (L508) | 2 (0=ignore, 1=dock, 2=dock_until_dry, 3=pause_auto) | `behavior_tree_node.cpp:884` `declare_parameter`; injected from the merged robot config by `full_system.launch.py:335` (commit `e77ed83f`, 2026-09-24, "#758") | Rain | live |
 | `rain_delay_minutes` (L509) | 30.0 | `behavior_tree_node.cpp:877` (node default 30.0, same); injected by `full_system.launch.py:336` | Rain | live |
 | `rain_debounce_sec` (L510) | 10.0 | `behavior_tree_node.cpp:891` (node default 0.0); injected from the template's 10.0 by `full_system.launch.py:337`, so the running robot now gets the template value, not the node's compiled default | Rain | live |
+| `use_external_rain` | true | `behavior_tree_node.cpp` `declare_parameter` → `BTContext::use_external_rain`; injected by `full_system.launch.py` next to the rain keys | Rain | live |
+| `external_rain_max_age_minutes` | 120.0 (0 = never expires) | `behavior_tree_node.cpp` `declare_parameter` → `BTContext::external_rain_max_age_sec`; injected by `full_system.launch.py` | Rain | live |
 
 ### Start-pose escape (SAFETY-CRITICAL bounded nudge, `full_system.launch.py:313–341`)
 
@@ -541,6 +543,19 @@ Declared **without** a yaml line (code defaults only, tune via `ros2 param set` 
 | `HARDWARE_BACKEND`, `MAVROS_*` | `compose.sh` L127 → `docker-compose.mavros.yml` | `mowgli-mavros` | MAVLink wiring; `mavros` forces `GNSS_BACKEND=disabled` (`env.sh` L303–305). The standalone `mowgli-ntrip` service was removed (commit `bfd44f1a`, 2026-09-19, "#625") — there is no separate NTRIP container on this backend any more |
 | `COMPOSE_PROJECT_NAME` | named-volume prefix (`install_mowgli_maps`) | all | **keep stable** — renaming orphans persisted maps |
 | `MOWER_IP`, `DISABLE_BLUETOOTH`, `GPS_PROTOCOL` | host/ser2net helpers | — | `GPS_PROTOCOL` and `GNSS_BACKEND`/`HARDWARE_BACKEND` are passed into `mowgli-ros2` but **nothing there reads them** |
+
+### Coverage blade readiness
+
+Coverage dispatch also reads `blade_ready_min_rpm` (1000.0),
+`blade_spinup_delay_sec` (1.5, telemetry-unavailable fallback after ON response),
+and `blade_ready_timeout_sec` (6.0, at most 30 seconds). Template defaults are
+in `mowgli_robot.yaml`; `full_system.launch.py` injects them into
+`behavior_tree_node`'s `BTContext::blade_ready_config`. The GUI schema mirrors
+them and exposes them in Advanced settings. All are startup-only. The BT also
+receives the existing `mowing_enabled` dry-run choice so it can deliberately
+follow coverage without requiring blade RPM; hardware still enforces inhibition.
+Read `docs/BLADE_READY_VALIDATION.md` for timestamp identity, failure semantics,
+scope and the pending physical acceptance procedure.
 
 ## Recipe: adding a new parameter
 

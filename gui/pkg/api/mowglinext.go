@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/providers"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/vmihailenco/msgpack/v5"
 )
@@ -126,7 +127,7 @@ func topicSubscribeInterval(topic string) (int, bool) {
 	case "diagnostics", "status", "highLevelStatus", "btLog", "map",
 		"path", "plan", "power", "emergency", "dockingSensor",
 		"robotDescription", "recordingTrajectory",
-		"coverageResumeAvailable", "coverageSession",
+		"coverageResumeAvailable", "coverageSession", "externalRainState",
 		"fusionDiag", "dockCalibrationStatus", "firmwareParams",
 		"digEvent", "localizationMode", "collisionMonitor", "mavrosState", "mavrosVehicleInfo":
 		return -1, true
@@ -162,6 +163,11 @@ func AddMapAreaRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		if CallReq.Area.Obstacles == nil {
 			CallReq.Area.Obstacles = []geometry.Polygon{}
 		}
+		if err := lockMapReplacement(ctx, nil); err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
+		defer unlockMapReplacement()
 		err = provider.CallService(ctx, "/map_server_node/add_area", &CallReq, &mowgli.AddMowingAreaRes{}, "mowgli_interfaces/srv/AddMowingArea")
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
@@ -186,6 +192,11 @@ func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 		defer cancel()
 
+		if err := lockMapReplacement(ctx, nil); err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
+		defer unlockMapReplacement()
 		err := provider.CallService(ctx, "/map_server_node/clear_map", &mowgli.ClearMapReq{}, &mowgli.ClearMapRes{}, "std_srvs/srv/Trigger")
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
@@ -234,17 +245,25 @@ func ReplaceMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // converged…) with {success:false, message}: the dock pose was NOT
 // committed, so that is an error too, carrying map_server's reason (#703).
 func setDockingPointInternal(ctx context.Context, provider types.IRosProvider, req *mowgli.SetDockingPointReq) error {
-	if req == nil {
-		return errors.New("setDockingPointInternal: nil request")
-	}
-	var res mowgli.SetDockingPointRes
-	if err := provider.CallService(ctx, "/map_server_node/set_docking_point", req, &res, "mowgli_interfaces/srv/SetDockingPoint"); err != nil {
+	res, err := requestDockingPoint(ctx, provider, req)
+	if err != nil {
 		return err
 	}
 	if !res.Success {
 		return fmt.Errorf("dock pose rejected by map_server: %s", res.Message)
 	}
 	return nil
+}
+
+// Preserve the complete acknowledgement for import callers that must also
+// distinguish an accepted in-memory pose from confirmed YAML persistence.
+func requestDockingPoint(ctx context.Context, provider types.IRosProvider, req *mowgli.SetDockingPointReq) (mowgli.SetDockingPointRes, error) {
+	var res mowgli.SetDockingPointRes
+	if req == nil {
+		return res, errors.New("setDockingPointInternal: nil request")
+	}
+	err := provider.CallService(ctx, "/map_server_node/set_docking_point", req, &res, "mowgli_interfaces/srv/SetDockingPoint")
+	return res, err
 }
 
 // SetDockingPointRoute set the docking point
@@ -268,6 +287,11 @@ func SetDockingPointRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
 		}
+		if err := lockMapReplacement(ctx, nil); err != nil {
+			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		}
+		defer unlockMapReplacement()
 		if err := setDockingPointInternal(ctx, provider, &CallReq); err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
 			return
@@ -695,7 +719,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(ctx, "/hardware_bridge/emergency_stop", &CallReq, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
+			err = providers.CallEmergencyStop(ctx, provider, &CallReq)
 		case "mow_enabled":
 			var CallReq mowgli.MowerControlReq
 			err = c.BindJSON(&CallReq)
@@ -705,7 +729,7 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
-			err = provider.CallService(ctx, "/hardware_bridge/mower_control", &CallReq, &mowgli.MowerControlRes{}, "mowgli_interfaces/srv/MowerControl")
+			err = providers.CallMowerControl(ctx, provider, &CallReq)
 		case "blade_control":
 			handleBladeControl(c, provider)
 			return
@@ -950,44 +974,8 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				return
 			}
 		case "set_lidar_ignore_corridors":
-			// Replace the whole LiDAR-ignore corridor list (clear + add each),
-			// the same rebuild shape the map save uses for areas. map_server
-			// clamps width_m and persists into areas.dat on every add.
-			var setReq struct {
-				Corridors []mowgli.LidarIgnoreCorridor `json:"corridors"`
-			}
-			if err = c.BindJSON(&setReq); err != nil {
-				c.JSON(400, ErrorResponse{Error: err.Error()})
-				return
-			}
-			var clearRes mowgli.ClearLidarIgnoreCorridorsRes
-			err = provider.CallService(ctx,
-				"/map_server_node/clear_lidar_ignore_corridors",
-				&mowgli.ClearLidarIgnoreCorridorsReq{},
-				&clearRes,
-				"mowgli_interfaces/srv/ClearLidarIgnoreCorridors")
-			if err == nil && !clearRes.Success {
-				err = errors.New("clear_lidar_ignore_corridors failed")
-			}
-			for i := 0; err == nil && i < len(setReq.Corridors); i++ {
-				corridor := setReq.Corridors[i]
-				if corridor.Polyline.Points == nil {
-					corridor.Polyline.Points = []geometry.Point32{}
-				}
-				var addRes mowgli.AddLidarIgnoreCorridorRes
-				err = provider.CallService(ctx,
-					"/map_server_node/add_lidar_ignore_corridor",
-					&mowgli.AddLidarIgnoreCorridorReq{Corridor: corridor},
-					&addRes,
-					"mowgli_interfaces/srv/AddLidarIgnoreCorridor")
-				if err == nil && !addRes.Success {
-					err = errors.New("add_lidar_ignore_corridor rejected a corridor (needs at least 2 points)")
-				}
-			}
-			if err == nil {
-				c.JSON(200, OkResponse{})
-				return
-			}
+			replaceLidarCorridors(c, ctx, provider)
+			return
 		case "ignore_obstacle", "discard_obstacle":
 			// Reject a PENDING obstacle proposal (currently: wheel-slip dig
 			// keepouts) by its MapObstacleInfo.id. Nothing was persisted, so

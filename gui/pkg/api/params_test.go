@@ -17,7 +17,9 @@ import (
 func newParamsRouter(ros types.IRosProvider) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	ParamsRoutes(r.Group("/api"), ros, types.NewMockDBProvider())
+	db := types.NewMockDBProvider()
+	_ = db.Set("system.mower.runtimeEnvFile", []byte(""))
+	ParamsRoutes(r.Group("/api"), ros, db)
 	return r
 }
 

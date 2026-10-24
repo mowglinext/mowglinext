@@ -1,5 +1,5 @@
 import {GnssStatus, GnssStatusConstants} from "../../types/ros.ts";
-import {deriveGpsStatus, gnssCorrectionStreamStatusLabel} from "../../utils/gpsStatus.ts";
+import {deriveGpsStatus, currentCorrectionStreamStatus, gnssCorrectionStreamStatusLabel} from "../../utils/gpsStatus.ts";
 import type {FusionGraphStats} from "../../hooks/useFusionGraphDiagnostics.ts";
 import type {CalibrationStatus} from "../../hooks/useCalibrationStatus.ts";
 
@@ -95,7 +95,7 @@ function rtkCheck(snap: ReadinessSnapshot): ReadinessCheck {
 }
 
 function correctionsCheck(snap: ReadinessSnapshot): ReadinessCheck {
-    const status = snap.gnss?.correction_stream_status;
+    const status = currentCorrectionStreamStatus(snap.gnss);
     let state: ReadinessState;
     if (status === GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE) {
         state = "pass";

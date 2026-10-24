@@ -360,6 +360,15 @@ def generate_launch_description() -> LaunchDescription:
             {"rain_mode": int(robot_params.get("rain_mode", 2))},
             {"rain_delay_minutes": float(robot_params.get("rain_delay_minutes", 30.0))},
             {"rain_debounce_sec": float(robot_params.get("rain_debounce_sec", 0.0))},
+            # use_external_rain / external_rain_max_age_minutes: the
+            # /external_rain verdict (a roof weather station behind Home
+            # Assistant, relayed by mqtt_bridge_node) OR-ed with the mower's own
+            # rain sensor in BTContext::RainingNow. Template defaults live in
+            # mowgli_robot.yaml; these fallbacks only matter if the template key
+            # is missing.
+            {"use_external_rain": bool(robot_params.get("use_external_rain", True))},
+            {"external_rain_max_age_minutes":
+                float(robot_params.get("external_rain_max_age_minutes", 120.0))},
             # idle_nav2_suspend: PAUSE the Nav2 lifecycle stack while parked on
             # the dock to cut idle CPU/thermal load (costmaps stop looping).
             # Default off — a deliberate per-site opt-in. RESUME is guaranteed
@@ -374,6 +383,10 @@ def generate_launch_description() -> LaunchDescription:
             {"transit_speed": float(robot_params.get("transit_speed", 0.25))},
             {"mowing_speed": float(robot_params.get("mowing_speed", 0.2))},
             {"blade_auto_reverse": bool(robot_params.get("blade_auto_reverse", False))},
+            {"mowing_enabled": bool(robot_params.get("mowing_enabled", True))},
+            {"blade_ready_min_rpm": float(robot_params.get("blade_ready_min_rpm", 1000.0))},
+            {"blade_spinup_delay_sec": float(robot_params.get("blade_spinup_delay_sec", 1.5))},
+            {"blade_ready_timeout_sec": float(robot_params.get("blade_ready_timeout_sec", 6.0))},
             # mow_angle_deg: operator swath direction. -1 (negative) = AUTO
             # (coverage server picks the swath-count-minimising angle); 0..179 =
             # fixed swath angle in degrees. Read by PlanCoverageArea::buildGoal

@@ -1,4 +1,9 @@
 {
+  "telemetry": {
+    "emergencyClearanceUnverified": "Emergency was reported · clearing unverified",
+    "statusUnknown": "Status unknown",
+    "freshnessUnverified": "Reported status · freshness unverified"
+  },
   "blackbox": {
     "title": "Automatic blackbox",
     "recordingsTab": "Recordings",
@@ -103,21 +108,32 @@
     "names": {
       "mowgli": "Mowgli board (STM32)",
       "openmower": "OpenMower v1 (LowLevel board + xESC)",
-      "mavros": "Pixhawk (MAVROS)"
+      "mavros": "Pixhawk (MAVROS)",
+      "unknown": "Unconfirmed hardware backend"
     },
     "descriptions": {
       "mowgli": "The Mowgli STM32 firmware drives the motors and owns blade and emergency safety. It needs no wiring settings here.",
       "openmower": "The stock OpenMower electronics keep their own firmware; a bridge container drives them. Settings MowgliNext already has (charge limits, lift delays, ticks per metre…) stay in their usual sections and are applied to the OpenMower hardware.",
-      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer."
+      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer.",
+      "unknown": "Unconfirmed hardware backend"
     },
     "choiceNote": "The backend is chosen when installing the robot.",
     "openmowerRestartNote": "The OpenMower bridge reads these settings when it starts: use \"Restart ROS2\" after saving, which restarts the bridge too.",
     "shortNames": {
       "mowgli": "Mowgli",
       "openmower": "OpenMower v1",
-      "mavros": "MAVROS"
+      "mavros": "MAVROS",
+      "unknown": "Unconfirmed hardware backend"
     },
-    "badgeTooltip": "Hardware backend: {{name}} — open the hardware settings"
+    "badgeTooltip": "Hardware backend: {{name}} — open the hardware settings",
+    "presetsUnavailable": "Backend defaults unavailable; hardware model presets disabled.",
+    "authority": {
+      "loading": "Hardware identity is loading",
+      "legacy_absent": "Legacy metadata endpoint absent; live hardware writes disabled",
+      "unavailable": "Hardware metadata unavailable; live hardware writes disabled",
+      "malformed": "Malformed hardware metadata; live hardware writes disabled",
+      "unsupported": "Unsupported hardware backend; live hardware writes disabled"
+    }
   },
   "settingsMavrosDrive": {
     "notice": {
@@ -1054,7 +1070,7 @@
     "soilWetTitle": "Careful: the garden is wet (IrriSense)",
     "soilWetBlocking": "scheduled mows are suspended",
     "digEscalationTitle": "Mowing halted — repeat dig detected",
-    "digEscalationBody": "The mower couldn't free itself and stopped {{distance}} m from the spot (needs {{required}} m to clear). Move it further away, then try again.",
+    "digEscalationBody": "The mower couldn't free itself and stopped {{distance}} m from the spot. Resume from here (one more dig at this spot stops it again), move it more than {{required}} m away, or send it home.",
     "digEscalationReady": "Moved {{distance}} m from the spot — ready to clear.",
     "digEscalationClear": "Clear & resume"
   },
@@ -1746,7 +1762,7 @@
     },
     "DIG_OBSTRUCTION": {
       "label": "Dig obstruction",
-      "friendly": "Stopped — kept digging at the same spot. Lift it clear, then Play or Home"
+      "friendly": "Stopped — kept digging at the same spot. Check it, then Play to resume or Home"
     },
     "UNDOCK_FAILED": {
       "label": "Start failed",
@@ -2012,7 +2028,16 @@
     "colApproxArea": "Approx area (m²)",
     "warningCount_one": "{{count}} warning",
     "warningCount_other": "{{count}} warnings",
-    "applyFailed": "Apply failed"
+    "applyFailed": "Import incomplete or unconfirmed",
+    "legacyApplied": "The legacy server acknowledged the import, but detailed map and dock persistence cannot be confirmed. Your local draft is preserved and may differ from the robot. Verify the map and dock before another operation; no datum write was attempted.",
+    "notStarted": "Import was not started; this request did not change the map or dock.",
+    "mapRestored": "Import failed; restoration of the previous areas was acknowledged. Your local draft is preserved.",
+    "outcomeUnknown": "Import outcome unconfirmed; the server may have changed the map or dock. Your local draft is preserved and may differ from the robot. Verify both before another operation; do not start mowing.",
+    "mapPersistenceUnconfirmed": "The new map is active, but persistence is unconfirmed. The dock was not updated. Your local draft is preserved; verify the map and dock before another operation.",
+    "dockRejected": "The new map was saved, but the dock update was explicitly rejected. Your local draft is preserved and may differ from the robot. Verify the map and dock before another operation.",
+    "dockUnconfirmed": "The new map was saved, but the dock outcome is unconfirmed. Your local draft is preserved and may differ from the robot. Verify the map and dock before another operation.",
+    "dockNotAttempted": "The service confirmed that the areas were saved. The dock update was not attempted. Your local draft is preserved. Verify the robot's state before trying again. No new import or datum write is started automatically.",
+    "dockPersistenceUnconfirmed": "The new map was saved and the dock update was accepted in memory, but dock persistence is unconfirmed. Your local draft is preserved; verify the map and dock before another operation."
   },
   "mapAreasList": {
     "typeWorkArea": "Work Area",
@@ -2146,6 +2171,16 @@
   "mapFiles": {
     "areaSaved": "Area saved",
     "failedToSaveArea": "Failed to save area",
+    "unsupportedGeometry": "Polygons with interior rings (holes) and MultiPolygon geometries are not supported without losing exclusions. No map replacement or dock write was sent. The source file and local draft are unchanged. Review the exclusions before choosing a supported representation.",
+    "invalidGeometry": "Invalid or unrepresentable map geometry or coordinate transformation. No map replacement or dock write was sent. The source file and local draft are unchanged.",
+    "obstacleParentMissing": "Map not saved: obstacles {{ids}} have no matching parent area. The local draft is unchanged; no exclusion was discarded and no map replacement or dock write was sent.",
+    "affectedPolygons": "Affected polygons: {{polygons}}. Fix their outline (no crossing or touching edges) and save again.",
+    "polygonArea": "area \"{{name}}\"",
+    "polygonNavigation": "navigation area \"{{name}}\"",
+    "polygonObstacle": "obstacle {{index}} of area \"{{area}}\"",
+    "unnamedPolygon": "unnamed",
+    "preExistingInvalidGeometryTitle": "Map saved with invalid polygons left unchanged",
+    "preExistingInvalidGeometry": "These polygons were already invalid (crossing or touching edges) and were not edited, so they were saved exactly as before: {{polygons}}. Redraw them so coverage planning can use them reliably.",
     "restoreFailed": "Could not restore this map backup",
     "restoreOriginalsFailed": "The map was restored, but the recorded obstacle outlines in the backup could not be stored",
     "restoreCorridorsFailed": "The map was restored, but the LiDAR ignore lines in the backup could not be written",
@@ -2154,6 +2189,7 @@
     "openMowerImportFailed": "OpenMower import failed",
     "openMowerMapImported": "OpenMower map imported",
     "openMowerMapImportedDescription": "Areas + dock pose written. /map should refresh shortly.",
+    "openMowerMapImportedWithoutDock": "Areas saved. No dock update was requested. /map should refresh shortly.",
     "unknownType": "Unknown type {{type}}",
     "obstaclesDropped": "Some obstacles were dropped",
     "obstaclesDroppedDescription": "These keep-out zones had no matching parent area and were not saved: {{ids}}",
@@ -2978,6 +3014,14 @@
       }
     },
     "backend": {
+      "invalidStatus": "Invalid drive tuning status response",
+      "invalidReport": "Invalid drive tuning report response",
+      "invalidParsedReport": "Invalid drive tuning report data",
+      "invalidRollback": "Invalid drive tuning rollback response",
+      "rollbackFailed": "Drive tuning rollback failed",
+      "invalidStart": "Drive tuning start was not confirmed",
+      "invalidRequest": "Invalid drive tuning inputs; no request was sent",
+      "requestFailed": "Drive tuning request failed",
       "statusFetchFailed": "Failed to fetch drive tuning status",
       "rollback": {
         "successMessage": "Drive tuning rollback applied live and persisted to mowgli_robot.yaml"
@@ -3202,9 +3246,37 @@
     "resumeDelay": "Resume Delay",
     "resumeDelayTooltip": "Minutes to wait after rain stops before resuming",
     "debounce": "Debounce",
-    "debounceTooltip": "Seconds of continuous rain signal before triggering"
+    "debounceTooltip": "Seconds of continuous rain signal before triggering",
+    "externalSource": "External rain source",
+    "externalSourceDescription": "Also treat a yes/no published to MQTT topic <prefix>/external_rain as rain, for example from a Home Assistant automation on a roof weather station. It can only add a reason to stop; the mower's own rain sensor always counts too. Requires MQTT to be enabled.",
+    "useExternal": "Use external rain source",
+    "useExternalTooltip": "Treat an external 'yes' on <prefix>/external_rain as rain",
+    "externalStatus": "Status",
+    "externalState_wet": "Wet — counted",
+    "externalState_dry": "Dry",
+    "externalState_expired": "Wet, but expired — not counted",
+    "externalState_disabled": "Switched off",
+    "externalState_no_data": "No message received yet",
+    "externalAge": "last message {{age}} ago",
+    "externalExpiresIn": "counts for another {{age}}",
+    "ownSensorWet": "Mower's own sensor: wet",
+    "externalExpiry": "External rain expiry",
+    "externalExpiryTooltip": "Minutes after which an external 'yes' is ignored if it was not refreshed (0 = never expires). Keeps a dead automation from holding the mower in the rain wait."
   },
   "settingsAdvanced": {
+    "valueFor": "Value for {{key}}",
+    "numberCommitHint": "Commit a complete number with Enter or by leaving this field.",
+    "invalidNumber": "Invalid or incomplete number ignored. Enter a complete finite decimal number.",
+    "structuredReadOnly": "Structured value (read-only)",
+    "unsupportedReadOnly": "Unsupported value (read-only)",
+    "deleteKey": "Delete {{key}}",
+    "newKey": "New parameter name",
+    "newValue": "New parameter value",
+    "valueType": "Value type",
+    "types": {"string": "String", "number": "Number", "boolean": "Boolean"},
+    "invalidName": "Use an exact flat parameter name: letters, digits and underscores; start with a letter or underscore. No automatic renaming.",
+    "duplicateKey": "This parameter already exists, including pending deletions.",
+    "protectedKey": "This parameter belongs to another section or is hidden/retired.",
     "advancedParameters": "Advanced parameters",
     "advancedParametersDescription": "These are raw YAML parameters not covered by the sections above. Edit with care — invalid values can break the robot configuration.",
     "noExtraParameters": "No extra parameters defined",
@@ -3305,12 +3377,13 @@
     "rawValueFallback": "{{label}} Raw Value"
   },
   "gnssRuntimeConfig": {
+    "invalidResponse": "Invalid GNSS runtime configuration response.",
     "detectedDevicesLabel": "Detected serial device",
     "detectedDevicesPlaceholder": "Select a detected serial device",
     "manualSerialPathLabel": "Manual serial path override",
-    "activeLinkLabel": "Active runtime link",
+    "activeLinkLabel": "Resolved GNSS configuration",
     "resolvedTarget": "Resolved target: {{path}}",
-    "envFallbackMessage": "Runtime is using .env fallback for GNSS family/device/baud because no GUI YAML override is saved yet: {{family}} / {{device}} / {{baud}}.",
+    "envFallbackMessage": "GNSS configuration resolves family/device/baud from .env because no GUI YAML override is saved yet: {{family}} / {{device}} / {{baud}}.",
     "configuredDeviceMissing": "The selected GNSS serial device no longer exists: {{device}}.",
     "activeDeviceMissing": "The active GNSS serial device does not exist: {{device}}.",
     "familyMismatch": "Detected receiver family {{detected}} differs from the selected family {{selected}}.",
@@ -3319,7 +3392,8 @@
     "source": {
       "config": "GUI/YAML",
       "env": ".env fallback",
-      "default": "built-in default"
+      "default": "built-in default",
+      "unknown": "unavailable / unknown"
     }
   },
   "settingsGnssSignalHelp": {},
@@ -3332,6 +3406,14 @@
     "actionFactoryReset": "Factory reset + apply profile",
     "actionRestart": "Restart GPS",
     "cancel": "Cancel",
+    "invalidResponse": "GNSS response is missing or malformed.",
+    "operationUnconfirmed": "GNSS operation result is unconfirmed",
+    "operationUnconfirmedDesc": "The server or receiver may already have executed the operation. Check its state before retrying; no automatic retry was sent.",
+    "persistenceInProgressDesc": "Saving prerequisite settings before sending the GNSS action.",
+    "persistenceUnconfirmed": "Settings persistence was not confirmed",
+    "persistenceUnconfirmedDesc": "Prerequisite settings save was not confirmed; no GNSS action request was sent.",
+    "restartUnconfirmed": "GPS restart completion is unconfirmed",
+    "planOnlyDesc": "Planning completed without changing the receiver.",
     "unknownApiError": "Unknown GNSS API error",
     "backendRequestFailed": "GNSS backend request failed",
     "summaryPartialFailure": "GNSS action finished with partial failure",
@@ -3346,12 +3428,12 @@
     "notifyFailedDesc": "Review the GNSS action panel for stdout/stderr and warnings.",
     "notifyCompleted": "{{action}} completed",
     "confirmApplyTitle": "Apply GNSS profile to receiver?",
-    "confirmApplyBody": "The GPS sidecar will be stopped, the receiver profile will be applied in a one-shot GNSS container, and the GPS sidecar will be restarted only if the apply succeeds.",
+    "confirmApplyBody": "The running GPS sidecar will be stopped before applying the saved receiver profile. The backend attempts to restore GPS afterward, including on failure.",
     "confirmApplyWarning": "Do not disconnect power or USB/serial wiring while the receiver profile is being applied.",
     "confirmApplyOk": "Apply profile",
     "confirmFactoryResetTitle": "Factory reset receiver and re-apply profile?",
     "confirmFactoryResetDanger": "Factory reset clears receiver settings before rebuilding the selected profile.",
-    "confirmFactoryResetBody": "The backend will stop the GPS sidecar, run the persistent factory-reset flow, then re-apply the selected saved profile and restart GPS only if that flow succeeds.",
+    "confirmFactoryResetBody": "The backend will stop the running GPS sidecar, factory-reset the receiver and re-apply the saved profile, then attempt to restore GPS even if the operation fails.",
     "confirmFactoryResetWarning": "Use this only when you intentionally want to rebuild receiver configuration from a clean state.",
     "confirmFactoryResetOk": "Factory reset and apply",
     "actionInProgress": "{{action}} in progress",
@@ -3464,6 +3546,12 @@
     "yourRobot": "Your robot"
   },
   "robotComponentEditor": {
+    "savedDockLoaded": "Stored dock coordinates loaded",
+    "savedDockLoadedDesc": "The values read from mowgli_robot.yaml are now shown, including the independently stored heading. This readback does not identify a new GPS acquisition.",
+    "dockWriteUnconfirmed": "Dock write not confirmed",
+    "dockReadbackUnconfirmed": "Dock write accepted; stored coordinates not confirmed",
+    "dockUnconfirmedDesc": "Local coordinates are unchanged. The action may have executed; no automatic retry was made. {{reason}}",
+    "invalidGeometry": "Some sensor values are invalid. Inputs remain unavailable; the preview uses robot geometry defaults.",
     "dockPoseSetFromGps": "Dock pose set (from GPS)",
     "dockPoseSetFromGpsDescription": "Captured the dock position from the averaged GPS fix and persisted to mowgli_robot.yaml. The map indicator jumps to the new pose on the next /map publish.",
     "unknownError": "Unknown error",
@@ -3472,14 +3560,14 @@
     "setDockFromPoseTitle": "Set dock position from current robot position?",
     "setDockPose": "Set dock position",
     "cancel": "Cancel",
-    "setDockConfirmIntro1": "This captures the robot's",
+    "setDockConfirmIntro1": "This requests a capture of the robot’s averaged GPS",
     "setDockConfirmXYHeading": "x, y position only",
-    "setDockConfirmIntro2": "right now and writes it to",
+    "setDockConfirmIntro2": "and asks the service to write it to",
     "setDockConfirmIntro3": "as the new dock position. Heading is NOT changed by this action — the fused heading is locked to the existing dock heading while charging, so a live capture could never correct it. Recalibrate heading separately via \"Run Calibration\" (motion-based, not affected by this).",
     "currentRobot": "Current robot",
     "bearing": "bearing",
     "savedDock": "Saved dock (heading unchanged by this action)",
-    "setDockConfirmFooter": "Make sure the robot is sitting on the dock so the position capture reflects the true charging-contact point. The new position persists across container restarts.",
+    "setDockConfirmFooter": "Keep charging contact throughout the action. The GUI adopts only valid coordinates read from the YAML file; an unconfirmed result leaves local coordinates unchanged.",
     "sensorPlacement": "Sensor Placement",
     "metersFromUrdf": "m (robot geometry)",
     "dragSensorsHint": "Drag sensors on the top-down robot view to set their X/Y position. Use the rotation handle (small circle) to set sensor yaw. The grid spacing is 5 cm. Robot dimensions are read from the /robot_description topic.",
@@ -3495,8 +3583,8 @@
     "source": "source",
     "captureFromRobot": "Capture from current robot position",
     "captureIntro1": "Park the robot on the dock facing the approach direction, then click below. Captures",
-    "captureXYYaw": "x, y AND yaw",
-    "captureIntro2": "at once — this is the most reliable way to seed the dock pose for a fresh map.",
+    "captureXYYaw": "GPS position (heading preserved)",
+    "captureIntro2": "while charging. Confirm the action, then check the stored YAML values read back by the GUI.",
     "robotNow": "Robot now: x={{x}} m, y={{y}} m, bearing={{bearing}}°",
     "waitingForPose": "Waiting for robot pose…",
     "tooltipNotCharging": "Place robot on dock with charging contacts engaged before setting the reference pose",
@@ -4111,13 +4199,28 @@
       "savedDescription": "Restart ROS2 to apply changes.",
       "savedGpsRestartDescription": "Restarting GPS to apply GNSS changes. Restart ROS2 to apply other saved changes.",
       "restartingGps": "Restarting GPS with current settings",
+      "dockCapturePending": "Dock capture is in progress. Wait for its readback before saving settings.",
+      "dockCaptureUnconfirmed": "The dock capture result is unconfirmed. Reload settings or complete a confirmed capture before saving dock edits. Local values remain unchanged.",
+      "dockCaptureWhileSaving": "A settings write or dock capture is already in progress. Wait for it to finish before capturing the dock.",
       "dockRefreshFailed": "Settings saved, but map_server runtime refresh failed",
       "dockRefreshFailedDescription": "Restart ROS2 (or call /map_server_node/set_docking_point manually) to pick up the new dock pose.",
       "drivePidUpdateFailed": "Settings saved, but live drive-PID update failed",
       "drivePidUpdateFailedDescription": "Restart ROS2 to apply the new drive-motor PID gains.",
       "saveFailed": "Failed to save settings",
-      "savedApplyingLive": "Saved. Applying the drive settings to the running robot…",
-      "savedDisplaySettings": "Saved. Dock appearance updated; no robot restart is needed."
+      "savedApplyingLive": "YAML saved; runtime application is still pending.",
+      "savedDisplaySettings": "Saved. Dock appearance updated; no robot restart is needed.",
+      "runtimeUnconfirmed": "Runtime update was not confirmed; YAML remains saved.",
+      "liveApplied": "Runtime parameters confirmed",
+      "liveAdjusted": "Runtime parameters applied, adjusted by the robot",
+      "liveAdjustedItem": "{{name}} set to {{applied}} (requested {{requested}}, adjusted by the bridge)",
+      "invalidNumericValue": "Invalid numeric setting; nothing was saved.",
+      "savedRuntimeFailed": "YAML saved, but a subsequent operation failed",
+      "routing": {
+        "unconfirmed": "Backend identity is unconfirmed. YAML saved; no live hardware update was sent.",
+        "pending_image": "YAML saved. Live routing needs a compatible runtime image; restart required.",
+        "restart_required": "YAML saved. These hardware changes require a restart.",
+        "unavailable": "YAML saved. Live hardware routing is unavailable; restart required."
+      }
     }
   },
   "displayMode": {
@@ -4840,8 +4943,10 @@
     "openGui": "Open this robot's GUI",
     "removeConfirm": "Remove {{robot}} from the fleet? It will forget this robot too.",
     "peerAdded": "Robot added to the fleet",
+    "peerAddWarningUnusable": "The add request returned an unusable warning. Check the fleet list and reciprocal registration status.",
     "peerRemoved": "Robot removed from the fleet",
     "pollError": "Fleet snapshot unavailable",
+    "rejectedRobots": "Hidden: unreadable status received from {{names}}. The other robots are shown normally.",
     "apiMismatch": "Different software version",
     "battery": "Battery",
     "gps": "GPS",
@@ -5174,5 +5279,69 @@
     "mapAlt": "Assembled mower from the running robot description",
     "dockStyle": "Styled dock",
     "dockNote": "Illustrative dock · 67 × 46 cm. Paired with the chassis in Hardware and shown automatically on the map."
+  },
+  "diagnosticHealth": {
+    "operation": "Operational state",
+    "allConfirmed": "All required display checks have current positive evidence. This is not a motion authorization.",
+    "level": {
+      "critical": "Critical",
+      "warning": "Warning",
+      "unknown": "Unknown",
+      "ok": "OK",
+      "not_applicable": "Not applicable"
+    },
+    "containers": "Containers",
+    "ros": "ROS diagnostics",
+    "localizer": "Localizer",
+    "lastReported": "Last reported ROS level: {{level}}",
+    "reason": {
+      "configuration": "Configuration checks report a warning or unavailable information.",
+      "clearance": "An earlier emergency has no verified clearance.",
+      "emergency": "Emergency status determines this verdict.",
+      "operation": "Operational state is missing, initializing or unverified.",
+      "containers": "Container state or required service availability determines this verdict.",
+      "cpu": "CPU temperature determines this verdict; an unavailable reading is unknown.",
+      "battery": "Battery estimate determines this verdict; unavailable telemetry is unknown.",
+      "gnss": "GNSS quality is degraded, missing or unverified. Missing GNSS alone does not prove a robot fault.",
+      "ros": "ROS diagnostics report a degradation or unavailable information.",
+      "lidar": "LiDAR status is missing or degraded; not applicable only when explicitly disabled.",
+      "localizer": "Autonomous operation requires a current localizer diagnostic.",
+      "recovery": "Navigation recovery is taking longer than expected."
+    }
+  },
+  "diagnosticAlertHistory": {
+    "currentCause": "Current verdict cause",
+    "active": "Active",
+    "resolved": "Resolved",
+    "unverified": "State unverified",
+    "recent": "Recent ({{count}})",
+    "showRecent": "Show recent alerts ({{count}})",
+    "hideRecent": "Hide recent alerts",
+    "collapseAll": "Collapse all groups",
+    "empty": "No alerts to display. Recent history remains available here.",
+    "episode": "Episode {{count}}",
+    "source": "Reported source",
+    "unknownSource": "Source not provided",
+    "unknownComponent": "Unnamed component"
+  },
+  "diagnosticReception": {
+    "communication": "Communication with the robot has been interrupted for at least 60 seconds.",
+    "missing": "No data received from {{source}} for at least 60 seconds.",
+    "source": {
+      "operation": "robot status",
+      "emergency": "emergency status",
+      "system": "system monitoring",
+      "hardware": "hardware bridge",
+      "odometry": "odometry",
+      "lidar": "LiDAR",
+      "gnss": "GNSS",
+      "localizer": "localization"
+    }
+  },
+  "digObstructionAck": {
+    "title": "Resume from the blocked spot?",
+    "body": "The wheels dug in repeatedly here and the mower is still {{distance}} m from the spot. Check that nothing is stuck under or in front of it. If it digs in once more at this spot, it will stop again.",
+    "ok": "Resume mowing",
+    "cancel": "Cancel"
   }
 }

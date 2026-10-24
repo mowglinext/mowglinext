@@ -5,6 +5,7 @@ import {useStatus} from "../../hooks/useStatus.ts";
 import {useMowerAction} from "../MowerActions.tsx";
 import {AsyncButton} from "../AsyncButton.tsx";
 import type {Status} from "../../types/ros.ts";
+import {useDigObstructionAck} from "../../hooks/useDigObstructionAck.ts";
 
 interface DigEscalationBannerProps {
     /** Injected for tests; the dashboard lets the hook fetch it. */
@@ -18,28 +19,27 @@ interface DigEscalationBannerProps {
  * the same spot, the robot judged unable to free itself, mowing halted. The
  * latch clears itself once the robot reaches the charger or once the fused
  * pose is 2x dig_escalate_radius_m from the spot; this banner is the operator
- * path in between (issue reported 2026-09-14): an operator who has already
- * moved the mower away from the obstruction by hand can clear it here
- * instead of driving the whole way home or carrying it a full metre. The Clear button stays disabled until the
- * chassis has actually moved dig_escalated_required_distance_m past the
- * spot the escalation latched at — ~/clear_dig_escalation enforces the same
- * distance server-side, so a stale/racy click still fails safely with the
- * backend's own reason surfaced via AsyncButton's error notification.
+ * path in between: "Clear & resume" releases the hold and sends START.
+ * Once the chassis has moved past dig_escalated_required_distance_m it is a
+ * plain clear; closer to the spot the operator first confirms an
+ * acknowledgement, and the bridge keeps the spot on probation so one more
+ * dig there holds the robot again (field report 2026-10-16: on the spot only
+ * HOME used to act). Failures surface via AsyncButton's error notification.
  */
 export function DigEscalationBanner({status: injected, variants}: DigEscalationBannerProps) {
     const {t} = useTranslation();
     const polled = useStatus();
     const status = injected ?? polled;
     const mowerAction = useMowerAction();
+    const ackStart = useDigObstructionAck();
     if (!status.dig_escalated) return null;
 
     const distance = status.dig_escalated_distance_m ?? 0;
     const required = status.dig_escalated_required_distance_m ?? 0.5;
     // Strict > — matches CanClearDigEscalation server-side exactly (see
-    // dig_escalation.hpp), so a click never reaches the backend only to be
-    // refused at a boundary the button claimed was already clear.
+    // dig_escalation.hpp): past it the release needs no acknowledgement.
     const canClear = distance > required;
-    const clearAction = mowerAction("clear_dig_escalation");
+    const clearAndResume = ackStart(mowerAction("high_level_control", {Command: 1}));
 
     return (
         <motion.div
@@ -71,8 +71,7 @@ export function DigEscalationBanner({status: injected, variants}: DigEscalationB
             <AsyncButton
                 danger
                 size="small"
-                disabled={!canClear}
-                onAsyncClick={clearAction}
+                onAsyncClick={clearAndResume}
             >
                 {t("mowgliNextPage.digEscalationClear")}
             </AsyncButton>

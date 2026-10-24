@@ -52,7 +52,7 @@ export const LidarCorridorsInfo = ({editable}: {editable: boolean}) => {
                     {!editable && <div>{t('mapLidarCorridors.lockedHint')}</div>}
                 </div>
             }
-            overlayStyle={{maxWidth: 320}}
+            styles={{root: {maxWidth: 320}}}
         >
             <InfoCircleOutlined style={{color: colors.muted, fontSize: 13, cursor: 'help'}}/>
         </Tooltip>

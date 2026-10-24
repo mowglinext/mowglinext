@@ -726,6 +726,28 @@ void MqttBridgeNode::create_subscriptions()
                             on_mqtt_start_area(topic, payload, retained);
                           });
 
+  // External rain verdict (e.g. a roof weather station behind Home Assistant).
+  // transient_local so behavior_tree_node gets the last value even when it
+  // (re)starts after this bridge has already delivered it.
+  pub_external_rain_ =
+      create_publisher<std_msgs::msg::Bool>("/external_rain", rclcpp::QoS(1).transient_local());
+  // The mower's own reading of that verdict (state, whether it is counted, ages), JSON from
+  // behavior_tree_node. transient_local so a bridge that starts late still gets the last one.
+  sub_external_rain_state_ =
+      create_subscription<std_msgs::msg::String>("/behavior_tree_node/external_rain_state",
+                                                 rclcpp::QoS(1).transient_local(),
+                                                 [this](std_msgs::msg::String::ConstSharedPtr msg)
+                                                 {
+                                                   on_external_rain_state(msg);
+                                                 });
+  mqtt_client_->subscribe(full_topic("external_rain"),
+                          [this](const std::string& topic,
+                                 const std::string& payload,
+                                 bool retained)
+                          {
+                            on_mqtt_external_rain(topic, payload, retained);
+                          });
+
   if (home_assistant_discovery_enabled_)
   {
     mqtt_client_->subscribe("homeassistant/status",
@@ -883,6 +905,31 @@ bool MqttBridgeNode::parse_command_payload(const std::string& payload, uint8_t& 
   return true;
 }
 
+std::optional<bool> MqttBridgeNode::parse_external_rain_payload(const std::string& payload)
+{
+  const auto first = payload.find_first_not_of(" \t\r\n");
+  if (first == std::string::npos)
+  {
+    return std::nullopt;
+  }
+  const auto last = payload.find_last_not_of(" \t\r\n");
+  std::string word = payload.substr(first, last - first + 1);
+  for (char& ch : word)
+  {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  if (word == "yes" || word == "on" || word == "true" || word == "rain" || word == "wet" ||
+      word == "1")
+  {
+    return true;
+  }
+  if (word == "no" || word == "off" || word == "false" || word == "dry" || word == "0")
+  {
+    return false;
+  }
+  return std::nullopt;
+}
+
 bool MqttBridgeNode::is_publish_due(const rclcpp::Time& now,
                                     const rclcpp::Time& last_publish,
                                     double min_interval_s)
@@ -952,6 +999,42 @@ void MqttBridgeNode::on_mqtt_command(const std::string& /*topic*/,
           RCLCPP_WARN(get_logger(), "HighLevelControl command=%d reported failure.", command_int);
         }
       });
+}
+
+// ---------------------------------------------------------------------------
+// MQTT external_rain callback → /external_rain
+// ---------------------------------------------------------------------------
+
+void MqttBridgeNode::on_mqtt_external_rain(const std::string& /*topic*/,
+                                           const std::string& payload,
+                                           bool retained)
+{
+  const std::optional<bool> wet = parse_external_rain_payload(payload);
+  if (!wet.has_value())
+  {
+    RCLCPP_WARN(get_logger(),
+                "MQTT external_rain payload '%s' is not yes/no (or on/off, true/false, 1/0). "
+                "Ignored.",
+                payload.c_str());
+    return;
+  }
+  std_msgs::msg::Bool msg;
+  msg.data = *wet;
+  pub_external_rain_->publish(msg);
+  RCLCPP_INFO(get_logger(),
+              "External rain: %s%s",
+              *wet ? "wet" : "dry",
+              retained ? " (retained)" : "");
+}
+
+void MqttBridgeNode::on_external_rain_state(std_msgs::msg::String::ConstSharedPtr msg)
+{
+  if (msg->data.empty())
+  {
+    return;
+  }
+  // Already JSON from behavior_tree_node; relayed as-is, retained like high_level_status.
+  mqtt_client_->publish(full_topic("external_rain_state"), msg->data, /*retain=*/true);
 }
 
 // ---------------------------------------------------------------------------

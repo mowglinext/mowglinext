@@ -1,5 +1,6 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React, { useMemo } from "react";
-import { Card, Col, Form, InputNumber, Row, Space, Typography } from "antd";
+import { Card, Col, Form, Row, Space, Typography } from "antd";
 import { ThunderboltOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
@@ -11,7 +12,7 @@ const { Text, Paragraph } = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: number | null) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
     onReset?: (key: string) => void;
@@ -35,9 +36,9 @@ const BatteryGauge: React.FC<{
     // Scale voltage to position (use range from criticalV-1 to fullV+1)
     const minV = criticalV - 1;
     const maxV = fullV + 1;
-    const toX = (v: number) => barX + ((v - minV) / (maxV - minV)) * barW;
 
     const markers = useMemo(() => {
+        const toX = (v: number) => barX + ((v - minV) / (maxV - minV)) * barW;
         const items: React.ReactNode[] = [];
         // Bar background
         items.push(
@@ -107,7 +108,7 @@ const BatteryGauge: React.FC<{
         }
 
         return items;
-    }, [fullV, emptyV, criticalV, currentV, mode]);
+    }, [fullV, emptyV, criticalV, currentV, mode, minV, maxV, barW]);
 
     return (
         <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: "block", margin: "0 auto" }}>
@@ -172,11 +173,11 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                     label={fieldLabel("battery_full_voltage", <Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.fullVoltage")}</Text>)}
                                     tooltip={t("settingsBattery.fullVoltageTooltip")}
                                 >
-                                    <InputNumber aria-label={t("settingsBattery.fullVoltage") + ", V"} aria-description={t("settingsBattery.fullVoltageTooltip")}  id="setting-battery_full_voltage"
+                                    <NumberWithAddon aria-label={t("settingsBattery.fullVoltage") + ", V"} aria-description={t("settingsBattery.fullVoltageTooltip")}  id="setting-battery_full_voltage"
                                         value={values.battery_full_voltage}
                                         onChange={(v) => onChange("battery_full_voltage", v)}
                                         min={20} max={60} step={0.5} precision={1}
-                                        style={{ width: "100%" }} addonAfter="V"
+                                        style={{ width: "100%" }} after="V"
                                     />
                                 </Form.Item>
                             </Col>
@@ -185,11 +186,11 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                     label={fieldLabel("battery_empty_voltage", <Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.emptyVoltage")}</Text>)}
                                     tooltip={t("settingsBattery.emptyVoltageTooltip")}
                                 >
-                                    <InputNumber aria-label={t("settingsBattery.emptyVoltage") + ", V"} aria-description={t("settingsBattery.emptyVoltageTooltip")}  id="setting-battery_empty_voltage"
+                                    <NumberWithAddon aria-label={t("settingsBattery.emptyVoltage") + ", V"} aria-description={t("settingsBattery.emptyVoltageTooltip")}  id="setting-battery_empty_voltage"
                                         value={values.battery_empty_voltage}
                                         onChange={(v) => onChange("battery_empty_voltage", v)}
                                         min={18} max={55} step={0.5} precision={1}
-                                        style={{ width: "100%" }} addonAfter="V"
+                                        style={{ width: "100%" }} after="V"
                                     />
                                 </Form.Item>
                             </Col>
@@ -198,11 +199,11 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                     label={fieldLabel("battery_critical_voltage", <Text style={{ color: "#f5222d", fontSize: 12 }}>{t("settingsBattery.criticalVoltage")}</Text>)}
                                     tooltip={t("settingsBattery.criticalVoltageTooltip")}
                                 >
-                                    <InputNumber aria-label={t("settingsBattery.criticalVoltage") + ", V"} aria-description={t("settingsBattery.criticalVoltageTooltip")}  id="setting-battery_critical_voltage"
+                                    <NumberWithAddon aria-label={t("settingsBattery.criticalVoltage") + ", V"} aria-description={t("settingsBattery.criticalVoltageTooltip")}  id="setting-battery_critical_voltage"
                                         value={values.battery_critical_voltage}
                                         onChange={(v) => onChange("battery_critical_voltage", v)}
                                         min={15} max={50} step={0.5} precision={1}
-                                        style={{ width: "100%" }} addonAfter="V"
+                                        style={{ width: "100%" }} after="V"
                                     />
                                 </Form.Item>
                             </Col>
@@ -220,11 +221,11 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                 label={fieldLabel("battery_full_percent", <Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.resumeAbove")}</Text>)}
                                 tooltip={t("settingsBattery.resumeAboveTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsBattery.resumeAbove") + ", %"} aria-description={t("settingsBattery.resumeAboveTooltip")}  id="setting-battery_full_percent"
+                                <NumberWithAddon aria-label={t("settingsBattery.resumeAbove") + ", %"} aria-description={t("settingsBattery.resumeAboveTooltip")}  id="setting-battery_full_percent"
                                     value={values.battery_full_percent}
                                     onChange={(v) => onChange("battery_full_percent", v)}
                                     min={50} max={100} step={5} precision={0}
-                                    style={{ width: "100%" }} addonAfter="%"
+                                    style={{ width: "100%" }} after="%"
                                 />
                             </Form.Item>
                         </Col>
@@ -233,11 +234,11 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                 label={fieldLabel("battery_low_percent", <Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.lowDock")}</Text>)}
                                 tooltip={t("settingsBattery.lowDockTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsBattery.lowDock") + ", %"} aria-description={t("settingsBattery.lowDockTooltip")}  id="setting-battery_low_percent"
+                                <NumberWithAddon aria-label={t("settingsBattery.lowDock") + ", %"} aria-description={t("settingsBattery.lowDockTooltip")}  id="setting-battery_low_percent"
                                     value={values.battery_low_percent}
                                     onChange={(v) => onChange("battery_low_percent", v)}
                                     min={5} max={50} step={5} precision={0}
-                                    style={{ width: "100%" }} addonAfter="%"
+                                    style={{ width: "100%" }} after="%"
                                 />
                             </Form.Item>
                         </Col>
@@ -246,11 +247,11 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                 label={fieldLabel("battery_critical_percent", <Text style={{ color: "#f5222d", fontSize: 12 }}>{t("settingsBattery.critical")}</Text>)}
                                 tooltip={t("settingsBattery.criticalTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsBattery.critical") + ", %"} aria-description={t("settingsBattery.criticalTooltip")}  id="setting-battery_critical_percent"
+                                <NumberWithAddon aria-label={t("settingsBattery.critical") + ", %"} aria-description={t("settingsBattery.criticalTooltip")}  id="setting-battery_critical_percent"
                                     value={values.battery_critical_percent}
                                     onChange={(v) => onChange("battery_critical_percent", v)}
                                     min={1} max={30} step={5} precision={0}
-                                    style={{ width: "100%" }} addonAfter="%"
+                                    style={{ width: "100%" }} after="%"
                                 />
                             </Form.Item>
                         </Col>
@@ -261,11 +262,11 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                 label={fieldLabel("battery_critical_recovery_percent", <Text style={{ color: "#52c41a", fontSize: 12 }}>{t("settingsBattery.criticalRecovery")}</Text>)}
                                 tooltip={t("settingsBattery.criticalRecoveryTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsBattery.criticalRecovery") + ", %"} aria-description={t("settingsBattery.criticalRecoveryTooltip")}  id="setting-battery_critical_recovery_percent"
+                                <NumberWithAddon aria-label={t("settingsBattery.criticalRecovery") + ", %"} aria-description={t("settingsBattery.criticalRecoveryTooltip")}  id="setting-battery_critical_recovery_percent"
                                     value={values.battery_critical_recovery_percent}
                                     onChange={(v) => onChange("battery_critical_recovery_percent", v)}
                                     min={5} max={90} step={5} precision={0}
-                                    style={{ width: "100%" }} addonAfter="%"
+                                    style={{ width: "100%" }} after="%"
                                 />
                             </Form.Item>
                         </Col>
@@ -274,11 +275,11 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                 label={fieldLabel("battery_manual_resume_percent", <Text style={{ color: "#1677ff", fontSize: 12 }}>{t("settingsBattery.manualResume")}</Text>)}
                                 tooltip={t("settingsBattery.manualResumeTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsBattery.manualResume") + ", %"} aria-description={t("settingsBattery.manualResumeTooltip")}  id="setting-battery_manual_resume_percent"
+                                <NumberWithAddon aria-label={t("settingsBattery.manualResume") + ", %"} aria-description={t("settingsBattery.manualResumeTooltip")}  id="setting-battery_manual_resume_percent"
                                     value={values.battery_manual_resume_percent}
                                     onChange={(v) => onChange("battery_manual_resume_percent", v)}
                                     min={5} max={95} step={5} precision={0}
-                                    style={{ width: "100%" }} addonAfter="%"
+                                    style={{ width: "100%" }} after="%"
                                 />
                             </Form.Item>
                         </Col>
@@ -287,11 +288,11 @@ export const BatterySection: React.FC<Props> = ({ values, onChange, isOverridden
                                 label={fieldLabel("battery_charge_tail_current_a", <Text style={{ color: "#fa8c16", fontSize: 12 }}>{t("settingsBattery.chargeTail")}</Text>)}
                                 tooltip={t("settingsBattery.chargeTailTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsBattery.chargeTail") + ", A"} aria-description={t("settingsBattery.chargeTailTooltip")}  id="setting-battery_charge_tail_current_a"
+                                <NumberWithAddon aria-label={t("settingsBattery.chargeTail") + ", A"} aria-description={t("settingsBattery.chargeTailTooltip")}  id="setting-battery_charge_tail_current_a"
                                     value={values.battery_charge_tail_current_a as number | undefined}
                                     onChange={(v) => onChange("battery_charge_tail_current_a", v)}
                                     min={0.02} max={1} step={0.01} precision={2}
-                                    style={{ width: "100%" }} addonAfter="A"
+                                    style={{ width: "100%" }} after="A"
                                 />
                             </Form.Item>
                         </Col>

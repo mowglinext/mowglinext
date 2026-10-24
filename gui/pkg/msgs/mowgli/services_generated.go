@@ -150,6 +150,21 @@ type EmergencyStopRes struct {
 	Success                   bool                           `json:"success"`
 }
 
+// FleetYieldReq for mowgli_interfaces/srv/FleetYield request.
+type FleetYieldReq struct {
+	Operation                 uint8                          `json:"operation"`
+	Epoch                     string                         `json:"epoch"`
+	RequestId                 string                         `json:"request_id"`
+}
+
+// FleetYieldRes for mowgli_interfaces/srv/FleetYield response.
+type FleetYieldRes struct {
+	Result                    uint8                          `json:"result"`
+	Epoch                     string                         `json:"epoch"`
+	Held                      bool                           `json:"held"`
+	Message                   string                         `json:"message"`
+}
+
 // GetLidarIgnoreCorridorsReq for mowgli_interfaces/srv/GetLidarIgnoreCorridors request (empty).
 type GetLidarIgnoreCorridorsReq struct{}
 
@@ -255,6 +270,26 @@ type PromoteObstacleReq struct {
 type PromoteObstacleRes struct {
 	Success                   bool                           `json:"success"`
 	Message                   string                         `json:"message"`
+}
+
+// ReplaceLidarIgnoreCorridorsReq for mowgli_interfaces/srv/ReplaceLidarIgnoreCorridors request.
+type ReplaceLidarIgnoreCorridorsReq struct {
+	Corridors                 []LidarIgnoreCorridor          `json:"corridors"`
+	ClientOperationId         string                         `json:"client_operation_id"`
+}
+
+// ReplaceLidarIgnoreCorridorsRes for mowgli_interfaces/srv/ReplaceLidarIgnoreCorridors response.
+type ReplaceLidarIgnoreCorridorsRes struct {
+	Success                   bool                           `json:"success"`
+	Outcome                   string                         `json:"outcome"`
+	Message                   string                         `json:"message"`
+	Committed                 bool                           `json:"committed"`
+	Persisted                 bool                           `json:"persisted"`
+	Published                 bool                           `json:"published"`
+	ClientOperationId         string                         `json:"client_operation_id"`
+	ServerInstanceId          string                         `json:"server_instance_id"`
+	Revision                  uint64                         `json:"revision"`
+	Corridors                 []LidarIgnoreCorridor          `json:"corridors"`
 }
 
 // SetAreaCoverageLinesReq for mowgli_interfaces/srv/SetAreaCoverageLines request.

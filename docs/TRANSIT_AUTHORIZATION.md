@@ -12,8 +12,9 @@ an obstacle while the costmap catches up.
 `/map_server_node/transit_geometry` is a reliable, transient-local
 `visualization_msgs/MarkerArray` containing one complete snapshot. Marker
 namespaces `area` and `dock_corridor` are authorized outer rings; `obstacle`
-rings are forbidden and `scale.x` is their explicit clearance margin in metres
-(zero for the dock body). An empty array invalidates transit during map
+rings are forbidden and `scale.x` is their explicit clearance margin in metres.
+`dock_body` is forbidden in the same way (margin zero) but is the one ring a
+START may lie inside, see below. An empty array invalidates transit during map
 replacement; the debounced keepout rebuild publishes the complete snapshot.
 No timestamp is used as a freshness timeout or an observation identity.
 Replacing the area list retains the separately calibrated dock pose, corridor
@@ -31,6 +32,32 @@ Starts/goals on polygon edges connect to an interior grid anchor even when
 grid alignment puts the endpoint cell centre outside. Obstacles still block
 these legs. A missing connection fails planning without unrestricted fallback.
 
+A start inside the dock body is not refused. The robot ends coverage units in
+front of the dock more often than not, which is inside that 0.80 x 0.55 m
+rectangle, and refusing there stranded it (field 2026-10-16: every transit
+`START_OCCUPIED` until the operator pressed Play, whose first act is driving 1 m
+out). Such a start is judged without the dock body and connected to the nearest
+clear, authorized, obstacle-free cell within 1.0 m by an exit leg that obeys every
+other obstacle, the authorized union and the obstacle costs. With no such cell the
+start stays `START_OCCUPIED`.
+
+The exit never closes on the charging station. The planner recovers the dock
+frame from the body ring and the `dock_corridor` ring directly behind it (+x from
+the corridor through the body toward the station; x = 0 is the body's
+station-side edge, the line through the dock pose). With not exactly one body and
+one adjacent corridor in the snapshot the start stays `START_OCCUPIED`. The exit
+cell must lie no further along +x than the start, so the leg goes backwards
+(toward the corridor) or sideways, never past the station-side edge. The
+transit controller may pivot in place before the leg, to a heading sampled along
+the path rather than the leg, so the bound is heading-independent: the disc the
+footprint sweeps around the start (radius = farthest footprint vertex) must end
+`kStationClearance` (0.10 m) short of the station, taken to begin at the docked
+robot's nose (footprint front reach ahead of the dock pose). With the shipped
+footprint (front 0.53 m, sweep radius 0.597 m) that admits starts at least
+0.167 m behind the dock pose; nearer starts stay `START_OCCUPIED`. Goals inside the dock body, the search grid and every
+path segment after the exit leg keep the whole ring forbidden, so a transit can
+leave the dock body but never enter or cross it.
+
 Each search edge and every final path segment is checked against exact polygon
 crossings and crossed obstacle-cost cells. Smoothing that leaves the union
 falls back to the validated raw authorized path. A geometry change during
@@ -38,6 +65,16 @@ planning discards that result. Explicit BoundaryGuard recovery selects
 `BoundaryRecovery` through `navigate_inside_boundary.xml`; its existing
 keepout-disable/re-enable, timeout, cancellation and bounded BackUp paths
 remain separate from ordinary transit.
+
+Authorization preparation rasterizes polygon interiors by row and tests exact
+boundary distances in the affected cell windows. The mask and crossing scratch
+buffers belong to one plan and are never reused by later plans; the revision
+check still discards a result if geometry changes during its plan. A negative
+bounding-box connectivity preflight can reject separated authorized areas before
+search. Overlapping boxes still require the exact search, including current
+obstacle costs. These optimizations do not change the 8-second planning budget.
+See [planner performance evidence](TRANSIT_PLANNER_PERFORMANCE.md) for reproducible
+benchmarks and the remaining Raspberry Pi 4 validation.
 
 Stop the mission before editing or replacing a map. Invalidation rejects new
 plans; a controller already following a path may retain it until replanning.

@@ -30,8 +30,10 @@
 #include "geometry_msgs/msg/point32.hpp"
 #include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_behavior/blade_direction.hpp"
+#include "mowgli_behavior/blade_ready.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
+#include "mowgli_behavior/fleet_yield.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_behavior/transit_avoidance.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
@@ -88,6 +90,17 @@ struct BTContext
   /// Timestamp of the last emergency message received.
   std::chrono::steady_clock::time_point last_emergency_time{std::chrono::steady_clock::now()};
 
+  /// Shared IsEmergency/fleet predicate. Caller holds context_mutex.
+  /// A stale stream (>2 s) fails safe even when cached bits are clear. The
+  /// firmware latch also counts: software e-stop can latch without an active
+  /// physical trigger. Keep the existing startup grace and strict > boundary.
+  bool emergencyActiveOrStale(
+      std::chrono::steady_clock::time_point steady_now = std::chrono::steady_clock::now()) const
+  {
+    return latest_emergency.active_emergency || latest_emergency.latched_emergency ||
+           steady_now - last_emergency_time > std::chrono::seconds(2);
+  }
+
   // -----------------------------------------------------------------------
   // Thread safety
   // -----------------------------------------------------------------------
@@ -124,6 +137,9 @@ struct BTContext
   /// pattern to follow instead of a mutex if that ever happens.
   mutable std::mutex context_mutex;
 
+  /// Fleet stop ownership is never persisted; all access takes context_mutex.
+  FleetYieldState fleet_yield;
+
   // -----------------------------------------------------------------------
   // Command state (set by HighLevelControl service handler)
   // -----------------------------------------------------------------------
@@ -138,6 +154,11 @@ struct BTContext
   /// operator service and explicit start handlers. Direction resets only at
   /// EndSession; operator inhibition also clears on an explicit mowing start.
   bool blade_auto_reverse{false};
+  bool mowing_enabled{true};  // explicit commissioning dry run; hardware also enforces it
+  BladeReadyConfig blade_ready_config;
+  // Sticky provenance: a controller stream that disappears cannot become a
+  // telemetry-less installation and regain permission via the timer fallback.
+  bool blade_telemetry_seen{false};  // guarded by context_mutex
   BladeDirection blade_direction;
   // One DDS request writer preserves ordering between coverage, manual and
   // operator blade requests. Access only from the owning callback group.
@@ -470,6 +491,14 @@ struct BTContext
   /// a fixed area+params, so the re-planned path is identical and the index is
   /// stable. Cleared (erased) when the area completes; reset by EndSession.
   std::map<uint32_t, std::size_t> area_resume_pose_index;
+  /// How far each INTERRUPTED unit of an area got: area -> (unit -> local pose index inside the
+  /// full unit). area_resume_pose_index is ONE scalar for the unit being driven, so the moment a
+  /// later unit is dispatched it forgets an earlier unit that was abandoned at 99 % (field
+  /// 2026-10-14: a 2294-pose unit was re-driven from pose 0 on four passes in a row). FollowStrip
+  /// records a unit's furthest progress here whenever it persists the cursor and trims the unit at
+  /// it on the next pass; erased when the unit is booked mowed, with the rest of an area's state
+  /// when the plan changes, and by EndSession. Persisted with the resume cursor.
+  std::map<uint32_t, std::map<std::size_t, std::size_t>> area_unit_progress;
   /// Total pose count of the area's continuous full_path (the denominator for
   /// the resume-cursor coverage_percent). Set by FollowStrip at dispatch.
   std::map<uint32_t, std::size_t> area_path_pose_count;
@@ -687,9 +716,54 @@ struct BTContext
   double transit_speed{0.25};
   double mowing_speed{0.2};
 
-  /// True if it was raining when the current mowing session started.
-  /// Set by WasRainingAtStart, checked by IsNewRain.
+  /// True if the MOWER's OWN sensor reported rain when the current mowing
+  /// session started ("the operator chose to mow in the rain"). Set by
+  /// WasRainingAtStart, checked by IsNewRain. Deliberately NOT fed by the
+  /// external verdict: a wet roof station at start must not license mowing
+  /// through the next real shower for the whole session.
   bool raining_at_mow_start{false};
+
+  /// Rain verdict pushed by an EXTERNAL source on `/external_rain`
+  /// (std_msgs/Bool, latched) — e.g. a roof weather station behind a Home
+  /// Assistant automation, relayed by mqtt_bridge_node from
+  /// `<prefix>/external_rain`. It only ever ADDS a reason to stop: the
+  /// on-board sensor (latest_status.rain_detected) is OR-ed with it in
+  /// RainingNow(), never overridden by it, so a "dry" external verdict can
+  /// not hide rain the mower itself feels. Written by the subscription
+  /// callback and read by the rain BT nodes under context_mutex.
+  bool external_rain{false};
+  /// Arrival time of the last /external_rain message; the epoch default
+  /// means "never received".
+  std::chrono::steady_clock::time_point external_rain_stamp{};
+  /// `use_external_rain`: master switch; false ignores /external_rain entirely.
+  bool use_external_rain{true};
+  /// A "wet" verdict older than this is ignored (fail back to the on-board
+  /// sensor alone) so a dead automation, broker or Home Assistant cannot park
+  /// the mower in RAIN_WAITING forever. 0 = never expires.
+  double external_rain_max_age_sec{7200.0};
+
+  /// True while a fresh external "wet" verdict is in force. Caller holds
+  /// context_mutex.
+  bool ExternalRainActive(std::chrono::steady_clock::time_point now) const
+  {
+    if (!use_external_rain || !external_rain || external_rain_stamp.time_since_epoch().count() == 0)
+    {
+      return false;
+    }
+    if (external_rain_max_age_sec <= 0.0)
+    {
+      return true;
+    }
+    return std::chrono::duration<double>(now - external_rain_stamp).count() <=
+           external_rain_max_age_sec;
+  }
+
+  /// Raining by ANY source: the on-board sensor or a fresh external verdict.
+  /// Caller holds context_mutex.
+  bool RainingNow(std::chrono::steady_clock::time_point now) const
+  {
+    return latest_status.rain_detected || ExternalRainActive(now);
+  }
 
   /// First time we observed continuous rain since the last dry sample.
   /// Used by IsNewRain to debounce short rain pulses (rain_debounce_sec).
@@ -1033,7 +1107,8 @@ inline constexpr std::chrono::hours kIncompleteResumeMaxAge{24};
 /// mid-path resume cursor. Nothing to keep (or resume) otherwise.
 inline bool hasRecordedCoverageProgress(const BTContext& ctx)
 {
-  if (!ctx.completed_areas.empty() || !ctx.area_resume_pose_index.empty())
+  if (!ctx.completed_areas.empty() || !ctx.area_resume_pose_index.empty() ||
+      !ctx.area_unit_progress.empty())
   {
     return true;
   }

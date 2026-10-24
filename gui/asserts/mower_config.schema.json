@@ -819,6 +819,28 @@
           "default": false,
           "description": "Choose a random blade direction per mowing session, including manual mowing. Keep it through pauses, transits and recharge. Consecutive sessions may choose the same direction; restarting ROS2 starts a new selection. Requires bidirectional blades and firmware with safe stopped reversal support. Takes effect after a ROS2 restart."
         },
+        "blade_ready_min_rpm": {
+          "type": "number",
+          "title": "Blade Ready RPM",
+          "default": 1000.0,
+          "exclusiveMinimum": 0,
+          "description": "Minimum RPM in fresh, active blade-controller reports before a new coverage goal starts. Required for 0.3 seconds. Verify on your blade and firmware. Applied after ROS2 restart."
+        },
+        "blade_spinup_delay_sec": {
+          "type": "number",
+          "title": "Blade Spin-up Fallback Delay",
+          "default": 1.5,
+          "exclusiveMinimum": 0,
+          "description": "Wait in seconds after the blade ON service response, used only when no blade-controller telemetry has ever arrived. Stale or low-RPM reports never use this fallback. Must be shorter than Blade Ready Timeout. Applied after ROS2 restart."
+        },
+        "blade_ready_timeout_sec": {
+          "type": "number",
+          "title": "Blade Ready Timeout",
+          "default": 6.0,
+          "maximum": 30.0,
+          "exclusiveMinimum": 0.3,
+          "description": "Maximum wait in seconds before withholding the coverage goal and requesting blade OFF. Must exceed Blade Spin-up Fallback Delay. Applied after ROS2 restart."
+        },
         "mowing_speed": {
           "type": "number",
           "title": "Mowing Speed",
@@ -1234,6 +1256,18 @@
           "title": "Rain Debounce",
           "default": 10.0,
           "description": "Seconds of continuous rain signal before triggering."
+        },
+        "use_external_rain": {
+          "type": "boolean",
+          "title": "Use External Rain Source",
+          "default": true,
+          "description": "Also treat a yes/no published to MQTT <prefix>/external_rain (e.g. a Home Assistant automation on a roof weather station) as rain. It only adds a reason to stop; the mower's own rain sensor still counts. Needs MQTT enabled."
+        },
+        "external_rain_max_age_minutes": {
+          "type": "number",
+          "title": "External Rain Expiry",
+          "default": 120.0,
+          "description": "Minutes after which an external rain 'yes' is ignored if it has not been refreshed (0 = never expires). Stops a dead automation from holding the mower in the rain wait."
         }
       }
     },

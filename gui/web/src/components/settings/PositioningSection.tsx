@@ -1,3 +1,5 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import React, { useState } from "react";
 import { Alert, App, Button, Card, Col, Form, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
 import { GlobalOutlined, SettingOutlined } from "@ant-design/icons";
@@ -7,8 +9,9 @@ import { useGnssStatus } from "../../hooks/useGnssStatus.ts";
 import { deriveGpsStatus, gnssReceiverLabel } from "../../utils/gpsStatus.ts";
 import { GnssLiveStatusSummaryCard } from "../gnss/GnssLiveStatusSummaryCard.tsx";
 import {
+    type GnssSelectFieldOption,
     GNSS_BAUD_OPTIONS,
-    GNSS_ACTION_SETTINGS_KEYS,
+    pickGnssActionSettings,
     GNSS_PROFILE_OPTIONS,
     GNSS_PROFILE_RATE_OPTIONS,
     GNSS_RECEIVER_FAMILY_OPTIONS,
@@ -22,19 +25,20 @@ import { UniversalGnssAdvancedSettings } from "./UniversalGnssAdvancedSettings.t
 import { GnssReceiverActionsCard } from "./GnssReceiverActionsCard.tsx";
 import { GnssSerialDeviceConfigField } from "./GnssSerialDeviceConfigField.tsx";
 import type {SettingsValues} from "../../types/settings.generated";
-import {errorMessage} from "../../utils/errors";
+import {isJsonObject} from "../../utils/json";
+import {requestErrorMessage} from "../../utils/errors";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: string | number | null) => void;
     isDirty: boolean;
     saving: boolean;
     gpsRestarting: boolean;
     onSave: () => void | Promise<void>;
     onSaveAndRestartGps: () => void | Promise<void>;
-    onPersistGnssSettings: (settings: Record<string, any>) => Promise<boolean>;
+    onPersistGnssSettings: (settings: SettingsValues) => Promise<boolean>;
 };
 
 export const PositioningSection: React.FC<Props> = ({
@@ -47,6 +51,7 @@ export const PositioningSection: React.FC<Props> = ({
     onSaveAndRestartGps,
     onPersistGnssSettings,
 }) => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const guiApi = useApi();
     const { notification } = App.useApp();
@@ -66,28 +71,30 @@ export const PositioningSection: React.FC<Props> = ({
         setDatumLoading(true);
         try {
             const res = await guiApi.mowglinext.callCreate("set_datum", {});
-            if (res.error) throw new Error(res.error.error);
-            const msg: string = (res.data as any)?.message ?? "";
-            const parts = msg.split(",");
-            if (parts.length === 2) {
-                onChange("datum_lat", parseFloat(parts[0]));
-                onChange("datum_lon", parseFloat(parts[1]));
-                notification.success({ message: t("settingsPositioning.datumSetFromGps") });
-            }
+            if (!res.ok || res.error) throw new Error(requestErrorMessage(res) ?? t("settingsPositioning.datumGpsFailed"));
+            const raw: unknown = res.data;
+            if (!isJsonObject(raw) || typeof raw.message !== 'string' || 'error' in raw
+                || ('success' in raw && raw.success !== true)) throw new Error(t("settingsPositioning.datumGpsFailed"));
+            const parts = raw.message.split(',');
+            // The producer sends decimal latitude/longitude, not arbitrary parseFloat prefixes.
+            const decimal = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+            if (parts.length !== 2 || !parts.every(part => decimal.test(part.trim()))
+                || parts.some(part => Number(part) === 0 && /[1-9]/.test(part.split(/[eE]/)[0]))) throw new Error(t("settingsPositioning.datumGpsFailed"));
+            const lat = Number(parts[0]);
+            const lon = Number(parts[1]);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new Error(t("settingsPositioning.datumGpsFailed"));
+            onChange("datum_lat", lat);
+            onChange("datum_lon", lon);
+            notification.success({ message: t("settingsPositioning.datumSetFromGps") });
         } catch (e) {
-            notification.error({ message: t("settingsPositioning.datumGpsFailed"), description: errorMessage(e) });
+            notification.error({ message: t("settingsPositioning.datumGpsFailed"), description: requestErrorMessage(e) ?? t("diagnosticsPage.unknownError") });
         } finally {
             setDatumLoading(false);
         }
     };
 
     const persistCurrentGnssSettings = async () => {
-        const partial: Record<string, any> = {};
-        for (const key of GNSS_ACTION_SETTINGS_KEYS) {
-            if (Object.prototype.hasOwnProperty.call(values, key)) {
-                partial[key] = values[key];
-            }
-        }
+        const partial: SettingsValues = pickGnssActionSettings(values);
         return onPersistGnssSettings(partial);
     };
     const handleBaudChange = (v: number) => {
@@ -136,7 +143,7 @@ export const PositioningSection: React.FC<Props> = ({
                                     size="small"
                                     type="link"
                                     loading={datumLoading}
-                                    onClick={setDatumFromGps}
+                                    onClick={asyncHandler(setDatumFromGps)}
                                     style={{ fontSize: 12, padding: 0 }}
                                 >
                                     {t("settingsPositioning.useCurrentGpsPosition")}
@@ -177,7 +184,7 @@ export const PositioningSection: React.FC<Props> = ({
                                 tooltip={t("settingsPositioning.signalProfileTooltip")}
                                 extra={<GnssSignalProfileHelp selectedProfile={selectedSignalProfile} />}
                             >
-                                <Select
+                                <Select<string, GnssSelectFieldOption>
                                     value={selectedSignalProfile}
                                     onChange={(value) => onChange("gnss_signal_profile", value)}
                                     options={GNSS_SIGNAL_PROFILE_OPTIONS.map((option) => ({
@@ -201,7 +208,7 @@ export const PositioningSection: React.FC<Props> = ({
                                 label={t("settingsPositioning.baudLabel")}
                                 tooltip={t("settingsPositioning.baudTooltip")}
                             >
-                                <Select id="setting-gnss_config_baud"
+                                <Select<number> id="setting-gnss_config_baud"
                                     value={values.gnss_config_baud ?? 921600}
                                     onChange={handleBaudChange}
                                     options={GNSS_BAUD_OPTIONS.map((option) => ({
@@ -245,7 +252,7 @@ export const PositioningSection: React.FC<Props> = ({
                             <Row gutter={[16, 0]}>
                                 <Col xs={24} sm={12}>
                                     <Form.Item label={t("settingsPositioning.receiverProfileLabel")} tooltip={t("settingsPositioning.receiverProfileTooltip")}>
-                                        <Select
+                                        <Select<string>
                                             value={normalizeGnssProfile(values.gnss_profile)}
                                             onChange={(value) => onChange("gnss_profile", value)}
                                             options={GNSS_PROFILE_OPTIONS.map((option) => ({
@@ -257,7 +264,7 @@ export const PositioningSection: React.FC<Props> = ({
                                 </Col>
                                 <Col xs={24} sm={12}>
                                     <Form.Item htmlFor="setting-gnss_profile_rate_hz" data-setting-key="gnss_profile_rate_hz" label={t("settingsPositioning.positionRateLabel")}>
-                                        <Select id="setting-gnss_profile_rate_hz"
+                                        <Select<number> id="setting-gnss_profile_rate_hz"
                                             value={values.gnss_profile_rate_hz ?? 5}
                                             onChange={(value) => onChange("gnss_profile_rate_hz", value)}
                                             options={GNSS_PROFILE_RATE_OPTIONS.map((option) => ({
@@ -271,7 +278,7 @@ export const PositioningSection: React.FC<Props> = ({
                             <Row gutter={[16, 0]}>
                                 <Col xs={24} sm={10}>
                                     <Form.Item htmlFor="setting-gnss_receiver_family" data-setting-key="gnss_receiver_family" label={t("settingsPositioning.receiverFamilyLabel")}>
-                                        <Select id="setting-gnss_receiver_family"
+                                        <Select<string> id="setting-gnss_receiver_family"
                                             value={values.gnss_receiver_family ?? "auto"}
                                             onChange={(value) => onChange("gnss_receiver_family", value)}
                                             options={GNSS_RECEIVER_FAMILY_OPTIONS.map((option) => ({
@@ -294,25 +301,25 @@ export const PositioningSection: React.FC<Props> = ({
                             <Row gutter={[16, 0]}>
                                 <Col xs={12} sm={6}>
                                     <Form.Item htmlFor="setting-gps_wait_after_undock_sec" data-setting-key="gps_wait_after_undock_sec" label={t("settingsPositioning.rtkWaitAfterUndockLabel")}>
-                                        <InputNumber aria-label={t("settingsPositioning.rtkWaitAfterUndockLabel") + ", s"} id="setting-gps_wait_after_undock_sec"
+                                        <NumberWithAddon aria-label={t("settingsPositioning.rtkWaitAfterUndockLabel") + ", s"} id="setting-gps_wait_after_undock_sec"
                                             value={values.gps_wait_after_undock_sec}
                                             onChange={(value) => onChange("gps_wait_after_undock_sec", value)}
                                             min={0}
                                             step={1}
                                             style={{ width: "100%" }}
-                                            addonAfter="s"
+                                            after="s"
                                         />
                                     </Form.Item>
                                 </Col>
                                 <Col xs={12} sm={6}>
                                     <Form.Item htmlFor="setting-gps_timeout_sec" data-setting-key="gps_timeout_sec" label={t("settingsPositioning.gpsTimeoutLabel")}>
-                                        <InputNumber aria-label={t("settingsPositioning.gpsTimeoutLabel") + ", s"} id="setting-gps_timeout_sec"
+                                        <NumberWithAddon aria-label={t("settingsPositioning.gpsTimeoutLabel") + ", s"} id="setting-gps_timeout_sec"
                                             value={values.gps_timeout_sec}
                                             onChange={(value) => onChange("gps_timeout_sec", value)}
                                             min={1}
                                             step={1}
                                             style={{ width: "100%" }}
-                                            addonAfter="s"
+                                            after="s"
                                         />
                                     </Form.Item>
                                 </Col>

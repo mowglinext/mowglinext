@@ -1,7 +1,10 @@
+import {TextWithAddon} from '../components/inputs/TextWithAddon';
+import {NumberWithAddon} from '../components/inputs/NumberWithAddon';
+import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {useTranslation} from "react-i18next";
 import {stringifyValue} from "../utils/stringifyValue.ts";
-import {Segmented, Input, InputNumber, Switch, Collapse, Spin, Empty, Tag, Alert, Button, App, Tooltip} from "antd";
+import {Segmented, Input, Switch, Collapse, Spin, Empty, Tag, Alert, Button, App, Tooltip} from "antd";
 import {SearchOutlined, WarningOutlined, InfoCircleOutlined} from "@ant-design/icons";
 import {useApi} from "../hooks/useApi.ts";
 import {useIsMobile} from "../hooks/useIsMobile.ts";
@@ -19,6 +22,8 @@ interface RosParameter {
 
 interface ParamsResponse {
   parameters: RosParameter[];
+  // POST only: hardware writes the node accepted at a different value.
+  adjustments?: {name: string; requested_value: unknown; applied_value: unknown}[];
 }
 
 // Profile labels. The catalog keys stay basic/middle/expert; only the display
@@ -82,7 +87,7 @@ function ParamRow({
   const guardedCommit = useCallback((raw: unknown) => {
     const next = coerce(raw);
     if (next == null) { setValue(param.value); return; } // don't blank a live param
-    if (!danger) { commit(next); return; }
+    if (!danger) { observeAsync(commit(next)); return; }
     modal.confirm({
       title: t("parametersPage.confirmSafetyTitle"),
       icon: <WarningOutlined style={{color: colors.danger}}/>,
@@ -112,9 +117,9 @@ function ParamRow({
                      onChange={(v) => { setValue(v); guardedCommit(v); }}/>;
     }
     if (typeof param.value === "number") {
-      return <InputNumber value={value as number} disabled={saving || disabled}
+      return <NumberWithAddon value={value as number} disabled={saving || disabled}
                           style={{width: controlWidth ?? 160}}
-                          addonAfter={meta.unit}
+                          after={meta.unit}
                           onChange={(v) => setValue(v)}
                           onBlur={() => value !== param.value && guardedCommit(value)}
                           onPressEnter={() => value !== param.value && guardedCommit(value)}/>;
@@ -136,9 +141,9 @@ function ParamRow({
         </Tooltip>
       );
     }
-    return <Input value={stringifyValue(value)} disabled={saving || disabled}
+    return <TextWithAddon value={stringifyValue(value)} disabled={saving || disabled}
                   style={{width: controlWidth ?? 220}}
-                  addonAfter={meta.unit}
+                  after={meta.unit}
                   onChange={(e) => setValue(e.target.value)}
                   onBlur={() => value !== param.value && guardedCommit(value)}
                   onPressEnter={() => value !== param.value && guardedCommit(value)}/>;
@@ -201,24 +206,31 @@ export const ParametersPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [guiApi, t]);
 
-  useEffect(() => { fetchParams(); }, [fetchParams]);
+  useEffect(() => { observeAsync(fetchParams()); }, [fetchParams]);
 
   const commit = useCallback(async (name: string, value: unknown) => {
     try {
-      await guiApi.request({
+      const res = await guiApi.request<ParamsResponse>({
         path: "/params", method: "POST", format: "json",
         type: ContentType.Json,
         body: {parameters: [{name, value}]},
       });
-      setParams((prev) => prev.map((p) => (p.name === name ? {...p, value} : p)));
-      notification.success({message: t("parametersPage.updateSuccess", {name}), duration: 2});
+      const adjustment = res?.data?.adjustments?.find((a) => a.name === name);
+      const applied = adjustment ? adjustment.applied_value : value;
+      setParams((prev) => prev.map((p) => (p.name === name ? {...p, value: applied} : p)));
+      if (adjustment) {
+        notification.warning({message: t("settingsSections.toasts.liveAdjustedItem",
+          {name, applied: String(applied), requested: String(value)})});
+      } else {
+        notification.success({message: t("parametersPage.updateSuccess", {name}), duration: 2});
+      }
     } catch {
       notification.error({message: t("parametersPage.updateFailure", {name})});
       throw new Error("commit failed");
     }
-  }, [notification, t]);
+  }, [guiApi, notification, t]);
 
   // Filter by the selected profile (cumulative) and the search box, then group.
   const groups = useMemo(() => {

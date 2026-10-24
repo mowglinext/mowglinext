@@ -104,3 +104,13 @@ describe("SettingsFieldCard", () => {
         expect(onReset).toHaveBeenCalledWith("turn_speed_ratio");
     });
 });
+
+
+it("shared numeric settings render their units without InputNumber addon deprecations", () => {
+    const errors = vi.spyOn(console, 'error');
+    try {
+        const view = render(<ThemeProvider><SettingsFieldCard group={REVERSE_ESCAPE_GROUP} values={{obstacle_reverse_max_dist_m: 0}} onChange={vi.fn()}/></ThemeProvider>);
+        expect(view.container.querySelectorAll('.ant-space-addon').length).toBeGreaterThan(0);
+        expect(errors.mock.calls.some(args => args.some(arg => typeof arg === 'string' && arg.includes('[antd: InputNumber]') && /addonAfter|addonBefore/.test(arg)))).toBe(false);
+    } finally {errors.mockRestore();}
+});

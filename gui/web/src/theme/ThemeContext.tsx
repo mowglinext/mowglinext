@@ -1,9 +1,8 @@
+import {DISPLAY_MODES, type DisplayMode} from "./displayModes";
+export type {DisplayMode} from "./displayModes";
 import {createContext, useCallback, useContext, useEffect, useState} from "react";
 import type {ThemeMode} from "./colors.ts";
 import {cssVars, getColors, setColors} from "./colors.ts";
-
-export const DISPLAY_MODES = ['visual', 'balanced', 'efficient'] as const;
-export type DisplayMode = typeof DISPLAY_MODES[number];
 
 const DISPLAY_MODE_STORAGE_KEY = 'mowgli.display-mode';
 

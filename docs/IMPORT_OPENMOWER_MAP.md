@@ -199,24 +199,50 @@ The MowgliNext write-side surface the importer reuses:
   `/map_server_node/set_docking_point`, which line-splices `dock_pose_*`
   into `mowgli_robot.yaml` while preserving comments + perms.
 
-`applyImport` does **not** re-enter those HTTP handlers; it calls the same
-in-process helpers they do — `replaceMapInternal` + `setDockingPointInternal`
-in `gui/pkg/api/mowglinext.go` — so the importer and the map editor's *Save*
-button can't drift apart on what "save" means. No new ROS service surface is
-needed. The whole `clear_map → add_area×N → save_areas` sequence shares one
-size-scaled deadline (`mapWriteBudget`), and there is no transaction: a
-failure part-way leaves the areas already written in `map_server_node`'s
-state, exactly as the HTTP route does.
+`applyImport` does **not** re-enter those HTTP handlers. It holds the shared
+GUI map-write lock while calling `replaceMapLocked` and then
+`requestDockingPoint`. Public replacement, add, clear and dock routes use the
+same context-cancellable lock. This serializes these GUI operations within one
+server process; it is not a ROS transaction or a lock against other ROS writers.
+In particular, a context timeout stops waiting for a response; it does not prove
+that ROS canceled the remote command. An unconfirmed command may finish later,
+even after this process releases its lock. Verify the remote state before
+another operation; the lock alone does not solve that protocol limitation.
+The import has a size-scaled deadline (`mapWriteBudget`, at most six minutes).
+Failed clear/add operations retain the existing bounded attempt to restore the
+previous areas; a failed dock call never restores an older map.
+
+Success summaries and error bodies add typed `map_status` and `dock_status`
+fields. Existing summary fields, `applied`, HTTP codes and string `error` are
+retained. For example, after a confirmed map save and an explicit dock refusal:
+
+```json
+{"error":"set docking point: dock pose rejected by map_server: …","map_status":"persisted","dock_status":"rejected"}
+```
+
+Map states are `unchanged`, `restored`, `unconfirmed`,
+`active_persistence_unconfirmed` and `persisted`. Dock states are
+`not_requested`, `not_attempted`, `rejected`, `unconfirmed`,
+`active_persistence_unconfirmed` and `confirmed`. They describe service
+acknowledgements in this operation, not a later physical observation or a
+joint filesystem transaction. A failed `save_areas` does not prove that nothing
+was persisted: `add_area` may already have auto-saved. A dock transport failure
+does not prove that the dock stayed unchanged.
 
 **Dock write caveat.** `/map_server_node/set_docking_point` is gated:
 it refuses unless the firmware reports `is_charging` on a fresh
 `/hardware_bridge/status`, `/gps/pose_cov` is fresh with σ ≤
 `dock_set_gps_accuracy_max_m`, and the fused yaw has converged
 (`area_manager.cpp::on_set_docking_point`). Those gates apply to the
-importer's call too, so an import run with the robot off the dock — or
-without RTK-Fixed — writes the areas but silently leaves `dock_pose_*`
-untouched: `setDockingPointInternal` does not inspect the service's
-`success` flag, so the rejection never reaches the modal.
+importer's call too. A refusal after a successful area save returns HTTP 500
+with `map_status=persisted`, `dock_status=rejected`. A lost dock response uses
+`dock_status=unconfirmed`; success with a persistence warning uses
+`dock_status=active_persistence_unconfirmed`. Neither produces full GUI success
+or a datum write. The GUI preserves the local draft, warns that it may differ
+from the robot, and requires verification before another operation. It does not
+retry automatically. Old summary-only apply acknowledgements are shown as
+unconfirmed because they cannot expose the dock persistence warning; legacy
+previews remain supported.
 
 ---
 

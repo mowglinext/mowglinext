@@ -1,3 +1,4 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React from "react";
 import { Card, Col, Collapse, Form, InputNumber, Row, Space, Switch, Typography } from "antd";
 import { HomeOutlined } from "@ant-design/icons";
@@ -11,7 +12,7 @@ const { Text, Paragraph } = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: number | boolean | null) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
     onReset?: (key: string) => void;
@@ -49,31 +50,31 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                         <Row gutter={[16, 0]}>
                             <Col xs={24} sm={12}>
                                 <Form.Item htmlFor="setting-undock_distance" data-setting-key="undock_distance" label={fieldLabel("undock_distance", t('dockingSection.undockDistance'))} tooltip={t('dockingSection.undockDistanceTooltip')}>
-                                    <InputNumber id="setting-undock_distance"
+                                    <NumberWithAddon id="setting-undock_distance"
                                         value={values.undock_distance}
                                         onChange={(v) => onChange("undock_distance", v)}
                                         min={0.5} max={3.0} step={0.1} precision={2}
-                                        style={{ width: "100%" }} addonAfter="m"
+                                        style={{ width: "100%" }} after="m"
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
                                 <Form.Item htmlFor="setting-undock_speed" data-setting-key="undock_speed" label={fieldLabel("undock_speed", t('dockingSection.undockSpeed'))} tooltip={t('dockingSection.undockSpeedTooltip')}>
-                                    <InputNumber id="setting-undock_speed"
+                                    <NumberWithAddon id="setting-undock_speed"
                                         value={values.undock_speed}
                                         onChange={(v) => onChange("undock_speed", v)}
                                         min={0.05} max={0.3} step={0.05} precision={2}
-                                        style={{ width: "100%" }} addonAfter="m/s"
+                                        style={{ width: "100%" }} after="m/s"
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
                                 <Form.Item htmlFor="setting-dock_approach_distance" data-setting-key="dock_approach_distance" label={fieldLabel("dock_approach_distance", t('dockingSection.approachDistance'))} tooltip={t('dockingSection.approachDistanceTooltip')}>
-                                    <InputNumber id="setting-dock_approach_distance"
+                                    <NumberWithAddon id="setting-dock_approach_distance"
                                         value={values.dock_approach_distance}
                                         onChange={(v) => onChange("dock_approach_distance", v)}
                                         min={0.5} max={3.0} step={0.1} precision={2}
-                                        style={{ width: "100%" }} addonAfter="m"
+                                        style={{ width: "100%" }} after="m"
                                     />
                                 </Form.Item>
                             </Col>
@@ -113,31 +114,31 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                                             </Col>
                                             <Col xs={24} sm={12}>
                                                 <Form.Item htmlFor="setting-dock_charging_threshold" data-setting-key="dock_charging_threshold" label={fieldLabel("dock_charging_threshold", t('dockingSection.chargingThreshold'))} tooltip={t('dockingSection.chargingThresholdTooltip')}>
-                                                    <InputNumber id="setting-dock_charging_threshold"
+                                                    <NumberWithAddon id="setting-dock_charging_threshold"
                                                         value={values.dock_charging_threshold}
                                                         onChange={(v) => onChange("dock_charging_threshold", v)}
                                                         min={0.05} max={1.0} step={0.05} precision={2}
-                                                        style={{ width: "100%" }} addonAfter="A"
+                                                        style={{ width: "100%" }} after="A"
                                                     />
                                                 </Form.Item>
                                             </Col>
                                             <Col xs={24} sm={12}>
                                                 <Form.Item htmlFor="setting-dock_approach_overshoot" data-setting-key="dock_approach_overshoot" label={fieldLabel("dock_approach_overshoot", t('dockingSection.approachOvershoot'))} tooltip={t('dockingSection.approachOvershootTooltip')}>
-                                                    <InputNumber id="setting-dock_approach_overshoot"
+                                                    <NumberWithAddon id="setting-dock_approach_overshoot"
                                                         value={values.dock_approach_overshoot}
                                                         onChange={(v) => onChange("dock_approach_overshoot", v)}
                                                         min={0} max={0.3} step={0.01} precision={2}
-                                                        style={{ width: "100%" }} addonAfter="m"
+                                                        style={{ width: "100%" }} after="m"
                                                     />
                                                 </Form.Item>
                                             </Col>
                                             <Col xs={24} sm={12}>
                                                 <Form.Item htmlFor="setting-dock_pose_yaw_sigma_rad" data-setting-key="dock_pose_yaw_sigma_rad" label={fieldLabel("dock_pose_yaw_sigma_rad", t('dockingSection.baseHeadingUncertainty'))} tooltip={t('dockingSection.baseHeadingUncertaintyTooltip')}>
-                                                    <InputNumber id="setting-dock_pose_yaw_sigma_rad"
+                                                    <NumberWithAddon id="setting-dock_pose_yaw_sigma_rad"
                                                         value={values.dock_pose_yaw_sigma_rad}
                                                         onChange={(v) => onChange("dock_pose_yaw_sigma_rad", v)}
                                                         min={0.005} max={0.5} step={0.005} precision={3}
-                                                        style={{ width: "100%" }} addonAfter="rad"
+                                                        style={{ width: "100%" }} after="rad"
                                                     />
                                                 </Form.Item>
                                             </Col>

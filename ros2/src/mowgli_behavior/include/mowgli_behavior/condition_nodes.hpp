@@ -143,7 +143,8 @@ public:
 // IsRainDetected
 // ---------------------------------------------------------------------------
 
-/// Returns SUCCESS when the rain sensor reports rain.
+/// Returns SUCCESS when it is raining: the mower's own rain sensor OR a fresh
+/// external "wet" verdict from /external_rain (BTContext::RainingNow).
 class IsRainDetected : public BT::ConditionNode
 {
 public:

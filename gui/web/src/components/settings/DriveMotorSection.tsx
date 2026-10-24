@@ -1,4 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
+import {errorMessage, requestErrorMessage} from "../../utils/errors";
+import {observeAsync} from "../../utils/async";
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     Alert,
     App,
@@ -31,15 +35,18 @@ import {
     translateDriveTuningTrialPhase,
     translateDriveTuningTrialQuality,
 } from "../../utils/driveTuningI18n.ts";
+import {isJsonObject} from '../../utils/json';
+import type {DriveFeedForwardRequest, DrivePIDRequest} from '../../utils/driveTuningContract';
+import type {HardwareBackend} from '../../constants/hardwareBackends';
 import type {SettingsValues} from "../../types/settings.generated";
 
 const { Text, Paragraph } = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
-    acceptPersistedValues?: (values: Record<string, any>) => void;
-    hardwareBackend?: string;
+    onChange: (key: string, value: number | null) => void;
+    acceptPersistedValues?: (values: Record<string, number>) => void;
+    hardwareBackend?: HardwareBackend;
 };
 
 const DRIVE_PARAM_KEYS = [
@@ -97,11 +104,11 @@ const jobTag = (t: TFunction, state?: string) => {
     return <Tag>{t("settingsDriveMotor.job.idle")}</Tag>;
 };
 
-const pickPersistedDriveValues = (report: Record<string, any> | undefined, odometryOnly = false) => {
+const pickPersistedDriveValues = (report: Record<string, number> | undefined, odometryOnly = false) => {
     if (!report) return {};
-    const picked: Record<string, any> = {};
+    const picked: Record<string, number> = {};
     for (const key of odometryOnly ? ["ticks_per_meter"] : DRIVE_PARAM_KEYS) {
-        if (key in report) {
+        if (Object.prototype.hasOwnProperty.call(report, key) && Number.isFinite(report[key])) {
             picked[key] = report[key];
         }
     }
@@ -109,6 +116,7 @@ const pickPersistedDriveValues = (report: Record<string, any> | undefined, odome
 };
 
 export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPersistedValues, hardwareBackend = "mowgli" }) => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const { formatAbsolute } = useTimeFormat();
     // "never" rather than the em-dash placeholder: an absent calibration
@@ -136,8 +144,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
     const [reportOpen, setReportOpen] = useState(false);
     const [startingAction, setStartingAction] = useState<"ff" | "pid" | null>(null);
     const [rollingBack, setRollingBack] = useState(false);
-    const [ffForm] = Form.useForm();
-    const [pidForm] = Form.useForm();
+    const [ffForm] = Form.useForm<Omit<DriveFeedForwardRequest, 'turn_direction'>>();
+    const [pidForm] = Form.useForm<DrivePIDRequest>();
     const appliedJobIdsRef = useRef<Set<string>>(new Set());
 
     const isEmergencyActive = !!emergency.active_emergency || !!emergency.latched_emergency;
@@ -147,15 +155,14 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
 
     const feedForwardSummary = tuningStatus?.feed_forward;
     const pidSummary = tuningStatus?.pid;
-    const translateBackendMessage = (message?: string | null) => (
+    const translateBackendMessage = useCallback((message?: string | null) => (
         translateDriveTuningBackendMessage(t, message) ?? message ?? undefined
-    );
-    const formatBackendError = (error: any) => (
-        translateDriveTuningBackendMessage(t, error?.error?.error ?? error?.message)
-        ?? error?.error?.error
-        ?? error?.message
-        ?? t("settingsDriveMotor.common.unknownBackendError")
-    );
+    ), [t]);
+    const formatBackendError = (error: unknown) => {
+        const message = requestErrorMessage(error);
+        return translateDriveTuningBackendMessage(t, message) ?? message
+            ?? t("settingsDriveMotor.common.unknownBackendError");
+    };
     const translatedFeedForwardSummary = translateBackendMessage(feedForwardSummary?.message)
         ?? t("settingsDriveMotor.common.noReportYetSentence");
     const translatedPidSummary = translateBackendMessage(pidSummary?.message)
@@ -174,7 +181,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
         }
 
         let cancelled = false;
-        (async () => {
+        observeAsync((async () => {
             try {
                 const reportResponse = await loadLatestReport();
                 const sameReport = reportResponse?.latest_report?.report_path === job.report_path;
@@ -187,10 +194,15 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         description: t("settingsDriveMotor.notifications.applied.description"),
                     });
                 }
-            } catch {
-                // The status panel still shows the backend error; keep this effect best-effort.
+            } catch (error) {
+                if (!cancelled) {
+                    notification.error({
+                        message: t("settingsDriveMotor.notifications.loadReportFailed.title"),
+                        description: errorMessage(error),
+                    });
+                }
             }
-        })();
+        })());
 
         return () => {
             cancelled = true;
@@ -233,7 +245,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             );
         }
         return alerts;
-    }, [isEmergencyActive, onDock, t, tuningError]);
+    }, [isEmergencyActive, onDock, t, tuningError, translateBackendMessage]);
 
     const openLatestReport = async () => {
         try {
@@ -269,8 +281,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     ? t(isMavros ? "settingsDriveMotor.odometry.applyDescription" : "settingsDriveMotor.notifications.ffStarted.applyDescription")
                     : t(isMavros ? "settingsDriveMotor.odometry.reportOnlyDescription" : "settingsDriveMotor.notifications.ffStarted.reportOnlyDescription"),
             });
-        } catch (e: any) {
-            if (e?.errorFields) {
+        } catch (e) {
+            if (isJsonObject(e) && Array.isArray(e.errorFields)) {
                 return;
             }
             notification.error({
@@ -301,8 +313,8 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                     ? t("settingsDriveMotor.notifications.pidStarted.applyDescription")
                     : t("settingsDriveMotor.notifications.pidStarted.reportOnlyDescription"),
             });
-        } catch (e: any) {
-            if (e?.errorFields) {
+        } catch (e) {
+            if (isJsonObject(e) && Array.isArray(e.errorFields)) {
                 return;
             }
             notification.error({
@@ -355,10 +367,10 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
         });
     };
 
-    const ffApply = Form.useWatch("apply", ffForm);
-    const ffAllowUndock = Form.useWatch("allow_undock", ffForm);
-    const pidApply = Form.useWatch("apply", pidForm);
-    const pidAllowUndock = Form.useWatch("allow_undock", pidForm);
+    const ffApply: unknown = Form.useWatch("apply", ffForm);
+    const ffAllowUndock: unknown = Form.useWatch("allow_undock", ffForm);
+    const pidApply: unknown = Form.useWatch("apply", pidForm);
+    const pidAllowUndock: unknown = Form.useWatch("allow_undock", pidForm);
 
     const latestParsedReport = latestReport?.parsed;
     const latestReasons = latestParsedReport?.reasons ?? [];
@@ -440,7 +452,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         {!isMavros && <Button onClick={() => setPidOpen(true)} disabled={runningJob || isEmergencyActive}>
                             {t("settingsDriveMotor.actions.startPid")}
                         </Button>}
-                        <Button icon={<FileTextOutlined />} onClick={openLatestReport} loading={loadingLatestReport}>
+                        <Button icon={<FileTextOutlined />} onClick={asyncHandler(openLatestReport)} loading={loadingLatestReport}>
                             {t("settingsDriveMotor.actions.viewLastReport")}
                         </Button>
                         <Button
@@ -528,11 +540,11 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             </Col>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-wheel_pid_integral_limit" data-setting-key="wheel_pid_integral_limit" label={t("settingsDriveMotor.integralLimit")} tooltip={t("settingsDriveMotor.integralLimitTooltip")}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.integralLimit") + ", PWM"} aria-description={t("settingsDriveMotor.integralLimitTooltip")}  id="setting-wheel_pid_integral_limit"
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.integralLimit") + ", PWM"} aria-description={t("settingsDriveMotor.integralLimitTooltip")}  id="setting-wheel_pid_integral_limit"
                                         value={values.wheel_pid_integral_limit}
                                         onChange={(v) => onChange("wheel_pid_integral_limit", v)}
                                         min={0} max={255} step={0.001} precision={3}
-                                        style={{ width: "100%" }} addonAfter="PWM"
+                                        style={{ width: "100%" }} after="PWM"
                                     />
                                 </Form.Item>
                             </Col>
@@ -544,13 +556,13 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
             {isMavros ? <Card size="small" title={t("settingsDriveMotor.odometry.label")} style={{ marginBottom: 16 }}>
                 <Form layout="vertical" size="small">
                     <Form.Item htmlFor="setting-ticks_per_meter" data-setting-key="ticks_per_meter" label={t("settingsDriveMotor.odometry.ticksPerMeter")}>
-                        <InputNumber
+                        <NumberWithAddon
                             id="setting-ticks_per_meter"
                             aria-label={t("settingsDriveMotor.odometry.ticksPerMeter")}
                             value={values.ticks_per_meter}
                             onChange={(v) => onChange("ticks_per_meter", v)}
                             min={0.001} step={0.001}
-                            style={{ width: "100%" }} addonAfter="ticks/m"
+                            style={{ width: "100%" }} after="ticks/m"
                         />
                     </Form.Item>
                 </Form>
@@ -562,11 +574,11 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                 label={t("settingsDriveMotor.pwmPerMps")}
                                 tooltip={t("settingsDriveMotor.pwmPerMpsTooltip")}
                             >
-                                <InputNumber aria-label={t("settingsDriveMotor.pwmPerMps") + ", PWM"} aria-description={t("settingsDriveMotor.pwmPerMpsTooltip")}  id="setting-wheel_pid_pwm_per_mps"
+                                <NumberWithAddon aria-label={t("settingsDriveMotor.pwmPerMps") + ", PWM"} aria-description={t("settingsDriveMotor.pwmPerMpsTooltip")}  id="setting-wheel_pid_pwm_per_mps"
                                     value={values.wheel_pid_pwm_per_mps}
                                     onChange={(v) => onChange("wheel_pid_pwm_per_mps", v)}
                                     min={50} max={600} step={0.001} precision={3}
-                                    style={{ width: "100%" }} addonAfter="PWM"
+                                    style={{ width: "100%" }} after="PWM"
                                 />
                             </Form.Item>
                         </Col>
@@ -578,16 +590,16 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                 title={t(isMavros ? "settingsDriveMotor.odometry.modalTitle" : "settingsDriveMotor.ffModal.title")}
                 open={ffOpen}
                 onCancel={() => setFfOpen(false)}
-                onOk={handleStartFeedForward}
+                onOk={asyncHandler(handleStartFeedForward)}
                 okText={t("settingsDriveMotor.ffModal.ok")}
                 cancelText={t("settingsDriveMotor.common.cancel")}
                 confirmLoading={startingAction === "ff"}
                 okButtonProps={{
-                    disabled: isEmergencyActive || (onDock && !ffAllowUndock),
+                    disabled: isEmergencyActive || (onDock && ffAllowUndock !== true),
                 }}
             >
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                    {onDock && !ffAllowUndock && (
+                    {onDock && ffAllowUndock !== true && (
                         <Alert
                             type="warning"
                             showIcon
@@ -618,12 +630,12 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         <Row gutter={[16, 0]}>
                             <Col xs={24} sm={12}>
                                 <Form.Item name="distance_m" label={t("settingsDriveMotor.ffModal.fields.distance")} rules={[{ required: true }]}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.ffModal.fields.distance") + ", m"} min={2} max={10} step={0.5} precision={1} style={{ width: "100%" }} addonAfter="m" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.ffModal.fields.distance") + ", m"} min={2} max={10} step={0.5} precision={1} style={{ width: "100%" }} after="m" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
                                 <Form.Item name="test_speed_mps" label={t("settingsDriveMotor.ffModal.fields.testSpeed")} rules={[{ required: true }]}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.ffModal.fields.testSpeed") + ", m/s"} min={0.05} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} addonAfter="m/s" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.ffModal.fields.testSpeed") + ", m/s"} min={0.05} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} after="m/s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
@@ -638,7 +650,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                     tooltip={t("settingsDriveMotor.ffModal.fields.odomTimeoutTooltip")}
                                     rules={[{ required: true }]}
                                 >
-                                    <InputNumber aria-label={t("settingsDriveMotor.ffModal.fields.odomTimeout") + ", s"} aria-description={t("settingsDriveMotor.ffModal.fields.odomTimeoutTooltip")}  min={0.5} max={15} step={0.5} precision={1} style={{ width: "100%" }} addonAfter="s" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.ffModal.fields.odomTimeout") + ", s"} aria-description={t("settingsDriveMotor.ffModal.fields.odomTimeoutTooltip")}  min={0.5} max={15} step={0.5} precision={1} style={{ width: "100%" }} after="s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
@@ -671,12 +683,12 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                     label={t("settingsDriveMotor.common.undockDistance")}
                                     tooltip={t("settingsDriveMotor.common.undockDistanceTooltip")}
                                 >
-                                    <InputNumber aria-label={t("settingsDriveMotor.common.undockDistance") + ", m"} aria-description={t("settingsDriveMotor.common.undockDistanceTooltip")}  min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} addonAfter="m" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.common.undockDistance") + ", m"} aria-description={t("settingsDriveMotor.common.undockDistanceTooltip")}  min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} after="m" />
                                 </Form.Item>
                             </Col>
                         </Row>
                     </Form>
-                    {ffApply ? (
+                    {ffApply === true ? (
                         <Alert
                             type="success"
                             showIcon
@@ -698,12 +710,12 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                 title={t("settingsDriveMotor.pidModal.title")}
                 open={pidOpen}
                 onCancel={() => setPidOpen(false)}
-                onOk={handleStartPid}
+                onOk={asyncHandler(handleStartPid)}
                 okText={t("settingsDriveMotor.pidModal.ok")}
                 cancelText={t("settingsDriveMotor.common.cancel")}
                 confirmLoading={startingAction === "pid"}
                 okButtonProps={{
-                    disabled: isEmergencyActive || (onDock && !pidAllowUndock),
+                    disabled: isEmergencyActive || (onDock && pidAllowUndock !== true),
                 }}
             >
                 <Space direction="vertical" size={12} style={{ width: "100%" }}>
@@ -715,7 +727,7 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                             description={t("settingsDriveMotor.pidModal.precheck.description")}
                         />
                     )}
-                    {onDock && !pidAllowUndock && (
+                    {onDock && pidAllowUndock !== true && (
                         <Alert
                             type="warning"
                             showIcon
@@ -744,12 +756,12 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                         <Row gutter={[16, 0]}>
                             <Col xs={24} sm={12}>
                                 <Form.Item name="max_speed_mps" label={t("settingsDriveMotor.pidModal.fields.maxSpeed")} rules={[{ required: true }]}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.pidModal.fields.maxSpeed") + ", m/s"} min={0.1} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} addonAfter="m/s" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.pidModal.fields.maxSpeed") + ", m/s"} min={0.1} max={0.5} step={0.05} precision={2} style={{ width: "100%" }} after="m/s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
                                 <Form.Item name="segment_duration_s" label={t("settingsDriveMotor.pidModal.fields.segmentDuration")} rules={[{ required: true }]}>
-                                    <InputNumber aria-label={t("settingsDriveMotor.pidModal.fields.segmentDuration") + ", s"} min={2} max={20} step={0.5} precision={1} style={{ width: "100%" }} addonAfter="s" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.pidModal.fields.segmentDuration") + ", s"} min={2} max={20} step={0.5} precision={1} style={{ width: "100%" }} after="s" />
                                 </Form.Item>
                             </Col>
                             <Col xs={24} sm={12}>
@@ -779,12 +791,12 @@ export const DriveMotorSection: React.FC<Props> = ({ values, onChange, acceptPer
                                     label={t("settingsDriveMotor.common.undockDistance")}
                                     tooltip={t("settingsDriveMotor.common.undockDistanceTooltip")}
                                 >
-                                    <InputNumber aria-label={t("settingsDriveMotor.common.undockDistance") + ", m"} aria-description={t("settingsDriveMotor.common.undockDistanceTooltip")}  min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} addonAfter="m" />
+                                    <NumberWithAddon aria-label={t("settingsDriveMotor.common.undockDistance") + ", m"} aria-description={t("settingsDriveMotor.common.undockDistanceTooltip")}  min={0.5} max={5} step={0.1} precision={1} style={{ width: "100%" }} after="m" />
                                 </Form.Item>
                             </Col>
                         </Row>
                     </Form>
-                    {pidApply ? (
+                    {pidApply === true ? (
                         <Alert
                             type="success"
                             showIcon

@@ -21,6 +21,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -84,6 +85,7 @@ target_link_libraries(mowgli_monitoring_core
   ${rclcpp_TARGETS}
   ${diagnostic_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
+  ${std_msgs_TARGETS}
   ${nav_msgs_TARGETS}
   ${nav2_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
@@ -113,6 +115,7 @@ target_link_libraries(diagnostics_node
   ${rclcpp_TARGETS}
   ${diagnostic_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
+  ${std_msgs_TARGETS}
   ${nav_msgs_TARGETS}
   ${nav2_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
@@ -135,6 +138,7 @@ target_link_libraries(mqtt_bridge_node
   ${rclcpp_TARGETS}
   ${diagnostic_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
+  ${std_msgs_TARGETS}
   ${nav_msgs_TARGETS}
   ${nav2_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
@@ -193,6 +197,7 @@ if(BUILD_TESTING)
     ${rclcpp_TARGETS}
     ${diagnostic_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
+    ${std_msgs_TARGETS}
     ${nav_msgs_TARGETS}
     ${nav2_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
@@ -229,6 +234,7 @@ if(BUILD_TESTING)
     ${rclcpp_TARGETS}
     ${diagnostic_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
+    ${std_msgs_TARGETS}
     ${nav_msgs_TARGETS}
     ${nav2_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
@@ -251,6 +257,7 @@ ament_export_dependencies(
   rclcpp
   diagnostic_msgs
   sensor_msgs
+  std_msgs
   nav_msgs
   geometry_msgs
   mowgli_interfaces
