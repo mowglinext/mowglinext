@@ -226,6 +226,14 @@
           <IsCommand command="1"/>
           <IsDocking/>
         </Sequence>
+        <!-- Same blade-OFF dock transit while COMMAND_GOTO (9) is still set:
+             GotoLowBatteryHandler, or CriticalBatteryDock entered during a
+             GOTO. IsDocking is false during the GOTO transit itself, so the
+             GOTO keeps full boundary protection. -->
+        <Sequence name="GotoDockTransitExempt">
+          <IsCommand command="9"/>
+          <IsDocking/>
+        </Sequence>
         <Inverter><IsBoundaryViolation/></Inverter>
 
         <!-- Lethal path: stop immediately, latch -->
@@ -325,6 +333,10 @@
         <IsCommand command="2"/>
         <Sequence name="LocDockTransitExempt">
           <IsCommand command="1"/>
+          <IsDocking/>
+        </Sequence>
+        <Sequence name="LocGotoDockTransitExempt">
+          <IsCommand command="9"/>
           <IsDocking/>
         </Sequence>
         <Inverter><IsLocalizationDegraded/></Inverter>
@@ -623,16 +635,27 @@
                          the saved cursor on the next tick. Mirrors BatteryGuard's tail. -->
                   <!-- Critical docking protects every command, including IDLE.
                        Only an active mow authorizes the recovery motion. The
-                       reactive gate also cancels an undock on a new command. -->
-                  <ReactiveSequence name="CriticalResumeMow">
-                    <IsCommand command="1"/>
-                    <Sequence>
-                      <IsResumeUndockAllowed max_attempts="3"/>
-                      <PublishHighLevelStatus state="2" state_name="RESUMING_UNDOCKING"/>
-                      <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
-                      <PublishHighLevelStatus state="2" state_name="MOWING"/>
+                       reactive gate also cancels an undock on a new command.
+                       A GOTO (COMMAND_GOTO=9) ends here, docked: without the
+                       ClearCommand, GotoSequence would drive off the charger with
+                       no undock on the next tick. The caller decides whether to
+                       send a new ~/goto_pose. -->
+                  <Fallback name="CriticalBatteryResumeOrGotoTerminate">
+                    <Sequence name="GotoTerminatesOnCriticalBattery">
+                      <IsCommand command="9"/>
+                      <PublishHighLevelStatus state="1" state_name="GOTO_CRITICAL_BATTERY_DOCKED"/>
+                      <ClearCommand/>
                     </Sequence>
-                  </ReactiveSequence>
+                    <ReactiveSequence name="CriticalResumeMow">
+                      <IsCommand command="1"/>
+                      <Sequence>
+                        <IsResumeUndockAllowed max_attempts="3"/>
+                        <PublishHighLevelStatus state="2" state_name="RESUMING_UNDOCKING"/>
+                        <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
+                        <PublishHighLevelStatus state="2" state_name="MOWING"/>
+                      </Sequence>
+                    </ReactiveSequence>
+                  </Fallback>
                 </Sequence>
                 <AlwaysSuccess/>
               </IfThenElse>
@@ -1467,6 +1490,77 @@
             <PublishHighLevelStatus state="1" state_name="IDLE_DOCKED"/>
             <!-- HOME interrupts a mow: keep whatever progress it had, so Play continues it. -->
             <EndSession keep_incomplete="true"/>
+            <ClearCommand/>
+          </Sequence>
+        </ReactiveSequence>
+
+        <!-- ============================================================
+             c2. Point-to-point GOTO (COMMAND_GOTO = 9, set by ~/goto_pose)
+             Blade off and stop, then ONE NavigateToPose to the target
+             (default navigator tree, AuthorizedTransitPlanner) bounded by
+             {goto_timeout_sec}. GotoNavOrFailed always reaches ClearCommand,
+             so a failed goal is never retried. GotoGuards re-checks the
+             battery every tick like StripGuards: a low or critical battery
+             halts the transit (onHalted cancels the goal), docks once and
+             ends the mission. Unlike BatteryGuard, nothing resumes the GOTO
+             after charging.
+             ============================================================ -->
+        <ReactiveSequence name="GotoSequence">
+          <IsCommand command="9"/>
+          <Sequence name="GotoAction">
+            <SetMowerEnabled enabled="false"/>
+            <StopMoving/>
+            <PublishHighLevelStatus state="2" state_name="GOTO_ACTIVE"/>
+            <ReactiveSequence name="GotoGuards">
+              <Fallback name="GotoLowBatteryGuard">
+                <!-- Low percentage, or the exact critical test CriticalBatteryDock
+                     enters on (percentage OR filtered voltage below
+                     battery_critical_voltage). CriticalBatteryDock itself is not
+                     re-evaluated while this branch is RUNNING (MainLogic is a
+                     non-reactive Fallback), so the voltage gate is checked here. -->
+                <Inverter>
+                  <Fallback name="GotoBatteryLowOrCritical">
+                    <NeedsDocking threshold="{battery_low_pct}"/>
+                    <IsBatteryLow threshold="{battery_critical_pct}" voltage_threshold="{battery_critical_voltage}"/>
+                  </Fallback>
+                </Inverter>
+                <Sequence name="GotoLowBatteryHandler">
+                  <SetMowerEnabled enabled="false"/>
+                  <StopMoving/>
+                  <PublishHighLevelStatus state="2" state_name="GOTO_LOW_BATTERY_DOCKING"/>
+                  <ClearCostmap/>
+                  <!-- One docking attempt; the terminal status tells a successful
+                       return apart from a robot left stopped away from the dock. -->
+                  <Fallback name="GotoDockedOrDockFailed">
+                    <Sequence>
+                      <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
+                      <IsLastDockSucceeded/>
+                      <PublishHighLevelStatus state="1" state_name="GOTO_LOW_BATTERY_DOCKED"/>
+                    </Sequence>
+                    <Sequence>
+                      <PublishHighLevelStatus state="0" state_name="GOTO_LOW_BATTERY_DOCK_FAILED"/>
+                      <SetStopReason reason="DOCK_NAV_FAILED" detail="The mower could not drive back to the dock and is standing where it stopped."/>
+                    </Sequence>
+                  </Fallback>
+                  <ClearCommand/>
+                  <!-- Force FAILURE so GotoGuards (ReactiveSequence) stops here this
+                       tick and does NOT tick GotoNavOrFailed/NavigateToPose right
+                       after — current_command is already 0, so GotoSequence simply
+                       is not re-entered on the next tick regardless. -->
+                  <AlwaysFailure/>
+                </Sequence>
+              </Fallback>
+              <Fallback name="GotoNavOrFailed">
+                <Sequence>
+                  <NavigateToPose timeout_sec="{goto_timeout_sec}"/>
+                  <PublishHighLevelStatus state="1" state_name="GOTO_REACHED"/>
+                </Sequence>
+                <Sequence>
+                  <PublishHighLevelStatus state="1" state_name="GOTO_FAILED"/>
+                  <AlwaysSuccess/>
+                </Sequence>
+              </Fallback>
+            </ReactiveSequence>
             <ClearCommand/>
           </Sequence>
         </ReactiveSequence>
