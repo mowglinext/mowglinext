@@ -18,7 +18,8 @@ vi.mock('../../../hooks/useWS.ts', () => ({useWS: (onError: (error: Error) => vo
         mock.streams.push(value);
         return value;
     });
-    return stream;
+    // The wrapper may change identity even when its adapters remain stable.
+    return {...stream};
 }}));
 vi.mock('../../../hooks/useHighLevelStatus.ts', () => ({useHighLevelStatus: () => ({
     highLevelStatus: {state_name: mock.stateName}, start: mock.highStart, stop: mock.highStop,
@@ -82,6 +83,63 @@ describe('map stream dependency transitions', () => {
         expect(joy.stop).toHaveBeenCalledOnce();
         unmount();
     });
+    it('keeps trajectory and visual streams stable across controller ownership and render churn', () => {
+        mock.stateName = 'RECORDING';
+        const initial = options();
+        const {rerender, result, unmount} = renderHook(props => useMapStreams(props), {initialProps: initial});
+        const trajectory = mock.streams.find(stream => stream.start.mock.calls.some(([uri]) => uri.endsWith('/recordingTrajectory')))!;
+        const joy = result.current.joyStream;
+        const beforeStarts = starts();
+        const beforeStops = stops();
+        expect(trajectory.start).toHaveBeenCalledOnce();
+        expect(trajectory.stop).not.toHaveBeenCalled();
+
+        rerender({...initial, controllerOwnsInput: true});
+        expect(joy.stop).toHaveBeenCalledOnce();
+        rerender({...initial, controllerOwnsInput: true, settings: {...initial.settings}});
+        expect(starts()).toBe(beforeStarts);
+        expect(stops()).toBe(beforeStops + 1);
+        rerender({...initial, controllerOwnsInput: false});
+        expect(joy.start).toHaveBeenCalledTimes(2);
+        expect(starts()).toBe(beforeStarts + 1);
+        expect(trajectory.start).toHaveBeenCalledOnce();
+        expect(trajectory.stop).not.toHaveBeenCalled();
+
+        mock.stateName = 'IDLE';
+        rerender(initial);
+        expect(trajectory.stop).toHaveBeenCalledOnce();
+        unmount();
+    });
+
+    it.each(['MANUAL_MOWING', 'RECORDING'])('does not restore an old touch gesture or keepalive after controller return in %s', stateName => {
+        mock.stateName = stateName;
+        const initial = options();
+        const {result, rerender, unmount} = renderHook(props => {
+            const streams = useMapStreams(props);
+            const manual = useManualMode({mowerAction: () => () => Promise.resolve(), joyStream: streams.joyStream, stateName: mock.stateName, controllerOwnsInput: props.controllerOwnsInput});
+            return {streams, manual};
+        }, {initialProps: initial});
+        const raw = mock.streams.find(s => s.start === result.current.streams.joyStream.start)!;
+        const move = {type: 'move' as const, x: 0, y: 1, direction: null, distance: null};
+        const nonzero = () => raw.sendJsonMessage.mock.calls.filter(([m]) => (m as TwistStamped).twist?.linear?.x !== 0).length;
+        act(() => { raw.open(); result.current.manual.handleJoyStart(); result.current.manual.handleJoyMove(move); vi.advanceTimersByTime(200); });
+        expect(nonzero()).toBe(3);
+
+        rerender({...initial, controllerOwnsInput: true});
+        const afterTakeover = raw.sendJsonMessage.mock.calls.length;
+        act(() => { result.current.manual.handleJoyMove(move); vi.advanceTimersByTime(500); });
+        expect(raw.sendJsonMessage.mock.calls).toHaveLength(afterTakeover);
+        rerender({...initial, controllerOwnsInput: false});
+        act(() => { raw.open(); result.current.manual.handleJoyMove(move); vi.advanceTimersByTime(500); });
+        expect(nonzero()).toBe(3);
+        expect(vi.getTimerCount()).toBe(0);
+
+        act(() => { result.current.manual.handleJoyStart(); result.current.manual.handleJoyMove(move); vi.advanceTimersByTime(100); });
+        expect(nonzero()).toBe(5);
+        expect(raw.sendJsonMessage.mock.calls.every(([, keep]) => keep === false)).toBe(true);
+        unmount();
+    });
+
     it('never queues motion or revives a held gesture across a publisher reconnect', () => {
         mock.stateName = 'MANUAL_MOWING';
         const initial = options();

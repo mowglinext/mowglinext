@@ -101,14 +101,15 @@ var fusionGraphTriggerServices = map[string]string{
 
 func MowgliNextRoutes(r *gin.RouterGroup, provider types.IRosProvider) {
 	group := r.Group("/mowglinext")
-	ServiceRoute(group, provider)
+	teleop := &gamepadCoordinator{provider: provider}
+	registerServiceRoutes(group, provider, teleop)
 	AddMapAreaRoute(group, provider)
 	SetDockingPointRoute(group, provider)
 	ClearMapRoute(group, provider)
 	ReplaceMapRoute(group, provider)
 	SubscriberRoute(group, provider)
 	MultiplexRoute(group, provider)
-	PublisherRoute(group, provider)
+	registerPublisherRoutes(group, teleop)
 }
 
 // topicSubscribeInterval returns the throttle interval (ms, -1 = unthrottled)
@@ -347,7 +348,16 @@ func SubscriberRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // @Param topic path string true "topic to publish to, could be: joy"
 // @Router /mowglinext/publish/{topic} [get]
 func PublisherRoute(group *gin.RouterGroup, provider types.IRosProvider) {
+	registerPublisherRoutes(group, &gamepadCoordinator{provider: provider})
+}
+
+func registerPublisherRoutes(group *gin.RouterGroup, teleop *gamepadCoordinator) {
+	teleop.diagnostics.initialize()
+	group.GET("/gamepad/diagnostics", teleop.getDiagnostics)
+	group.POST("/gamepad/diagnostics", teleop.postDiagnostics)
+	group.GET("/publish/gamepad", teleop.handle)
 	group.GET("/publish/:topic", func(c *gin.Context) {
+		epoch := teleop.epoch.Load()
 		var err error
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 		if err != nil {
@@ -366,8 +376,16 @@ func PublisherRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				log.Printf("PublisherRoute: unmarshal error: %v", err)
 				continue
 			}
-			err = provider.Publish("/cmd_vel_teleop", "geometry_msgs/msg/TwistStamped", &msgObj)
+			err = teleop.publishLegacy(&msgObj, epoch)
 			if err != nil {
+				if errors.Is(err, errGamepadOwner) {
+					if epoch != teleop.epoch.Load() {
+						return
+					}
+					// A fresh socket can wait through controller cleanup. Drop
+					// this frame without queueing it; only later input may move.
+					continue
+				}
 				log.Printf("PublisherRoute: publish error: %v", err)
 				// Don't break — foxglove may reconnect; keep the browser WebSocket alive
 				continue
@@ -683,6 +701,10 @@ func subscribe(provider types.IRosProvider, c *gin.Context, conn *websocket.Conn
 // @Failure 500 {object} ErrorResponse
 // @Router /mowglinext/call/{command} [post]
 func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
+	registerServiceRoutes(group, provider, &gamepadCoordinator{provider: provider})
+}
+
+func registerServiceRoutes(group *gin.RouterGroup, provider types.IRosProvider, teleop *gamepadCoordinator) {
 	group.POST("/call/:command", func(c *gin.Context) {
 		command := c.Param("command")
 		// Bound every ROS service call: foxglove's CallService waits on
@@ -695,6 +717,21 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 		defer cancel()
 		var err error
+		if command == "coverage_clear_resume" {
+			finish, owned, admissionErr := teleop.beginMode(c.GetHeader(gamepadActionHeader), 0)
+			if admissionErr != nil {
+				c.JSON(http.StatusConflict, ErrorResponse{Error: admissionErr.Error()})
+				return
+			}
+			defer func() { finish(err) }()
+			if owned {
+				// Controller ownership survives HTTP cancellation. Ordinary calls
+				// without an owner retain their existing request cancellation.
+				var actionCancel context.CancelFunc
+				ctx, actionCancel = context.WithTimeout(context.Background(), gamepadActionTimeout)
+				defer actionCancel()
+			}
+		}
 		switch command {
 		case "high_level_control":
 			var CallReq mowgli.HighLevelControlReq
@@ -704,6 +741,31 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				// the frontend's useMowerAction reads res.error from JSON.
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
+			}
+			if CallReq.Command == 8 {
+				stop, stopErr := teleop.requestStop(c.GetHeader(gamepadActionHeader))
+				if stopErr != nil {
+					c.JSON(http.StatusConflict, ErrorResponse{Error: stopErr.Error()})
+					return
+				}
+				select {
+				case <-stop.done:
+					err = stop.err
+				case <-ctx.Done():
+					err = ctx.Err()
+				}
+				break
+			}
+			finish, owned, admissionErr := teleop.beginMode(c.GetHeader(gamepadActionHeader), CallReq.Command)
+			if admissionErr != nil {
+				c.JSON(http.StatusConflict, ErrorResponse{Error: admissionErr.Error()})
+				return
+			}
+			defer func() { finish(err) }()
+			if owned {
+				var actionCancel context.CancelFunc
+				ctx, actionCancel = context.WithTimeout(context.Background(), gamepadActionTimeout)
+				defer actionCancel()
 			}
 			var res mowgli.HighLevelControlRes
 			err = provider.CallService(ctx, "/behavior_tree_node/high_level_control", &CallReq, &res, "mowgli_interfaces/srv/HighLevelControl")
@@ -719,6 +781,9 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
 			}
+			// Emergency intent retires any controller resume capability before
+			// the hardware RPC, including while a manual start is settling.
+			teleop.revokeManualIntent()
 			err = providers.CallEmergencyStop(ctx, provider, &CallReq)
 		case "mow_enabled":
 			var CallReq mowgli.MowerControlReq
@@ -756,6 +821,17 @@ func ServiceRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				// the frontend's useMowerAction reads res.error from JSON.
 				c.JSON(400, ErrorResponse{Error: err.Error()})
 				return
+			}
+			finish, owned, admissionErr := teleop.beginMode(c.GetHeader(gamepadActionHeader), 1)
+			if admissionErr != nil {
+				c.JSON(http.StatusConflict, ErrorResponse{Error: admissionErr.Error()})
+				return
+			}
+			defer func() { finish(err) }()
+			if owned {
+				var actionCancel context.CancelFunc
+				ctx, actionCancel = context.WithTimeout(context.Background(), gamepadActionTimeout)
+				defer actionCancel()
 			}
 			var res mowgli.StartInAreaRes
 			err = provider.CallService(ctx, "/behavior_tree_node/start_in_area", &CallReq, &res, "mowgli_interfaces/srv/StartInArea")

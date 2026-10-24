@@ -216,6 +216,7 @@ type rosClient interface {
 	Unsubscribe(string, string)
 	CallService(context.Context, string, interface{}, ...string) (json.RawMessage, error)
 	Publish(string, interface{}, ...string) error
+	PublishContext(context.Context, string, interface{}, ...string) error
 	GetParameters(context.Context, []string) ([]foxglove.Parameter, error)
 	SetParameters(context.Context, []foxglove.Parameter) ([]foxglove.Parameter, error)
 }
@@ -765,10 +766,20 @@ func (r *RosProvider) UnSubscribe(topic string, id string) {
 // relay is not yet connected (e.g., early startup), it falls back to
 // foxglove_bridge so the first manual commands still reach the robot.
 func (r *RosProvider) Publish(topic string, msgType string, msg interface{}) error {
-	if topic == "/cmd_vel_teleop" && r.cmdVelRelay.Connected() {
-		return r.cmdVelRelay.Send(msg)
+	return r.PublishContext(context.Background(), topic, msgType, msg)
+}
+
+// PublishContext preserves the caller's lease across relay selection and the
+// foxglove fallback. Neither transport may turn an expired queued input into
+// a new motion command when its writer becomes available.
+func (r *RosProvider) PublishContext(ctx context.Context, topic string, msgType string, msg interface{}) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return r.client.Publish(topic, msg, msgType)
+	if topic == "/cmd_vel_teleop" && r.cmdVelRelay != nil && r.cmdVelRelay.Connected() {
+		return r.cmdVelRelay.SendContext(ctx, msg)
+	}
+	return r.client.PublishContext(ctx, topic, msg, msgType)
 }
 
 // GetParameters lists ROS2 parameters via the foxglove bridge.

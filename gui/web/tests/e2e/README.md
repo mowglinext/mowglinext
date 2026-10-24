@@ -68,7 +68,12 @@ The other four specs are targeted regressions rather than a matrix:
 
 ## Where this fits
 
-No CI workflow runs this suite — it is a by-hand gate (see
+`gui-ci.yml` runs the power-menu, blackbox and browser-controller specs. Controller
+workflows run serially in Chromium and WebKit: their real 200 ms input-poll fail-safe must remain enabled.
+Run them with `npx playwright install chromium webkit` and
+`npx playwright test --config playwright.gamepad.config.ts`. WebKit here exercises
+focus/layout behavior with synthetic input; it does not validate physical iPad Bluetooth.
+The remaining browser specs are a by-hand gate (see
 [`docs/claude/testing-ci.md`](../../../../docs/claude/testing-ci.md) for what CI
 does gate, and [`docs/claude/codemaps/gui_frontend.md`](../../../../docs/claude/codemaps/gui_frontend.md)
 for the pages, hooks and topic keys these specs drive).
