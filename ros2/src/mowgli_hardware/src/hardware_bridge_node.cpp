@@ -80,6 +80,7 @@
 #include "mowgli_hardware/dig_detector.hpp"
 #include "mowgli_hardware/dig_escalation.hpp"
 #include "mowgli_hardware/drive_gain_sanity.hpp"
+#include "mowgli_hardware/firmware_interlock.hpp"
 #include "mowgli_hardware/firmware_param_store_reset_gate.hpp"
 #include "mowgli_hardware/firmware_params.hpp"
 #include "mowgli_hardware/gnss_hardware_status.hpp"
@@ -99,6 +100,8 @@ static constexpr uint8_t HL_MODE_IDLE = 1u;  ///< Docked or between missions
 static constexpr uint8_t HL_MODE_AUTONOMOUS = 2u;  ///< Autonomous mowing
 static constexpr uint8_t HL_MODE_RECORDING = 3u;  ///< Area recording
 static constexpr uint8_t HL_MODE_MANUAL_MOWING = 4u;  ///< Manual teleop with blade
+static_assert(mowgli_hardware::kInterlockHighLevelMode == HL_MODE_IDLE,
+              "the firmware interlock must hold the board in IDLE");
 static constexpr double kMinRuntimeTicksPerMeter = 50.0;
 static constexpr double kMaxRuntimeTicksPerMeter = 5000.0;
 static constexpr double kMinRuntimePwmPerMps = 50.0;
@@ -2606,18 +2609,28 @@ private:
   {
     LlHighLevelState pkt{};
     pkt.type = PACKET_ID_LL_HIGH_LEVEL_STATE;
-    pkt.current_mode = current_mode_;
+    // Firmware interlock (firmware_interlock.hpp): any mode becomes IDLE — the
+    // firmware's wheel+blade hard stop — until the board has proven it speaks
+    // this image's protocol. current_mode_ keeps the BT's real mode so it is
+    // forwarded as soon as the handshake succeeds.
+    const bool allowed = actuation_allowed();
+    pkt.current_mode = mowgli_hardware::interlock_high_level_mode(allowed, current_mode_);
+    if (mowgli_hardware::interlock_refuses_mode(allowed, current_mode_))
+    {
+      log_interlock_refusal("high-level mode", high_level_mode_name(current_mode_));
+    }
     pkt.gps_quality = GnssQualityForFirmware(gnssObservationFresh(), gps_quality_);
 
     if (last_sent_mode_ != current_mode_ || last_sent_mode_state_name_ != current_mode_state_name_)
     {
       RCLCPP_INFO(get_logger(),
                   "hardware_bridge forwarding HL state to STM32: mode=%u (%s), state_name='%s', "
-                  "gps_quality=%u",
-                  current_mode_,
-                  high_level_mode_name(current_mode_),
+                  "gps_quality=%u%s",
+                  pkt.current_mode,
+                  high_level_mode_name(pkt.current_mode),
                   current_mode_state_name_.c_str(),
-                  pkt.gps_quality);
+                  pkt.gps_quality,
+                  allowed ? "" : " [held IDLE: firmware protocol not verified]");
       last_sent_mode_ = current_mode_;
       last_sent_mode_state_name_ = current_mode_state_name_;
     }
@@ -2632,6 +2645,18 @@ private:
     {
       on = 0;
       mow_enabled_ = false;
+    }
+    // Firmware interlock: an ON becomes OFF (an OFF always passes) until the
+    // board speaks this image's protocol. The intent is dropped too, so the
+    // re-assert / lift-resume paths cannot spin the blade up later on their
+    // own — a new explicit request is needed once the board is compatible.
+    if (mowgli_hardware::interlock_refuses_blade(actuation_allowed(), on))
+    {
+      log_interlock_refusal("blade ON", "forced OFF");
+      on = mowgli_hardware::interlock_blade_on(false, on);
+      mow_enabled_ = false;
+      blade_intent_authorized_ = false;
+      cancelBladeResume();
     }
     LlCmdBlade pkt{};
     pkt.type = PACKET_ID_LL_CMD_BLADE;
@@ -3203,6 +3228,80 @@ private:
   }
 
   // ---------------------------------------------------------------------------
+  // Firmware actuation interlock (firmware_interlock.hpp)
+  // ---------------------------------------------------------------------------
+
+  /// True once the board has completed a handshake reporting this image's
+  /// protocol. Gates every motion / blade / mode packet; never the heartbeat
+  /// (emergency stop + release), the handshake, telemetry or parameter reads.
+  [[nodiscard]] bool actuation_allowed() const
+  {
+    return mowgli_hardware::firmware_actuation_allowed(fw_handshake_done_, fw_compatible_);
+  }
+
+  void log_interlock_refusal(const char* what, const char* outcome)
+  {
+    RCLCPP_WARN_THROTTLE(get_logger(),
+                         *get_clock(),
+                         5000,
+                         "Firmware interlock: %s refused (%s) — the STM32 has not reported "
+                         "protocol v%u (handshake %s, board protocol v%u). Flash the matching "
+                         "firmware; actuation resumes automatically after the next handshake.",
+                         what,
+                         outcome,
+                         static_cast<unsigned>(kMowgliProtocolVersion),
+                         fw_handshake_done_ ? "done" : "pending",
+                         static_cast<unsigned>(fw_protocol_version_));
+  }
+
+  /// Called after every change to the handshake state. Engaging actively stops
+  /// the board (it may have been driving or mowing a moment ago); releasing
+  /// re-sends the BT's real mode so normal operation resumes without waiting
+  /// for the next high-level tick.
+  void apply_firmware_interlock_transition(bool was_allowed)
+  {
+    const auto transition = mowgli_hardware::interlock_transition(was_allowed, actuation_allowed());
+    if (transition == mowgli_hardware::InterlockTransition::kNone)
+    {
+      return;
+    }
+    if (transition == mowgli_hardware::InterlockTransition::kReleased)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Firmware interlock released: board speaks protocol v%u — actuation enabled.",
+                  static_cast<unsigned>(fw_protocol_version_));
+      send_high_level_state();
+      return;
+    }
+    RCLCPP_ERROR(get_logger(),
+                 "Firmware interlock ENGAGED: firmware protocol not verified — stopping wheels "
+                 "and blade, holding the board in IDLE.");
+    dig_escaping_ = false;
+    dig_escape_state_ = DigEscapeState{};
+    dig_invalidate_baselines();
+    have_shaped_cmd_vel_ = false;
+    last_shaped_cmd_vx_ = 0.0;
+    last_shaped_cmd_wz_ = 0.0;
+    last_cmd_vx_ = 0.0;
+    last_cmd_wz_ = 0.0;
+    if (!serial_ || !serial_->is_open())
+    {
+      // Nothing to talk to (constructor, or the link is down); the next
+      // connect starts from the interlocked state anyway.
+      mow_enabled_ = false;
+      blade_intent_authorized_ = false;
+      cancelBladeResume();
+      return;
+    }
+    send_blade_command(0, desired_blade_direction_);
+    mow_enabled_ = false;
+    blade_intent_authorized_ = false;
+    cancelBladeResume();
+    send_cmd_vel_packet(0.0, 0.0);
+    send_high_level_state();
+  }
+
+  // ---------------------------------------------------------------------------
   // Firmware version handshake (image <-> firmware compatibility)
   // ---------------------------------------------------------------------------
 
@@ -3220,6 +3319,7 @@ private:
 
     LlConfigRsp pkt{};
     std::memcpy(&pkt, data, sizeof(LlConfigRsp));
+    const bool was_allowed = actuation_allowed();
 
     fw_protocol_version_ = pkt.protocol_version;
     firmware_debug_enabled_ = (pkt.active_flags & CONFIG_FLAG_FIRMWARE_DEBUG) != 0u;
@@ -3261,7 +3361,7 @@ private:
       RCLCPP_ERROR(get_logger(),
                    "INCOMPATIBLE FIRMWARE: firmware v%s speaks protocol v%u but this image "
                    "expects protocol v%u. Reflash the STM32 firmware (see docs/FIRST_BOOT.md). "
-                   "Mowing is blocked until the versions match.",
+                   "Wheels, blade and mode changes are held stopped until the versions match.",
                    fw_version_str_.c_str(),
                    static_cast<unsigned>(fw_protocol_version_),
                    static_cast<unsigned>(kMowgliProtocolVersion));
@@ -3282,11 +3382,13 @@ private:
     {
       RCLCPP_INFO(get_logger(), "[FW_DIAG] Firmware debug disabled.");
     }
+    apply_firmware_interlock_transition(was_allowed);
   }
 
   // Reset the handshake state on (re)connect so a reflashed board is re-checked.
   void rearm_firmware_handshake()
   {
+    const bool was_allowed = actuation_allowed();
     fw_handshake_done_ = false;
     fw_compatible_ = false;
     fw_protocol_version_ = 0u;
@@ -3294,6 +3396,7 @@ private:
     config_req_resend_count_ = 5;
     config_control_resend_count_ = 0;
     fw_handshake_start_ = now();
+    apply_firmware_interlock_transition(was_allowed);
   }
 
   // Sends PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ on the first few heartbeats after a
@@ -3315,6 +3418,7 @@ private:
     // the handshake (or is otherwise unresponsive) → incompatible.
     if ((now() - fw_handshake_start_).seconds() > fw_handshake_timeout_s_)
     {
+      const bool was_allowed = actuation_allowed();
       fw_handshake_done_ = true;
       fw_compatible_ = false;
       fw_protocol_version_ = 0u;
@@ -3322,9 +3426,11 @@ private:
       RCLCPP_ERROR(get_logger(),
                    "INCOMPATIBLE FIRMWARE: the STM32 did not answer the version handshake "
                    "(no CONFIG_RSP in %.0f s). This firmware predates the version protocol — "
-                   "reflash it (see docs/FIRST_BOOT.md). Mowing is blocked until then.",
+                   "reflash it (see docs/FIRST_BOOT.md). Wheels, blade and mode changes are "
+                   "held stopped until then.",
                    fw_handshake_timeout_s_);
       publish_firmware_params();
+      apply_firmware_interlock_transition(was_allowed);
     }
   }
 
@@ -3412,6 +3518,17 @@ private:
           vx,
           wz);
       return;
+    }
+
+    // Firmware interlock: until the board has proven it speaks this image's
+    // protocol, every command is a stop. Zeroing it HERE (not only at the
+    // packet) keeps it from forcing a mode change below, from building slew
+    // state, and from feeding the dig detector a phantom commanded speed.
+    if (mowgli_hardware::interlock_refuses_velocity(actuation_allowed(), vx, wz))
+    {
+      log_interlock_refusal("cmd_vel", "sent as zero");
+      vx = 0.0;
+      wz = 0.0;
     }
 
     // The firmware ignores cmd_vel when mode is IDLE.  When velocity commands
@@ -3632,7 +3749,7 @@ private:
   /// sole safety authority (Invariant 9) — this only ever declines to act.
   [[nodiscard]] bool dig_escape_allowed() const
   {
-    return !emergency_active_ && !fw_latched_emergency_ && !is_charging_;
+    return !emergency_active_ && !fw_latched_emergency_ && !is_charging_ && actuation_allowed();
   }
 
   /// Drop the wheel/map baselines so the next live tick starts a fresh
@@ -3666,7 +3783,8 @@ private:
       {
         // Emergency asserted (or we docked) mid-escape — abandon it. The
         // firmware is already cutting the motors; do not fight it.
-        RCLCPP_WARN(get_logger(), "Dig escape aborted: emergency or charging asserted.");
+        RCLCPP_WARN(get_logger(),
+                    "Dig escape aborted: emergency, charging or firmware interlock asserted.");
         dig_escaping_ = false;
         dig_escape_state_ = DigEscapeState{};
         dig_invalidate_baselines();
@@ -3695,7 +3813,10 @@ private:
     }
 
     // ── Detection ─────────────────────────────────────────────────────────
-    if (tick_now < dig_rearm_deadline_)
+    // Stand down while the firmware interlock holds the wheels: nothing is
+    // commanded, and odometry from a board speaking another protocol is not
+    // evidence of anything.
+    if (tick_now < dig_rearm_deadline_ || !actuation_allowed())
     {
       dig_invalidate_baselines();
       return;
@@ -3808,8 +3929,8 @@ private:
     if (!dig_escaping_)
     {
       RCLCPP_WARN(get_logger(),
-                  "Dig escape suppressed: emergency active or robot charging. "
-                  "Stop stands; no reverse commanded.");
+                  "Dig escape suppressed: emergency active, robot charging or firmware "
+                  "protocol not verified. Stop stands; no reverse commanded.");
     }
   }
 
@@ -3960,6 +4081,17 @@ private:
       vx = 0.0;
       wz = 0.0;
     }
+    // Firmware interlock (firmware_interlock.hpp): every caller — on_cmd_vel,
+    // the dig escape, the blade-on freshness zero — funnels through here, so
+    // nothing non-zero reaches a board whose protocol is not verified.
+    const bool allowed = actuation_allowed();
+    if (mowgli_hardware::interlock_refuses_velocity(allowed, vx, wz))
+    {
+      log_interlock_refusal("cmd_vel", "sent as zero");
+    }
+    const auto interlocked = mowgli_hardware::interlock_velocity(allowed, vx, wz);
+    vx = interlocked.vx;
+    wz = interlocked.wz;
     // Keep this final construction boundary defensive as well: callers such
     // as the bounded dig escape pass doubles.  Check float32 representability
     // before narrowing: converting an out-of-range double is not a safe way
@@ -4018,6 +4150,26 @@ private:
                         std::shared_ptr<mowgli_interfaces::srv::MowerControl::Response> res)
   {
     const bool requested_enable = (req->mow_enabled != 0u);
+    // Firmware interlock (firmware_interlock.hpp): an ENABLE is refused while
+    // the board has not proven it speaks this image's protocol. The OFF is
+    // still written, and the caller is told — FollowStrip and the GUI read
+    // `success` — so nothing waits for a blade that will never spin.
+    if (mowgli_hardware::interlock_refuses_blade(actuation_allowed(), requested_enable ? 1u : 0u))
+    {
+      // Not throttled: a service call is rare and the operator pressed something.
+      RCLCPP_WARN(get_logger(),
+                  "Firmware interlock: MowerControl blade enable REFUSED — the STM32 has not "
+                  "reported protocol v%u (handshake %s, board protocol v%u). Blade kept OFF.",
+                  static_cast<unsigned>(kMowgliProtocolVersion),
+                  fw_handshake_done_ ? "done" : "pending",
+                  static_cast<unsigned>(fw_protocol_version_));
+      mow_enabled_ = false;
+      blade_intent_authorized_ = false;
+      cancelBladeResume();
+      send_blade_command(0, desired_blade_direction_);
+      res->success = false;
+      return;
+    }
     // Dry-run inhibit (issue #195). Suppresses an ENABLE only; a DISABLE always
     // passes through in either state, so a stop can never be swallowed. The
     // firmware stays the sole blade safety authority — this is NOT an interlock.

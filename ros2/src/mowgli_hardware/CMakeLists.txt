@@ -227,6 +227,16 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  # ---- test_firmware_interlock ----
+  # Header-only pure logic (firmware_interlock.hpp), same as test_blade_gate.
+  ament_add_gtest(test_firmware_interlock
+    test/test_firmware_interlock.cpp
+  )
+  target_include_directories(test_firmware_interlock
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
   # ---- test_blade_reassert ----
   # Header-only pure logic (blade_reassert.hpp), same as test_blade_gate.
   ament_add_gtest(test_blade_reassert
