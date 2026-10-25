@@ -40,6 +40,40 @@ OdometryPublisher::OdometryPublisher(rclcpp::Node& node) : node_(node)
 
 void OdometryPublisher::reset()
 {
+  reset_stream();
+  legacy_decoder_.reset();
+  last_format_ = OdometryWireFormat::kInvalid;
+}
+
+void OdometryPublisher::select_format(OdometryWireFormat format)
+{
+  if (last_format_ != format)
+  {
+    reset();
+    last_format_ = format;
+  }
+}
+
+void OdometryPublisher::handle_packet(const LlOdometry& pkt,
+                                      double ticks_per_meter,
+                                      double wheel_track,
+                                      bool is_charging)
+{
+  select_format(OdometryWireFormat::kCurrent);
+  process(pkt, ticks_per_meter, wheel_track, is_charging);
+}
+
+void OdometryPublisher::handle_legacy_v8_packet(const LlOdometryV8& pkt,
+                                                double ticks_per_meter,
+                                                double wheel_track,
+                                                bool is_charging)
+{
+  select_format(OdometryWireFormat::kLegacyV8);
+  process(legacy_decoder_.convert(pkt), ticks_per_meter, wheel_track, is_charging);
+}
+
+void OdometryPublisher::reset_stream()
+{
   odom_clock_fit_.Reset();
   odom_initialized_ = false;
   prev_acquisition_ms_ = 0;
@@ -51,10 +85,10 @@ void OdometryPublisher::reset()
   wheels_stationary_ = true;
 }
 
-void OdometryPublisher::handle_packet(const LlOdometry& pkt,
-                                      double ticks_per_meter,
-                                      double wheel_track,
-                                      bool is_charging)
+void OdometryPublisher::process(const LlOdometry& pkt,
+                                double ticks_per_meter,
+                                double wheel_track,
+                                bool is_charging)
 {
   // Derive time and tick deltas from the same received acquisition pair.
   // Unsigned subtraction preserves elapsed firmware time across HAL tick wrap.
@@ -63,7 +97,7 @@ void OdometryPublisher::handle_packet(const LlOdometry& pkt,
   {
     // A backwards clock (e.g. firmware reboot) is not a forward HAL wrap.
     // Re-seed time and ticks together instead of inventing a multi-week gap.
-    reset();
+    reset_stream();
   }
   if (odom_initialized_ && dt_ms == 0)
   {

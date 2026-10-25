@@ -65,7 +65,8 @@
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/blade_gate.hpp` | 49 | Pure: `blade_enable_allowed(requested, mowing_enabled)` — suppresses ENABLE only |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/cmd_vel_slew.hpp` | 42 | Pure final-command slew limiter: immediate exact stop, bounded deceleration through zero before reversal, separate acceleration/deceleration rates |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/drive_gain_sanity.hpp` | 45 | Pure: `DriveGainsBridgePwm` / `DriveGainsBridgeDeadband(kp, integral_limit, pwm_per_mps, deadband_pwm)` — can the firmware wheel PI (unscaled PWM units) push a wheel through the stiction deadband at 0.03 m/s? Gate for `send_drive_pid()` and the `wheel_pid_*` set-parameters path (2026-09-15 stiction lock) |
-| `ros2/src/mowgli_hardware/include/mowgli_hardware/odometry_publisher.hpp` | 126 | `OdometryPublisher` API (`handle_packet`, `reset`, `wheels_stationary`, `tyre_travelled`) |
+| `ros2/src/mowgli_hardware/include/mowgli_hardware/odometry_publisher.hpp` | 152 | `OdometryPublisher` API (`handle_packet`, `handle_legacy_v8_packet`, `reset`, `wheels_stationary`, `tyre_travelled`) |
+| `ros2/src/mowgli_hardware/include/mowgli_hardware/legacy_odometry.hpp` | 173 | Pure: previous-protocol `LlOdometryV8` (17 B), `classify_odometry_packet(len)`, `LegacyOdometryDecoder` (summed `dt_millis` → synthetic acquisition clock, v8-host 16-bit unwrap → synthetic cumulative ticks). Keeps `/wheel_odom` live in the update-first window (docs/UPDATES.md); telemetry only. Test: `test_legacy_odometry.cpp` |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/clock_fit.hpp` | 121 | `HostFirmwareClockFit` (window 100 samples, reset gap 5000 ms defaults) |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/packet_handler.hpp` | 172 | `PacketHandler` API + counters (`rx_ok`, `rx_crc_errors`, `rx_overflow`, `rx_cobs_errors`) |
 | `ros2/src/mowgli_hardware/include/mowgli_hardware/serial_port.hpp` | 133 | `SerialPort` API |
@@ -146,7 +147,7 @@ Frame = `0x00 | COBS(payload + CRC16-LE) | 0x00`; CRC-16/CCITT-FALSE over `type�
 | 0x01 | `LlStatus` (38) | FW→host | `handle_status` |
 | 0x02 | `LlImu` (41) | FW→host | `handle_imu` |
 | 0x03 | `LlUiEvent` (5) | FW→host | `handle_ui_event` |
-| 0x04 | `LlOdometry` (19) | FW→host | `handle_odometry` → `OdometryPublisher` |
+| 0x04 | `LlOdometry` (19); previous-protocol `LlOdometryV8` (17) from a v8 board | FW→host | `handle_odometry` → `OdometryPublisher` (`handle_packet` / `handle_legacy_v8_packet`) |
 | 0x05 | `LlBladeStatus` (16) | FW→host | `handle_blade_status` |
 | 0x06 | `LlResetCause` (5) | FW→host | `handle_reset_cause` |
 | 0x11 / 0x12 | `LlConfigReq` (4) / `LlConfigRsp` (8) | host→FW / FW→host | `send_config_request` / `handle_config_rsp` |
@@ -213,6 +214,7 @@ CI: `.github/workflows/ros2-ci.yml` (`colcon build` + `colcon test --return-code
 ## Change coupling — "if you change X, also update Y"
 
 - **Any `Ll*` struct / `PacketId` change** → bump `kMowgliProtocolVersion` (`ll_datatypes.hpp` :51) AND `MOWGLI_PROTOCOL_VERSION` (`firmware/stm32/ros_usbnode/include/mowgli_protocol.h` :59) in lockstep, update the `static_assert` sizes/offsets, `test/test_protocol.cpp`, `firmware/scripts/protocol_baseline.json` (via `protocol_version_guard.py`), and the C reference in `ros2/src/mowgli_hardware/firmware/` (currently already behind).
+- **Protocol bump that reshapes a readiness-relevant packet (status, blade status, odometry)** → keep the PREVIOUS layout decodable for one version, like `include/mowgli_hardware/legacy_odometry.hpp` (`LlOdometryV8`, exact-length dispatch in `handle_odometry`, accepted only when the handshake reports `kLegacyOdometryProtocolVersion`; telemetry only, `fw_compatible_` untouched). Without it the update-first install (docs/UPDATES.md) cannot prove a stationary mower against the old firmware and rolls back (field 2026-10-25, v8 → v9). The `static_assert(kLegacyOdometryProtocolVersion + 1 == kMowgliProtocolVersion)` fails the build on the next bump: move the current `LlOdometry` into the legacy decoder then (or drop it if odometry did not change).
 - **`HL_MODE_*`** are triplicated: `HighLevelStatus.msg` ↔ `hardware_bridge_node.cpp` :75–79 (the copy the bridge actually compiles) ↔ firmware `mowgli_protocol.h`. `docs/claude/commands.md` step 4 names only the two `mowgli_protocol.h` files.
 - **New node parameter** → `declare_parameters()`; default in the template `mowgli_robot.yaml` (site/robot-level, Invariant 15) or `hardware_bridge.yaml` (node-local); pass-through dict in `mowgli.launch.py` (:194–254) if it comes from `robot_params`; GUI exposure needs `gui/asserts/mower_config.schema.json`, `gui/web/src/components/settings/paramCatalog.ts`, `gui/web/src/i18n/locales/{en,fr}.json` (today the catalog carries `imu_cal_*` and `yaw_*`; the schema carries `wheel_pid_*`, `mowing_enabled`, `ticks_per_meter`, `wheel_track`, `lift_*`).
 - **Firmware clamp ranges** (`kMin/MaxRuntime*`, :80–101) mirror the firmware's `pid_constrain()`; change both or `ros2 param set` will accept values the board silently re-clamps.

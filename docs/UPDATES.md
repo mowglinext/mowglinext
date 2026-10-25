@@ -254,6 +254,35 @@ meet the same refusal from the other side. After a successful forced install
 the GUI shows a persistent "flash the mainboard firmware now" alert (Firmware
 section, ST-Link) until the board reports the new protocol.
 
+**The new host must keep the previous protocol's telemetry decodable.** The
+exception above only works if `maintenance_ready` can actually be proven
+while the new host talks to the OLD firmware — and that needs live wheel
+odometry (the stationary proof). Protocol v9 grew the odometry packet
+(17 → 19 bytes); the first v9 host dropped every v8 packet, `/wheel_odom`
+went silent, readiness reported *"Fresh firmware, behaviour and wheel
+telemetry required"* and every update-first install from v8 firmware rolled
+back (field, 2026-10-25), stranding the operator on the GUI that cannot flash
+v9. The bridge now decodes the v8 odometry layout too
+(`mowgli_hardware/legacy_odometry.hpp`), only from a board whose handshake
+declared v8, for telemetry only — `firmware_compatible` stays false and
+mowing stays blocked until the firmware is flashed.
+
+Checklist for every future protocol bump (host side):
+
+- If a packet the readiness verdict depends on changes shape (status, blade
+  status, odometry), keep the PREVIOUS protocol's layout decodable for one
+  version (move the old struct to a `Ll*V<N>` legacy decoder, dispatch on the
+  exact length, accept it only from a board that declared protocol N).
+- Never let a legacy decoder set `firmware_compatible` or relax any motion,
+  blade or parameter-store gate — it exists only so the update-first window
+  can prove idle, stationary and blade-off.
+- Drop the previous legacy decoder when adding the new one
+  (`kLegacyOdometryProtocolVersion + 1 == kMowgliProtocolVersion` is a
+  `static_assert`, so the bump cannot be forgotten).
+- Hardware acceptance: from the previous firmware, install the new release with
+  "install anyway" and expect a successful verification (not a rollback), then
+  flash from the new GUI.
+
 ## Installed stack, health and component versions
 
 The updater samples **local Docker state every 15 seconds**, independently of

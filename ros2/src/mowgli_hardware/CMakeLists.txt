@@ -169,6 +169,16 @@ if(BUILD_TESTING)
     mowgli_hardware_core
   )
 
+  # ---- test_legacy_odometry ----
+  # Previous-protocol (v8) odometry decoder (legacy_odometry.hpp, header-only)
+  # + the shared CRC deframer it rides on.
+  ament_add_gtest(test_legacy_odometry
+    test/test_legacy_odometry.cpp
+  )
+  target_link_libraries(test_legacy_odometry
+    mowgli_hardware_core
+  )
+
   # ---- test_odometry_publisher ----
   ament_add_ros_isolated_gtest(test_odometry_publisher
     test/test_odometry_publisher.cpp
