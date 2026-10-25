@@ -435,6 +435,8 @@ export type HighLevelStatus = {
   battery_percent?: number;
   is_charging?: boolean;
   emergency?: boolean;
+  stop_reason?: string;
+  stop_detail?: string;
 };
 
 export type ImuRaw = {

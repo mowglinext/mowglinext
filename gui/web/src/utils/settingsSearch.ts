@@ -186,6 +186,10 @@ const FIELD_TEXT: Record<string, string[]> = {
         "settingsNavigation.dockExemptRadius",
         "settingsNavigation.dockExemptRadiusTooltip"
     ],
+    "obstacle_transit_margin_m": [
+        "settingsNavigation.obstacleTransitMargin",
+        "settingsNavigation.obstacleTransitMarginTooltip"
+    ],
     "datum_lat": [
         "settingsPositioning.latitude"
     ],

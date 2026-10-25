@@ -260,47 +260,80 @@ func TestFleetSnapshotRejectsUnqualifiedIdentity(t *testing.T) {
 	}
 }
 
-func TestFleetCoordinatorReportsHighLevelAcknowledgement(t *testing.T) {
+// The proximity yield goes through the owned fleet_yield contract (#1009),
+// never a bare HighLevelControl STOP/START. A refusal or transport failure of
+// that contract must still be visible on the Fleet page (#1017).
+func yieldRefusalRows() []FleetRobot {
+	return []FleetRobot{
+		{Identity: RobotIdentity{ID: "b"}, Self: true, Online: true, Topics: map[string]json.RawMessage{"highLevelStatus": json.RawMessage(`{"state":2,"state_name":"MOWING","current_area":0}`), "gps": gpsTopic(48, 2)}, TopicAgeS: map[string]float64{"gps": 0}},
+		{Identity: RobotIdentity{ID: "a"}, Online: true, Topics: map[string]json.RawMessage{"highLevelStatus": json.RawMessage(`{"state":2,"state_name":"MOWING","current_area":1}`), "gps": gpsTopic(48.00001, 2)}, TopicAgeS: map[string]float64{"gps": 0}},
+	}
+}
+
+func TestFleetCoordinatorReportsFleetYieldAcknowledgement(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		success bool
-		err     error
-		want    string
+		name  string
+		query uint8
+		pause uint8
+		err   error
+		want  string
 	}{
-		{"success", true, nil, ""}, {"refused", false, nil, "rejected"}, {"transport", false, errors.New("ROS down"), "ROS down"},
+		{"held", fleetAvailable, fleetHeld, nil, ""},
+		{"query refused", fleetBusy, fleetHeld, nil, "no unowned hold"},
+		{"pause refused", fleetAvailable, fleetIneligible, nil, "terminal result"},
+		{"transport", fleetAvailable, fleetHeld, errors.New("ROS down"), "fleet_yield unavailable or call failed (requires compatible ROS stack): ROS down"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ros := types.NewMockRosProvider()
+			rows := yieldRefusalRows()
+			c, _, ros := newTestCoordinator(t, &rows)
+			ros.ServiceResponder = func(_ string, req any, res any) {
+				switch r := res.(type) {
+				case *mowgli.SetFleetAssignmentRes:
+					r.Success = true
+				case *mowgli.FleetYieldRes:
+					r.Epoch = "e1"
+					r.Result = tc.query
+					if req.(*mowgli.FleetYieldReq).Operation == fleetPause {
+						r.Result = tc.pause
+						r.Held = tc.pause == fleetHeld
+					}
+				}
+			}
 			ros.ServiceErr = tc.err
-			ros.ServiceResponder = func(_ string, _ any, res any) { res.(*mowgli.HighLevelControlRes).Success = tc.success }
-			c := &FleetCoordinator{ros: ros}
-			c.sendHighLevel(hlCommandStop)
+			require.NoError(t, c.SetSettings(CoordinatorSettings{Enabled: true}))
 			if tc.want == "" {
-				assert.Empty(t, c.lastError)
+				assert.Empty(t, c.Status().LastError)
+				assert.True(t, c.yield.Yielded)
 			} else {
-				assert.Contains(t, c.lastError, tc.want)
+				assert.Contains(t, c.Status().LastError, tc.want)
 			}
 		})
 	}
 }
 
 func TestFleetCoordinatorYieldRefusalIsVisible(t *testing.T) {
-	rows := []FleetRobot{
-		{Identity: RobotIdentity{ID: "b"}, Self: true, Online: true, Topics: map[string]json.RawMessage{"highLevelStatus": json.RawMessage(`{"state":2,"current_area":0}`), "gps": gpsTopic(48, 2)}, TopicAgeS: map[string]float64{"gps": 0}},
-		{Identity: RobotIdentity{ID: "a"}, Online: true, Topics: map[string]json.RawMessage{"highLevelStatus": json.RawMessage(`{"state":2,"current_area":1}`), "gps": gpsTopic(48.00001, 2)}, TopicAgeS: map[string]float64{"gps": 0}},
-	}
+	rows := yieldRefusalRows()
 	c, _, ros := newTestCoordinator(t, &rows)
-	ros.ServiceResponder = func(_ string, _ any, res any) {
+	ros.ServiceResponder = func(_ string, req any, res any) {
 		switch r := res.(type) {
 		case *mowgli.SetFleetAssignmentRes:
 			r.Success = true
-		case *mowgli.HighLevelControlRes:
-			r.Success = false
+		case *mowgli.FleetYieldRes:
+			r.Epoch, r.Result = "e1", fleetAvailable
+			if req.(*mowgli.FleetYieldReq).Operation == fleetPause {
+				r.Result, r.Message = fleetIneligible, "not mowing"
+			}
 		}
 	}
 	require.NoError(t, c.SetSettings(CoordinatorSettings{Enabled: true}))
-	calls := serviceCalls(ros, highLevelControlService)
-	require.Len(t, calls, 1)
-	assert.Equal(t, uint8(hlCommandStop), calls[0].Req.(*mowgli.HighLevelControlReq).Command)
-	assert.Contains(t, c.Status().LastError, "high_level_control rejected")
+	assert.Empty(t, serviceCalls(ros, highLevelControlService), "the yield must never fall back to a bare STOP")
+	var pauses int
+	for _, call := range serviceCalls(ros, fleetYieldService) {
+		if call.Req.(*mowgli.FleetYieldReq).Operation == fleetPause {
+			pauses++
+		}
+	}
+	assert.Equal(t, 1, pauses)
+	assert.Contains(t, c.Status().LastError, "terminal result")
+	assert.Contains(t, c.Status().LastError, "not mowing")
 }

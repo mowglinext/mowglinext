@@ -43,6 +43,7 @@
 #include "mowgli_behavior/localization_health.hpp"
 #include "mowgli_behavior/recording_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_behavior/stop_reason.hpp"
 #include "mowgli_interfaces/gnss_observation_freshness.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
@@ -832,6 +833,9 @@ private:
             context_->current_command = cmd;
             if (cmd != HighLevelControl::Request::COMMAND_STOP)
             {
+              // Any command that is not a plain stop starts something new: the reason the
+              // previous attempt ended no longer describes the mower.
+              clearStopReason(*context_);
               context_->critical_charge_stop_latched = false;
               cleared_dock_failure_latch = context_->critical_dock_failure_latched;
               context_->critical_dock_failure_latched = false;

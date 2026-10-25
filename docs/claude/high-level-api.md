@@ -32,6 +32,8 @@ path); both edges publish immediately, with the normal 1 Hz republisher as a liv
 It does not change the numeric state, main state name, or command semantics. It takes priority over
 the live `TRANSIT` sub-state if a transit completion discovers the stale scan in the same tick.
 
+`stop_reason` / `stop_detail` say WHY the mower is not mowing. They are context state (`BTContext::stop_reason`), not tree identity, so they survive the failure state that was published once and replaced by `IDLE`: set by `recordStopReason` (`mowgli_behavior/stop_reason.hpp`) when `GetNextUnmowedArea` gives an area up (`AREA_START_BLOCKED`, `AREA_NO_PROGRESS`) and by the `SetStopReason` BT node after a failed dock drive (`DOCK_NAV_FAILED`), undock (`UNDOCK_FAILED`) or charge (`CHARGER_FAILED`); cleared by the next `HighLevelControl` command that is not a plain STOP. `stop_detail` is a short English sentence with the numbers; the GUI maps the code to a localized message (`StopReasonBanner`, `stopReason.*` in the locale files, `utils/stopReason.ts`). A new code goes in all three places.
+
 ## Area Recording Flow
 1. GUI sends `COMMAND_RECORD_AREA` (3) to start recording
 2. BT enters `RecordArea` node — samples position at `area_record_rate_hz` (default **10 Hz**, from `mowgli_robot.yaml` via the blackboard; points closer than `kMinSampleSpacingM` = 0.05 m are dropped). Live preview is republished on `~/recording_trajectory` at `kPreviewPublishRateHz` = 2 Hz

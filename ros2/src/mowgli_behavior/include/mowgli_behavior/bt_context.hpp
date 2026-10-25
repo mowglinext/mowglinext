@@ -597,6 +597,11 @@ struct BTContext
   /// Cleared by EndSession so the next COMMAND_START starts without a stale
   /// warning from a previous, unrelated session.
   bool coverage_plausibility_warning{false};
+  /// Why the mower is not mowing (HighLevelStatus.stop_reason / stop_detail). Written by
+  /// recordStopReason (stop_reason.hpp) where a session ends or a hold begins without finishing,
+  /// cleared by the next HighLevelControl command. Empty = nothing to report.
+  std::string stop_reason;
+  std::string stop_detail;
 
   /// Filesystem path the coverage RESUME state (the four maps above +
   /// completed_areas + current_area) is persisted to, so an interrupted session

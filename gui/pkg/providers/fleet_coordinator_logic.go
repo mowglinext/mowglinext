@@ -91,6 +91,7 @@ type fleetMember struct {
 	Self               bool
 	Online             bool
 	Autonomous         bool // HighLevelStatus.state == AUTONOMOUS (2)
+	StopHold           bool // state == IDLE (1) and state_name == IDLE, as published after STOP
 	StateName          string
 	CurrentArea        int // -1 when none
 	Completed          []uint32
@@ -124,6 +125,7 @@ func memberFromRobotAt(r FleetRobot, selfDatum LatLon, maxAge time.Duration) fle
 	if hlValid {
 		m.Autonomous = hl.State != nil && *hl.State == hlStateAutonomous
 		m.StateName = hl.StateName
+		m.StopHold = hl.State != nil && *hl.State == 1 && hl.StateName == "IDLE"
 		if hl.CurrentArea != nil {
 			m.CurrentArea = *hl.CurrentArea
 		}
@@ -324,81 +326,6 @@ func enuFromDatum(datum, p LatLon) (x, y float64) {
 // sameDatum: within map_server's re-projection tolerance.
 func sameDatum(a, b LatLon) bool {
 	return math.Abs(a.Lat-b.Lat) <= datumEpsilonDeg && math.Abs(a.Lon-b.Lon) <= datumEpsilonDeg
-}
-
-// yieldState is the coordinator's memory of the proximity rule.
-type yieldState struct {
-	Yielded    bool
-	HoldSince  time.Time // when the hold started (max-hold deadlock breaker)
-	ClearSince time.Time // when the last priority peer left the resume radius
-	ResumedAt  time.Time // last resume this rule sent (re-yield cooldown)
-}
-
-// YieldAction is what the proximity rule wants sent to the local BT.
-type YieldAction string
-
-const (
-	YieldNone  YieldAction = ""
-	YieldStop  YieldAction = "stop"  // COMMAND_STOP (8): hold in place
-	YieldStart YieldAction = "start" // COMMAND_START (1): resume at the cursor
-)
-
-const yieldResumeHold = 3 * time.Second
-
-// decideYield implements the mutual-avoidance rule: when a peer WITH PRIORITY
-// is autonomous within yield_distance of us while we are autonomous, we stop
-// in place; once no such peer has been within resume_distance for a few
-// seconds, we resume. A robot that stopped for another reason (operator
-// Pause, Home, charging) is never resumed by this rule: we only resume what
-// we ourselves stopped, and only while the robot still sits where we left it
-// (IDLE with our stop reason still standing).
-//
-// Two bounds keep the rule from deadlocking with the costmap avoidance both
-// robots now run (docs/MULTI_ROBOT.md § 3c): a hold never lasts longer than
-// yield_max_hold_s (the priority robot may itself have stopped in front of
-// us on its collision checks, waiting for us to leave), and after any resume
-// no new yield is issued for yield_cooldown_s, so the resumed robot gets to
-// skirt the peer instead of stopping again at the same 3 m.
-func decideYield(self fleetMember, peers []fleetMember, st yieldState, s CoordinatorSettings, now time.Time) (yieldState, YieldAction) {
-	if self.Pos == nil {
-		return st, YieldNone
-	}
-	nearest := math.Inf(1)
-	for _, p := range peers {
-		if !p.Autonomous || p.Pos == nil || !hasPriorityOver(p.ID, self.ID) {
-			continue
-		}
-		if d := math.Hypot(p.Pos.X-self.Pos.X, p.Pos.Y-self.Pos.Y); d < nearest {
-			nearest = d
-		}
-	}
-	cooldown := time.Duration(s.YieldCooldownS * float64(time.Second))
-	if !st.Yielded {
-		inCooldown := !st.ResumedAt.IsZero() && now.Sub(st.ResumedAt) < cooldown
-		if self.Autonomous && nearest < s.YieldDistanceM && !inCooldown {
-			return yieldState{Yielded: true, HoldSince: now, ResumedAt: st.ResumedAt}, YieldStop
-		}
-		return st, YieldNone
-	}
-	// We are holding. If the operator moved the robot on (it is autonomous
-	// again, or docked / charging), our hold is over without a resume.
-	if self.Autonomous || self.StateName == "CHARGING" || self.StateName == "MANUAL_CHARGING" || self.StateName == "RETURNING_HOME" {
-		return yieldState{ResumedAt: st.ResumedAt}, YieldNone
-	}
-	maxHold := time.Duration(s.YieldMaxHoldS * float64(time.Second))
-	if !st.HoldSince.IsZero() && now.Sub(st.HoldSince) >= maxHold {
-		return yieldState{ResumedAt: now}, YieldStart
-	}
-	if nearest < s.ResumeDistanceM {
-		return yieldState{Yielded: true, HoldSince: st.HoldSince, ResumedAt: st.ResumedAt}, YieldNone
-	}
-	if st.ClearSince.IsZero() {
-		return yieldState{Yielded: true, HoldSince: st.HoldSince, ClearSince: now, ResumedAt: st.ResumedAt}, YieldNone
-	}
-	if now.Sub(st.ClearSince) < yieldResumeHold {
-		return st, YieldNone
-	}
-	return yieldState{ResumedAt: now}, YieldStart
 }
 
 // assignmentEqual compares two assignments.

@@ -1502,6 +1502,14 @@
           "maximum": 10.0,
           "description": "Radius (m) around the dock pose, in every direction, exempt from Transit Boundary Margin above -- so the dock approach carries no bias at all, not just \"never blocked\". Only takes effect once a dock pose is set; widen it if your dock sees a lot of GNSS drift (e.g. under a canopy)."
         },
+        "obstacle_transit_margin_m": {
+          "type": "number",
+          "title": "Transit Obstacle Margin",
+          "default": 0.30,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Extra distance (m) outside a drawn obstacle's keepout band that point-to-point TRANSIT moves prefer to keep, planned against the global costmap. A soft preference, never a hard block: transit can still start, end, or pass through it if that is the only option, and the coverage rings stay reachable. It exists because the lethal band is only the body half-width while the controller checks the whole footprint against the real object, so a transit planned right along the band can stop on \"collision ahead\". Coverage/mowing is unaffected. 0 disables it."
+        },
         "tick_rate": {
           "type": "number",
           "title": "Behaviour Tree Tick Rate",

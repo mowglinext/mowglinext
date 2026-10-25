@@ -17,6 +17,7 @@
 
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_behavior/stop_reason.hpp"
 
 namespace mowgli_behavior
 {
@@ -154,6 +155,28 @@ BT::NodeStatus ClearCommand::tick()
   // SeedYawFromMotion to re-drive 1 m forward on the next ReactiveSequence
   // re-tick of UndockOrSkip — even when the dock_yaw seed was already healthy.
   // Use EndSession at the real session boundaries instead.
+  return BT::NodeStatus::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// SetStopReason
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus SetStopReason::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::string reason;
+  std::string detail;
+  bool overwrite = true;
+  getInput<std::string>("reason", reason);
+  getInput<std::string>("detail", detail);
+  getInput<bool>("overwrite", overwrite);
+  recordStopReason(*ctx, reason, detail, overwrite);
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "SetStopReason: %s%s%s",
+              ctx->stop_reason.c_str(),
+              ctx->stop_detail.empty() ? "" : " — ",
+              ctx->stop_detail.c_str());
   return BT::NodeStatus::SUCCESS;
 }
 

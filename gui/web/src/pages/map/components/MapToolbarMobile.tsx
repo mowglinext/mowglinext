@@ -33,6 +33,8 @@ import {
     CheckOutlined,
     BarsOutlined,
     ExpandOutlined,
+    LockOutlined,
+    UnlockOutlined,
 } from "@ant-design/icons";
 import type {MenuInfo} from "rc-menu/lib/interface";
 import AsyncButton from "../../../components/AsyncButton.tsx";
@@ -63,6 +65,8 @@ interface MapToolbarMobileProps {
     onToggleObstacleClearance?: () => void;
     showCoveragePreview?: boolean;
     onToggleCoveragePreview?: () => void;
+    rotationLocked?: boolean;
+    onToggleRotationLocked?: () => void;
     onManualMode: () => Promise<void>;
     onStopManualMode: () => Promise<void>;
     onBackupMap: () => void;
@@ -115,6 +119,7 @@ export const MapToolbarMobile = ({
     onEditMap, onSaveMap, onRestoreBackup, onUndo, onRedo, onToggleSatellite,
     showObstacleClearance = false, onToggleObstacleClearance,
     showCoveragePreview = false, onToggleCoveragePreview,
+    rotationLocked = false, onToggleRotationLocked,
     onManualMode, onStopManualMode,
     onBackupMap, onRestoreMap, onDownloadGeoJSON, onUploadGeoJSON, onImportOpenMower, onResetMowingProgress,
     onMowArea, selectedFeatureCount = 0, onEditSelectedFeature,
@@ -224,6 +229,13 @@ export const MapToolbarMobile = ({
                     label: showCoveragePreview ? t("mapToolbarMobile.hideCoveragePreview") : t("mapToolbarMobile.showCoveragePreview"),
                 } satisfies NonNullable<MenuProps["items"]>[number]]
                 : []),
+            ...(onToggleRotationLocked
+                ? [{
+                    key: "rotationLock",
+                    icon: rotationLocked ? <LockOutlined /> : <UnlockOutlined />,
+                    label: t(rotationLocked ? "mapOffsetPanel.unlockRotation" : "mapOffsetPanel.lockRotation"),
+                } satisfies NonNullable<MenuProps["items"]>[number]]
+                : []),
             {key: "hardwareAppearance", label: <a href="#/settings?section=hardware">{t("mowerVisual.hardwareLink")}</a>},
         ]},
         {type: "group", label: t("mapToolbar.motionGroup"), children: [
@@ -263,6 +275,7 @@ export const MapToolbarMobile = ({
             case "satellite": onToggleSatellite(); break;
             case "obstacleClearance": onToggleObstacleClearance?.(); break;
             case "coveragePreview": onToggleCoveragePreview?.(); break;
+            case "rotationLock": onToggleRotationLocked?.(); break;
             case "areaRecording": safeCall(onAreaRecording); break;
             case "continueOrPause": safeCall(onContinueOrPause); break;
             case "bladeForward": safeCall(onBladeForward); break;

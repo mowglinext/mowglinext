@@ -104,6 +104,7 @@
     }
   },
   "settingsHardwareBackend": {
+    "title": "Hardware backend",
     "active": "Active backend",
     "names": {
       "mowgli": "Mowgli board (STM32)",
@@ -274,7 +275,8 @@
       "ntrip": "NTRIP",
       "vesc": "VESC",
       "tfluna-front": "Front TF-Luna",
-      "tfluna-edge": "Edge TF-Luna"
+      "tfluna-edge": "Edge TF-Luna",
+      "openmower": "OpenMower bridge"
     },
     "containerStates": {
       "running": "Running",
@@ -982,6 +984,29 @@
     "sourceIdentityUnknown": "No producer timestamp. Sensor acquisition age is unknown.",
     "sourceUnchanged": "Publication unchanged for {{seconds}} s",
     "lidarNoEstimate": "No estimate yet"
+  },
+  "stopReason": {
+    "genericTitle": "The mower stopped",
+    "AREA_START_BLOCKED": {
+      "title": "Stopped: the mower's own position is blocked",
+      "hint": "Every pass was refused because the mower stands on a blocked spot, often right in front of the dock. Move it a metre or two and press Play: the progress is kept."
+    },
+    "AREA_NO_PROGRESS": {
+      "title": "Stopped: an area could not be mown",
+      "hint": "Several passes in a row mowed nothing new, so the area was given up. Check the map and the obstacles around it, then press Play to try again."
+    },
+    "DOCK_NAV_FAILED": {
+      "title": "Stopped: the mower could not drive back to the dock",
+      "hint": "It is standing where it stopped. Drive or carry it to the dock, or press Play to continue mowing."
+    },
+    "UNDOCK_FAILED": {
+      "title": "Stopped: the mower could not back out of the dock",
+      "hint": "Check that nothing blocks the way out of the dock, then press Play."
+    },
+    "CHARGER_FAILED": {
+      "title": "Stopped: the mower is at the dock but is not charging",
+      "hint": "Check the charging contacts and that the mower sits straight in the dock."
+    }
   },
   "mowgliNextPage": {
     "mowerOnDockTop": "Mower on its dock — top view",
@@ -1961,7 +1986,10 @@
   "mapOffsetPanel": {
     "mapOffset": "Map Offset",
     "mapRotation": "Map Rotation",
-    "resetToNorthUp": "Reset to north-up"
+    "resetToNorthUp": "Reset to north-up",
+    "lockRotation": "Lock map rotation",
+    "unlockRotation": "Unlock map rotation",
+    "rotationLockSaveError": "Failed to save the map rotation lock"
   },
   "mapEditArea": {
     "areaTypeMowing": "Mowing Area",
@@ -3214,6 +3242,8 @@
     "boundaryClearanceDescription": "How far transit moves between locations prefer to stay from the recorded boundary. This is a soft preference, not a hard rule — transit can still cross the margin when that's the only option (e.g. right after undocking). Mowing itself is unaffected — the robot still cuts up to the true edge as configured elsewhere; only point-to-point travel is nudged back.",
     "boundaryInnerMargin": "Transit Boundary Margin",
     "boundaryInnerMarginTooltip": "Distance (m) transit paths are nudged to stay inside the recorded boundary. 0 disables this and lets transit hug or clip the recorded line, as before this setting existed.",
+    "obstacleTransitMargin": "Transit Obstacle Margin",
+    "obstacleTransitMarginTooltip": "Extra distance (m) outside a drawn obstacle's keepout band that transit paths prefer to keep. A soft preference, never a hard block. It exists because the keepout band is only the body half-width while the controller checks the whole footprint against the real object. 0 disables it. Mowing is unaffected.",
     "dockExemptRadius": "Dock Exemption Radius",
     "dockExemptRadiusTooltip": "Radius (m) around the dock pose, in every direction, exempt from the transit boundary margin above — so the dock approach carries no bias at all, not just \"never blocked\". Widen this if your dock sees a lot of GNSS drift (e.g. under a canopy). Only takes effect once a dock pose is set."
   },
@@ -4254,6 +4284,8 @@
     "Motor control": "Motor control",
     "IMU": "IMU",
     "Diagnostics": "Diagnostics",
+    "Navigation": "Navigation",
+    "Obstacles": "Obstacles",
     "Other": "Other"
   },
   "hookNotifications": {

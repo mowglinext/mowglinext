@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
+#include <cstdio>
 #include <exception>
 #include <filesystem>
 #include <limits>
@@ -30,6 +31,7 @@
 #include "mowgli_behavior/coverage_preview.hpp"
 #include "mowgli_behavior/mow_coverage_plausibility.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_behavior/stop_reason.hpp"
 #include "mowgli_behavior/strip_progress.hpp"
 #include "mowgli_behavior/unit_resume.hpp"
 #include "mowgli_interfaces/coverage_path_invariants.hpp"
@@ -3618,6 +3620,40 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
   {
     ctx->attempted_areas.insert(current_area_idx_);
     ctx->incomplete_retired_areas.insert(current_area_idx_);
+    // Tell the operator WHY the mower stopped: the failure states the tree publishes are replaced
+    // by IDLE within seconds, this stays until the next command. A pass refused from the robot's
+    // own pose is a different problem (move the mower) from a field it cannot mow (look at the
+    // map).
+    {
+      const auto blocked_it = ctx->area_start_blocked_count.find(current_area_idx_);
+      const bool start_blocked = blocked_it != ctx->area_start_blocked_count.end() &&
+                                 blocked_it->second >= BTContext::kMaxStartBlockedAttempts;
+      char detail[200];
+      if (start_blocked)
+      {
+        std::snprintf(detail,
+                      sizeof(detail),
+                      "Area %u: every pass was refused because the robot's own position is "
+                      "blocked (robot at %.2f, %.2f). Move the mower a metre and press Play.",
+                      current_area_idx_ + 1,
+                      ctx->gps_x,
+                      ctx->gps_y);
+      }
+      else
+      {
+        std::snprintf(detail,
+                      sizeof(detail),
+                      "Area %u: %u passes in a row mowed nothing new (%zu sub-path(s) done).",
+                      current_area_idx_ + 1,
+                      n,
+                      done_swaths);
+      }
+      recordStopReason(*ctx,
+                       start_blocked ? stop_reason::kAreaStartBlocked
+                                     : stop_reason::kAreaNoProgress,
+                       detail,
+                       /*overwrite=*/false);
+    }
     RCLCPP_WARN(ctx->node->get_logger(),
                 "GetNextUnmowedArea: area %u hit max attempts (%u), giving up with "
                 "%zu swath(s) completed",

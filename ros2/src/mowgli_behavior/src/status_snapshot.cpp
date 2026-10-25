@@ -63,6 +63,11 @@ mowgli_interfaces::msg::HighLevelStatus withLiveStatusFields(
     msg.sub_state_name = "SCAN_PAUSED";
   }
 
+  // The reason the mower stopped is context state, not tree identity: it outlives the failure
+  // state that was published once and then overwritten by IDLE.
+  msg.stop_reason = ctx.stop_reason;
+  msg.stop_detail = ctx.stop_detail;
+
   msg.current_area = static_cast<int16_t>(ctx.current_area);
   // The GUI computes progress as current_path_index / current_path
   // (MowerStatus.tsx, MowgliNextPage.tsx), so current_path is the DENOMINATOR

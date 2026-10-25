@@ -104,6 +104,7 @@
     }
   },
   "settingsHardwareBackend": {
+    "title": "Pont matériel",
     "active": "Pont matériel actif",
     "names": {
       "mowgli": "Carte Mowgli (STM32)",
@@ -274,7 +275,8 @@
       "ntrip": "NTRIP",
       "vesc": "VESC",
       "tfluna-front": "TF-Luna avant",
-      "tfluna-edge": "TF-Luna de bord"
+      "tfluna-edge": "TF-Luna de bord",
+      "openmower": "Pont OpenMower"
     },
     "containerStates": {
       "running": "En cours",
@@ -982,6 +984,29 @@
     "sourceIdentityUnknown": "Horodatage du producteur absent. L’âge de mesure du capteur est inconnu.",
     "sourceUnchanged": "Publication inchangée depuis {{seconds}} s",
     "lidarNoEstimate": "Pas encore d’estimation"
+  },
+  "stopReason": {
+    "genericTitle": "La tondeuse s'est arrêtée",
+    "AREA_START_BLOCKED": {
+      "title": "Arrêt : la position de la tondeuse est bloquée",
+      "hint": "Chaque passage a été refusé car la tondeuse se trouve sur un endroit bloqué, souvent juste devant la base. Déplacez-la d'un ou deux mètres et appuyez sur Lecture : la progression est conservée."
+    },
+    "AREA_NO_PROGRESS": {
+      "title": "Arrêt : une zone n'a pas pu être tondue",
+      "hint": "Plusieurs passages de suite n'ont rien tondu de nouveau, la zone a donc été abandonnée. Vérifiez la carte et les obstacles autour, puis appuyez sur Lecture pour réessayer."
+    },
+    "DOCK_NAV_FAILED": {
+      "title": "Arrêt : la tondeuse n'a pas pu retourner à la base",
+      "hint": "Elle est restée là où elle s'est arrêtée. Conduisez-la ou portez-la à la base, ou appuyez sur Lecture pour continuer à tondre."
+    },
+    "UNDOCK_FAILED": {
+      "title": "Arrêt : la tondeuse n'a pas pu sortir de la base",
+      "hint": "Vérifiez que rien ne bloque la sortie de la base, puis appuyez sur Lecture."
+    },
+    "CHARGER_FAILED": {
+      "title": "Arrêt : la tondeuse est à la base mais ne charge pas",
+      "hint": "Vérifiez les contacts de charge et que la tondeuse est bien droite dans la base."
+    }
   },
   "mowgliNextPage": {
     "mowerOnDockTop": "Tondeuse sur sa station — vue de dessus",
@@ -1957,7 +1982,10 @@
   "mapOffsetPanel": {
     "mapOffset": "Décalage de la carte",
     "mapRotation": "Rotation de la carte",
-    "resetToNorthUp": "Réinitialiser vers le nord"
+    "resetToNorthUp": "Réinitialiser vers le nord",
+    "lockRotation": "Verrouiller la rotation de la carte",
+    "unlockRotation": "Déverrouiller la rotation de la carte",
+    "rotationLockSaveError": "Échec de l'enregistrement du verrouillage de la rotation"
   },
   "mapEditArea": {
     "areaTypeMowing": "Zone de tonte",
@@ -3210,6 +3238,8 @@
     "boundaryClearanceDescription": "À quelle distance les trajets de transit entre deux emplacements préfèrent rester de la limite enregistrée. C'est une préférence souple, pas une règle stricte — le transit peut toujours franchir la marge si c'est la seule option (par ex. juste après le débranchement). La tonte elle-même n'est pas affectée — le robot coupe toujours jusqu'au bord réel comme configuré ailleurs ; seuls les déplacements point à point sont légèrement rappelés vers l'intérieur.",
     "boundaryInnerMargin": "Marge de transit à la limite",
     "boundaryInnerMarginTooltip": "Distance (m) à laquelle les trajets de transit sont incités à rester à l'intérieur de la limite enregistrée. 0 désactive ce réglage et laisse le transit longer ou couper la ligne enregistrée, comme avant l'existence de ce réglage.",
+    "obstacleTransitMargin": "Marge de transit autour des obstacles",
+    "obstacleTransitMarginTooltip": "Distance supplémentaire (m) au-delà de la bande d'exclusion d'un obstacle dessiné que les trajets de transit préfèrent garder. Une préférence souple, jamais un blocage. Elle existe car la bande d'exclusion ne couvre que la demi-largeur du châssis alors que le contrôleur vérifie toute l'empreinte par rapport à l'objet réel. 0 la désactive. La tonte n'est pas affectée.",
     "dockExemptRadius": "Rayon d'exemption autour du socle",
     "dockExemptRadiusTooltip": "Rayon (m) autour de la position du socle, dans toutes les directions, exempté de la marge de transit ci-dessus — pour que l'approche du socle ne subisse aucun biais, pas seulement « jamais bloquée ». Élargissez ce rayon si votre socle subit beaucoup de dérive GNSS (par ex. sous un auvent). Ne prend effet qu'une fois une position de socle définie."
   },
@@ -4250,6 +4280,8 @@
     "Motor control": "Contrôle moteur",
     "IMU": "IMU",
     "Diagnostics": "Diagnostics",
+    "Navigation": "Navigation",
+    "Obstacles": "Obstacles",
     "Other": "Autre"
   },
   "hookNotifications": {

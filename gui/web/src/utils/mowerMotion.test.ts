@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {deriveIsMoving} from './mowerMotion.ts';
+import {deriveIsMoving, isSessionActive} from './mowerMotion.ts';
 
 describe('deriveIsMoving', () => {
     it('reports motion for every self-propelled state when not charging', () => {
@@ -29,5 +29,21 @@ describe('deriveIsMoving', () => {
     it('treats a missing charging flag as not charging', () => {
         expect(deriveIsMoving(2, undefined)).toBe(true);
         expect(deriveIsMoving(2, null)).toBe(true);
+    });
+});
+
+describe('isSessionActive', () => {
+    it('is true for every self-propelled state, on the charger or not', () => {
+        // A mid-mission recharge keeps state 2 and resumes by itself.
+        expect(isSessionActive(2)).toBe(true);
+        expect(isSessionActive(3)).toBe(true);
+        expect(isSessionActive(4)).toBe(true);
+    });
+
+    it('is false once the mower has stopped or the state is unknown', () => {
+        expect(isSessionActive(0)).toBe(false);
+        expect(isSessionActive(1)).toBe(false);
+        expect(isSessionActive(undefined)).toBe(false);
+        expect(isSessionActive(null)).toBe(false);
     });
 });
