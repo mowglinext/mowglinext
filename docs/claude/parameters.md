@@ -26,7 +26,7 @@
 | `ros2/src/mowgli_map/config/obstacle_tracker.yaml` (18 L) | LiDAR cluster→obstacle promotion thresholds | `full_system.launch.py` obstacle_tracker node | maintainer |
 | `ros2/src/mowgli_behavior/config/behavior_tree.yaml` (11 L) | `tree_file`, `tick_rate`, legacy `battery_*_pct` **aliases that no longer match the node's param names** | `full_system.launch.py:172` | maintainer |
 | `ros2/src/mowgli_localization/config/wheel_odometry.yaml` (18 L) | `wheel_distance`, `ticks_per_meter`, `publish_tf: false` (Invariant 2 guard) | **no launch file** — `wheel_odometry_node` is not launched; the file is only read by `test_tf_ownership.py:81` | maintainer |
-| `ros2/src/mowgli_monitoring/config/{diagnostics,mqtt_bridge}.yaml` | freshness/battery/temp thresholds; MQTT broker + prefix | `full_system.launch.py` | maintainer |
+| `ros2/src/mowgli_monitoring/config/{diagnostics,mqtt_bridge}.yaml` | freshness/battery/temp thresholds; MQTT broker + prefix, publish cadence (`publish_rate`, `state_heartbeat_period_s`, `position_deadband_m`, `position_heartbeat_period_s`, `diagnostics_publish_period_s` — not GUI-exposed, see docs/MQTT_CONTROL.md) | `full_system.launch.py` | maintainer |
 | `docker/.env` (gitignored; template `docker/.env.example`) | which **containers** run, image tags, host devices, GNSS sidecar wiring | compose fragments in `install/compose/*.yml` | installer `install/lib/env.sh` `setup_env` L210–374; operator by hand |
 | `docker/docker-compose.yaml` (generated at install; gitignored, `.gitignore:33`) | the merged stack | `docker compose` | `install/lib/compose.sh` `build_compose_stack` (L11 `FINAL_COMPOSE_FILE`) |
 
