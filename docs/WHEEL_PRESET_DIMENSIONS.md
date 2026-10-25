@@ -20,7 +20,9 @@ Those models have not been measured; shared values do not establish shared parts
 | Sabo MOWiT 500F | 89.5 mm | 190 mm | 70 mm | 90 mm | Provisional SA650-based assumption |
 
 The measured YardForce 500/500B defaults remain unchanged. RM1000 and Custom
-remain unchanged. The previous rear value came from the same 0.04475 m radius
+were unchanged by this 2026-10-11 wheel correction. The later RM1000
+owner-measurement preset is documented separately in [RM1000_GEOMETRY.md](RM1000_GEOMETRY.md).
+The previous rear value came from the same 0.04475 m radius
 copied across unrelated machines, as documented by commit `c0aa94fa`.
 
 ## Application and geometry impact
