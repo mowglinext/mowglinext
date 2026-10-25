@@ -31,6 +31,7 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/battery_filter.hpp"
+#include "mowgli_behavior/battery_recovery_command.hpp"
 #include "mowgli_behavior/blade_control_service.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
@@ -121,16 +122,16 @@ public:
       // commands, or an empty snapshot, fall back to IDLE. EndSession clears
       // commands/cursors; a phase-only cross-hatch snapshot therefore stays
       // IDLE too.
-      constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
-      const bool has_resumable_state = hasCoverageResumeState(*context_);
-      const bool auto_continue = context_->current_command == kCommandStart && has_resumable_state;
-      context_->restored_mow_charge_check_pending = auto_continue;
-      constexpr uint8_t kCommandStop = 8;  // HighLevelControl::Request::COMMAND_STOP
-      const bool preserve_stop_hold =
-          context_->current_command == kCommandStop && context_->critical_charge_stop_latched;
-      if (!auto_continue && !preserve_stop_hold)
+      // A saved battery charge wait survives only with an auto-continued mow
+      // (applyRestoredCommandPolicy): alone it must never drive an IDLE mower.
+      const RestoredCommandPolicy policy = applyRestoredCommandPolicy(*context_);
+      const bool auto_continue = policy.auto_continue;
+      const bool preserve_stop_hold = policy.preserve_stop_hold;
+      if (policy.cleared_charge_pending)
       {
-        context_->current_command = 0;  // IDLE — require an explicit operator start
+        RCLCPP_WARN(get_logger(),
+                    "Dropped a saved battery charge wait: no mow is being continued, so it "
+                    "must not move the mower on its own");
       }
       std::size_t completed_subpaths = 0;
       for (const auto& [area, done] : context_->area_completed_swaths)
@@ -803,7 +804,7 @@ private:
             RCLCPP_INFO(get_logger(),
                         "HighLevelControl: COMMAND_S2 normalised to COMMAND_START (mow next area)");
           }
-          bool cleared_dock_failure_latch = false;
+          bool battery_recovery_changed = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
             context_->fleet_yield.revoke();  // Every accepted external command, even repeat STOP.
@@ -836,17 +837,11 @@ private:
               // Any command that is not a plain stop starts something new: the reason the
               // previous attempt ended no longer describes the mower.
               clearStopReason(*context_);
-              context_->critical_charge_stop_latched = false;
-              cleared_dock_failure_latch = context_->critical_dock_failure_latched;
-              context_->critical_dock_failure_latched = false;
             }
-            else if (context_->last_high_level_status.state_name == "CRITICAL_BATTERY_CHARGING")
-            {
-              // Capture cancellation synchronously as well as in the tree
-              // condition, so the persisted snapshot already represents this
-              // post-dock hold if the process stops before its next tick.
-              context_->critical_charge_stop_latched = true;
-            }
+            // HOME / RECORD / MANUAL / STOP hand control back to the operator: a
+            // pending battery charge or a failed critical dock must not keep
+            // re-arming DockRobot ahead of the operator's branch.
+            battery_recovery_changed = applyCommandToBatteryRecovery(*context_, cmd);
             // A plain COMMAND_START means "mow the lawn", so it must cancel any
             // single-area clip still latched from an earlier ~/start_in_area run.
             // EndSession normally clears it, but a session can legitimately stay
@@ -899,7 +894,7 @@ private:
           // thread serializes this snapshot with all coverage-map access. The
           // service response acknowledges the in-memory command immediately;
           // a durability failure is reported to the node log.
-          if ((cmd == HighLevelControl::Request::COMMAND_STOP || cleared_dock_failure_latch) &&
+          if ((cmd == HighLevelControl::Request::COMMAND_STOP || battery_recovery_changed) &&
               !context_->coverage_resume_path.empty())
           {
             command_resume_persistence_requested_.store(true);
@@ -929,7 +924,7 @@ private:
             resp->success = false;
             return;
           }
-          bool cleared_dock_failure_latch = false;
+          bool battery_recovery_changed = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
             context_->fleet_yield.revoke();
@@ -937,11 +932,10 @@ private:
             context_->resume_after_incomplete_end = false;
             context_->blade_direction.clearOperatorInhibit();
             context_->current_command = 1;  // COMMAND_START
-            context_->critical_charge_stop_latched = false;
-            cleared_dock_failure_latch = context_->critical_dock_failure_latched;
-            context_->critical_dock_failure_latched = false;
+            // A START retries a failed critical dock and keeps a pending charge.
+            battery_recovery_changed = applyCommandToBatteryRecovery(*context_, 1);
           }
-          if (cleared_dock_failure_latch && !context_->coverage_resume_path.empty())
+          if (battery_recovery_changed && !context_->coverage_resume_path.empty())
           {
             command_resume_persistence_requested_.store(true);
           }

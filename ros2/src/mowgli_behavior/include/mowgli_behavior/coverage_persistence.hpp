@@ -65,6 +65,26 @@ void markCoverageStarted(BTContext& ctx, uint32_t area);
 /// recognised and any state present was loaded.
 bool loadCoverageResumeState(BTContext& ctx);
 
+/// What a freshly loaded snapshot is still allowed to do at process start.
+struct RestoredCommandPolicy
+{
+  bool auto_continue{false};  ///< START + resumable progress: re-enter MowingSequence.
+  bool preserve_stop_hold{false};  ///< STOP latched during a critical charge hold.
+  bool cleared_charge_pending{false};  ///< A saved battery_charge_pending was dropped.
+};
+
+/// Apply the boot policy to a context just filled by loadCoverageResumeState.
+/// Only an auto-continued mow keeps current_command = START; a latched critical
+/// charge STOP keeps STOP; everything else boots IDLE. battery_charge_pending
+/// survives ONLY together with an auto-continued mow: on its own it would make
+/// an IDLE mower drive to the dock right after power-on, without a command and
+/// without proving the battery is still low (PR #1010 review). Battery recovery
+/// at IDLE stays covered by the critical-battery entry, which re-reads the live
+/// battery. When the flag is dropped the snapshot is re-saved after the first
+/// tick (critical_dock_failure_persistence_requested). Not thread-safe; call
+/// before subscribers and timers exist.
+RestoredCommandPolicy applyRestoredCommandPolicy(BTContext& ctx);
+
 /// Consume the first live power sample after auto-restoring a valid mow.
 /// A restart on the charger continues charging before any mission motion,
 /// including snapshots predating battery_charge_pending. Caller serializes

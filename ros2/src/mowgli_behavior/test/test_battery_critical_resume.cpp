@@ -50,6 +50,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "behaviortree_cpp/bt_factory.h"
+#include "mowgli_behavior/battery_recovery_command.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
@@ -570,6 +571,9 @@ protected:
     factory.registerNodeType<mowgli_behavior::IsBatteryLow>("IsBatteryLow");
     factory.registerNodeType<mowgli_behavior::NeedsDocking>("NeedsDocking");
     factory.registerNodeType<mowgli_behavior::IsManualResumeRequested>("IsManualResumeRequested");
+    // The production battery branches report their terminal reason (#1016);
+    // keep the real node so DOCK_NAV_FAILED / CHARGER_FAILED stay observable.
+    factory.registerNodeType<mowgli_behavior::SetStopReason>("SetStopReason");
     factory.registerSimpleCondition("IsChargingProgressing",
                                     [this](BT::TreeNode&)
                                     {
@@ -762,8 +766,8 @@ protected:
     restarted->node = ctx->node;
     restarted->coverage_resume_path = path;
     ASSERT_TRUE(mowgli_behavior::loadCoverageResumeState(*restarted));
-    restarted->restored_mow_charge_check_pending =
-        restarted->current_command == 1 && mowgli_behavior::hasCoverageResumeState(*restarted);
+    // The node's own boot policy (behavior_tree_node.cpp init()).
+    mowgli_behavior::applyRestoredCommandPolicy(*restarted);
     ctx = restarted;
     blackboard->set("context", ctx);
     std::filesystem::remove(path);
@@ -952,7 +956,11 @@ TEST_F(ProductionBatteryRecoveryTest, LegacyMowSnapshotOnChargerWaitsFullButOffD
   EXPECT_EQ(ctx->area_resume_pose_index.at(0), 42u);
 }
 
-TEST_F(ProductionBatteryRecoveryTest, StopKeepsPendingChargeAndBlocksUndockAcrossRestart)
+// STOP is an operator taking control: it releases the pending charge (the
+// earlier version of this test kept it pending, which is what let any later
+// command re-arm DockRobot — PR #1010 review). The post-dock STOP hold still
+// blocks the undock tail across a restart.
+TEST_F(ProductionBatteryRecoveryTest, StopReleasesPendingChargeAndBlocksUndockAcrossRestart)
 {
   ctx->current_command = 1;
   ctx->battery_charge_pending = true;
@@ -961,10 +969,12 @@ TEST_F(ProductionBatteryRecoveryTest, StopKeepsPendingChargeAndBlocksUndockAcros
   auto tree = productionBranch("CriticalBatteryDock");
   EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
   ctx->current_command = 8;
+  EXPECT_TRUE(mowgli_behavior::applyCommandToBatteryRecovery(*ctx, 8));
+  EXPECT_FALSE(ctx->battery_charge_pending);
   EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
   EXPECT_TRUE(ctx->critical_charge_stop_latched);
-  EXPECT_TRUE(ctx->battery_charge_pending);
   restartFromSnapshot();
+  EXPECT_FALSE(ctx->battery_charge_pending);
   ctx->battery_percent = 100.0f;
   ctx->latest_power.charger_enabled = true;
   wait_complete = true;
@@ -1109,4 +1119,293 @@ TEST_F(ProductionBatteryRecoveryTest, SavedChargePendingCannotDockBeforeInitialP
   EXPECT_EQ(dock_count, 0);
   EXPECT_EQ(heading_seed_count, 0);
   EXPECT_EQ(undock_count, 0);
+}
+
+// ---------------------------------------------------------------------------
+// PR #1010 review: a pending battery charge must never move an idle mower on
+// its own, and an operator command must always get its branch back.
+// ---------------------------------------------------------------------------
+
+class OperatorControlRecoveryTest : public ProductionBatteryRecoveryTest
+{
+protected:
+  std::map<std::string, int> branch_runs;
+
+  void SetUp() override
+  {
+    ProductionBatteryRecoveryTest::SetUp();
+    for (const auto* marker : {"HomeMarker", "ManualMarker", "RecordMarker", "StopMarker"})
+    {
+      const std::string name = marker;
+      factory.registerSimpleAction(name,
+                                   [this, name](BT::TreeNode&)
+                                   {
+                                     ++branch_runs[name];
+                                     return BT::NodeStatus::SUCCESS;
+                                   });
+    }
+    factory.registerBuilder<BatteryProbeAction>("MowMarker",
+                                                [this](const std::string& name,
+                                                       const BT::NodeConfig& config)
+                                                {
+                                                  return std::make_unique<BatteryProbeAction>(
+                                                      name,
+                                                      config,
+                                                      [this](bool start)
+                                                      {
+                                                        if (start)
+                                                          ++branch_runs["MowMarker"];
+                                                        return BT::NodeStatus::RUNNING;
+                                                      },
+                                                      []() {});
+                                                });
+  }
+
+  /// The production critical branch ahead of MainLogic's other branches in
+  /// their production order, each reduced to its command gate plus a marker.
+  BT::Tree mainLogic()
+  {
+    return factory.createTreeFromText(
+        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Main\"><Fallback>" +
+            productionBranchXml("CriticalBatteryDock", "Sequence") +
+            "<ReactiveSequence><IsCommand command=\"1\"/><MowMarker/></ReactiveSequence>"
+            "<ReactiveSequence><IsCommand command=\"2\"/><HomeMarker/></ReactiveSequence>"
+            "<ReactiveSequence><IsCommand command=\"3\"/><RecordMarker/></ReactiveSequence>"
+            "<ReactiveSequence><IsCommand command=\"7\"/><ManualMarker/></ReactiveSequence>"
+            "<ReactiveSequence><IsCommand command=\"8\"/><StopMarker/></ReactiveSequence>"
+            "<AlwaysFailure/></Fallback></BehaviorTree></root>",
+        blackboard);
+  }
+
+  /// A critical dock attempt that fails, leaving the latch and a pending charge.
+  void failCriticalDock(BT::Tree& tree)
+  {
+    ctx->current_command = 1;
+    ctx->area_resume_pose_index[0] = 42;
+    ctx->battery_percent = 5.0f;
+    ctx->latest_power.charger_enabled = false;
+    docking_ok = false;
+    ASSERT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+    ASSERT_EQ(dock_count, 1);
+    ASSERT_TRUE(ctx->critical_dock_failure_latched);
+    ASSERT_TRUE(ctx->battery_charge_pending);
+    ASSERT_EQ(last_state, "CRITICAL_BATTERY_NAV_FAILED");
+  }
+
+  /// Mirrors the ~/high_level_control handler's battery-recovery step.
+  void operatorCommand(uint8_t cmd)
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->current_command = cmd;
+    mowgli_behavior::applyCommandToBatteryRecovery(*ctx, cmd);
+  }
+};
+
+// The reported reboot: a charge wait saved by an earlier session must not send
+// an IDLE mower, powered on off the charger with a healthy battery, to the dock.
+TEST_F(OperatorControlRecoveryTest, BootWithSavedPendingIdleOffDockNeverDocks)
+{
+  ctx->current_command = 0;
+  ctx->battery_charge_pending = true;
+  ctx->area_resume_pose_index[0] = 42;  // Retained progress is not a command.
+  restartFromSnapshot();
+  EXPECT_FALSE(ctx->battery_charge_pending);
+  EXPECT_TRUE(ctx->critical_dock_failure_persistence_requested);  // Re-saved after a tick.
+  EXPECT_EQ(ctx->current_command, 0);
+
+  ctx->battery_percent = 75.0f;
+  ctx->latest_power.charger_enabled = false;
+  ctx->power_sample_received = true;
+  wait_complete = true;
+  auto tree = productionPoweredStartup();
+  for (int i = 0; i < 50; ++i)
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(dock_count, 0);
+  EXPECT_EQ(heading_seed_count, 0);
+  EXPECT_EQ(undock_count, 0);
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 42u);
+}
+
+// A START snapshot that cannot be continued (no progress) boots IDLE, so its
+// pending charge is dropped too; a resumable one keeps it (charge first).
+TEST_F(OperatorControlRecoveryTest, BootKeepsPendingOnlyWithAutoContinuedMow)
+{
+  ctx->current_command = 1;
+  ctx->battery_charge_pending = true;
+  restartFromSnapshot();
+  EXPECT_EQ(ctx->current_command, 0);
+  EXPECT_FALSE(ctx->battery_charge_pending);
+
+  ctx->current_command = 1;
+  ctx->battery_charge_pending = true;
+  ctx->area_resume_pose_index[0] = 42;
+  restartFromSnapshot();
+  EXPECT_EQ(ctx->current_command, 1);
+  EXPECT_TRUE(ctx->battery_charge_pending);
+  EXPECT_TRUE(ctx->restored_mow_charge_check_pending);
+}
+
+// Defense in depth: even a pending flag set at runtime cannot drive an IDLE
+// mower unless the battery is still at/below the low threshold.
+TEST_F(OperatorControlRecoveryTest, IdlePendingChargeNeedsAStillLowBattery)
+{
+  ctx->current_command = 0;
+  ctx->battery_charge_pending = true;
+  ctx->battery_percent = 75.0f;
+  ctx->latest_power.charger_enabled = false;
+  auto tree = productionBranch("CriticalBatteryDock");
+  for (int i = 0; i < 20; ++i)
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(dock_count, 0);
+
+  ctx->battery_percent = 15.0f;  // battery_low_pct is 20.
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(dock_count, 1);
+  EXPECT_EQ(undock_count, 0);
+}
+
+// HOME, RECORD and MANUAL after a failed critical dock release both the pending
+// charge and the failure latch: the operator's branch runs, no DockRobot retry.
+TEST_F(OperatorControlRecoveryTest, OperatorCommandAfterFailedDockRunsItsBranch)
+{
+  const std::map<uint8_t, std::string> commands = {{2, "HomeMarker"},
+                                                   {3, "RecordMarker"},
+                                                   {7, "ManualMarker"}};
+  for (const auto& [cmd, marker] : commands)
+  {
+    SCOPED_TRACE(marker);
+    dock_count = 0;
+    branch_runs.clear();
+    ctx->critical_dock_failure_latched = false;
+    ctx->battery_charge_pending = false;
+    auto tree = mainLogic();
+    failCriticalDock(tree);
+    // Before the command, the failure holds without another goal.
+    for (int i = 0; i < 5; ++i)
+      EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+    EXPECT_EQ(dock_count, 1);
+
+    ctx->battery_percent = 15.0f;  // Rested pack: above critical, still low.
+    operatorCommand(cmd);
+    EXPECT_FALSE(ctx->battery_charge_pending);
+    EXPECT_FALSE(ctx->critical_dock_failure_latched);
+    for (int i = 0; i < 5; ++i)
+      EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+    EXPECT_EQ(branch_runs[marker], 5);
+    EXPECT_EQ(dock_count, 1);
+
+    // The released state survives a restart, which boots IDLE.
+    restartFromSnapshot();
+    EXPECT_FALSE(ctx->battery_charge_pending);
+    EXPECT_FALSE(ctx->critical_dock_failure_latched);
+    ctx->battery_percent = 15.0f;
+    ctx->latest_power.charger_enabled = false;
+    auto restarted = mainLogic();
+    EXPECT_EQ(restarted.tickOnce(), BT::NodeStatus::FAILURE);
+    EXPECT_EQ(dock_count, 1);
+  }
+}
+
+// STOP after a failed critical dock reaches StopHold and never re-arms a dock
+// goal, even while the battery is still critical, and across a restart.
+TEST_F(OperatorControlRecoveryTest, StopAfterFailedDockHoldsStillEvenWhenCritical)
+{
+  auto tree = mainLogic();
+  failCriticalDock(tree);
+  operatorCommand(8);
+  EXPECT_FALSE(ctx->battery_charge_pending);
+  EXPECT_FALSE(ctx->critical_dock_failure_latched);
+  EXPECT_TRUE(ctx->critical_charge_stop_latched);
+  for (int i = 0; i < 10; ++i)
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(branch_runs["StopMarker"], 10);
+  EXPECT_EQ(dock_count, 1);
+
+  restartFromSnapshot();
+  EXPECT_EQ(ctx->current_command, 8);
+  ctx->battery_percent = 5.0f;
+  ctx->latest_power.charger_enabled = false;
+  auto restarted = mainLogic();
+  for (int i = 0; i < 10; ++i)
+    EXPECT_EQ(restarted.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(branch_runs["StopMarker"], 20);
+  EXPECT_EQ(dock_count, 1);
+  EXPECT_EQ(undock_count, 0);
+}
+
+// START keeps the critical protection: with the pack still critical it is a
+// dock retry, never a mow.
+TEST_F(OperatorControlRecoveryTest, StartWhileStillCriticalRetriesDockInsteadOfMowing)
+{
+  auto tree = mainLogic();
+  failCriticalDock(tree);
+  operatorCommand(1);
+  EXPECT_TRUE(ctx->battery_charge_pending);
+  EXPECT_FALSE(ctx->critical_dock_failure_latched);
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);  // The retry fails and latches again.
+  EXPECT_EQ(dock_count, 2);
+  EXPECT_TRUE(ctx->critical_dock_failure_latched);
+  EXPECT_EQ(branch_runs["MowMarker"], 0);
+  EXPECT_EQ(undock_count, 0);
+}
+
+// EndSession is a session boundary: it drops the pending charge, and both of
+// its exits leave a snapshot without it.
+TEST_F(OperatorControlRecoveryTest, EndSessionClearsPendingChargeOnDisk)
+{
+  const auto path = ::testing::TempDir() + "/end_session_pending.txt";
+  for (const bool keep_incomplete : {true, false})
+  {
+    SCOPED_TRACE(keep_incomplete ? "keep_incomplete" : "finished");
+    ctx->coverage_resume_path = path;
+    ctx->current_command = 1;
+    ctx->area_resume_pose_index[0] = 42;
+    ctx->battery_charge_pending = true;
+    ASSERT_TRUE(mowgli_behavior::saveCoverageResumeState(*ctx));
+    auto tree = factory.createTreeFromText(
+        std::string("<root BTCPP_format=\"4\"><BehaviorTree ID=\"Main\"><EndSession "
+                    "keep_incomplete=\"") +
+            (keep_incomplete ? "true" : "false") + "\"/></BehaviorTree></root>",
+        blackboard);
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+    EXPECT_FALSE(ctx->battery_charge_pending);
+
+    BTContext reloaded;
+    reloaded.coverage_resume_path = path;
+    mowgli_behavior::loadCoverageResumeState(reloaded);  // An absent file keeps defaults.
+    EXPECT_FALSE(reloaded.battery_charge_pending);
+    std::filesystem::remove(path);
+  }
+}
+
+// One failed low-battery dock used to cost three DockRobot goals with no
+// operator action: BatteryGuard, FailedCoverageDock, then the pending-driven
+// critical branch. EndSession now closes the pending charge, so the critical
+// branch only comes back once the pack is genuinely critical.
+TEST_F(OperatorControlRecoveryTest, FailedLowBatteryDockIsNotRetriedByPendingBranch)
+{
+  ctx->current_command = 1;
+  ctx->battery_percent = 15.0f;
+  docking_ok = false;
+  auto guard = productionBranch("BatteryGuard", "Fallback");
+  EXPECT_EQ(guard.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(dock_count, 1);
+  EXPECT_TRUE(ctx->battery_charge_pending);
+
+  auto failed = productionBranch("FailedCoverageDock");
+  EXPECT_EQ(failed.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(dock_count, 2);
+  EXPECT_EQ(ctx->stop_reason, "DOCK_NAV_FAILED");  // #1016 reporting intact.
+  EXPECT_EQ(ctx->current_command, 0);
+  EXPECT_FALSE(ctx->battery_charge_pending);
+
+  auto critical = productionBranch("CriticalBatteryDock");
+  for (int i = 0; i < 20; ++i)
+    EXPECT_EQ(critical.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(dock_count, 2);
+
+  // A genuinely critical pack still gets its protective dock attempt.
+  ctx->battery_percent = 5.0f;
+  critical.tickOnce();
+  EXPECT_EQ(dock_count, 3);
 }

@@ -230,6 +230,12 @@ BT::NodeStatus EndSession::tick()
   {
     std::lock_guard<std::mutex> lock(ctx->context_mutex);
     ctx->fleet_yield.revoke();
+    // A battery charge wait belongs to the session it paused. Leaving it set
+    // would let the critical-battery branch drive an ended session back to
+    // the dock (e.g. right after FailedCoverageDock already failed to dock).
+    // Both exits below persist it: keep_incomplete re-saves the snapshot, a
+    // finished session removes the file (an absent row loads as false).
+    ctx->battery_charge_pending = false;
   }
   ctx->yaw_seeded_this_session = false;
   ctx->blade_direction.endSession();

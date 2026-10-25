@@ -494,7 +494,18 @@
                or reboot. Recovery shares the critical charging status even
                when the original entry was the normal low-battery guard. -->
           <Fallback name="CriticalBatteryLowOrDockFailureLatched">
-            <IsBatteryChargePending/>
+            <!-- A pending charge alone never moves an idle mower: it needs
+                 an active mow (START) or a battery still at/below the low
+                 threshold. Boot drops a saved pending flag unless the mow is
+                 auto-continued, and HOME/STOP/RECORD/MANUAL/EndSession clear
+                 it (docs/BATTERY_DOCK_RECOVERY.md, "Operator control"). -->
+            <Sequence name="BatteryChargePendingAuthorized">
+              <IsBatteryChargePending/>
+              <Fallback>
+                <IsCommand command="1"/>
+                <NeedsDocking threshold="{battery_low_pct}"/>
+              </Fallback>
+            </Sequence>
             <IsCriticalDockFailureLatched/>
             <IsBatteryLow threshold="{battery_critical_pct}" voltage_threshold="{battery_critical_voltage}"/>
           </Fallback>

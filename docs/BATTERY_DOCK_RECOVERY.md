@@ -97,7 +97,8 @@ supply or battery repair.
 
 Confirmed charger contact takes priority over saved docking failure and cancels
 an unnecessary active/pending docking goal. Battery charge holds survive guard
-interruptions and process restarts. Full-charge/current-taper or permitted manual
+interruptions, and process restarts that continue the mow (see "Operator
+control" below). Full-charge/current-taper or permitted manual
 resume remains required before continuing an active mow. Recovery undocking
 requires an active START command; idle/STOP preserve progress without departure.
 Valid persisted mowing resumes remain supported.
@@ -109,6 +110,53 @@ tree holds blade/wheel commands off and reports `WAITING_FOR_POWER`; default
 100% battery and charger-off values cannot authorize heading seeding, docking
 or undocking. This is a process-local startup barrier, not a new timeout or
 runtime freshness policy.
+
+### Operator control (review follow-up)
+
+`battery_charge_pending` remembers that a battery-driven dock/charge is not
+finished. It must never move the mower on its own, and an operator must always
+be able to take the mower back. The rules:
+
+- **Boot.** `applyRestoredCommandPolicy` (`coverage_persistence.cpp`, called by
+  `behavior_tree_node.cpp` `init()`) keeps a saved pending flag only when the
+  same snapshot auto-continues a mow (`current_command` START with resumable
+  progress). Any other boot is IDLE (or a latched critical-charge STOP hold), and
+  the flag is dropped and the snapshot re-saved after the first tick. Without
+  this, an IDLE mower powered on off the charger drove itself to the dock with
+  no command, no battery-still-low check and no localization readiness. A boot
+  with a genuinely critical pack still docks through the live `IsBatteryLow`
+  check, exactly as before this PR.
+- **Tree gate.** In `CriticalBatteryDock` (`main_tree.xml`,
+  `BatteryChargePendingAuthorized`) a pending flag enters the branch only with an
+  active mow (`IsCommand 1`) or a battery still at/below `battery_low_pct`
+  (`NeedsDocking`). This is defense in depth for a flag set at runtime; the
+  enter-low / resume-at-full hysteresis of the charge hold itself is unchanged.
+- **Operator commands.** `applyCommandToBatteryRecovery`
+  (`battery_recovery_command.hpp`, called by `~/high_level_control` and
+  `~/start_in_area`): HOME, RECORD (3/5/6), MANUAL_MOW and STOP clear the
+  pending flag. Every non-STOP command clears the critical dock failure latch
+  (a retry, as before). STOP never re-arms a dock: after a failed critical dock
+  it converts the failure latch into the existing critical-charge STOP hold, so
+  the critical branch steps aside and StopHold runs even with a still-critical
+  pack, across restarts. The change is persisted on the next tick. START keeps
+  the pending charge (the mow must still charge first). With the pack still
+  critical, START, HOME, RECORD and MANUAL re-enter the critical branch through
+  `IsBatteryLow`, which docks instead of mowing. A critical pack therefore still
+  overrides manual driving and recording, as it did before this PR.
+- **EndSession** clears the pending flag. Its keep-progress exit re-saves the
+  snapshot, and a finished session removes it.
+- **One failed low-battery dock.** BatteryGuard's DockRobot failure ends the
+  run through `FailedCoverageDock`, which tries a second time and reports
+  `NAV_TO_DOCK_FAILED` / `DOCK_NAV_FAILED` (unchanged since before this PR).
+  Its `EndSession` now clears the pending flag, so the critical branch no longer
+  makes a third attempt straight away. It comes back only once the pack is
+  genuinely critical.
+
+Residual: on a restart that continues a mow with a pending charge while off the
+charger, the critical branch's DockRobot can run before Nav2 is active. If the
+docking server is not up yet, the attempt fails and latches
+`CRITICAL_BATTERY_NAV_FAILED` (the mower stays stopped). It does not move
+without a planner.
 
 Failure notifications are remembered by terminal reason across guard statuses
 and GUI restarts. A concrete new attempt rearms them; confirmed charging also
@@ -142,6 +190,13 @@ cpplint false positives on unnamed lambda arguments. The test fixture now uses
 the real conditions with its replay assertions unchanged, and the lambda
 arguments are named. Both failing checks pass locally; full CI for the updated
 head must still run.
+
+The operator-control follow-up was validated with a local Lyrical build of `mowgli_behavior`
+(`ros:lyrical-ros-base`). `test_battery_critical_resume` passes all 33 tests (8 new). The full
+package suite passes with 1027 tests and 0 failures, including cpplint, xmllint and copyright.
+Before the follow-up, 15 of this PR's production-XML tests failed at the branch head, because the
+fixture did not register the `SetStopReason` node merged from dev (#1016). The fixture now
+registers the real node.
 
 ## Physical acceptance still required
 

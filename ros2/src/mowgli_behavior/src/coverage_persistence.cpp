@@ -98,6 +98,28 @@ bool hasCoverageResumeState(const BTContext& ctx)
                      });
 }
 
+RestoredCommandPolicy applyRestoredCommandPolicy(BTContext& ctx)
+{
+  constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
+  constexpr uint8_t kCommandStop = 8;  // HighLevelControl::Request::COMMAND_STOP
+  RestoredCommandPolicy policy;
+  policy.auto_continue = ctx.current_command == kCommandStart && hasCoverageResumeState(ctx);
+  policy.preserve_stop_hold =
+      ctx.current_command == kCommandStop && ctx.critical_charge_stop_latched;
+  ctx.restored_mow_charge_check_pending = policy.auto_continue;
+  if (!policy.auto_continue && !policy.preserve_stop_hold)
+  {
+    ctx.current_command = 0;  // IDLE — require an explicit operator start
+  }
+  if (!policy.auto_continue && ctx.battery_charge_pending)
+  {
+    ctx.battery_charge_pending = false;
+    ctx.critical_dock_failure_persistence_requested = true;
+    policy.cleared_charge_pending = true;
+  }
+  return policy;
+}
+
 void observeRestoredMowPower(BTContext& ctx, bool charging)
 {
   if (!ctx.restored_mow_charge_check_pending)
