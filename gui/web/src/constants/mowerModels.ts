@@ -102,9 +102,23 @@ export const MOWER_MODELS: MowerModel[] = [
         label: "mowerModels.BiltemaRM1000.label",
         description: "mowerModels.BiltemaRM1000.description",
         appearance: {style: "rm1000", dockAppearance: "styled"},
-        // Provisional caster position only; retain the user's other dimensions
-        // and calibration until RM1000 hardware measurements are available.
-        defaults: {caster_x_offset: 0.35},
+        // Tape-measured on one RM1000 (2026-10-25); see docs/RM1000_GEOMETRY.md.
+        // The rear wheel measured 180 mm over tread base / 200 mm over lugs:
+        // use the 100 mm outer radius for geometry, NOT encoder calibration.
+        // Conservatively use 570 mm external length (published dimensions) rather
+        // than the 548 mm tape span, keeping the measured chassis centre near +129 mm.
+        // Caster placement and body height/clearance remain provisional.
+        // Deliberately leave mass, motor/encoder, battery and sensor calibration alone.
+        defaults: {
+            wheel_radius: 0.1, wheel_track: 0.325, wheel_width: 0.036,
+            wheel_x_offset: 0.0,
+            caster_radius: 0.045, caster_track: 0.215, caster_x_offset: 0.30,
+            chassis_length: 0.57, chassis_width: 0.40, chassis_height: 0.22,
+            chassis_center_x: 0.13, chassis_z_offset: -0.06,
+            blade_x_offset: 0.06, blade_y_offset: 0.0,
+            blade_radius: 0.09, tool_width: 0.18,
+            dock_visual_length: 0.63, dock_visual_width: 0.46,
+        },
     },
     {
         value: "YardForce900ECO",
