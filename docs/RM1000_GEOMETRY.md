@@ -40,12 +40,12 @@ was performed.
 
 ## External reference data
 
-- [Biltema RM1000 product specification](https://www.biltema.se/fritid/tradgard/tradgardsmaskiner/grasklippare/robotgrasklippare/): nominal 180 mm cutting width; 8.5 kg **total mower** mass.
+- [Biltema RM1000 product specification](https://www.biltema.dk/fritid/haven/havemaskiner/planeklippere/robot-plaeneklippere/robotplaneklipper-rm1000-2000043815): nominal 180 mm cutting width; 8.5 kg **total mower** mass.
   The RM1000 product article is 17-119.
 - [Forbrugerrådet Tænk, Biltema RM1000](https://taenk.dk/test/robotplaeneklipper/biltema-rm1000):
   listed mower envelope **570 × 395 × 265 mm** (L × W × total H);
   charging dock **630 × 460 × 230 mm**.
-- [Yard Force SA650ECO manual](https://uk.yardforce.eu/wp-content/uploads/sites/7/2021/06/MNL_YF-SA650ECO.pdf):
+- [Yard Force SA650ECO manual](https://www.libble.eu/yardforce-sa650-eco/online-manual-929220/?page=0004):
   listed mower envelope **570 × 390 × 260 mm** and 180 mm cut.
   Similar dimensions do **not** prove interchangeable wheels or axle positions.
 - `docs/WHEEL_PRESET_DIMENSIONS.md`: an SA650 owner reported 190 mm rear
