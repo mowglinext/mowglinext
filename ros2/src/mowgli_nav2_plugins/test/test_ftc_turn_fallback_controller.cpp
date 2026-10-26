@@ -30,6 +30,7 @@
 //   * The no-LiDAR overlay (obstacle flags off): the fallback is unreachable.
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -38,6 +39,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -48,6 +50,7 @@
 #include <nav2_ros_common/lifecycle_node.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2/utils.hpp>
+#include <tf2_ros/transform_broadcaster.hpp>
 
 #include "motion_fixture.hpp"
 #include "mowgli_interfaces/motion_authorization.hpp"
@@ -133,6 +136,17 @@ nav_msgs::msg::Path StraightPlan(double x0, double x1)
   return path;
 }
 
+class HarnessCostmap : public nav2_costmap_2d::Costmap2DROS
+{
+public:
+  using nav2_costmap_2d::Costmap2DROS::Costmap2DROS;
+
+  bool ExecutorSpinning() const
+  {
+    return executor_ && executor_->is_spinning();
+  }
+};
+
 class Harness
 {
 public:
@@ -153,7 +167,7 @@ public:
     // The costmap declares its parameters when constructed; set them before
     // configure(). No layers: the test paints the master grid itself, and the
     // costmap is never activated, so no update thread repaints it.
-    costmap_ = std::make_shared<nav2_costmap_2d::Costmap2DROS>("local_costmap", "/", false);
+    costmap_ = std::make_shared<HarnessCostmap>("local_costmap", "/", false);
     for (const auto& p : std::vector<rclcpp::Parameter>{
              rclcpp::Parameter("plugins", std::vector<std::string>{}),
              rclcpp::Parameter("global_frame", "odom"),
@@ -182,6 +196,7 @@ public:
     }
     costmap_->configure();
     tf_ = costmap_->getTfBuffer();
+    WaitForCostmapThreads();
     {
       const auto* cm = costmap_->getCostmap();
       EXPECT_EQ(cm->getSizeInCellsX(), 400u);
@@ -402,6 +417,32 @@ public:
   double yaw_{0.0};
 
 private:
+  void WaitForCostmapThreads()
+  {
+    // Invalid FTC parameters throw from this constructor. Before that can
+    // destroy the costmap, prove both of its workers entered spin(): upstream
+    // listeners can lose cancel() issued before spin() and hang in join().
+    // Actual TF delivery proves readiness of the listener's private executor.
+    static std::atomic<std::uint64_t> next_probe{0};
+    geometry_msgs::msg::TransformStamped probe;
+    probe.header.stamp = node_->now();
+    probe.header.frame_id = "harness_listener_probe";
+    probe.child_frame_id = "harness_listener_probe_" + std::to_string(++next_probe);
+    probe.transform.rotation.w = 1.0;
+    tf2_ros::TransformBroadcaster broadcaster(node_);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      broadcaster.sendTransform(probe);
+      if (costmap_->ExecutorSpinning() &&
+          tf_->canTransform(probe.header.frame_id, probe.child_frame_id, tf2::TimePointZero))
+        return;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    // Keep fixture startup failures distinct from the expected FTC rejection.
+    throw std::runtime_error("Costmap executor/TF listener did not become ready");
+  }
+
   double response_time_s_{kTau};
   double loop_us_{0};
   double loop_max_us_{0};
@@ -521,7 +562,7 @@ private:
   }
 
   std::shared_ptr<nav2::LifecycleNode> node_;
-  std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_;
+  std::shared_ptr<HarnessCostmap> costmap_;
   std::shared_ptr<tf2_ros::Buffer> tf_;
   rclcpp::Clock::SharedPtr clock_;
   mn::FTCController ftc_;
