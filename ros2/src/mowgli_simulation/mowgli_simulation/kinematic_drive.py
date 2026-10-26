@@ -264,6 +264,10 @@ class KinematicDrive:
             PoseStamped, '/sim/ground_truth_pose', 10
         )
 
+        self.__applied_twist_pub = self.__node.create_publisher(
+            TwistStamped, '/sim/applied_twist', 10
+        )
+
         # Latest commanded velocity. Default to zero so the robot is at
         # rest until the first cmd_vel arrives.
         self.__target_vx = 0.0
@@ -469,7 +473,11 @@ class KinematicDrive:
         # subscriber sees the chassis at the position the sim is
         # actually rendering.
         gt = PoseStamped()
-        gt.header.stamp = self.__node.get_clock().now().to_msg()
+        # This plugin's private rclpy clock can still be wall time (or lag
+        # /clock). The native Webots step owns this observation's epoch.
+        native_ns = round(self.__supervisor.getTime() * 1_000_000_000)
+        gt.header.stamp.sec = native_ns // 1_000_000_000
+        gt.header.stamp.nanosec = native_ns % 1_000_000_000
         gt.header.frame_id = 'map'
         gt.pose.position.x = self.__x
         gt.pose.position.y = self.__y
@@ -477,6 +485,16 @@ class KinematicDrive:
         gt.pose.orientation.z = math.sin(self.__yaw * 0.5)
         gt.pose.orientation.w = math.cos(self.__yaw * 0.5)
         self.__gt_pose_pub.publish(gt)
+
+        # The twist actually integrated over the interval ending at this
+        # native step, including command timeout and firmware-model effects.
+        # This is an observation, not another command/actuation authority.
+        applied = TwistStamped()
+        applied.header.stamp = gt.header.stamp
+        applied.header.frame_id = 'base_footprint'
+        applied.twist.linear.x = vx
+        applied.twist.angular.z = wz
+        self.__applied_twist_pub.publish(applied)
 
         # Set the chassis ODE velocity to match the commanded body
         # motion each tick.

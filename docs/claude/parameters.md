@@ -581,3 +581,15 @@ Follow all six steps, in order. Skipping step 2 is the classic failure: the key 
 Dock Center X and Dock Center Y locate the centre of the full visible footprint, including any side pedestal. X is forward from the parked rear axle; Y is left from the mower centreline. The renderer has no additional per-style lateral offset. Existing saved X values retain their meaning.
 
 Blade geometry: `blade_x_offset` / `blade_y_offset` (both 0.0 m) move the blade centre relative to the chassis centre (+X forward, +Y left). `mowgli.launch.py` forwards both to `mowgli.urdf.xacro`; the Hardware measurement editor previews and saves them. Zero preserves the original chassis-centred blade.
+
+
+## Simulation observation provenance
+
+| Parameter | Script default | Full-system launch | Meaning |
+|---|---|---|---|
+| `sim_imu_noise.synthesize_from_applied_twist` | `false` | `true` | Generate ideal upright IMU from actual native-step applied twist; raw mode preserves its existing noise model. Replaces `synthesize_from_cmd_vel`. |
+| `sim_imu_noise.applied_twist_topic` | `/sim/applied_twist` | `/sim/applied_twist` | Read-only `TwistStamped` observation; replaces the synthetic mode's `cmd_vel_topic`. |
+
+See [simulation observation contracts](../WEBOTS_SIM.md) for timestamp,
+clock-rewind and bounded pending-queue semantics. These are simulator helper
+parameters, not installed robot configuration keys.

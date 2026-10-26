@@ -4,6 +4,106 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Seed error and simulator observation identity (2026-10-27)
+
+The original **13.943731 mm** boundary failure remains open. Fetched `main`
+and `dev` remain at `fe77a097` and `5d3845b1`; neither contains these repairs.
+New evidence separates three mechanisms instead of assigning the residual to
+prediction alone:
+
+- In the retained call819 reconstruction, the joint N1/source-time control
+  still leaves **+13.836143 mm** declared-time y error. Under two explicit
+  truth-time associations, **+12.207160 mm / +14.558176 mm** is already in
+  the actual published map seed. The post-seed DR contribution is only
+  −0.022095 / −0.012954 mm. Original truth headers were wall time and no
+  native step or `/clock` was retained; these partitions remain conditional.
+- Reconstructing the longer pre-seed wheel history reproduces all 27 retained
+  local states to 2.22e-16. Replacing N10 with N1 while freezing the original
+  anchor makes the y error **6.210057 mm worse**. Original graph anchors were
+  optimized against the original filtered inputs; this control cannot identify
+  the reoptimized N1 result. The final captured anchor change lowers the
+  selected seed by 0.492927 mm; earlier upward changes dominate. A calibrated
+  GPS lever/yaw-only explanation has the wrong sign or insufficient magnitude.
+- A fresh build of all production FusionGraphNode/core translation units and
+  real GTSAM reproduces a distinct epoch-association defect with perfect data:
+  straight motion at 0.15 m/s after rest, accurate GNSS at **1.24 s** attached
+  to node **1.14 s**, produces **+14.814123 mm** map error at the next node.
+  No-fix and exact-node controls stay near zero; an exact known-displacement
+  oracle also removes the error. This proves that mechanism, not its share of
+  the original event. Straight two-node time interpolation is unsafe: the
+  throttled rest-to-start gap would invent 18.421053 mm motion at the actual
+  stationary epoch. No such graph repair or observation dropping is applied.
+
+A native-step Webots diagnostic also establishes an application-owned source
+identity defect: the private plugin clock stamps truth with wall time, the
+GNSS relay projects that truth but copies another raw GPS epoch, and synthetic
+IMU pairs a cached command value with an independently delivered raw IMU epoch.
+The narrow repair now stamps truth directly from native Webots time and emits
+`/sim/applied_twist` for the exact interval ending at that same truth pose.
+Synthetic IMU consumes that observation's value and epoch; generated planar
+GNSS coordinates retain the selected truth epoch and antenna frame, paired
+exactly with typed status and its lifetime sequence.
+
+Clock eligibility never rewrites acquisition time. Invalid/future inputs cannot
+advance accepted authority; rewind clears pending/accepted identity. The IMU
+keeps ten ordered pending samples, matching DDS depth, and drains on clock
+catch-up even without another input. Independent review found and reproduced
+loss of a final timeout-zero in the first single-slot candidate; the ordered
+queue fixes that RED case. Overflow deliberately drops oldest samples; this
+is not a lossless delivery or arbitrary cross-generation replay guarantee.
+Raw driver header phase and production TF/graph association remain separate.
+
+One 15-second rest/straight/pivot/arc/stop minimal Webots profile completes in
+30 seconds wall time under 180-second hard/45-second progress bounds.
+All **766 captured truth/applied/IMU samples** pair exactly by native epoch;
+gyro z equals that interval's applied yaw rate. Across 765 complete intervals,
+GT yaw-increment residual is at most 5.45e-16 rad. All **73 GNSS fixes/statuses**
+pair exactly with their selected truth; sequence is 1–73 and maximum antenna
+projection error is 3.4e-8 m. No captured applied-to-IMU or raw-to-GNSS count
+loss occurs. `/clock` is contiguous at 20 ms; eight stamps round 1 ns below
+the native acquisition epoch, handled without changing observation headers.
+This uses the pinned image's existing controllers plus source-hashed current
+plugin/relays and current generated interfaces, UID1000 with network disabled;
+it contains no FusionGraph, Nav2 or BT. During pivot, 18 zero-applied
+samples are already present in the plant's consumed target; they are not hidden
+by sensor synthesis. The known controller teardown segfault after SIGINT is
+retained. An initial shell-setup failure before Webots startup is also retained.
+
+Validation: **54 focused pytest cases pass**, including actual plugin step and
+sensor callbacks, interval yaw transitions, replay, future ordering and rewind.
+Retained old-source tests fail the native GT/selected-GT timestamp contracts
+and applied-IMU source selection. The final-zero discriminator is RED on the
+single-slot candidate and GREEN with the final queue. Five sensor/test files
+pass ament_flake8; whole-file lint on the plugin/launch retains the same 185
+pre-existing diagnostics as their exact HEAD baseline. No C++ changes are made.
+
+Evidence is retained outside Git under
+`~/.cache/pr950-resume-20261026/root-cause/`: `residual/` contains original-row
+arithmetic and hashes; `real-node/logs/association.jsonl` is the actual-node
+GNSS discriminator; `webots-phase/` contains the native diagnostic;
+`applied-imu/` and `provenance-*.log` contain RED/GREEN and lint evidence;
+`app-provenance-live/attempt-02/summary.{md,json}` links every component oracle
+to the retained raw rows and source hashes.
+The source snapshot is defined by retained hashes, not the image's old build.
+No hardware or full mission acceptance is claimed.
+
+The next software discriminator is a phase sweep of real production-node
+GNSS against **integrated acquisition history**, including rest-to-start,
+curves, delayed delivery, node throttling and reset. It must retain the actual
+state epoch, wheel/gyro identities, graph node/optimizer snapshot and anchor
+revision together. A correct repair must preserve valid off-node observations
+without inventing rest-period motion, treating uncertain odometry as a known
+lever arm, or increasing prediction/freshness tolerances. Once that local
+contract passes, a bounded first-cusp replay with native truth can measure
+its contribution to the original residual. More uninstrumented E2E runs
+cannot settle that attribution.
+
+The new native truth/applied-twist/IMU/GNSS wiring is one cohesive simulator
+repair family, independently useful from motion authorization and N1 wheel
+filtering. Its source and consumers must move together. Previously tested
+wheel, FTC-fixture and CI families remain candidates for smaller PRs;
+none is extracted here or inherits a boundary-containment pass.
+
 ## Producer-time contract and remaining blocker (2026-10-26)
 
 All five required hosted checks pass on `651508c6`; the PR remains Draft.

@@ -136,6 +136,11 @@ if(BUILD_TESTING)
     ENV ROS_DOMAIN_ID=186
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_sim_imu_provenance
+    test/test_sim_imu_provenance.py
+    ENV ROS_DOMAIN_ID=188
+    TIMEOUT 30
+  )
   ament_add_pytest_test(test_sim_navsat_rtk_fix
     test/test_sim_navsat_rtk_fix.py
   )

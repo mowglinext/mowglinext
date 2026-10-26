@@ -52,7 +52,7 @@ With no installed site config, the old localizer auto-seeded its datum from the 
 | `src/fake_hardware_bridge_node.cpp` | 280 | Stand-in for `hardware_bridge_node`: status/power/emergency/battery/dock-heading publishers + 2 services |
 | `src/sim_actuation_node.cpp` | 183 | `/cmd_vel` → per-wheel firmware model → `/cmd_vel_wheels` (the wheels' input) |
 | `include/mowgli_simulation/firmware_wheel_model.hpp` | 170 | Header-only, ROS-free per-wheel PI + stiction model (`step_firmware_wheel_model`) |
-| `scripts/sim_imu_noise.py` | 269 | `/imu/data_sim` → `/imu/data` with white noise + bias walk (optional cmd_vel-synthesised IMU) |
+| `scripts/sim_imu_noise.py` | 269 | `/imu/data_sim` → `/imu/data` with white noise + bias walk (optional native applied-twist IMU) |
 | `scripts/sim_navsat_rtk_fix.py` | 274 | `/gps/fix_raw` → `/gps/fix`; rewrites `status`/covariance per `RTK_FIXED`/`RTK_FLOAT`/`NO_FIX` regime |
 | `scripts/sim_wheel_slip.py` | 162 | `/wheel_odom_raw` → `/wheel_odom`; periodic vx over-report + production twist covariance |
 | `config_webots/ros2_control.yaml` | 60 | `controller_manager` 50 Hz, `diffdrive_controller` (0.325 m / 0.093 m, `use_stamped_vel`, `enable_odom_tf: false`) |
@@ -108,6 +108,7 @@ Launch-managed nodes receive `use_sim_time: True` (`sim_full_system.launch.py`),
 | `/scan` | `sensor_msgs/LaserScan` | pub — Webots `Lidar` 10 Hz (`mowgli_webots.urdf:162–170`; noise/resolution `mowgli_garden.wbt:122–123`) | driver default | `costmap_scan_filter_node` (→ `/scan_costmap` costmaps + `/scan_collision` collision_monitor), `scan_deskew_node` (→ `/scan_deskewed`, `fusion_graph` persistent map anchor) |
 | `/joint_states` | `sensor_msgs/JointState` | pub — `joint_state_broadcaster` | | `robot_state_publisher` (wheel TFs) |
 | `/robot_description` | `std_msgs/String` | pub — RSP only (`webots_minimal.launch.py:71–86`, driver copy disabled :99) | transient_local | `controller_manager` |
+| `/sim/applied_twist` | `geometry_msgs/TwistStamped` (`base_footprint`) | pub — `KinematicDrive`; sub — synthetic `sim_imu_noise` | depth 10 | native step epoch; actual twist integrated over interval ending at that epoch |
 | `/sim/ground_truth_pose` | `geometry_msgs/PoseStamped` (`frame_id: map`) | pub — `kinematic_drive.py:252`, every physics tick; sub — `fake_hardware_bridge_node.cpp:120` (SensorDataQoS) | depth 10 | sim-only truth; nothing production reads it |
 | `/hardware_bridge/status` | `mowgli_interfaces/Status` | pub — `fake_hardware_bridge_node.cpp:93` | QoS(10) | BT, map_server, diagnostics, `calibrate_imu_yaw_node`, `costmap_scan_filter_node`, `fusion_graph` (same names the real bridge is remapped to, `mowgli.launch.py:260–266`) |
 | `/hardware_bridge/power` | `mowgli_interfaces/Power` | pub — :95 (28 V; 1.5 A + `charger_enabled` when `near_dock`) | QoS(10) | BT battery filter, diagnostics |
@@ -136,7 +137,7 @@ No actions are defined in this package.
 | `sim_imu_noise.input_topic` / `output_topic` | `/imu/data_gz` / `/imu/data` (`sim_imu_noise.py:68,71`) | `:437` `/imu/data_sim`, `:438` | startup |
 | `sim_imu_noise.gyro_white_std` / `gyro_bias_walk_std` / `gyro_bias_init_std` | 0.005 / 1e-4 / 1e-3 (`:76–83`) | `:445–447` (same) | startup |
 | `sim_imu_noise.accel_white_std` / `accel_bias_walk_std` / `accel_bias_init_std` | 0.05 / 1e-3 / 0.05 (`:87–94`) | `:448–450` (same) | startup |
-| `sim_imu_noise.synthesize_from_cmd_vel` / `cmd_vel_topic` / `noise_seed` | false / `/cmd_vel` / 42 (`:119,122,98`) | `:460` `False`, `:461`, `:451` | startup |
+| `sim_imu_noise.synthesize_from_applied_twist` / `applied_twist_topic` / `noise_seed` | false / `/sim/applied_twist` / 42 | full system: true / `/sim/applied_twist` / 42 | startup |
 | `sim_navsat_rtk_fix.quality_pattern` | `""` = always `RTK_FIXED` (`sim_navsat_rtk_fix.py:117`; grammar `"30,RTK_FIXED;15,RTK_FLOAT;5,NO_FIX"`) | `gps_quality_pattern` launch argument (default `""`) | startup |
 | `sim_navsat_rtk_fix.input_topic` / `output_topic` / `noise_seed` | `/gps/fix_raw` / `/gps/fix` / 42 (`:110,113,122`) | `:321–322`, `:331` | startup |
 | `sim_wheel_slip.slip_period_s` / `slip_duration_s` / `slip_vx_bias` | 30 / 1.0 / 0.05 (`sim_wheel_slip.py:60,63,66`) | `:406–412` (same; `0.0` bias = slip-free baseline) | startup |
@@ -203,7 +204,7 @@ CI: `.github/workflows/ros2-ci.yml` builds the whole workspace and runs `colcon 
 
 ## Pitfalls
 - **Two simulated motion plants:** `kinematic_drive.py` integrates `/cmd_vel_wheels` into chassis pose and sets body velocity; it does not force wheel-joint positions. `diffdrive_controller` integrates those independently simulated joints into `/wheel_odom_raw`. A recovery trace on ROS source `cfd45403` records substantial truth/odometry disagreement. Preserve both observables and capture source stamps plus command/joint data before attributing it; switching odometry to command-derived open-loop values would conceal the disagreement. See the Ubuntu continuation in `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
-- **Ground-truth timestamp domain:** the kinematic plugin creates its own rclpy node without `use_sim_time=true`, so `/sim/ground_truth_pose` headers use system time while wheel commands/joints/odometry use simulated time. Do not directly join those header stamps. Passive same-process monotonic receipt ordering is correlation evidence, not synchronized acquisition.
+- **Observation epochs:** `KinematicDrive` stamps truth and `/sim/applied_twist` directly from native Webots time. Applied twist describes the interval ending at that truth pose. Synthetic IMU and projected GNSS retain their selected source epoch; vendor raw driver header phase remains separate. See [WEBOTS_SIM.md](../../WEBOTS_SIM.md) for clock eligibility and bounded queue limits.
 - Read `docs/WEBOTS_SIM.md` §3–§7 before touching `worlds_webots/`, `protos/`, `urdf_webots/`, or `kinematic_drive.py`: wheel `Cylinder`+`boundingObject` need the `Pose { rotation 1 0 0 -1.5708 }` (`MowgliMower.proto:168,187,226`); `axis 0 -1 0` is deliberate (`:146,204`); the teleport + `setVelocity([…,0.0,…,wz])` pair and the single init-time `resetPhysics()` are load-bearing (`kinematic_drive.py:273–275,456–457,513–515`); never let the plugin write the motors (`:214–225,542–565`).
 - `/cmd_vel` in sim is `TwistStamped` (`kinematic_drive.py:241`, `ros2_control.yaml:40`). `ros2/src/e2e_test.py:202–206` subscribes `/cmd_vel` and `/cmd_vel_smoothed` as `geometry_msgs/Twist` — those callbacks never fire under Webots.
 - `ros2/src/e2e_test.py:561–583` spawns its obstacle with `gz service` (Gazebo); under Webots it fails and the obstacle test reports `SKIP`. `/gps_degradation_sim/status` (`:195`) has no publisher — no such node exists (grep the tree). The no-LiDAR target uses the empty `gps_quality_pattern` default (always Fixed); the former `simulate_gps_degradation` flag was never declared and has been removed from that target.

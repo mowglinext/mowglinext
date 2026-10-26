@@ -60,8 +60,8 @@ def test_full_sim_gyro_uses_authoritative_achievable_twist() -> None:
         / 'sim_full_system.launch.py'
     ).read_text()
 
-    assert '"synthesize_from_cmd_vel": True' in launch
-    assert '"cmd_vel_topic": "/cmd_vel_wheels"' in launch
+    assert '"synthesize_from_applied_twist": True' in launch
+    assert '"applied_twist_topic": "/sim/applied_twist"' in launch
 
 
 def test_full_sim_reads_datum_and_lever_arm_from_scenario_config() -> None:
@@ -86,3 +86,56 @@ def test_full_sim_reads_datum_and_lever_arm_from_scenario_config() -> None:
     assert scenario['gps_reference']['latitude'] == 48.137154
     assert scenario['gps_reference']['longitude'] == 11.576124
     assert scenario['antenna_lever_arm'] == {'x': 0.30, 'y': 0.0}
+
+
+def test_step_observations_use_native_epoch_and_actual_applied_twist(monkeypatch):
+    import math
+    from builtin_interfaces.msg import Time
+    from types import SimpleNamespace
+    from mowgli_simulation import kinematic_drive as module
+
+    monkeypatch.setattr(module.rclpy, 'spin_once', lambda *args, **kwargs: None)
+    monkeypatch.setattr(module.time, 'monotonic', lambda: 5.0)
+    drive = module.KinematicDrive()
+    poses, twists = [], []
+    values = {
+        'node': SimpleNamespace(get_clock=lambda: SimpleNamespace(
+            now=lambda: SimpleNamespace(to_msg=lambda: Time(sec=1_793_000_000)))),
+        'supervisor': SimpleNamespace(getTime=lambda: 1.24),
+        'last_cmd_time_s': 5.0, 'target_vx': 0.15, 'target_wz': 0.3,
+        'apply_firmware_model': False, 'dt_s': 0.02,
+        'x': 0.0, 'y': 0.0, 'yaw': 0.0, 'z': 0.1,
+        'translation_field': SimpleNamespace(setSFVec3f=lambda value: None),
+        'rotation_field': SimpleNamespace(setSFRotation=lambda value: None),
+        'gt_pose_pub': SimpleNamespace(publish=poses.append),
+        'applied_twist_pub': SimpleNamespace(publish=twists.append),
+        'robot_node': SimpleNamespace(setVelocity=lambda value: None),
+    }
+    for name, value in values.items():
+        setattr(drive, '_KinematicDrive__' + name, value)
+    drive.step()
+    assert poses[0].header.stamp.sec == 1
+    assert poses[0].header.stamp.nanosec == 240_000_000
+    assert twists[0].header.stamp == poses[0].header.stamp
+    assert twists[0].header.frame_id == 'base_footprint'
+    assert twists[0].twist.linear.x == 0.15
+    assert twists[0].twist.angular.z == 0.3
+    assert poses[0].pose.position.x == 0.003 * math.cos(0.003)
+    assert poses[0].pose.position.y == 0.003 * math.sin(0.003)
+    # A timed-out command must report the actual zero applied at this step.
+    drive._KinematicDrive__last_cmd_time_s = 4.0
+    drive.step()
+    assert twists[1].twist.linear.x == twists[1].twist.angular.z == 0.0
+    assert poses[1].pose == poses[0].pose
+
+    previous_yaw = 0.006
+    for step, yaw_rate in enumerate((0.3, -0.6, 0.0, 0.6), start=1):
+        drive._KinematicDrive__supervisor.getTime = lambda: 1.24 + step * 0.02
+        drive._KinematicDrive__last_cmd_time_s = 5.0
+        drive._KinematicDrive__target_wz = yaw_rate
+        drive.step()
+        pose, applied = poses[-1], twists[-1]
+        yaw = 2.0 * math.atan2(pose.pose.orientation.z, pose.pose.orientation.w)
+        assert abs(yaw - previous_yaw - applied.twist.angular.z * 0.02) < 1e-15
+        assert applied.header.stamp == pose.header.stamp
+        previous_yaw = yaw

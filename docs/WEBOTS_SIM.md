@@ -86,9 +86,31 @@ Sensors:
 
 | Raw topic | Source | Post-processor | Final topic |
 |---|---|---|---|
-| `/imu/data_sim` | Ros2IMU plugin, `mowgli_webots.urdf:185` | `sim_imu_noise` (`sim_full_system.launch.py:424-437`) | `/imu/data` |
+| `/sim/applied_twist` | `KinematicDrive`, native step epoch | `sim_imu_noise` (full-system synthetic mode) | `/imu/data` |
+| `/imu/data_sim` | Ros2IMU plugin | `sim_imu_noise` (raw mode only) | `/imu/data` |
 | `/gps/fix_raw` | GPS device, `mowgli_webots.urdf:176` | `sim_navsat_rtk_fix` (`sim_full_system.launch.py:313-330`) | `/gps/fix` |
 | `/scan` | Lidar device, `mowgli_webots.urdf:166` | — (world-level `noise 0.002` / `resolution 0.01`, `mowgli_garden.wbt:122-123`) | `/scan` |
+
+`/sim/ground_truth_pose` is the post-integration chassis pose at native
+`Supervisor.getTime()`. `/sim/applied_twist` carries the actual body twist
+integrated over the interval **ending** at that same epoch, including command
+timeout and firmware-model effects. It is an observation, not a drive input.
+The synthetic IMU takes its gyro value and stamp from that packet, rather than
+pairing a cached command with an independently stamped raw IMU callback.
+Up to ten future packets wait in source-time order for asynchronous `/clock`
+delivery (matching subscriber queue depth); overflow drops the oldest pending
+packet, like transport loss. The final zero remains eligible for publication.
+Rewind clears pending/accepted identity. This does not identify arbitrary old
+packets replayed across clock generations.
+
+The GNSS relay uses raw GPS only as its cadence trigger. Generated planar
+coordinates and fix/status stamps belong to the selected new truth pose; the
+GPS antenna frame and lifetime observation sequence remain paired. A future
+truth sample cannot advance the accepted watermark. Both helpers wait for
+clock eligibility without restamping or increasing a future tolerance.
+Raw driver wheel/IMU header phase is a separate contract: these changes do not
+establish native acquisition identity for those vendor messages or establish
+boundary containment.
 
 `/wheel_odom`, `/imu/data` and `/gps/fix` then feed `fusion_graph_node`, which
 is the sole localizer and owns **both** `map→odom` and `odom→base_footprint`

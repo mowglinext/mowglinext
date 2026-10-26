@@ -269,6 +269,7 @@ class SimNavSatRtkFix(Node):
             sub_qos,
         )
         self._ground_truth: Optional[PoseStamped] = None
+        self._pending_ground_truth: Optional[PoseStamped] = None
         self._last_truth_stamp_ns: Optional[int] = None
         self._ground_truth_generation = 0
         self._last_published_truth_generation = 0
@@ -335,24 +336,58 @@ class SimNavSatRtkFix(Node):
         now_ns = self.get_clock().now().nanoseconds
         if self._last_ros_now_ns is not None and now_ns < self._last_ros_now_ns:
             self._ground_truth = None
+            self._pending_ground_truth = None
             self._last_truth_stamp_ns = None
             self._last_fix_stamp_ns = None
             self._last_published_truth_generation = self._ground_truth_generation
         self._last_ros_now_ns = now_ns
         return now_ns
 
-    def _on_ground_truth(self, msg: PoseStamped) -> None:
-        self._check_clock_epoch()
-        stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
-        if (stamp_ns <= 0 or (self._last_truth_stamp_ns is not None
-                              and stamp_ns <= self._last_truth_stamp_ns)):
-            return
-        self._last_truth_stamp_ns = stamp_ns
+    def _accept_ground_truth(self, msg: PoseStamped) -> None:
+        self._last_truth_stamp_ns = (
+            msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        )
         self._ground_truth_generation += 1
         self._ground_truth = msg
 
+    def _promote_pending_truth(self, now_ns: int) -> None:
+        pending = self._pending_ground_truth
+        if pending is None:
+            return
+        stamp_ns = pending.header.stamp.sec * 1_000_000_000 + pending.header.stamp.nanosec
+        if self._last_truth_stamp_ns is not None and stamp_ns <= self._last_truth_stamp_ns:
+            self._pending_ground_truth = None
+        elif stamp_ns <= now_ns:
+            self._pending_ground_truth = None
+            self._accept_ground_truth(pending)
+
+    def _on_ground_truth(self, msg: PoseStamped) -> None:
+        now_ns = self._check_clock_epoch()
+        self._promote_pending_truth(now_ns)
+        stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+        pose = msg.pose
+        if (stamp_ns <= 0 or msg.header.stamp.nanosec >= 1_000_000_000
+                or msg.header.frame_id != 'map'
+                or not all(math.isfinite(value) for value in (
+                pose.position.x, pose.position.y,
+                pose.orientation.z, pose.orientation.w))
+                or (self._last_truth_stamp_ns is not None
+                    and stamp_ns <= self._last_truth_stamp_ns)):
+            return
+        if stamp_ns > now_ns:
+            # Native acquisition may arrive before the asynchronous /clock.
+            # Keep one nearest pending sample; never let it advance authority
+            # or prevent a valid current acquisition from being accepted.
+            pending = self._pending_ground_truth
+            if (pending is None or stamp_ns < (
+                    pending.header.stamp.sec * 1_000_000_000 + pending.header.stamp.nanosec)):
+                self._pending_ground_truth = msg
+            return
+        self._accept_ground_truth(msg)
+
     def _on_fix(self, msg: NavSatFix) -> None:
         ros_now_ns = self._check_clock_epoch()
+        self._promote_pending_truth(ros_now_ns)
         if (self._ground_truth is None
                 or self._ground_truth_generation == self._last_published_truth_generation):
             return
@@ -360,20 +395,23 @@ class SimNavSatRtkFix(Node):
         stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
         # Identity belongs to a new simulator sensor acquisition, not callback
         # arrival or position value. Cached/replayed raw fixes must not acquire
-        # fresh RTK authority. Keep the source stamp for exact fix/status pairing.
-        if (stamp_ns <= 0 or stamp_ns > ros_now_ns
+        # fresh RTK authority. This stamp identifies the raw cadence trigger;
+        # the generated coordinates belong to the selected truth acquisition.
+        if (stamp_ns <= 0 or msg.header.stamp.nanosec >= 1_000_000_000
+                or stamp_ns > ros_now_ns
                 or (self._last_fix_stamp_ns is not None
                     and stamp_ns <= self._last_fix_stamp_ns)):
             return
         self._last_fix_stamp_ns = stamp_ns
         self._last_published_truth_generation = self._ground_truth_generation
         self._position_observation_sequence += 1
-        ros_now_s = ros_now_ns * 1e-9
-        regime = self._current_regime(ros_now_s)
+        truth = self._ground_truth
+        truth_stamp_ns = truth.header.stamp.sec * 1_000_000_000 + truth.header.stamp.nanosec
+        regime = self._current_regime(truth_stamp_ns * 1e-9)
         status_code, sigma_xy, sigma_z = QUALITY_REGIMES[regime]
         self._regime_counts[regime] += 1
 
-        pose = self._ground_truth.pose
+        pose = truth.pose
         yaw = 2.0 * math.atan2(
             pose.orientation.z, pose.orientation.w
         )
@@ -397,7 +435,11 @@ class SimNavSatRtkFix(Node):
             lon += self._rng.gauss(0.0, sigma_xy) / m_per_deg_lon
 
         out = NavSatFix()
-        out.header = msg.header
+        # Preserve the antenna frame, but pair coordinates and acquisition time.
+        # Copy fields separately so neither input header is mutated.
+        out.header.frame_id = msg.header.frame_id
+        out.header.stamp.sec = truth.header.stamp.sec
+        out.header.stamp.nanosec = truth.header.stamp.nanosec
         out.status.status = status_code
         out.status.service = msg.status.service or NavSatStatus.SERVICE_GPS
         out.latitude = lat

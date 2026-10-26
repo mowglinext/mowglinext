@@ -501,12 +501,11 @@ def generate_launch_description() -> LaunchDescription:
                 # Webots samples the ODE body between KinematicDrive
                 # teleports, so obstacle contacts can create angular
                 # velocity that is absent from the authoritative
-                # kinematic pose. Synthesize gyro_z from the post-firmware
-                # achievable twist consumed by KinematicDrive itself.
-                # Using /cmd_vel_wheels rather than raw /cmd_vel preserves
-                # deadband, PI, and saturation behavior.
-                "synthesize_from_cmd_vel": True,
-                "cmd_vel_topic": "/cmd_vel_wheels",
+                # kinematic pose. KinematicDrive reports the exact twist it
+                # applied with that step's native epoch, keeping the gyro
+                # value and timestamp on the same source observation.
+                "synthesize_from_applied_twist": True,
+                "applied_twist_topic": "/sim/applied_twist",
             }
         ],
     )
