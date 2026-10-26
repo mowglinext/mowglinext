@@ -45,15 +45,19 @@ def _grep_files(pattern: str, suffixes):
     return hits
 
 
-# The only two nodes in the repo that construct a tf2_ros::TransformBroadcaster.
+# The only production nodes that construct a tf2_ros::TransformBroadcaster.
 # fusion_graph_node is the sole, default localizer and owns both REP-105 edges
 # (Inv 1/2). wheel_odometry_node's broadcast is gated behind publish_tf
 # (pinned false below) and exists only for standalone/debug use.
+# The isolated FTC fixture additionally broadcasts unique harness_listener_probe
+# frames to confirm listener startup before invalid configuration tears it down.
+# It never broadcasts map/odom/base edges; scene transforms enter its buffer directly.
 EXPECTED_TF_BROADCASTER_FILES = {
     "fusion_graph/include/fusion_graph/fusion_graph_node.hpp",
     "fusion_graph/src/fusion_graph_node_setup_comms.cpp",
     "mowgli_localization/src/wheel_odometry_node.cpp",
     "mowgli_localization/include/mowgli_localization/wheel_odometry_node.hpp",
+    "mowgli_nav2_plugins/test/test_ftc_turn_fallback_controller.cpp",
 }
 
 
