@@ -900,6 +900,7 @@ if(BUILD_TESTING)
   # current_command + resume cursor) and only EndSession on a dead charger.
   ament_add_ros_isolated_gtest(test_battery_critical_resume
     test/test_battery_critical_resume.cpp
+    src/docking_nodes.cpp
     $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
     $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
     $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
@@ -917,6 +918,7 @@ if(BUILD_TESTING)
 
   target_link_libraries(test_battery_critical_resume
     ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}

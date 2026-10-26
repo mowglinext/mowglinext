@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { normalizeDigSensitivity, ObstaclesSection } from "./ObstaclesSection.tsx";
+import { ObstaclesSection } from "./ObstaclesSection.tsx";
+import { normalizeDigSensitivity } from "./digSensitivity";
 
 describe("dig obstacle setting", () => {
     it.each([true, false, "false"])("renders %s and changes the map setting only", (value) => {

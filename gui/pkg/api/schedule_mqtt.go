@@ -173,24 +173,29 @@ func (b *ScheduleMqttBridge) handleSet(payload []byte, retained bool) {
 		logrus.Error(fmt.Errorf("schedule mqtt bridge: rejected schedule: %w", err))
 		return
 	}
-	if existing, err := getSchedule(b.dbProvider, sched.ID); err == nil && existing != nil {
-		// Omitted means "unchanged"; an explicit areaId (including 0 = all areas)
-		// always wins. A name is only carried over for the SAME area.
-		if !sentAreaID {
-			sched.AreaID = existing.AreaID
-			sched.AreaName = existing.AreaName
-		} else if !sentAreaName && sched.AreaID == existing.AreaID {
-			sched.AreaName = existing.AreaName
+	err := func() error {
+		scheduleWriteMu.Lock()
+		defer scheduleWriteMu.Unlock()
+		if existing, err := getSchedule(b.dbProvider, sched.ID); err == nil && existing != nil {
+			// Omitted means "unchanged"; an explicit areaId (including 0 = all areas)
+			// always wins. A name is only carried over for the SAME area.
+			if !sentAreaID {
+				sched.AreaID = existing.AreaID
+				sched.AreaName = existing.AreaName
+			} else if !sentAreaName && sched.AreaID == existing.AreaID {
+				sched.AreaName = existing.AreaName
+			}
+			sched.CreatedAt = existing.CreatedAt
+			sched.LastRun = existing.LastRun
+			sched.LastSkipReason = existing.LastSkipReason
+			sched.LastSkippedAt = existing.LastSkippedAt
+		} else {
+			sched.ID = fmt.Sprintf("%d", time.Now().UnixNano())
+			sched.CreatedAt = time.Now()
 		}
-		sched.CreatedAt = existing.CreatedAt
-		sched.LastRun = existing.LastRun
-		sched.LastSkipReason = existing.LastSkipReason
-		sched.LastSkippedAt = existing.LastSkippedAt
-	} else {
-		sched.ID = fmt.Sprintf("%d", time.Now().UnixNano())
-		sched.CreatedAt = time.Now()
-	}
-	if err := saveScheduleChecked(b.dbProvider, &sched); err != nil {
+		return saveScheduleCheckedLocked(b.dbProvider, &sched)
+	}()
+	if err != nil {
 		logrus.Error(fmt.Errorf("schedule mqtt bridge: saving schedule: %w", err))
 		return
 	}
@@ -212,7 +217,7 @@ func (b *ScheduleMqttBridge) handleDelete(payload []byte, retained bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if err := b.dbProvider.Delete(scheduleKeyPrefix + id); err != nil {
+	if err := deleteScheduleRecord(b.dbProvider, id); err != nil {
 		logrus.Error(fmt.Errorf("schedule mqtt bridge: deleting schedule %s: %w", id, err))
 		return
 	}

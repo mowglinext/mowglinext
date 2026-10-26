@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -33,6 +34,8 @@ const (
 )
 
 // supportedHardwareBackends mirrors mowgli.launch.py SUPPORTED_HARDWARE_BACKENDS.
+var errUnsupportedHardwareBackend = errors.New("unsupported HARDWARE_BACKEND configuration")
+
 var supportedHardwareBackends = []string{"mowgli", "mavros", "openmower"}
 
 // openMowerRuntimeEnvKeys maps OpenMower wiring settings to the installer env.
@@ -78,7 +81,7 @@ var hardwareParameterRoutes = map[string]map[string]HardwareParameterRoute{
 	"openmower": {},
 }
 
-// normalizeHardwareBackend returns a supported backend or the default.
+// Only an absent/empty legacy selection uses the installer default; unknown values stay unresolved.
 func normalizeHardwareBackend(value string) string {
 	name := strings.ToLower(strings.TrimSpace(value))
 	for _, known := range supportedHardwareBackends {
@@ -86,33 +89,54 @@ func normalizeHardwareBackend(value string) string {
 			return name
 		}
 	}
-	return defaultHardwareBackend
-}
-
-// loadRuntimeEnv reads docker/.env via system.mower.runtimeEnvFile.
-func loadRuntimeEnv(dbProvider types.IDBProvider) map[string]string {
-	path, err := dbProvider.Get("system.mower.runtimeEnvFile")
-	if err != nil || len(path) == 0 {
-		return map[string]string{}
+	if name == "" {
+		return defaultHardwareBackend
 	}
-	env, err := loadGNSSRuntimeEnv(string(path))
-	if err != nil {
-		log.Printf("settings: %v; hardware backend falls back to %q", err, defaultHardwareBackend)
-		return map[string]string{}
-	}
-	return env
+	return ""
 }
 
 // activeHardwareBackend prefers docker/.env over the process environment.
 func activeHardwareBackend(runtimeEnv map[string]string) string {
-	if value := strings.TrimSpace(runtimeEnv["HARDWARE_BACKEND"]); value != "" {
+	if value, present := runtimeEnv["HARDWARE_BACKEND"]; present {
 		return normalizeHardwareBackend(value)
 	}
 	return normalizeHardwareBackend(os.Getenv("HARDWARE_BACKEND"))
 }
 
+func resolveHardwareBackendForDB(dbProvider types.IDBProvider) (string, error) {
+	path, err := dbProvider.Get("system.mower.runtimeEnvFile")
+	if err != nil {
+		return "", fmt.Errorf("hardware backend runtime-env path unavailable: %w", err)
+	}
+	env, err := loadGNSSRuntimeEnv(string(path))
+	if err != nil {
+		return "", err
+	}
+	backend := activeHardwareBackend(env)
+	if backend == "" {
+		return "", errUnsupportedHardwareBackend
+	}
+	return backend, nil
+}
+
 func activeHardwareBackendForDB(dbProvider types.IDBProvider) string {
-	return activeHardwareBackend(loadRuntimeEnv(dbProvider))
+	backend, _ := resolveHardwareBackendForDB(dbProvider)
+	return backend
+}
+
+// Shared drive workflows have Mowgli and MAVROS implementations; neither is an OpenMower tool.
+func requireDriveHardwareBackend(dbProvider types.IDBProvider) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		backend, err := resolveHardwareBackendForDB(dbProvider)
+		if err == nil && backend == "openmower" {
+			err = fmt.Errorf("drive calibration/rollback is unavailable for HARDWARE_BACKEND=openmower")
+		}
+		if err != nil {
+			c.AbortWithStatusJSON(409, ErrorResponse{Error: err.Error()})
+			return
+		}
+		c.Next()
+	}
 }
 
 // buildBackendDefaultsFile parses all ROS2 hardware backend YAML overlays.
@@ -221,8 +245,15 @@ type HardwareBackendResponse struct {
 // @Router /settings/hardware-backend [get]
 func GetSettingsHardwareBackend(r *gin.RouterGroup, dbProvider types.IDBProvider) gin.IRoutes {
 	return r.GET("/settings/hardware-backend", func(c *gin.Context) {
-		backend := activeHardwareBackendForDB(dbProvider)
-
+		backend, err := resolveHardwareBackendForDB(dbProvider)
+		if err != nil {
+			state := "unavailable"
+			if errors.Is(err, errUnsupportedHardwareBackend) {
+				state = "unsupported"
+			}
+			c.JSON(503, gin.H{"error": err.Error(), "state": state})
+			return
+		}
 		c.JSON(200, HardwareBackendResponse{
 			Backend:          backend,
 			Supported:        append([]string(nil), supportedHardwareBackends...),
@@ -238,12 +269,16 @@ func GetSettingsHardwareBackend(r *gin.RouterGroup, dbProvider types.IDBProvider
 // MAVROS and OpenMower backends.
 func requireMowgliHardwareBackend(dbProvider types.IDBProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if backend := activeHardwareBackendForDB(dbProvider); backend != "mowgli" {
-			c.AbortWithStatusJSON(409, ErrorResponse{
-				Error: "Mowgli drive PID/feed-forward tools are unavailable for HARDWARE_BACKEND=" + backend,
-			})
+		backend, err := resolveHardwareBackendForDB(dbProvider)
+		if err != nil {
+			c.AbortWithStatusJSON(409, ErrorResponse{Error: err.Error()})
 			return
 		}
+		if backend != "mowgli" {
+			c.AbortWithStatusJSON(409, ErrorResponse{Error: "Mowgli drive PID/feed-forward tools are unavailable for HARDWARE_BACKEND=" + backend})
+			return
+		}
+
 		c.Next()
 	}
 }

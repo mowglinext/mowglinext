@@ -5,6 +5,8 @@ import { useTranslation } from "react-i18next";
 import { GnssStatus, GnssStatusConstants } from "../../types/ros.ts";
 import {
     deriveGpsStatus,
+    currentRtkMode,
+    currentCorrectionStreamStatus,
     gnssBaselineSolutionStatusLabel,
     gnssCorrectionStreamStatusLabel,
     gnssReceiverLabel,
@@ -58,15 +60,16 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
     const { t } = useTranslation();
     const unknownLabel = t("diagnosticsPage.unknown");
     const liveStatus = deriveGpsStatus(gnssStatus);
-    const receiverLabel = gnssReceiverLabel(gnssStatus);
+    const receiver = gnssReceiverLabel(gnssStatus);
+    const receiverLabel = receiver === 'GNSS' ? unknownLabel : receiver;
     const backendLabel = normalizeGnssString(gnssStatus?.backend) || t("diagnosticsPage.unknownLower");
     const correctionStreamLabel = gnssCorrectionStreamStatusLabel(gnssStatus) ?? unknownLabel;
     const baselineSolutionStatus = gnssBaselineSolutionStatusLabel(gnssStatus);
     const rtkModeLabel = (() => {
-        if (!hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_RTK_MODE)) {
+        if (currentRtkMode(gnssStatus) === undefined) {
             return unknownLabel;
         }
-        switch (gnssStatus?.rtk_mode) {
+        switch (currentRtkMode(gnssStatus)) {
             case GnssStatusConstants.RTK_MODE_NONE:
                 return t("settingsGnssLiveStatus.rtkModeNone");
             case GnssStatusConstants.RTK_MODE_FLOAT:
@@ -191,13 +194,13 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                     <Space size={4} data-testid="gnss-rtk-status-group">
                         <Text type="secondary">{t("diagnosticsPage.rtkMode")}</Text>
                         <span className="diagnostics-status-slot diagnostics-status-slot-rtk">
-                            <Tag color={rtkModeTagColor(gnssStatus?.rtk_mode)}>{rtkModeLabel}</Tag>
+                            <Tag color={rtkModeTagColor(currentRtkMode(gnssStatus))}>{rtkModeLabel}</Tag>
                         </span>
                     </Space>
                     <Space size={4} data-testid="gnss-correction-status-group">
                         <Text type="secondary">{t("diagnosticsPage.correctionStreamStatus")}</Text>
                         <span className="diagnostics-status-slot diagnostics-status-slot-correction">
-                            <Tag color={correctionStreamTagColor(gnssStatus?.correction_stream_status)}>{correctionStreamLabel}</Tag>
+                            <Tag color={correctionStreamTagColor(currentCorrectionStreamStatus(gnssStatus))}>{correctionStreamLabel}</Tag>
                         </span>
                     </Space>
                 </Space>
@@ -329,7 +332,7 @@ export const GnssLiveDiagnosticsCard: React.FC<Props> = ({
                             {hasGnssCapability(gnssStatus, GnssStatusConstants.CAP_CORRECTION_STREAM) && (
                                 <Descriptions.Item label={t("diagnosticsPage.correctionStreamStatus")}>
                                     <span className="diagnostics-status-slot diagnostics-status-slot-description">
-                                        <Tag color={correctionStreamTagColor(gnssStatus?.correction_stream_status)}>
+                                        <Tag color={correctionStreamTagColor(currentCorrectionStreamStatus(gnssStatus))}>
                                             {correctionStreamLabel}
                                         </Tag>
                                     </span>

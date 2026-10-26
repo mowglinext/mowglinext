@@ -222,8 +222,14 @@ jobs:
           source /opt/ros/lyrical/setup.bash
           cd /ws
           colcon build \
-            --packages-select mowgli_interfaces mowgli_hardware mowgli_bringup mowgli_openmower_bridge \
+            --packages-select mowgli_interfaces mowgli_hardware mowgli_bringup \
             --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTING=OFF -Wno-dev \
+            --event-handlers console_cohesion+
+          source install/setup.bash
+          # Native observations belong only to the simulation build.
+          colcon build \
+            --packages-select mowgli_openmower_bridge \
+            --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_TESTING=OFF -DOPENMOWER_SIMULATION_TRACE=ON -Wno-dev \
             --event-handlers console_cohesion+
           BUILD
 

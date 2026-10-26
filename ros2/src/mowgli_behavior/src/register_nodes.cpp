@@ -30,6 +30,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
 {
   // Condition nodes
   factory.registerNodeType<IsEmergency>("IsEmergency");
+  factory.registerNodeType<HasPowerSample>("HasPowerSample");
   factory.registerNodeType<IsCharging>("IsCharging");
   factory.registerNodeType<IsBatteryLow>("IsBatteryLow");
   factory.registerNodeType<IsRainDetected>("IsRainDetected");
@@ -42,6 +43,9 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<IsLastDockSucceeded>("IsLastDockSucceeded");
   factory.registerNodeType<IsCriticalDockFailureLatched>("IsCriticalDockFailureLatched");
   factory.registerNodeType<LatchCriticalDockFailure>("LatchCriticalDockFailure");
+  factory.registerNodeType<ConfirmChargingDock>("ConfirmChargingDock");
+  factory.registerNodeType<IsBatteryChargePending>("IsBatteryChargePending");
+  factory.registerNodeType<SetBatteryChargePending>("SetBatteryChargePending");
 
   factory.registerNodeType<IsGPSFixed>("IsGPSFixed");
   factory.registerNodeType<IsCoverageComplete>("IsCoverageComplete");
@@ -79,6 +83,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<NavigateInsideBoundary>("NavigateInsideBoundary");
   factory.registerNodeType<BackUp>("BackUp");
   factory.registerNodeType<ClearCommand>("ClearCommand");
+  factory.registerNodeType<SetStopReason>("SetStopReason");
   // Guard-halt marker: a guard handler that halts the Root mid-mow must tick
   // this, or its pauses are charged to GetNextUnmowedArea's no-progress budget
   // and a flapping sensor fails the mow at 0 swaths (field 2026-09-07/08).

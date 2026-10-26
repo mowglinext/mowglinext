@@ -170,6 +170,8 @@ type GnssStatus struct {
 	CorrectionSource          string                         `json:"correction_source"`
 	CorrectionForwardingSource string                         `json:"correction_forwarding_source"`
 	MsmSummarySource          string                         `json:"msm_summary_source"`
+	SourceId                  string                         `json:"source_id"`
+	SourceIncarnation         string                         `json:"source_incarnation"`
 }
 
 // HighLevelStatus matches mowgli_interfaces/msg/HighLevelStatus.
@@ -188,6 +190,8 @@ type HighLevelStatus struct {
 	BatteryPercent            float32                        `json:"battery_percent"`
 	IsCharging                bool                           `json:"is_charging"`
 	Emergency                 bool                           `json:"emergency"`
+	StopReason                string                         `json:"stop_reason"`
+	StopDetail                string                         `json:"stop_detail"`
 }
 
 // ImuRaw matches mowgli_interfaces/msg/ImuRaw.

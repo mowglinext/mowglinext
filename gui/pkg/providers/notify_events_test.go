@@ -208,6 +208,67 @@ func TestNotifyDetector_NavFailureIsBlocked(t *testing.T) {
 	assert.Equal(t, "NAV_TO_DOCK_FAILED", got[0].Params["state"])
 }
 
+func TestNotifyDetector_FailureIncidentSurvivesGuardInterruptions(t *testing.T) {
+	d := NewNotifyDetector()
+	failure := tick(0, "CRITICAL_BATTERY_NAV_FAILED", 0, 0)
+	require.Equal(t, []string{NotifyMsgNavFailed}, messages(d.OnStatus(failure, t0, allKinds)))
+	for i, name := range []string{"EMERGENCY", "WAITING_FOR_RTK", "IDLE", "EMERGENCY"} {
+		now := t0.Add(time.Duration(i+1) * 10 * time.Minute)
+		d.OnStatus(tick(0, name, 0, 0), now, allKinds)
+		assert.Empty(t, d.OnStatus(failure, now.Add(time.Second), allKinds), name)
+		assert.Empty(t, d.OnStatus(failure, now.Add(5*time.Minute), allKinds), "periodic republish")
+	}
+}
+
+func TestNotifyDetector_FreshFailureIsNotHiddenByCooldown(t *testing.T) {
+	d := NewNotifyDetector()
+	failure := tick(0, "CRITICAL_BATTERY_NAV_FAILED", 0, 0)
+	require.Equal(t, []string{NotifyMsgNavFailed}, messages(d.OnStatus(failure, t0, allKinds)))
+	// A different terminal failure is independently actionable, even immediately.
+	got := d.OnStatus(tick(1, "CHARGER_FAILED", 0, 0), t0.Add(time.Second), allKinds)
+	assert.Equal(t, []string{NotifyMsgNavFailed}, messages(got))
+	// A new docking attempt also authorizes a fresh report of the same error.
+	d.OnStatus(tick(2, "CRITICAL_BATTERY_DOCKING", 0, 0), t0.Add(2*time.Second), allKinds)
+	got = d.OnStatus(failure, t0.Add(3*time.Second), allKinds)
+	assert.Equal(t, []string{NotifyMsgNavFailed}, messages(got))
+}
+
+func TestNotifyDetector_ChargingRecoveryRearmsFailure(t *testing.T) {
+	for name, confirmed := range map[string]bool{"unconfirmed": false, "confirmed": true} {
+		t.Run(name, func(t *testing.T) {
+			d := NewNotifyDetector()
+			failure := tick(0, "CRITICAL_BATTERY_NAV_FAILED", 0, 0)
+			d.OnStatus(failure, t0, allKinds)
+			charging := tick(1, "CRITICAL_BATTERY_CHARGING", 0, 0)
+			charging.IsCharging = confirmed
+			d.OnStatus(charging, t0.Add(time.Second), allKinds)
+			got := messagesForKind(d.OnStatus(failure, t0.Add(2*time.Second), allKinds), NotifyEventBlocked)
+			if confirmed {
+				assert.Equal(t, []string{NotifyMsgNavFailed}, got)
+			} else {
+				assert.Empty(t, got)
+			}
+		})
+	}
+}
+
+func TestNotifyDetector_DeadChargerContactDoesNotRearmFailure(t *testing.T) {
+	d := NewNotifyDetector()
+	failure := tick(1, "CHARGER_FAILED", 0, 0)
+	require.Equal(t, []string{NotifyMsgNavFailed}, messages(d.OnStatus(failure, t0, allKinds)))
+	for i := 1; i <= 5; i++ {
+		now := t0.Add(time.Duration(i) * 10 * time.Minute)
+		charging := tick(1, "CRITICAL_BATTERY_CHARGING", 0, 0)
+		charging.IsCharging = true
+		d.OnStatus(charging, now, allKinds)
+		assert.Empty(t, d.OnStatus(failure, now.Add(time.Second), allKinds), "contact is not proof a dead charger recovered")
+	}
+	// An explicit new attempt remains independently reportable.
+	d.OnStatus(tick(2, "RETURNING_HOME", 0, 0), t0.Add(time.Hour), allKinds)
+	got := d.OnStatus(failure, t0.Add(time.Hour+time.Second), allKinds)
+	assert.Equal(t, []string{NotifyMsgNavFailed}, messages(got))
+}
+
 func TestNotifyDetector_EmergencyRisingEdgeOnly(t *testing.T) {
 	d := NewNotifyDetector()
 	now := t0

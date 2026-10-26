@@ -272,6 +272,26 @@ type PromoteObstacleRes struct {
 	Message                   string                         `json:"message"`
 }
 
+// ReplaceLidarIgnoreCorridorsReq for mowgli_interfaces/srv/ReplaceLidarIgnoreCorridors request.
+type ReplaceLidarIgnoreCorridorsReq struct {
+	Corridors                 []LidarIgnoreCorridor          `json:"corridors"`
+	ClientOperationId         string                         `json:"client_operation_id"`
+}
+
+// ReplaceLidarIgnoreCorridorsRes for mowgli_interfaces/srv/ReplaceLidarIgnoreCorridors response.
+type ReplaceLidarIgnoreCorridorsRes struct {
+	Success                   bool                           `json:"success"`
+	Outcome                   string                         `json:"outcome"`
+	Message                   string                         `json:"message"`
+	Committed                 bool                           `json:"committed"`
+	Persisted                 bool                           `json:"persisted"`
+	Published                 bool                           `json:"published"`
+	ClientOperationId         string                         `json:"client_operation_id"`
+	ServerInstanceId          string                         `json:"server_instance_id"`
+	Revision                  uint64                         `json:"revision"`
+	Corridors                 []LidarIgnoreCorridor          `json:"corridors"`
+}
+
 // SetAreaCoverageLinesReq for mowgli_interfaces/srv/SetAreaCoverageLines request.
 type SetAreaCoverageLinesReq struct {
 	Id                        uint32                         `json:"id"`

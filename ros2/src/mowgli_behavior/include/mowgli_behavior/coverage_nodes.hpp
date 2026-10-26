@@ -864,6 +864,11 @@ private:
   /// through to a real probe, which reconciles it in processResponse.
   BT::NodeStatus advanceAndProbe();
 
+  /// No dispatchable area remains: record whether that is a clean completion and end the scan
+  /// (FAILURE) — unless the completion is stale (BTContext::start_awaiting_dispatch), in which
+  /// case the recorded progress is discarded and the scan starts over.
+  BT::NodeStatus finishExhaustedScan(BTContext& ctx);
+
   // Existence probe: GetMowingArea(index).success is false once index passes
   // the last defined area. Area completion is tracked in-memory via the
   // swath-completion model (ctx->completed_areas), not the removed cell grid.

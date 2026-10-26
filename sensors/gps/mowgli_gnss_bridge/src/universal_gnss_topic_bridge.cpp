@@ -251,6 +251,8 @@ void UniversalGnssTopicBridge::onStatus(const UniversalGnssStatus & msg)
   // cached republication, which is what lets consumers tell a frozen receiver
   // from a live one. See mowgli_interfaces/gnss_observation_freshness.hpp.
   public_msg.position_observation_sequence = msg.position_observation_sequence;
+  public_msg.source_id = msg.source_id;
+  public_msg.source_incarnation = msg.source_incarnation;
   public_msg.backend = backend_;
   public_msg.receiver_vendor = receiver_vendor_;
 

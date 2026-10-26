@@ -1,5 +1,6 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React from "react";
-import { Alert, Card, Col, Form, Input, InputNumber, Row, Select, Switch, Typography } from "antd";
+import { Alert, Card, Col, Form, Input, Row, Select, Switch, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 import type { SettingsFieldGroup, SettingsFieldSpec } from "./settingsFieldGroups.ts";
@@ -79,14 +80,14 @@ export const SettingsFieldCard: React.FC<SettingsFieldCardProps> = ({
                 );
             case "number":
                 return (
-                    <InputNumber
+                    <NumberWithAddon
                         value={typeof value === "number" ? value : null}
                         onChange={(next) => onChange(field.key, next)}
                         min={field.min}
                         max={field.max}
                         step={field.step}
                         precision={field.precision}
-                        addonAfter={field.unit}
+                        after={field.unit}
                         aria-label={label}
                         style={{ width: "100%" }}
                     />

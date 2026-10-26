@@ -209,6 +209,8 @@ TEST_F(BridgeTest, PositionObservationSequenceIsForwardedVerbatim)
   in.fix_type = UniversalGnssStatus::FIX_TYPE_RTK_FIXED;
   in.fix_valid = true;
   in.position_observation_sequence = 4242U;
+  in.source_id = "/dev/receiver";
+  in.source_incarnation = "session-a";
 
   spinUntil(exec, [&]() {
       status_pub->publish(in);
@@ -216,6 +218,8 @@ TEST_F(BridgeTest, PositionObservationSequenceIsForwardedVerbatim)
   });
   ASSERT_TRUE(got);
   EXPECT_EQ(received.position_observation_sequence, 4242U);
+  EXPECT_EQ(received.source_id, in.source_id);
+  EXPECT_EQ(received.source_incarnation, in.source_incarnation);
 
   // A numerically identical observation with a new upstream sequence must come
   // through as the NEW sequence — the payload is deliberately not the identity.

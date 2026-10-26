@@ -167,3 +167,55 @@ func TestProductionVersionOrderingPrecedesPaginationAndRetention(t *testing.T) {
 		t.Fatalf("wrong latest/retention: %s, %d results, %d downloads", result[0].ReleaseTag, len(result), downloads)
 	}
 }
+
+func TestStableScanKeepsReleasesFoundBeforeTheScanLimit(t *testing.T) {
+	base := fixture()
+	base.Source = Source{Repository: base.Source.Repository, Track: "stable", Branch: "main"}
+	pages := 0
+	client := &http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
+		var value any
+		if r.URL.Host == "api.github.com" {
+			pages++
+			headers := []map[string]any{}
+			for i := 0; i < 100; i++ {
+				headers = append(headers, map[string]any{"tag_name": fmt.Sprintf("updater-%d-%d", pages, i), "prerelease": true})
+			}
+			if r.URL.Query().Get("page") == "1" {
+				headers[3] = map[string]any{"tag_name": "v1.6.0"}
+			}
+			value = headers
+		} else {
+			d := base
+			parts := strings.Split(r.URL.Path, "/")
+			d.ReleaseTag = parts[len(parts)-2]
+			d.ID = d.ReleaseTag
+			value = d
+		}
+		data, _ := json.Marshal(value)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+	})}
+	g := GitHubSource{Client: client, Trusted: []string{base.Source.Repository}}
+	result, err := g.List(context.Background(), base.Source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pages != 10 || len(result) != 1 || result[0].ReleaseTag != "v1.6.0" {
+		t.Fatalf("expected v1.6.0 after a full 10-page scan, got %d pages, %+v", pages, result)
+	}
+}
+
+func TestStableScanWithNoReleaseInTheWindowStillErrors(t *testing.T) {
+	client := &http.Client{Transport: releaseTransport(func(r *http.Request) (*http.Response, error) {
+		headers := []map[string]any{}
+		for i := 0; i < 100; i++ {
+			headers = append(headers, map[string]any{"tag_name": fmt.Sprintf("updater-%d", i), "prerelease": true})
+		}
+		data, _ := json.Marshal(headers)
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(data)))}, nil
+	})}
+	repo := fixture().Source.Repository
+	g := GitHubSource{Client: client, Trusted: []string{repo}}
+	if _, err := g.List(context.Background(), Source{Repository: repo, Track: "stable", Branch: "main"}); err == nil || !strings.Contains(err.Error(), "scan limit") {
+		t.Fatalf("expected the scan-limit error, got %v", err)
+	}
+}

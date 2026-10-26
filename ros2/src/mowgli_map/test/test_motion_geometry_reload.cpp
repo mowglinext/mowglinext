@@ -223,6 +223,22 @@ TEST_F(MotionGeometryReload, ParameterLawnPublishesWithPausedSimulationClockAndN
   EXPECT_FALSE(snapshot->permits({5, 0, 0}, body, 0.1, 0, 0.1, false));
 }
 
+TEST_F(MotionGeometryReload, InvalidCorridorIdPreservesLiveMapButRevokesPermission)
+{
+  ExpectRevokedAfterFailedReload(ValidArea() +
+                                 "lidar_corridor_count: 1\n"
+                                 "lidar_corridor_0_name: invalid-id\n"
+                                 "lidar_corridor_0_polyline: 0,0;1,1\n"
+                                 "lidar_corridor_0_id: 41x\n");
+  EXPECT_EQ(node_->mowing_area_containing_for_test(0, 0), std::optional<std::size_t>{0});
+  Write(ValidArea());
+  ASSERT_NO_THROW(node_->load_areas_for_test(path_));
+  const auto before = received_.size();
+  node_->build_keepout_mask_for_test();
+  ObserveNewPublication(before);
+  ASSERT_FALSE(received_.back().markers.empty());
+}
+
 TEST_F(MotionGeometryReload, MalformedAreaCountRevokesPreviouslyPublishedGeometry)
 {
   ExpectRevokedAfterFailedReload("area_count: not_an_integer\n");

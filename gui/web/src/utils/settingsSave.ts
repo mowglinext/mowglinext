@@ -26,9 +26,9 @@ export type SavePartialOptions = {
 export const savePartialSettingsValues = async (params: {
     guiApi: GuiApi;
     notification: NotifyApi;
-    currentValues: Record<string, any>;
-    partialValues: Record<string, any>;
-    applyChanged: (changed: Record<string, any>) => void;
+    currentValues: Record<string, unknown>;
+    partialValues: Record<string, unknown>;
+    applyChanged: (changed: Record<string, unknown>) => void;
     setBusy: (busy: boolean) => void;
     markRestartRequired?: () => void;
     defaultSuccessMessage: string;
@@ -40,7 +40,7 @@ export const savePartialSettingsValues = async (params: {
         applyChanged, setBusy, markRestartRequired, options,
     } = params;
     try {
-        const changedPayload: Record<string, any> = {};
+        const changedPayload: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(partialValues)) {
             if (JSON.stringify(value) !== JSON.stringify(currentValues[key])) {
                 changedPayload[key] = value;

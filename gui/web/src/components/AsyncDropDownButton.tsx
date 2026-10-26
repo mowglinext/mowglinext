@@ -1,11 +1,14 @@
-import {App, Dropdown} from "antd";
+import {requestErrorMessage} from "../utils/errors";
+import {App, Dropdown, type MenuProps} from "antd";
 import * as React from "react";
 import {DropdownButtonProps} from "antd/es/dropdown";
 import {useTranslation} from "react-i18next";
 
+type MenuClickEvent = Parameters<NonNullable<MenuProps["onClick"]>>[0];
+
 export const AsyncDropDownButton: React.FC<DropdownButtonProps & {
     menu: DropdownButtonProps["menu"] & {
-        onAsyncClick: (event: any) => Promise<any>
+        onAsyncClick: (event: MenuClickEvent) => Promise<unknown>
     }
 }> = (props) => {
     const {t} = useTranslation();
@@ -15,19 +18,19 @@ export const AsyncDropDownButton: React.FC<DropdownButtonProps & {
     // Dropdown.Button's main button is a plain action button, and none of our
     // consumers give it an action, so it did nothing.
     const [menuOpen, setMenuOpen] = React.useState(false)
-    const handleClick = (event: any) => {
+    const handleClick = (event: MenuClickEvent) => {
         setMenuOpen(false)
         if (props.menu.onAsyncClick === undefined) return;
         setLoading(true)
         props.menu.onAsyncClick(event).then(() => {
             setLoading(false)
-        }).catch((e) => {
+        }).catch((e: unknown) => {
             setLoading(false)
             if (console.error)
                 console.error(e);
             notification.error({
                 message: t('asyncButton.errorOccurred'),
-                description: e?.message,
+                description: requestErrorMessage(e),
             })
         })
     }

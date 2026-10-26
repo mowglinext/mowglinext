@@ -205,6 +205,15 @@ map_server_node:
     # BoundaryGuard tripwire.
     boundary_inner_margin_m: 0.20
 
+    # Soft transit margin (m) around every DRAWN obstacle, outside its lethal band
+    # (keepout_obstacle_margin). Same mechanism and the same mid-cost as boundary_inner_margin_m:
+    # never lethal, so it cannot create START_OCCUPIED / GOAL_OCCUPIED, and the coverage ring
+    # planned 0.389 m from the obstacle stays reachable. The lethal band is only the body half-width
+    # while the controller checks the whole footprint against the LiDAR cells of the real object, so
+    # a transit planned right along the band can still hit "collision ahead" (mowglinext#975); this
+    # makes Smac prefer a wider berth where there is room. 0 disables it.
+    obstacle_transit_margin_m: 0.30
+
     # Radius (m) around the dock pose exempted from the penalty above,
     # regardless of direction -- so the dock approach carries no bias at
     # all rather than merely "never blocked" (see boundary_inner_margin_m).

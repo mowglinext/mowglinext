@@ -31,6 +31,7 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/battery_filter.hpp"
+#include "mowgli_behavior/battery_recovery_command.hpp"
 #include "mowgli_behavior/blade_control_service.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
@@ -43,6 +44,7 @@
 #include "mowgli_behavior/localization_health.hpp"
 #include "mowgli_behavior/recording_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_behavior/stop_reason.hpp"
 #include "mowgli_interfaces/gnss_observation_freshness.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
@@ -120,15 +122,45 @@ public:
       // commands, or an empty snapshot, fall back to IDLE. EndSession clears
       // commands/cursors; a phase-only cross-hatch snapshot therefore stays
       // IDLE too.
-      constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
-      const bool has_resumable_state = hasCoverageResumeState(*context_);
-      const bool auto_continue = context_->current_command == kCommandStart && has_resumable_state;
-      constexpr uint8_t kCommandStop = 8;  // HighLevelControl::Request::COMMAND_STOP
-      const bool preserve_stop_hold =
-          context_->current_command == kCommandStop && context_->critical_charge_stop_latched;
-      if (!auto_continue && !preserve_stop_hold)
+      // A saved battery charge wait survives only with an auto-continued mow
+      // (applyRestoredCommandPolicy): alone it must never drive an IDLE mower.
+      const RestoredCommandPolicy policy = applyRestoredCommandPolicy(*context_);
+      const bool auto_continue = policy.auto_continue;
+      const bool preserve_stop_hold = policy.preserve_stop_hold;
+      if (policy.cleared_charge_pending)
       {
-        context_->current_command = 0;  // IDLE — require an explicit operator start
+        RCLCPP_WARN(get_logger(),
+                    "Dropped a saved battery charge wait: no mow is being continued, so it "
+                    "must not move the mower on its own");
+      }
+      // How old the snapshot is, for the field log: a resumed mow must say WHEN its progress
+      // dates from (2026-10-25: a 6-day-old snapshot was resumed silently).
+      std::string age = "unknown age";
+      if (context_->coverage_resume_saved_at)
+      {
+        const auto hours =
+            std::chrono::duration_cast<std::chrono::hours>(std::chrono::system_clock::now() -
+                                                           *context_->coverage_resume_saved_at)
+                .count();
+        age = "saved " + std::to_string(hours) + " h ago";
+      }
+      if (policy.expired_progress)
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Discarded the coverage progress restored from %s (%s, older than %d h): it no "
+                    "longer describes the lawn, so the next Start mows it from the first line",
+                    context_->coverage_resume_path.c_str(),
+                    age.c_str(),
+                    static_cast<int>(kIncompleteResumeMaxAge.count()));
+        // Rewrite the snapshot without the stale progress so the GUI stops offering "Resume"
+        // and a further restart cannot bring it back.
+        if (!saveCoverageResumeState(*context_))
+        {
+          RCLCPP_ERROR(get_logger(),
+                       "Could not rewrite '%s' without the expired progress; a restart will "
+                       "re-evaluate it",
+                       context_->coverage_resume_path.c_str());
+        }
       }
       std::size_t completed_subpaths = 0;
       for (const auto& [area, done] : context_->area_completed_swaths)
@@ -136,16 +168,18 @@ public:
         completed_subpaths += done.size();
       }
       RCLCPP_INFO(get_logger(),
-                  "Restored coverage resume state from %s (current_area=%d, %zu area(s) with a "
-                  "resume cursor, %zu completed areas, %zu completed subpaths, "
-                  "auto_continue=%s, stop_hold=%s)",
+                  "Restored coverage resume state from %s (%s; current_area=%d, %zu area(s) with "
+                  "a resume cursor, %zu completed areas, %zu completed subpaths, "
+                  "auto_continue=%s, stop_hold=%s, kept_for_play=%s)",
                   context_->coverage_resume_path.c_str(),
+                  age.c_str(),
                   context_->current_area,
                   context_->area_resume_pose_index.size(),
                   context_->completed_areas.size(),
                   completed_subpaths,
                   auto_continue ? "true" : "false",
-                  preserve_stop_hold ? "true" : "false");
+                  preserve_stop_hold ? "true" : "false",
+                  context_->resume_after_incomplete_end ? "true" : "false");
     }
 
     setupSubscribers();
@@ -291,6 +325,12 @@ private:
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           context_->latest_power = *msg;
           refreshFleetYieldLocked(*context_);  // Charger authority is independent of valid voltage.
+          // A first invalid reading must not open startup with the default
+          // 100% battery or consume the restored mission's charger check.
+          if (!context_->power_sample_received && !std::isfinite(msg->v_battery))
+          {
+            return;
+          }
 
           // Smooth the rail voltage before deriving the percent — motor transients
           // sag it 0.5-1 V and used to trip the docking thresholds at a genuine
@@ -309,6 +349,8 @@ private:
           context_->battery_voltage_filtered = *v_filtered;
           context_->battery_percent =
               batteryPercentFromVoltage(*v_filtered, battery_empty_voltage_, battery_full_voltage_);
+          observeRestoredMowPower(*context_, msg->charger_enabled);
+          context_->power_sample_received = true;
         });
 
     // Replan / boundary signals from map_server_node
@@ -796,7 +838,6 @@ private:
             RCLCPP_INFO(get_logger(),
                         "HighLevelControl: COMMAND_S2 normalised to COMMAND_START (mow next area)");
           }
-          bool cleared_dock_failure_latch = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
             context_->fleet_yield.revoke();  // Every accepted external command, even repeat STOP.
@@ -826,17 +867,15 @@ private:
             context_->current_command = cmd;
             if (cmd != HighLevelControl::Request::COMMAND_STOP)
             {
-              context_->critical_charge_stop_latched = false;
-              cleared_dock_failure_latch = context_->critical_dock_failure_latched;
-              context_->critical_dock_failure_latched = false;
+              // Any command that is not a plain stop starts something new: the reason the
+              // previous attempt ended no longer describes the mower.
+              clearStopReason(*context_);
             }
-            else if (context_->last_high_level_status.state_name == "CRITICAL_BATTERY_CHARGING")
-            {
-              // Capture cancellation synchronously as well as in the tree
-              // condition, so the persisted snapshot already represents this
-              // post-dock hold if the process stops before its next tick.
-              context_->critical_charge_stop_latched = true;
-            }
+            // HOME / RECORD / MANUAL / STOP hand control back to the operator: a
+            // pending battery charge or a failed critical dock must not keep
+            // re-arming DockRobot ahead of the operator's branch. (Its "changed" result is
+            // not needed: the snapshot is re-saved after every command below.)
+            applyCommandToBatteryRecovery(*context_, cmd);
             // A plain COMMAND_START means "mow the lawn", so it must cancel any
             // single-area clip still latched from an earlier ~/start_in_area run.
             // EndSession normally clears it, but a session can legitimately stay
@@ -860,6 +899,10 @@ private:
                                           context_->resume_after_incomplete_end))
             {
               clearSingleAreaMode(*context_);
+            }
+            if (cmd == HighLevelControl::Request::COMMAND_START)
+            {
+              context_->start_awaiting_dispatch = true;
             }
             // The previous session ended unfinished and EndSession kept its progress: this Start
             // resumes it. Unless it has aged out — then it begins fresh, like any other Start.
@@ -889,8 +932,12 @@ private:
           // thread serializes this snapshot with all coverage-map access. The
           // service response acknowledges the in-memory command immediately;
           // a durability failure is reported to the node log.
-          if ((cmd == HighLevelControl::Request::COMMAND_STOP || cleared_dock_failure_latch) &&
-              !context_->coverage_resume_path.empty())
+          // EVERY accepted command, not only STOP: the snapshot must name the command the
+          // operator actually left the mower in. Field 2026-10-25: RECORD arrived during the
+          // MowingComplete dock, preempted that branch before its EndSession, and the file kept
+          // START + "every area complete" — the next restart would have auto-continued, i.e.
+          // undocked a finished mower to find nothing left to mow.
+          if (!context_->coverage_resume_path.empty())
           {
             command_resume_persistence_requested_.store(true);
           }
@@ -919,7 +966,7 @@ private:
             resp->success = false;
             return;
           }
-          bool cleared_dock_failure_latch = false;
+          bool battery_recovery_changed = false;
           {
             std::lock_guard<std::mutex> lock(context_->context_mutex);
             context_->fleet_yield.revoke();
@@ -927,11 +974,11 @@ private:
             context_->resume_after_incomplete_end = false;
             context_->blade_direction.clearOperatorInhibit();
             context_->current_command = 1;  // COMMAND_START
-            context_->critical_charge_stop_latched = false;
-            cleared_dock_failure_latch = context_->critical_dock_failure_latched;
-            context_->critical_dock_failure_latched = false;
+            context_->start_awaiting_dispatch = true;
+            // A START retries a failed critical dock and keeps a pending charge.
+            battery_recovery_changed = applyCommandToBatteryRecovery(*context_, 1);
           }
-          if (cleared_dock_failure_latch && !context_->coverage_resume_path.empty())
+          if (battery_recovery_changed && !context_->coverage_resume_path.empty())
           {
             command_resume_persistence_requested_.store(true);
           }
@@ -1185,7 +1232,12 @@ private:
     bool available;
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
-      available = hasCoverageResumeState(*context_);
+      // Kept progress that has aged out will NOT be resumed by the next Start (the handler
+      // starts fresh), so stop labelling the button "Resume" the moment it expires.
+      available = hasCoverageResumeState(*context_) &&
+                  !(context_->resume_after_incomplete_end &&
+                    incompleteResumeExpired(context_->resume_after_incomplete_end_time,
+                                            std::chrono::steady_clock::now()));
     }
     if (available == last_resume_available_ && resume_available_published_)
     {
@@ -1572,17 +1624,10 @@ private:
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
       context_->resume_after_incomplete_end = false;
-      context_->area_completed_swaths.clear();
-      context_->area_swath_count.clear();
-      context_->area_resume_pose_index.clear();
-      context_->area_unit_progress.clear();
-      context_->area_path_pose_count.clear();
-      context_->area_plan_fingerprint.clear();
-      context_->completed_areas.clear();
+      clearRecordedCoverageProgress(*context_);
       context_->attempted_areas.clear();
       context_->incomplete_retired_areas.clear();
       context_->area_attempt_count.clear();
-      context_->area_last_coverage.clear();
       context_->coverage_start_blocked = false;
       context_->start_blocked_area.reset();
       context_->area_start_blocked_count.clear();

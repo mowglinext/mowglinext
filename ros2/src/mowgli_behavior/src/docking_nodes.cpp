@@ -84,6 +84,17 @@ BT::NodeStatus DockRobot::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   ctx->last_dock_succeeded = false;
+  bool charging;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    charging = ctx->latest_power.charger_enabled;
+  }
+  if (charging)
+  {
+    onHalted();
+    ctx->last_dock_succeeded = true;
+    return BT::NodeStatus::SUCCESS;
+  }
 
   // A guard can halt us before the server accepts the previous request. Do
   // not preempt that request (or its staging navigator) with a replacement.
@@ -183,6 +194,17 @@ BT::NodeStatus DockRobot::sendGoal()
 BT::NodeStatus DockRobot::onRunning()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  bool charging;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    charging = ctx->latest_power.charger_enabled;
+  }
+  if (charging)
+  {
+    onHalted();
+    ctx->last_dock_succeeded = true;
+    return BT::NodeStatus::SUCCESS;
+  }
 
   if (waiting_for_retired_)
   {

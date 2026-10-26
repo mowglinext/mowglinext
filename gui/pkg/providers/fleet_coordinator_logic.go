@@ -87,14 +87,17 @@ type XY struct {
 
 // fleetMember is the slice of a FleetRobot the coordinator reasons about.
 type fleetMember struct {
-	ID            string
-	Self          bool
-	Online        bool
-	Autonomous    bool // HighLevelStatus.state == AUTONOMOUS (2)
-	StateName     string
-	CurrentArea   int // -1 when none
-	Completed     []uint32
-	SessionActive bool
+	ID                 string
+	Self               bool
+	Online             bool
+	Autonomous         bool // HighLevelStatus.state == AUTONOMOUS (2)
+	StopHold           bool // state == IDLE (1) and state_name == IDLE, as published after STOP
+	StateName          string
+	CurrentArea        int // -1 when none
+	Completed          []uint32
+	SessionActive      bool
+	SessionState       coverageState
+	SessionObservation *coverageObservation
 	// Fresh position in our map frame (fused pose first, antenna fix as the
 	// fallback — see peerMapPoses); nil when unknown or stale.
 	Pos *XY
@@ -118,25 +121,48 @@ func memberFromRobotAt(r FleetRobot, selfDatum LatLon, maxAge time.Duration) fle
 		StateName   string `json:"state_name"`
 		CurrentArea *int   `json:"current_area"`
 	}
-	if raw, ok := r.Topics["highLevelStatus"]; ok && json.Unmarshal(raw, &hl) == nil {
+	hlValid := json.Unmarshal(r.Topics["highLevelStatus"], &hl) == nil
+	if hlValid {
 		m.Autonomous = hl.State != nil && *hl.State == hlStateAutonomous
 		m.StateName = hl.StateName
+		m.StopHold = hl.State != nil && *hl.State == 1 && hl.StateName == "IDLE"
 		if hl.CurrentArea != nil {
 			m.CurrentArea = *hl.CurrentArea
 		}
 	}
-	var session struct {
-		SessionActive  bool     `json:"session_active"`
-		CurrentArea    *int     `json:"current_area"`
-		CompletedAreas []uint32 `json:"completed_areas"`
-	}
-	if raw, ok := r.Topics["coverageSession"]; ok && json.Unmarshal(raw, &session) == nil {
-		m.SessionActive = session.SessionActive
-		m.Completed = session.CompletedAreas
-		// The session topic is the BT's own bookkeeping; prefer it for the
-		// area index when both are present.
-		if session.CurrentArea != nil {
-			m.CurrentArea = *session.CurrentArea
+	m.SessionState = coverageAbsent
+	if raw, ok := r.Topics["coverageSession"]; ok {
+		m.SessionState = coverageUnknown
+		var session struct {
+			SessionActive  *bool     `json:"session_active"`
+			CurrentArea    *int      `json:"current_area"`
+			CompletedAreas *[]uint32 `json:"completed_areas"`
+		}
+		age, ageKnown := r.TopicAgeS["coverageSession"]
+		switch {
+		case !r.Online || r.Identity.ID == "" || !ageKnown || math.IsNaN(age) || math.IsInf(age, 0) || age < 0:
+		case age > peerOnlineMaxAge.Seconds():
+			m.SessionState = coverageStale
+		case r.coverageObservation == nil || r.coverageObservation.receivedAt.IsZero():
+		case json.Unmarshal(raw, &session) != nil || session.SessionActive == nil || session.CurrentArea == nil || session.CompletedAreas == nil || *session.CurrentArea < -1:
+		default:
+			m.SessionState = coverageFresh
+			hlAge, hlAgeKnown := r.TopicAgeS["highLevelStatus"]
+			hlFresh := hlAgeKnown && hlAge >= 0 && hlAge <= peerOnlineMaxAge.Seconds()
+			if hlValid && hlFresh && hl.CurrentArea != nil && *hl.CurrentArea != *session.CurrentArea {
+				// No producer sequence orders these two 1 Hz topics. Retain
+				// HLS and do not import contradictory completion bookkeeping.
+				m.SessionState = coverageContradictory
+				break
+			}
+			m.SessionActive = *session.SessionActive
+			m.Completed = *session.CompletedAreas
+			m.SessionObservation = r.coverageObservation
+			// A known HLS area wins unless it is explicitly stale. Missing
+			// HLS freshness is not evidence of a newer session observation.
+			if !hlValid || hl.CurrentArea == nil || (hlAgeKnown && hlAge > peerOnlineMaxAge.Seconds()) {
+				m.CurrentArea = *session.CurrentArea
+			}
 		}
 	}
 	if selfDatum.Lat == 0 && selfDatum.Lon == 0 {
@@ -211,21 +237,71 @@ func computeAssignment(self fleetMember, peers []fleetMember, completedMemory ma
 	return FleetAssignment{Excluded: list, PreferredStart: rank}
 }
 
-// updateCompletedMemory returns a NEW memory map: every area any member
-// reports completed is stamped `now`, and entries older than ttl expire.
-func updateCompletedMemory(memory map[uint32]time.Time, members []fleetMember, now time.Time, ttl time.Duration) map[uint32]time.Time {
+// coverageState distinguishes absence, unknown provenance, expiry and a
+// contradiction with fresh HLS. None of them is a new completed-area report.
+type coverageState string
+
+const (
+	coverageAbsent        coverageState = "absent"
+	coverageUnknown       coverageState = "unknown"
+	coverageStale         coverageState = "stale"
+	coverageFresh         coverageState = "fresh"
+	coverageContradictory coverageState = "contradictory"
+)
+
+// The last accepted membership set per qualified robot. Retain it across
+// disconnection so replaying the same session cannot restart completion TTLs.
+// A new completion requires an observed absent -> present transition; a new
+// transport delivery of an unchanged set is not evidence of another mowing.
+type completionObservation struct {
+	receipt *coverageObservation
+	areas   map[uint32]time.Time
+}
+
+// updateCompletedMemory returns a NEW memory map and consumes qualified
+// observations under the coordinator lock. Completion times are the first
+// accepted receipt of each membership, never the time we reread a snapshot.
+func updateCompletedMemory(memory map[uint32]time.Time, members []fleetMember, now time.Time, ttl time.Duration, observations map[string]completionObservation) map[uint32]time.Time {
 	out := make(map[uint32]time.Time, len(memory))
 	for area, seen := range memory {
-		if now.Sub(seen) <= ttl {
+		if !seen.After(now) && now.Sub(seen) <= ttl {
 			out[area] = seen
 		}
 	}
 	for _, m := range members {
-		if !m.Online {
+		receipt := m.SessionObservation
+		if !m.Online || m.ID == "" || m.SessionState != coverageFresh || receipt == nil || receipt.receivedAt.IsZero() || receipt.receivedAt.After(now) || now.Sub(receipt.receivedAt) > peerOnlineMaxAge {
 			continue
 		}
-		for _, area := range m.Completed {
-			out[area] = now
+		previous := observations[m.ID]
+		if previous.receipt != nil && receipt != previous.receipt &&
+			(receipt.receivedAt.Before(previous.receipt.receivedAt) ||
+				(receipt.receivedAt.Equal(previous.receipt.receivedAt) && receipt.sequence <= previous.receipt.sequence)) {
+			continue // out-of-order snapshot, not a new publication
+		}
+		current := previous
+		if receipt != previous.receipt {
+			current = completionObservation{receipt: receipt, areas: make(map[uint32]time.Time, len(m.Completed))}
+			for _, area := range m.Completed {
+				seen, known := previous.areas[area]
+				if !known {
+					seen = receipt.receivedAt
+					// On startup, preserve a still-persisted earlier completion
+					// rather than refreshing it with a subscription replay.
+					if saved, ok := memory[area]; previous.receipt == nil && ok && saved.Before(seen) {
+						seen = saved
+					}
+				}
+				current.areas[area] = seen
+			}
+			observations[m.ID] = current
+		}
+		for area, seen := range current.areas {
+			// A zero time retains membership suppressed by Start fresh; it
+			// cannot become a completion until absent then present again.
+			if !seen.IsZero() && !seen.After(now) && now.Sub(seen) <= ttl && seen.After(out[area]) {
+				out[area] = seen
+			}
 		}
 	}
 	return out
@@ -250,81 +326,6 @@ func enuFromDatum(datum, p LatLon) (x, y float64) {
 // sameDatum: within map_server's re-projection tolerance.
 func sameDatum(a, b LatLon) bool {
 	return math.Abs(a.Lat-b.Lat) <= datumEpsilonDeg && math.Abs(a.Lon-b.Lon) <= datumEpsilonDeg
-}
-
-// yieldState is the coordinator's memory of the proximity rule.
-type yieldState struct {
-	Yielded    bool
-	HoldSince  time.Time // when the hold started (max-hold deadlock breaker)
-	ClearSince time.Time // when the last priority peer left the resume radius
-	ResumedAt  time.Time // last resume this rule sent (re-yield cooldown)
-}
-
-// YieldAction is what the proximity rule wants sent to the local BT.
-type YieldAction string
-
-const (
-	YieldNone  YieldAction = ""
-	YieldStop  YieldAction = "stop"  // COMMAND_STOP (8): hold in place
-	YieldStart YieldAction = "start" // COMMAND_START (1): resume at the cursor
-)
-
-const yieldResumeHold = 3 * time.Second
-
-// decideYield implements the mutual-avoidance rule: when a peer WITH PRIORITY
-// is autonomous within yield_distance of us while we are autonomous, we stop
-// in place; once no such peer has been within resume_distance for a few
-// seconds, we resume. A robot that stopped for another reason (operator
-// Pause, Home, charging) is never resumed by this rule: we only resume what
-// we ourselves stopped, and only while the robot still sits where we left it
-// (IDLE with our stop reason still standing).
-//
-// Two bounds keep the rule from deadlocking with the costmap avoidance both
-// robots now run (docs/MULTI_ROBOT.md § 3c): a hold never lasts longer than
-// yield_max_hold_s (the priority robot may itself have stopped in front of
-// us on its collision checks, waiting for us to leave), and after any resume
-// no new yield is issued for yield_cooldown_s, so the resumed robot gets to
-// skirt the peer instead of stopping again at the same 3 m.
-func decideYield(self fleetMember, peers []fleetMember, st yieldState, s CoordinatorSettings, now time.Time) (yieldState, YieldAction) {
-	if self.Pos == nil {
-		return st, YieldNone
-	}
-	nearest := math.Inf(1)
-	for _, p := range peers {
-		if !p.Autonomous || p.Pos == nil || !hasPriorityOver(p.ID, self.ID) {
-			continue
-		}
-		if d := math.Hypot(p.Pos.X-self.Pos.X, p.Pos.Y-self.Pos.Y); d < nearest {
-			nearest = d
-		}
-	}
-	cooldown := time.Duration(s.YieldCooldownS * float64(time.Second))
-	if !st.Yielded {
-		inCooldown := !st.ResumedAt.IsZero() && now.Sub(st.ResumedAt) < cooldown
-		if self.Autonomous && nearest < s.YieldDistanceM && !inCooldown {
-			return yieldState{Yielded: true, HoldSince: now, ResumedAt: st.ResumedAt}, YieldStop
-		}
-		return st, YieldNone
-	}
-	// We are holding. If the operator moved the robot on (it is autonomous
-	// again, or docked / charging), our hold is over without a resume.
-	if self.Autonomous || self.StateName == "CHARGING" || self.StateName == "MANUAL_CHARGING" || self.StateName == "RETURNING_HOME" {
-		return yieldState{ResumedAt: st.ResumedAt}, YieldNone
-	}
-	maxHold := time.Duration(s.YieldMaxHoldS * float64(time.Second))
-	if !st.HoldSince.IsZero() && now.Sub(st.HoldSince) >= maxHold {
-		return yieldState{ResumedAt: now}, YieldStart
-	}
-	if nearest < s.ResumeDistanceM {
-		return yieldState{Yielded: true, HoldSince: st.HoldSince, ResumedAt: st.ResumedAt}, YieldNone
-	}
-	if st.ClearSince.IsZero() {
-		return yieldState{Yielded: true, HoldSince: st.HoldSince, ClearSince: now, ResumedAt: st.ResumedAt}, YieldNone
-	}
-	if now.Sub(st.ClearSince) < yieldResumeHold {
-		return st, YieldNone
-	}
-	return yieldState{ResumedAt: now}, YieldStart
 }
 
 // assignmentEqual compares two assignments.

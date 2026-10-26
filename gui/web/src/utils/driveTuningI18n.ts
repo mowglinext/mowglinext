@@ -6,6 +6,14 @@ type RegexTranslation = {
 };
 
 const EXACT_TRANSLATIONS: Record<string, string> = {
+    "Invalid drive tuning status": "settingsDriveMotor.backend.invalidStatus",
+    "Invalid drive tuning report": "settingsDriveMotor.backend.invalidReport",
+    "Invalid parsed drive tuning report": "settingsDriveMotor.backend.invalidParsedReport",
+    "Invalid drive tuning rollback response": "settingsDriveMotor.backend.invalidRollback",
+    "Drive tuning rollback failed": "settingsDriveMotor.backend.rollbackFailed",
+    "Invalid drive tuning start response": "settingsDriveMotor.backend.invalidStart",
+    "Invalid drive tuning request": "settingsDriveMotor.backend.invalidRequest",
+    "Drive tuning request failed": "settingsDriveMotor.backend.requestFailed",
     "No odometry passes recorded yet.": "settingsDriveMotor.odometry.validation.noPasses",
     "Odometry calibration did not complete successfully. Review the report failure details.": "settingsDriveMotor.odometry.validation.failed",
     "An odometry pass stalled or produced no wheel motion. Check wheel observations and mechanics.": "settingsDriveMotor.odometry.validation.noMotion",

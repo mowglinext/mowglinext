@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	notifySendTimeout = notifyHTTPTimeout
-	notifyQueueDepth  = 256
+	notifySendTimeout        = notifyHTTPTimeout
+	notifyQueueDepth         = 256
+	notifyFailureIncidentKey = "notifications.failureIncidents"
 )
 
 // NotifyDeliveryStatus is what the GUI shows under the settings: did the last
@@ -75,6 +76,16 @@ func newNotificationProvider(db types.IDBProvider, client *http.Client, now func
 		mapQueue: make(chan []byte, 4),
 		detector: NewNotifyDetector(),
 	}
+	if raw, err := db.Get(notifyFailureIncidentKey); err == nil {
+		var saved map[string]bool
+		if json.Unmarshal(raw, &saved) == nil {
+			for state, reported := range saved {
+				if reported && blockedStates[state] {
+					p.detector.reportedFailures[state] = true
+				}
+			}
+		}
+	}
 	p.applyConfig(LoadNotificationConfig(db))
 	return p
 }
@@ -125,6 +136,14 @@ func (p *NotificationProvider) HandleStatus(raw []byte) {
 	p.mu.Lock()
 	cfg := p.cfg
 	events := p.detector.OnStatus(st, now, cfg.EventEnabled)
+	if p.detector.failuresChanged {
+		raw, _ := json.Marshal(p.detector.reportedFailures)
+		if err := p.db.Set(notifyFailureIncidentKey, raw); err != nil {
+			logrus.WithError(err).Warn("Notifications: could not persist failure incident")
+		} else {
+			p.detector.failuresChanged = false
+		}
+	}
 	sender := p.sender
 	p.mu.Unlock()
 

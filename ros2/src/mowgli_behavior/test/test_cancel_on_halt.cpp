@@ -27,11 +27,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
@@ -50,7 +52,9 @@ using mowgli_behavior::cancelGoalQuietly;
 using mowgli_behavior::cancelWhenAbandoned;
 using mowgli_behavior::DockRobot;
 using mowgli_behavior::GoalAbandonment;
+using mowgli_behavior::UndockRobot;
 using Dock = nav2_msgs::action::DockRobot;
+using Undock = nav2_msgs::action::UndockRobot;
 
 namespace
 {
@@ -75,18 +79,26 @@ public:
     ::testing::AddGlobalTestEnvironment(new RclcppEnvironment());
 
 /// Fake docking_server: accepts every goal, records it, lets the test end it.
-class FakeDockServer
+template <typename Action>
+class FakeActionServer
 {
 public:
-  using Handle = rclcpp_action::ServerGoalHandle<Dock>;
+  using Handle = rclcpp_action::ServerGoalHandle<Action>;
 
-  explicit FakeDockServer(const rclcpp::Node::SharedPtr& node)
+  FakeActionServer(const rclcpp::Node::SharedPtr& node, const std::string& name)
   {
-    server_ = rclcpp_action::create_server<Dock>(
+    server_ = rclcpp_action::create_server<Action>(
         node,
-        "/dock_robot",
-        [](const rclcpp_action::GoalUUID&, std::shared_ptr<const Dock::Goal>)
+        name,
+        [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const typename Action::Goal>)
         {
+          std::unique_lock<std::mutex> lock(mutex_);
+          acceptance_requested_ = true;
+          acceptance_cv_.wait(lock,
+                              [this]()
+                              {
+                                return !hold_acceptance_;
+                              });
           return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         },
         [](const std::shared_ptr<Handle>)
@@ -98,6 +110,19 @@ public:
           std::lock_guard<std::mutex> lock(mutex_);
           handles_.push_back(handle);
         });
+  }
+
+  void holdAcceptance(bool hold)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hold_acceptance_ = hold;
+    acceptance_cv_.notify_all();
+  }
+
+  bool acceptanceRequested()
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return acceptance_requested_;
   }
 
   std::size_t goalCount()
@@ -115,14 +140,26 @@ public:
   void succeed(std::size_t i)
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    handles_.at(i)->succeed(std::make_shared<Dock::Result>());
+    handles_.at(i)->succeed(std::make_shared<typename Action::Result>());
+  }
+
+  void canceled(std::size_t i)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    handles_.at(i)->canceled(std::make_shared<typename Action::Result>());
   }
 
 private:
-  rclcpp_action::Server<Dock>::SharedPtr server_;
+  typename rclcpp_action::Server<Action>::SharedPtr server_;
   std::mutex mutex_;
+  std::condition_variable acceptance_cv_;
+  bool hold_acceptance_ = false;
+  bool acceptance_requested_ = false;
   std::vector<std::shared_ptr<Handle>> handles_;
 };
+
+using FakeDockServer = FakeActionServer<Dock>;
+using FakeUndockServer = FakeActionServer<Undock>;
 
 bool waitFor(const std::function<bool()>& done, double timeout_s)
 {
@@ -148,7 +185,8 @@ protected:
     ctx = std::make_shared<BTContext>();
     ctx->node = rclcpp::Node::make_shared("test_cancel_on_halt");
     server_node = rclcpp::Node::make_shared("fake_docking_server");
-    dock = std::make_unique<FakeDockServer>(server_node);
+    dock = std::make_unique<FakeDockServer>(server_node, "/dock_robot");
+    undock = std::make_unique<FakeUndockServer>(server_node, "/undock_robot");
     executor = std::make_unique<rclcpp::executors::MultiThreadedExecutor>();
     executor->add_node(ctx->node);
     executor->add_node(server_node);
@@ -160,10 +198,14 @@ protected:
     blackboard = BT::Blackboard::create();
     blackboard->set("context", ctx);
     factory.registerNodeType<DockRobot>("DockRobot");
+    factory.registerNodeType<UndockRobot>("UndockRobot");
   }
 
   void TearDown() override
   {
+    // Release a blocked server callback even when an assertion failed.
+    dock->holdAcceptance(false);
+    undock->holdAcceptance(false);
     tree.reset();
     executor->cancel();
     if (spinner.joinable())
@@ -207,6 +249,7 @@ protected:
   std::shared_ptr<BTContext> ctx;
   rclcpp::Node::SharedPtr server_node;
   std::unique_ptr<FakeDockServer> dock;
+  std::unique_ptr<FakeUndockServer> undock;
   std::unique_ptr<rclcpp::executors::MultiThreadedExecutor> executor;
   std::thread spinner;
   BT::Blackboard::Ptr blackboard;
@@ -352,4 +395,204 @@ TEST_F(CancelOnHaltTest, DockRobotHaltedAfterItsGoalFinishedDoesNotWedgeTheTree)
       },
       5.0))
       << "DockRobot did not start again after the halt";
+}
+
+TEST_F(CancelOnHaltTest, DockRobotHaltedBeforeAcceptanceCancelsTheLateGoal)
+{
+  dock->holdAcceptance(true);
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><DockRobot/></BehaviorTree></root>",
+      blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->acceptanceRequested();
+      },
+      5.0));
+  tree->haltTree();
+  EXPECT_FALSE(ctx->docking_active);
+
+  dock->holdAcceptance(false);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 1;
+      },
+      5.0));
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->isCanceling(0);
+      },
+      5.0));
+  dock->canceled(0);
+}
+
+TEST_F(CancelOnHaltTest, DockRobotStillWantedAfterDelayedAcceptanceIsNotCanceled)
+{
+  dock->holdAcceptance(true);
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><DockRobot/></BehaviorTree></root>",
+      blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->acceptanceRequested();
+      },
+      5.0));
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_TRUE(ctx->docking_active);
+
+  dock->holdAcceptance(false);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 1;
+      },
+      5.0));
+  EXPECT_FALSE(dock->isCanceling(0));
+  dock->succeed(0);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return tree->tickOnce() == BT::NodeStatus::SUCCESS;
+      },
+      5.0));
+  EXPECT_TRUE(ctx->last_dock_succeeded);
+  EXPECT_FALSE(ctx->docking_active);
+}
+
+template <typename Action>
+class DockingAttemptTest : public CancelOnHaltTest
+{
+protected:
+  FakeActionServer<Action>& server()
+  {
+    if constexpr (std::is_same_v<Action, Dock>)
+    {
+      return *dock;
+    }
+    else
+    {
+      return *undock;
+    }
+  }
+
+  void createTree()
+  {
+    const std::string node = std::is_same_v<Action, Dock> ? "DockRobot" : "UndockRobot";
+    tree = std::make_unique<BT::Tree>(
+        factory.createTreeFromText("<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><" + node +
+                                       "/></BehaviorTree></root>",
+                                   blackboard));
+  }
+};
+
+using DockingActions = ::testing::Types<Dock, Undock>;
+TYPED_TEST_SUITE(DockingAttemptTest, DockingActions);
+
+TYPED_TEST(DockingAttemptTest, DelayedCancellationOfHaltedAttemptDoesNotFailRestartedAttempt)
+{
+  this->createTree();
+  auto& server = this->server();
+  auto& tree = this->tree;
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return server.goalCount() == 1;
+      },
+      5.0));
+  // Make the BT take the accepted handle before halting (also for UndockRobot,
+  // whose existing halt path cancels only a handle already taken by the BT).
+  for (int i = 0; i < 5; ++i)
+  {
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  tree->haltTree();
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return server.isCanceling(0);
+      },
+      5.0));
+
+  // Restart the SAME BT node while the old goal is still CANCELING. The
+  // dispatch retains its old outcome and drains it before sending a successor.
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(server.goalCount(), 1u);
+  server.canceled(0);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+        return server.goalCount() == 2;
+      },
+      5.0));
+  // Allow delivery of the late result while repeatedly ticking the new goal.
+  // It must stay active until its OWN result arrives, then complete normally.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  EXPECT_FALSE(server.isCanceling(1));
+  if constexpr (std::is_same_v<TypeParam, Dock>)
+  {
+    EXPECT_TRUE(this->ctx->docking_active);
+    EXPECT_FALSE(this->ctx->last_dock_succeeded);
+  }
+  server.succeed(1);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return tree->tickOnce() == BT::NodeStatus::SUCCESS;
+      },
+      5.0));
+  if constexpr (std::is_same_v<TypeParam, Dock>)
+  {
+    EXPECT_FALSE(this->ctx->docking_active);
+    EXPECT_TRUE(this->ctx->last_dock_succeeded);
+  }
+}
+
+TYPED_TEST(DockingAttemptTest, CurrentAttemptCancellationStillFails)
+{
+  this->createTree();
+  auto& server = this->server();
+  auto& tree = this->tree;
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return server.goalCount() == 1;
+      },
+      5.0));
+  // Cancel as a remote client would, without halting the BT node.
+  const std::string name = std::is_same_v<TypeParam, Dock> ? "/dock_robot" : "/undock_robot";
+  auto client = rclcpp_action::create_client<TypeParam>(this->ctx->node, name);
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(5)));
+  client->async_cancel_all_goals();
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return server.isCanceling(0);
+      },
+      5.0));
+  server.canceled(0);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return tree->tickOnce() == BT::NodeStatus::FAILURE;
+      },
+      5.0));
+  if constexpr (std::is_same_v<TypeParam, Dock>)
+  {
+    EXPECT_FALSE(this->ctx->docking_active);
+    EXPECT_FALSE(this->ctx->last_dock_succeeded);
+  }
 }

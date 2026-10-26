@@ -59,7 +59,7 @@ func TestActiveHardwareBackend(t *testing.T) {
 	t.Setenv("HARDWARE_BACKEND", "")
 	assert.Equal(t, "mowgli", activeHardwareBackend(map[string]string{}))
 	assert.Equal(t, "openmower", activeHardwareBackend(map[string]string{"HARDWARE_BACKEND": " OpenMower "}))
-	assert.Equal(t, "mowgli", activeHardwareBackend(map[string]string{"HARDWARE_BACKEND": "../../x"}))
+	assert.Equal(t, "", activeHardwareBackend(map[string]string{"HARDWARE_BACKEND": "../../x"}))
 
 	t.Setenv("HARDWARE_BACKEND", "mavros")
 	assert.Equal(t, "mavros", activeHardwareBackend(map[string]string{}))

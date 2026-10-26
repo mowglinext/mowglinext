@@ -2,10 +2,20 @@ import MapboxDraw from '@mapbox/mapbox-gl-draw';
 import type {ControlPosition} from 'mapbox-gl';
 import {useControl} from 'react-map-gl/mapbox';
 import type {MapRef} from 'react-map-gl/mapbox';
-import {useEffect, useRef} from "react";
+import {useEffect, useLayoutEffect, useRef} from "react";
 import type {RefObject} from "react";
 import DirectSelectWithBoxMode from '../modes/DirectSelectWithBoxMode';
 import SplitLineMode from '../modes/SplitLineMode';
+
+type DrawEvents = {
+    'draw.create': {features: GeoJSON.Feature[]};
+    'draw.update': {features: GeoJSON.Feature[]; action: string};
+    'draw.combine': {createdFeatures: GeoJSON.Feature[]; deletedFeatures: GeoJSON.Feature[]};
+    'draw.delete': {features: GeoJSON.Feature[]};
+    'draw.selectionchange': {features: GeoJSON.Feature[]};
+    'feature.open': {feature?: GeoJSON.Feature};
+};
+type DrawHandlers = {[Event in keyof DrawEvents]: (event: DrawEvents[Event]) => void};
 
 type DrawControlProps = ConstructorParameters<typeof MapboxDraw>[0] & {
     position?: ControlPosition;
@@ -13,12 +23,12 @@ type DrawControlProps = ConstructorParameters<typeof MapboxDraw>[0] & {
     editMode?: boolean;
     drawRef?: RefObject<MapboxDraw | null>;
 
-    onCreate: (evt: { features: GeoJSON.Feature[] }) => void;
-    onUpdate: (evt: { features: GeoJSON.Feature[]; action: string }) => void;
-    onCombine: (evt: { createdFeatures: GeoJSON.Feature[]; deletedFeatures: GeoJSON.Feature[] }) => void;
-    onDelete: (evt: { features: GeoJSON.Feature[] }) => void;
-    onSelectionChange: (evt: { features: GeoJSON.Feature[] }) => void;
-    onOpenDetails: (evt: { feature?: GeoJSON.Feature }) => void;
+    onCreate: (evt: DrawEvents['draw.create']) => void;
+    onUpdate: (evt: DrawEvents['draw.update']) => void;
+    onCombine: (evt: DrawEvents['draw.combine']) => void;
+    onDelete: (evt: DrawEvents['draw.delete']) => void;
+    onSelectionChange: (evt: DrawEvents['draw.selectionchange']) => void;
+    onOpenDetails: (evt: DrawEvents['feature.open']) => void;
 };
 
 export default function DrawControl(props: DrawControlProps) {
@@ -34,28 +44,33 @@ export default function DrawControl(props: DrawControlProps) {
     } = props;
     const rawMapRef = useRef<ReturnType<MapRef['getMap']> | null>(null);
     const editModeRef = useRef(editMode);
-    editModeRef.current = editMode;
 
     // Use refs for all callbacks so event listeners always call the latest version.
     // useControl only binds listeners once during setup — without refs, stale closures
     // would be called when the callbacks change (e.g. when splitTargetId updates).
     const onCreateRef = useRef(onCreate);
-    onCreateRef.current = onCreate;
     const onUpdateRef = useRef(onUpdate);
-    onUpdateRef.current = onUpdate;
     const onCombineRef = useRef(onCombine);
-    onCombineRef.current = onCombine;
     const onDeleteRef = useRef(onDelete);
-    onDeleteRef.current = onDelete;
     const onSelectionChangeRef = useRef(onSelectionChange);
-    onSelectionChangeRef.current = onSelectionChange;
     const onOpenDetailsRef = useRef(onOpenDetails);
-    onOpenDetailsRef.current = onOpenDetails;
+
+    // Do not expose callbacks from an uncommitted render to Mapbox listeners.
+    // Layout effects run before useControl's passive listener registration.
+    useLayoutEffect(() => {
+        editModeRef.current = editMode;
+        onCreateRef.current = onCreate;
+        onUpdateRef.current = onUpdate;
+        onCombineRef.current = onCombine;
+        onDeleteRef.current = onDelete;
+        onSelectionChangeRef.current = onSelectionChange;
+        onOpenDetailsRef.current = onOpenDetails;
+    }, [editMode, onCreate, onUpdate, onCombine, onDelete, onSelectionChange, onOpenDetails]);
 
     // Keep stable references to the bound listeners so cleanup can map.off()
     // exactly what was map.on()'d. Without this, StrictMode's mount/unmount/
     // remount cycle stacks duplicate listeners → each draw.* event fires twice.
-    const drawHandlersRef = useRef<Record<string, (e: any) => void>>({});
+    const drawHandlersRef = useRef<DrawHandlers | null>(null);
     const mp = useControl<MapboxDraw>(
         () => new MapboxDraw({
             ...drawOptions,
@@ -67,24 +82,24 @@ export default function DrawControl(props: DrawControlProps) {
         }),
         ({map}: {map: MapRef}) => {
             rawMapRef.current = map.getMap();
-            const handlers: Record<string, (e: any) => void> = {
-                'draw.create': (e: any) => onCreateRef.current(e),
-                'draw.update': (e: any) => onUpdateRef.current(e),
-                'draw.combine': (e: any) => onCombineRef.current(e),
-                'draw.delete': (e: any) => onDeleteRef.current(e),
-                'draw.selectionchange': (e: any) => onSelectionChangeRef.current(e),
-                'feature.open': (e: any) => onOpenDetailsRef.current(e),
+            const handlers: DrawHandlers = {
+                'draw.create': (e) => onCreateRef.current(e),
+                'draw.update': (e) => onUpdateRef.current(e),
+                'draw.combine': (e) => onCombineRef.current(e),
+                'draw.delete': (e) => onDeleteRef.current(e),
+                'draw.selectionchange': (e) => onSelectionChangeRef.current(e),
+                'feature.open': (e) => onOpenDetailsRef.current(e),
             };
             drawHandlersRef.current = handlers;
             for (const [event, handler] of Object.entries(handlers)) {
-                map.on(event as any, handler);
+                map.on(event, handler);
             }
         },
         ({map}: {map: MapRef}) => {
-            for (const [event, handler] of Object.entries(drawHandlersRef.current)) {
-                map.off(event as any, handler);
+            for (const [event, handler] of Object.entries(drawHandlersRef.current ?? {})) {
+                map.off(event, handler);
             }
-            drawHandlersRef.current = {};
+            drawHandlersRef.current = null;
             rawMapRef.current = null;
         }
         ,
@@ -150,17 +165,21 @@ export default function DrawControl(props: DrawControlProps) {
         const rawMap = rawMapRef.current;
         if (!rawMap) return;
 
+        const pending = new Set<ReturnType<typeof setTimeout>>();
         const blockSelection = () => {
             if (!editModeRef.current) {
                 // Use setTimeout to avoid re-entrant mode changes during event dispatch
-                setTimeout(() => {
+                const timer = setTimeout(() => {
+                    pending.delete(timer);
                     mp.changeMode('simple_select', { featureIds: [] });
                 }, 0);
+                pending.add(timer);
             }
         };
         rawMap.on('draw.selectionchange', blockSelection);
         return () => {
             rawMap.off('draw.selectionchange', blockSelection);
+            pending.forEach(clearTimeout);
         };
     }, [mp]);
     return null;

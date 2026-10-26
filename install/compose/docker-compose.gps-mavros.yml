@@ -15,7 +15,7 @@ services:
     container_name: mowgli-gps
     labels:
       garden.mowgli.update.image: gps
-    image: ${UNIVERSAL_GNSS_IMAGE:-ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.4-rc5@sha256:127103ef9e90c3fa47edb38c01797128f8c1e616ab4548a35fe135ff16349727}
+    image: ${UNIVERSAL_GNSS_IMAGE:-ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.4-rc6@sha256:f9dc255b3ff6f7495c4210e990aa136b32a0fe3481f9da830ac4298519e08ea8}
     network_mode: host
     ipc: host
     environment:

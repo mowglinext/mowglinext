@@ -14,7 +14,7 @@ config_file="$REPO_DIR/install/lib/config.sh"
 stack_file="$REPO_DIR/docker/stack.sh"
 env_example="$REPO_DIR/docker/.env.example"
 
-section "External Universal GNSS v0.7.4-rc5 sidecar contract"
+section "External Universal GNSS v0.7.4-rc6 sidecar contract"
 
 compose_content="$(<"$compose_file")"
 compose_mavros_content="$(<"$compose_mavros_file")"
@@ -46,7 +46,7 @@ assert_contains "fragment image default is pinned to the deployment descriptor d
   "@$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json")}" "$compose_content"
 assert_contains "MAVROS-mode fragment image default matches the deployment descriptor digest" \
   "@$(python3 -c 'import json,sys; print(next(i["digest"] for i in json.load(open(sys.argv[1]))["components"] if i["name"] == "gps"))' "$REPO_DIR/install/deployment.json")" "$compose_mavros_content"
-assert_contains "v0.7.4-rc5 combined receiver/NTRIP launch is used" \
+assert_contains "v0.7.4-rc6 combined receiver/NTRIP launch is used" \
   'receiver_and_ntrip.launch.py' "$compose_content"
 assert_contains "NTRIP enable state is a launch argument derived from the yaml" \
   '"ntrip_enabled:=" + ("true" if ntrip else "false")' "$compose_content"
@@ -58,8 +58,8 @@ assert_contains "bridge RTCM topic stays internal to Universal GNSS" \
   'rtcm_topic:=/universal_gnss_receiver/rtcm' "$compose_content"
 
 config_content="$(<"$config_file")"
-assert_contains "MowgliNext pins v0.7.4-rc5 Lyrical image independently" \
-  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.4-rc5@sha256:127103ef9e90c3fa47edb38c01797128f8c1e616ab4548a35fe135ff16349727
+assert_contains "MowgliNext pins v0.7.4-rc6 Lyrical image independently" \
+  'UNIVERSAL_GNSS_IMAGE_DEFAULT="ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.4-rc6@sha256:f9dc255b3ff6f7495c4210e990aa136b32a0fe3481f9da830ac4298519e08ea8
 "' "$config_content"
 # The installer default and the deployment descriptor name the SAME image; the
 # digest is what makes the pin real, so a bump must touch both or fail here.
@@ -92,8 +92,8 @@ assert_contains "stack regen rebuilds sidecar runtime config" \
   'regenerate_sidecar_runtime_configs' "$stack_content"
 
 env_example_content="$(<"$env_example")"
-assert_contains "example uses v0.7.4-rc5 Lyrical image" \
-  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.4-rc5@sha256:127103ef9e90c3fa47edb38c01797128f8c1e616ab4548a35fe135ff16349727
+assert_contains "example uses v0.7.4-rc6 Lyrical image" \
+  'UNIVERSAL_GNSS_IMAGE=ghcr.io/pepeuch/universal-gnss-ros2-lyrical:v0.7.4-rc6@sha256:f9dc255b3ff6f7495c4210e990aa136b32a0fe3481f9da830ac4298519e08ea8
 ' "$env_example_content"
 
 test_summary

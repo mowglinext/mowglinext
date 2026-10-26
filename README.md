@@ -14,8 +14,8 @@
   <a href="https://github.com/Fields2Cover/Fields2Cover">
     <img src="https://img.shields.io/badge/Coverage-Fields2Cover-yellow" alt="Coverage">
   </a>
-  <a href="https://github.com/Pepeuch/universal-gnss/releases/tag/v0.7.4-rc5">
-    <img src="https://img.shields.io/badge/Universal%20GNSS-v0.7.4--rc5-success" alt="Universal GNSS v0.7.4-rc5">
+  <a href="https://github.com/Pepeuch/universal-gnss/releases/tag/v0.7.4-rc6">
+    <img src="https://img.shields.io/badge/Universal%20GNSS-v0.7.4--rc6-success" alt="Universal GNSS v0.7.4-rc6">
   </a>
 </p>
 
@@ -72,20 +72,20 @@
 
 ---
 
-## What's New in v1.5.0
+## What's New in v1.6.0
 
-The mower mows to the edge. Full notes: [v1.5.0 release](https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0).
+See the plan, know why it stopped. Full notes: [v1.6.0 release](https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0).
 
 | | |
 |---|---|
-| ✂️ **Mows to the edge** | The outermost pass rides on the line you recorded instead of 20 cm inside it, and drawn obstacles are saved at their real size instead of a chassis half-width too big. If your perimeter is not drivable all the way round, read the upgrade notes first. |
-| 🔁 **Row ends that stay on the lawn** | Where no turn-around arc fits, the robot pivots in place with the blade on instead of splitting the lawn into dozens of pieces, and it improvises a turn it cannot drive instead of aborting. |
-| 🔧 **Firmware settings without a custom build** | E-stop timings, charge ceiling, speed cap and tilt threshold come from your configuration, are clamped to a safety envelope and are kept in flash. Needs a firmware reflash, which the GUI offers after the update. |
-| 📡 **GNSS in its own container** | The Universal GNSS receiver runs in its own updatable sidecar; its configuration stays in `mowgli_robot.yaml`. |
-| 🌿 **LiDAR ignore lines** | Draw a line along a hedge or ornamental grass: LiDAR returns inside it are ignored, so soft vegetation the robot should brush past no longer stops it. |
-| 🏠 **Home Assistant auto-discovery** | Opt-in: the mower appears as one device with start, pause and dock, and a *Mow* button per area. |
-| 🛠️ **Installer modes** | `install`, `update`, `repair`, `check` and `uninstall` — a supported manual update path when the GUI updater cannot be used. |
-| 🤝 **Multi-robot (beta)** | Several mowers share one property without being assigned the same area. |
+| 🗺️ **Mowing lines on the map** | Preview the rings and swaths the planner will really drive, and set the angle, the perimeter direction and the start point per area. |
+| 🛑 **Know why it stopped** | The dashboard names the reason the mower stopped (an area it could not start or make progress in, a failed dock, undock or charge) until your next command. |
+| 📐 **Corners actually mowed** | Sharp boundary tips are pivoted instead of rounded off, headlands are finished before the interior, and dead-end tongues narrower than the mower are no longer planned. |
+| 🔌 **OpenMower v1 and Pixhawk (beta)** | Run MowgliNext on stock OpenMower v1 electronics (LowLevel + xESC) or on an ArduRover Pixhawk through MAVROS. Bench-test first. |
+| 🌧️ **Rain from your weather station** | A roof station or a Home Assistant automation can report rain over MQTT, next to the mower's own sensor. |
+| 🧭 **Smarter transits** | The planning grid covers your whole garden, transits keep a soft berth around drawn obstacles, and a transit can start from inside the dock. |
+| 🤖 **Your mower, to scale** | A URDF-scaled mower with shells, colours and model presets, fleet peers on the map, and a RAM blackbox that saves the minute before an incident. |
+| 🔧 **Firmware protocol v9** | Stall-free USB recovery on F401 boards, the charge voltage ceiling honoured, firmware timing kept through dropped packets. Needs a reflash, which the GUI offers after the update. |
 
 ## What It Does
 
@@ -93,7 +93,7 @@ A fully autonomous mowing stack running on real hardware: undock, navigate to zo
 
 **Core:** GTSAM iSAM2 factor-graph localizer (`fusion_graph`) — sole map+odom localizer (GPS + IMU + wheels, REP-105 map/odom, with an optional LiDAR map anchor that carries the pose through GNSS outages) · Nav2 navigation · BehaviorTree.CPP v4 · multi-area continuous-subpath coverage
 
-**Hardware:** YardForce chassis · ARM64 SBC (RK3566/RK3588, RPi 4/5) · RTK-GNSS via the Universal GNSS runtime (u-blox F9P, Unicore UM98x, or generic NMEA) · LiDAR (LDRobot LD19 / STL27L, RPLIDAR A1) · STM32 firmware
+**Hardware:** YardForce chassis · ARM64 SBC (RK3566/RK3588, RPi 4/5) · RTK-GNSS via the Universal GNSS runtime (u-blox F9P, Unicore UM98x, or generic NMEA) · LiDAR (LDRobot LD19 / STL27L, RPLIDAR A1) · STM32 firmware on the stock Mowgli board, or (beta) stock OpenMower v1 electronics or an ArduRover Pixhawk via MAVROS
 
 See the **[Architecture wiki page](https://github.com/mowglinext/mowglinext/wiki/Architecture)** for full system design and data flow.
 
@@ -123,7 +123,7 @@ GUI at `http://<mower-ip>:4006` · See **[Getting Started](https://github.com/mo
 
 Since v1.4.0 the mower updates itself from the web interface. **Settings → Updates** checks for published releases every 24 hours, shows a notice in the bell, and installs the release you review with a backup, a health check and automatic rollback. Nothing is ever installed without your confirmation, and never while the robot is mowing.
 
-**Updating to v1.5.0 changes the mainboard firmware protocol.** In **Settings → Updates**: *Update the update service* first, then *Review update* → *Install*, then use **Flash firmware** when the new interface asks for it. Until the board is reflashed the robot refuses to mow. Details in the [v1.5.0 release notes](https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0).
+**Updating to v1.6.0 changes the mainboard firmware protocol (v9).** In **Settings → Updates**: *Update the update service* first, then *Review update* → *Install*, then use **Flash firmware** when the new interface asks for it. Until the board is reflashed the robot refuses to mow. From v1.6.0 on, *Review update* installs the release's own update service by itself first. Details in the [v1.6.0 release notes](https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0).
 
 Mowers installed before v1.4.0 enable it by rerunning the installer once (same answers as the first time):
 

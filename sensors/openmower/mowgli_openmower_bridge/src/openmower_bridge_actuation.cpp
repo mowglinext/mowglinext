@@ -11,6 +11,7 @@
 #include "mowgli_interfaces/update_maintenance.hpp"
 #include "mowgli_openmower_bridge/blade_policy.hpp"
 #include "mowgli_openmower_bridge/openmower_bridge_node.hpp"
+#include "mowgli_openmower_bridge/simulation_trace.hpp"
 
 namespace mowgli_openmower_bridge
 {
@@ -106,6 +107,21 @@ void OpenMowerBridgeNode::control_tick()
       cmd_vel_stamp_.nanoseconds() != 0 && (now() - cmd_vel_stamp_).seconds() <= cmd_vel_timeout_s_;
   const bool wheels_allowed = WheelsMayRun(emergency, ll_alive, current_mode_, cmd_fresh);
   drive_wheels(dt_s, wheels_allowed && drives_ok);
+  OM_SIM_TRACE("wheel_control",
+               "\"cycle\":%llu,\"allowed\":%d,\"ll_alive\":%d,\"emergency\":%d,"
+               "\"cmd_fresh\":%d,\"drives_ok\":%d,\"target_vx\":%.17g,\"applied_vx\":%.17g,"
+               "\"dt_s\":%.17g,\"measured_left\":%.17g,\"measured_right\":%.17g",
+               static_cast<unsigned long long>(control_ticks_),
+               wheels_allowed && drives_ok,
+               ll_alive,
+               emergency,
+               cmd_fresh,
+               drives_ok,
+               cmd_vx_,
+               applied_vx_,
+               dt_s,
+               wheel_speed_[kLeft].value(),
+               wheel_speed_[kRight].value());
 
   const bool hl_fresh = hl_status_stamp_.nanoseconds() != 0 &&
                         (now() - hl_status_stamp_).seconds() <= high_level_status_timeout_s_;
@@ -116,6 +132,20 @@ void OpenMowerBridgeNode::control_tick()
                                                      current_mode_,
                                                      hl_fresh,
                                                      mowgli_interfaces::updateMaintenanceActive()});
+  OM_SIM_TRACE("gate",
+               "\"cycle\":%llu,\"ros_ns\":%lld,\"hl_stamp_ns\":%lld,\"ll_stamp_ns\":%lld,"
+               "\"mode\":%u,\"hl_fresh\":%d,\"ll_alive\":%d,\"emergency\":%d,"
+               "\"requested\":%d,\"allowed\":%d",
+               static_cast<unsigned long long>(control_ticks_),
+               static_cast<long long>(now().nanoseconds()),
+               static_cast<long long>(hl_status_stamp_.nanoseconds()),
+               static_cast<long long>(ll_last_status_.nanoseconds()),
+               current_mode_,
+               hl_fresh,
+               ll_alive,
+               emergency,
+               mow_requested_,
+               blade_allowed);
   drive_blade(blade_allowed);
 
   // Heartbeat + config handshake ride on the control tick so the LowLevel
@@ -290,6 +320,11 @@ void OpenMowerBridgeNode::drive_blade(bool blade_allowed)
   // OpenMower convention (mower_comms_v1): direction 1 = +duty, 0 = -duty.
   const double duty = blade_allowed ? (mow_direction_ != 0u ? blade_duty_ : -blade_duty_) : 0.0;
   const bool written = motors_[kMow]->SendDuty(duty);
+  OM_SIM_TRACE("blade_write",
+               "\"cycle\":%llu,\"duty\":%.17g,\"written\":%d",
+               static_cast<unsigned long long>(control_ticks_),
+               duty,
+               written);
   // Mirrors hardware_bridge_node's mapping so the GUI and diagnostics read the
   // same vocabulary on both backends: the request never left the host ->
   // unknown; otherwise off, or the direction the operator asked for.

@@ -8,7 +8,7 @@ const { Paragraph } = Typography;
 
 type Props = {
     values: SettingsValues;
-    onChange: (key: string, value: any) => void;
+    onChange: (key: string, value: string | number | boolean | null) => void;
 };
 
 /**

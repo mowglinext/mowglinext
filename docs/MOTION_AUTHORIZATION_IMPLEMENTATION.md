@@ -8,10 +8,11 @@ stack-wide autonomous-motion invariant or physical containment.
 
 Compared with fetched `main` `fe77a097` and `dev` `5d3845b1`, the PR's
 dock-dispatch, fresh-detour-snapshot, simulator-geometry and bounded-bevel
-repairs remain distinct. Newer upstream docking and FollowStrip changes
-overlap those files and must be reconciled before extracting those subsets.
-The investigation checkout fast-forwarded to the actual PR head `0caa2013`,
-including its dock-body execution exclusion; no old work was overwritten.
+repairs remain distinct. The investigation checkout fast-forwarded to PR head
+`0caa2013`, including its dock-body execution exclusion, then integrated the
+current `dev` at `5d3845b1`. Upstream #1008's firmware acquisition-time repair
+is included; the physical USB/STM32 path is separate from the failed Webots
+execution. No hardware result follows from that source integration.
 
 The Webots diff-drive configuration now explicitly uses a one-sample velocity
 window. The default ten-sample trailing mean paired a current wheel-odometry
@@ -48,6 +49,29 @@ error or earlier graph/anchor history. Source-time TF provenance remains a
 separate producer defect. Geometry tolerances, safety horizons and acceptance
 assertions remain unchanged; this simulator repair does not certify physical
 behavior.
+
+
+### Latest-dev integration
+
+The three conflict files are reconciled with independent review. Docking
+retains both the newer already-charging success paths and the PR's per-attempt
+result ownership/cancellation draining. The imported cancellation regression
+now also asserts that a successor is not dispatched before the old result is
+drained; its successor-result and success assertions remain intact.
+
+Corridor records retain dev's transactional preflight, strict unsigned IDs and
+name normalization. A preflight failure preserves the known live area and
+corridor records, while the existing planning-grid error gate keeps execution
+geometry revoked across mask rebuilds. An error after area replacement starts
+still discards partial state. A new integration regression verifies retained
+live map data, revoked permission and recovery after a corrected reload.
+
+Current interfaces were generated and installed from the merged source before
+dependent builds. Both map targets, all four selected docking/coverage targets
+and all five selected simulation targets pass (**11/11 CTest targets**).
+The behavior group takes 111.35 seconds in total, within the 120-second per-test
+and 240-second group bounds. This qualifies the focused merge seams; it does
+not replace whole-stack CI or a source-aligned localization/containment run.
 
 ## Targeted first-cusp investigation (2026-10-21)
 

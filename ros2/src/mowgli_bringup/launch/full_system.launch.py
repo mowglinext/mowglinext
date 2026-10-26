@@ -622,6 +622,10 @@ def generate_launch_description() -> LaunchDescription:
             # mowgli_robot.yaml for why this must stay soft, never lethal.
             {"boundary_inner_margin_m": float(
                 robot_params.get("boundary_inner_margin_m", 0.20))},
+            # Soft transit margin around drawn obstacles (mowglinext#975): the
+            # obstacle counterpart of boundary_inner_margin_m — soft, never lethal.
+            {"obstacle_transit_margin_m": float(
+                robot_params.get("obstacle_transit_margin_m", 0.30))},
             {"dock_inner_margin_exempt_radius_m": float(
                 robot_params.get("dock_inner_margin_exempt_radius_m", 2.5))},
             # tool_width is the SINGLE source of truth (mowgli_robot.yaml) for

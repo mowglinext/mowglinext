@@ -247,6 +247,12 @@ export interface UseMapEditingOptions {
     shrinkMemory?: ShrinkMemory;
 }
 
+type AreaLabelProperties = {
+    title?: string;
+    index?: MowingAreaFeature["properties"]["source_working_area_index"];
+    id?: MowingAreaFeature["properties"]["source_working_area_id"];
+};
+
 export interface UseMapEditingReturn {
     // Modal state
     modalOpen: boolean;
@@ -268,7 +274,7 @@ export interface UseMapEditingReturn {
     splitTargetId: string | null;
 
     // Labels helper
-    buildLabels: (param: MowingFeature[]) => ReturnType<typeof centroid>[];
+    buildLabels: (param: MowingFeature[]) => ReturnType<typeof centroid<AreaLabelProperties>>[];
 
     // Draw event callbacks
     onCreate: (e: { features: Feature[] }) => void;
@@ -335,12 +341,12 @@ export function useMapEditing({
     // -----------------------------------------------------------------------
     // Labels
     // -----------------------------------------------------------------------
-    const buildLabels = (param: MowingFeature[]) => {
+    const buildLabels = useCallback((param: MowingFeature[]) => {
         return param.flatMap((feature) => {
             if (!(feature instanceof MowingAreaFeature)) return [];
             if (!feature.geometry?.coordinates?.[0]?.length) return [];
 
-            const centroidPt = centroid(feature);
+            const centroidPt = centroid<AreaLabelProperties>(feature);
             if (centroidPt.properties != null) {
                 const areaSqm = turfArea(feature);
                 const sizeLabel = formatArea(areaSqm, i18n.language);
@@ -354,7 +360,7 @@ export function useMapEditing({
             centroidPt.id = feature.id;
             return [centroidPt];
         });
-    };
+    }, [t, i18n.language]);
 
     // -----------------------------------------------------------------------
     // Internal helpers that need closure over state
@@ -433,6 +439,11 @@ export function useMapEditing({
                 targetFeat.geometry.type !== "Polygon"
             ) {
                 notification.error({message: t('mapEditing.splitTargetNotValidPolygon')});
+                return;
+            }
+
+            if (targetFeat.geometry.coordinates.length > 1) {
+                notification.error({message: t('mapFiles.unsupportedGeometry')});
                 return;
             }
 
@@ -1016,7 +1027,7 @@ export function useMapEditing({
         }
 
         const result = difference(
-            featureCollection([keepFeat as any, cutFeat as any])
+            featureCollection([keepFeat, cutFeat])
         );
         if (!result || result.geometry.type !== "Polygon") {
             notification.error({
@@ -1060,7 +1071,7 @@ export function useMapEditing({
         }
         setSplitTargetId(targetId);
         notification.info({message: t('mapEditing.drawLineAcrossArea')});
-        drawRef.current?.changeMode("split_line" as any);
+        drawRef.current?.changeMode("split_line");
     }, [selectedFeatureIds, features, notification, drawRef, t]);
 
     // -----------------------------------------------------------------------
@@ -1116,10 +1127,17 @@ export function useMapEditing({
     const updateMowingArea = useCallback((correctedGeometry?: Polygon) => {
         if (!curMowingAreaFeature || !curMowingAreaFeature.id) return;
 
-        setAreaModelOpen(false);
         const newFeatures = {...features} as Record<string, MowingFeature>;
         const oldFeature = newFeatures[curMowingAreaFeature.id];
         if (!oldFeature || !(oldFeature instanceof MowingFeatureBase)) return;
+
+        // Shrink memory and split/type conversions can only represent one ring.
+        // Do not let an older draft lose holes before the save preflight sees it.
+        if (oldFeature.geometry.coordinates.length > 1 || correctedGeometry && correctedGeometry.coordinates.length > 1) {
+            notification.error({message: t('mapFiles.unsupportedGeometry')});
+            return;
+        }
+        setAreaModelOpen(false);
 
         const typeChanged =
             curMowingAreaFeature.feature_type !==
@@ -1190,7 +1208,7 @@ export function useMapEditing({
         }
 
         setFeatures(newFeatures);
-    }, [curMowingAreaFeature, features, setFeatures, shrinkMemory]);
+    }, [curMowingAreaFeature, features, setFeatures, shrinkMemory, notification, t]);
 
     const cancelAreaModal = useCallback(() => {
         setAreaModelOpen(false);

@@ -71,6 +71,12 @@ target_link_libraries(openmower_bridge_node
   ${mowgli_interfaces_TARGETS}
 )
 
+# Only the simulation job enables this; image/production builds keep it OFF.
+option(OPENMOWER_SIMULATION_TRACE "Record native simulation observations" OFF)
+if(OPENMOWER_SIMULATION_TRACE)
+  target_compile_definitions(openmower_bridge_node PRIVATE OPENMOWER_SIMULATION_TRACE)
+endif()
+
 # ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------

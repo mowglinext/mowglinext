@@ -11,9 +11,9 @@ const ticks = (sec: number, count: number, factor = 1000): WheelTick => ({stamp:
     wheel_direction_rl: 1, wheel_direction_rr: 0});
 
 describe('existing motor telemetry contract', () => {
-    it('projects native Status unchanged in RPM, A and degrees Celsius', () => {
+    it('projects native blade measurements and keeps its unpopulated ESC temperature unknown', () => {
         expect(bladeTelemetry(status, 1000, 1001, 'mowgli')).toEqual({fresh: true, rpm: 3200,
-            current: 1.25, escTemp: 42, motorTemp: 36});
+            current: 1.25, escTemp: NaN, motorTemp: 36});
     });
     it('uses the same blade values for MAVROS and keeps unavailable winding temperature unknown', () => {
         const result = bladeTelemetry(status, 1000, 1001, 'mavros');
@@ -65,7 +65,7 @@ describe('existing motor telemetry contract', () => {
 });
 
 export const escDiagnostic = (role = 'left_wheel', overrides: Record<string, string> = {}, level = 0): DiagnosticArray => ({status: [{
-    name: `mowgli_mavros_bridge/vesc_${role}`, message: 'online', hardware_id: '', level, receivedAt: 10000,
+    name: `mowgli_mavros_bridge/vesc_${role}`, message: 'online', hardware_id: '', level, receivedAt: 10000, receivedMonotonic: 10000,
     values: Object.entries({online: 'true', stale: 'false', age_ms: '100', rpm_abs: '9000', rpm_valid: 'true',
         temperature_c: '31.5', temperature_valid: 'true', current_a: '2.5', voltage_v: '24', totalcurrent_ah: '1.25',
         failure_flags: '0', failure_flags_valid: 'true', error_count: '0', error_count_valid: 'true', count: '123', esc_index: '47', ...overrides})

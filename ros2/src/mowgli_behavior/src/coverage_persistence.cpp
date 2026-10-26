@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -41,6 +42,18 @@ namespace
 constexpr const char* kHeader = "mowgli_coverage_resume v3";
 // The phase-only snapshot never carries a command or cursor, so it cannot
 // auto-start the mower. Older readers ignore these optional rows.
+
+// Wall-clock seconds the snapshot was written: the age a later boot judges
+// restored progress by (restoredProgressExpired). Wall clock, not steady —
+// only it survives a restart. Optional row: files written before it have an
+// unknown age and are resumed as before.
+void writeSavedAt(std::ostream& out, std::chrono::system_clock::time_point written)
+{
+  out << "saved_at "
+      << std::chrono::duration_cast<std::chrono::seconds>(written.time_since_epoch()).count()
+      << '\n';
+}
+
 void writeCrossHatch(std::ostream& out, const std::map<uint32_t, CrossHatch>& areas)
 {
   for (const auto& [index, state] : areas)
@@ -98,6 +111,86 @@ bool hasCoverageResumeState(const BTContext& ctx)
                      });
 }
 
+void discardRestoredCoverageProgress(BTContext& ctx)
+{
+  ctx.area_completed_swaths.clear();
+  ctx.area_swath_count.clear();
+  ctx.area_resume_pose_index.clear();
+  ctx.area_unit_progress.clear();
+  ctx.area_path_pose_count.clear();
+  ctx.area_plan_fingerprint.clear();
+  ctx.completed_areas.clear();
+  clearSingleAreaMode(ctx);
+  ctx.resume_after_incomplete_end = false;
+  ctx.resume_after_incomplete_end_time = {};
+}
+
+RestoredCommandPolicy applyRestoredCommandPolicy(BTContext& ctx,
+                                                 std::chrono::system_clock::time_point wall_now,
+                                                 std::chrono::steady_clock::time_point steady_now)
+{
+  constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
+  constexpr uint8_t kCommandStop = 8;  // HighLevelControl::Request::COMMAND_STOP
+  RestoredCommandPolicy policy;
+  // Age first: progress older than kIncompleteResumeMaxAge no longer describes
+  // the lawn, whatever command was saved with it. A START that old must not
+  // auto-continue either — nobody expects the mower to leave the dock on its
+  // own because a mow died yesterday.
+  if (ctx.coverage_resume_saved_at && hasRecordedCoverageProgress(ctx) &&
+      restoredProgressExpired(*ctx.coverage_resume_saved_at, wall_now))
+  {
+    discardRestoredCoverageProgress(ctx);
+    policy.expired_progress = true;
+  }
+  policy.auto_continue = ctx.current_command == kCommandStart && hasCoverageResumeState(ctx);
+  policy.preserve_stop_hold =
+      ctx.current_command == kCommandStop && ctx.critical_charge_stop_latched;
+  ctx.restored_mow_charge_check_pending = policy.auto_continue;
+  if (!policy.auto_continue && !policy.preserve_stop_hold)
+  {
+    ctx.current_command = 0;  // IDLE — require an explicit operator start
+  }
+  if (!policy.auto_continue && ctx.battery_charge_pending)
+  {
+    ctx.battery_charge_pending = false;
+    ctx.critical_dock_failure_persistence_requested = true;
+    policy.cleared_charge_pending = true;
+  }
+  // Progress that boots without a running command is progress WAITING for a
+  // Play — what EndSession(keep_incomplete) leaves behind, or a STOP hold. Flag
+  // it as kept, aged from the snapshot (unknown age counts from boot), so the
+  // START handler applies the same age-out it applies within one process
+  // instead of resuming it unconditionally because the flag died with the
+  // previous process.
+  if (!policy.auto_continue && hasRecordedCoverageProgress(ctx))
+  {
+    ctx.resume_after_incomplete_end = true;
+    ctx.resume_after_incomplete_end_time = steady_now;
+    if (ctx.coverage_resume_saved_at)
+    {
+      const auto age = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+          wall_now - *ctx.coverage_resume_saved_at);
+      if (age.count() > 0)
+      {
+        ctx.resume_after_incomplete_end_time = steady_now - age;
+      }
+    }
+  }
+  return policy;
+}
+
+void observeRestoredMowPower(BTContext& ctx, bool charging)
+{
+  if (!ctx.restored_mow_charge_check_pending)
+    return;
+  ctx.restored_mow_charge_check_pending = false;
+  if (charging && ctx.current_command == 1)
+  {
+    ctx.battery_charge_pending = true;
+    ctx.critical_dock_failure_persistence_requested = true;
+  }
+}
+
 bool beginCoverageOrientation(BTContext& ctx, uint32_t area)
 {
   auto it = ctx.cross_hatch.find(area);
@@ -137,6 +230,11 @@ void markCoverageStarted(BTContext& ctx, uint32_t area)
 
 bool saveCoverageResumeState(const BTContext& ctx)
 {
+  return saveCoverageResumeState(ctx, std::chrono::system_clock::now());
+}
+
+bool saveCoverageResumeState(const BTContext& ctx, std::chrono::system_clock::time_point written)
+{
   if (ctx.coverage_resume_path.empty())
   {
     return false;
@@ -167,6 +265,7 @@ bool saveCoverageResumeState(const BTContext& ctx)
 
   std::ostringstream out;
   out << kHeader << '\n';
+  writeSavedAt(out, written);
   writeCrossHatch(out, ctx.cross_hatch);
   for (const auto area : ctx.base_orientation_areas)
     out << "base_orientation_area " << area << '\n';
@@ -177,6 +276,7 @@ bool saveCoverageResumeState(const BTContext& ctx)
   // the cursors, retaining only cross-hatch metadata when needed.
   out << "current_command " << static_cast<unsigned>(ctx.current_command) << '\n';
   out << "critical_charge_stop_latched " << (ctx.critical_charge_stop_latched ? 1 : 0) << '\n';
+  out << "battery_charge_pending " << (ctx.battery_charge_pending ? 1 : 0) << '\n';
   out << "critical_dock_failure_latched " << (ctx.critical_dock_failure_latched ? 1 : 0) << '\n';
   // Single-area mode (a ~/start_in_area targeted run). Persisted for the same
   // reason as current_command: a restart mid-run auto-re-enters MowingSequence,
@@ -269,7 +369,17 @@ bool loadCoverageResumeState(BTContext& ctx)
     {
       continue;
     }
-    if (tag == "cross_hatch_area")
+    if (tag == "saved_at")
+    {
+      // Optional: absent in files written before the row existed (unknown age).
+      int64_t seconds;
+      if (ls >> seconds && seconds > 0)
+      {
+        ctx.coverage_resume_saved_at =
+            std::chrono::system_clock::time_point(std::chrono::seconds(seconds));
+      }
+    }
+    else if (tag == "cross_hatch_area")
     {
       uint32_t index;
       int next, active, alternate, used, override_next;
@@ -314,6 +424,13 @@ bool loadCoverageResumeState(BTContext& ctx)
       int v;
       if (ls >> v && (v == 0 || v == 1))
         ctx.critical_charge_stop_latched = v != 0;
+    }
+    else if (tag == "battery_charge_pending")
+    {
+      // Optional v3 row: older snapshots remain resumable unchanged.
+      int v = 0;
+      if (ls >> v && (v == 0 || v == 1))
+        ctx.battery_charge_pending = v != 0;
     }
     else if (tag == "critical_dock_failure_latched")
     {
@@ -421,6 +538,7 @@ bool clearCoverageResumeState(const BTContext& ctx)
   {
     std::ostringstream out;
     out << kHeader << '\n';
+    writeSavedAt(out, std::chrono::system_clock::now());
     writeCrossHatch(out, ctx.cross_hatch);
     for (const auto area : ctx.base_orientation_areas)
       out << "base_orientation_area " << area << '\n';

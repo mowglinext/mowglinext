@@ -86,6 +86,9 @@ struct BTContext
   std::chrono::steady_clock::time_point last_status_time{};
   mowgli_interfaces::msg::Emergency latest_emergency;
   mowgli_interfaces::msg::Power latest_power;
+  /// Startup barrier: set only after live power has supplied a usable battery
+  /// reading and restored charging intent has been reconciled. Never persisted.
+  bool power_sample_received{false};
 
   /// Timestamp of the last emergency message received.
   std::chrono::steady_clock::time_point last_emergency_time{std::chrono::steady_clock::now()};
@@ -214,17 +217,27 @@ struct BTContext
   /// context_mutex.
   bool critical_charge_stop_latched{false};
 
+  /// Battery-driven charge waits survive guard halts and process restarts.
+  /// Both low and critical holds re-enter the shared critical recovery branch.
+  bool battery_charge_pending{false};
+
+  /// After restoring an active mow, inspect the first power sample. An old
+  /// snapshot may predate battery_charge_pending, but booting on the charger
+  /// must still complete charging before resuming the saved mission.
+  bool restored_mow_charge_check_pending{false};
+
   /// Outcome of the most recent DockRobot attempt. Reset when an action starts
-  /// and set only after its action result reports success. Used by the
+  /// and set after its action result or physical charger contact reports success. Used by the
   /// critical-battery tree to avoid treating a failed navigation attempt as
   /// arrival at the charger.
   bool last_dock_succeeded{false};
 
   /// Latches a failed critical-battery dock attempt. The mower stays stopped
-  /// until an operator sends a new command, rather than retrying at BT rate.
+  /// until a new operator command or physical charger contact resolves it,
+  /// rather than retrying at BT rate.
   bool critical_dock_failure_latched{false};
 
-  /// Set by LatchCriticalDockFailure and consumed by the node after the current
+  /// Set by battery recovery state transitions and consumed after the current
   /// tree tick, so persistence remains serialized with coverage-map access.
   bool critical_dock_failure_persistence_requested{false};
 
@@ -262,6 +275,15 @@ struct BTContext
   /// handler; see keepsSingleAreaOnStart() and incompleteResumeExpired().
   bool resume_after_incomplete_end{false};
   std::chrono::steady_clock::time_point resume_after_incomplete_end_time{};
+
+  /// Set by an operator START (~/high_level_control COMMAND_START, ~/start_in_area) and cleared
+  /// by the first area GetNextUnmowedArea dispatches after it. While set, a scan that finds every
+  /// area already COMPLETE has not mowed a thing for this Start: the progress it found belongs to
+  /// a session that finished without reaching EndSession (its dock was preempted, or the stack
+  /// restarted first). GetNextUnmowedArea then discards that progress and mows the lawn again
+  /// instead of reporting MOWING_COMPLETE — field 2026-10-26, v1.6.0: every Play undocked, said
+  /// "mowing complete" and drove back, for good. Not persisted: a restart is not a Start.
+  bool start_awaiting_dispatch{false};
 
   /// Stable id (mowglinext#637) of the area single_area_target's index
   /// pointed at when it was locked in — captured from the FIRST probe
@@ -584,6 +606,11 @@ struct BTContext
   /// Cleared by EndSession so the next COMMAND_START starts without a stale
   /// warning from a previous, unrelated session.
   bool coverage_plausibility_warning{false};
+  /// Why the mower is not mowing (HighLevelStatus.stop_reason / stop_detail). Written by
+  /// recordStopReason (stop_reason.hpp) where a session ends or a hold begins without finishing,
+  /// cleared by the next HighLevelControl command. Empty = nothing to report.
+  std::string stop_reason;
+  std::string stop_detail;
 
   /// Filesystem path the coverage RESUME state (the four maps above +
   /// completed_areas + current_area) is persisted to, so an interrupted session
@@ -593,6 +620,14 @@ struct BTContext
   /// completion, loaded once at node startup, and removed by EndSession. See
   /// coverage_persistence.{hpp,cpp}.
   std::string coverage_resume_path;
+  /// Wall-clock time the snapshot at coverage_resume_path was written (its `saved_at` row),
+  /// filled by loadCoverageResumeState. It is the AGE of restored progress: kept progress older
+  /// than kIncompleteResumeMaxAge is discarded at boot (applyRestoredCommandPolicy) exactly as a
+  /// live process ages it out at the next Play. Field 2026-10-25: without it, three updater
+  /// restarts turned a 6-day-old "4 of 5 sub-paths done" snapshot into a mow that drove the one
+  /// ring unit left and declared the lawn complete. Absent in files written before this row
+  /// (unknown age, resumed as before).
+  std::optional<std::chrono::system_clock::time_point> coverage_resume_saved_at;
   bool mow_cross_hatch{false};
   std::map<uint32_t, CrossHatch> cross_hatch;
   // Disabled sessions still latch their base orientation for resume, but do not
@@ -1122,6 +1157,33 @@ inline bool hasRecordedCoverageProgress(const BTContext& ctx)
   return false;
 }
 
+/// Forget every recorded coverage progress — what hasRecordedCoverageProgress() looks at plus
+/// the plan fingerprints, swath counts and the per-area high-water mark — so the next scan
+/// plans and mows each area from its first line. Session budgets, flags and the single-area
+/// target are the caller's business.
+inline void clearRecordedCoverageProgress(BTContext& ctx)
+{
+  ctx.area_completed_swaths.clear();
+  ctx.area_swath_count.clear();
+  ctx.area_resume_pose_index.clear();
+  ctx.area_unit_progress.clear();
+  ctx.area_path_pose_count.clear();
+  ctx.area_plan_fingerprint.clear();
+  ctx.completed_areas.clear();
+  ctx.area_last_coverage.clear();
+  ctx.coverage_plausibility_warning = false;
+}
+
+/// Forget the recorded progress of ONE area, for an explicit "mow this area" request.
+inline void clearAreaCoverageProgress(BTContext& ctx, uint32_t area)
+{
+  ctx.area_completed_swaths.erase(area);
+  ctx.area_resume_pose_index.erase(area);
+  ctx.area_unit_progress.erase(area);
+  ctx.area_last_coverage.erase(area);
+  ctx.completed_areas.erase(area);
+}
+
 /// Does a plain COMMAND_START keep the single-area clip it finds latched? Yes when the operator
 /// paused a run (isResumableHoldState), and — new — when the previous session ended unfinished
 /// and its progress was kept (BTContext::resume_after_incomplete_end): Play then continues the
@@ -1136,6 +1198,17 @@ inline bool incompleteResumeExpired(std::chrono::steady_clock::time_point kept_a
                                     std::chrono::steady_clock::time_point now)
 {
   return now - kept_at > kIncompleteResumeMaxAge;
+}
+
+/// The same question for progress RESTORED from disk at boot, whose age is only known on the
+/// wall clock (BTContext::coverage_resume_saved_at): a steady clock does not survive a restart.
+/// A clock that went backwards since the save reads as a negative age, i.e. not expired — the Pi
+/// has no RTC but systemd restores the last known time, so the wall clock never runs behind a
+/// save made by this robot.
+inline bool restoredProgressExpired(std::chrono::system_clock::time_point saved_at,
+                                    std::chrono::system_clock::time_point now)
+{
+  return now - saved_at > kIncompleteResumeMaxAge;
 }
 
 /// Should a plain COMMAND_START received while the tree publishes `state_name`
