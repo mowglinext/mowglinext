@@ -54,8 +54,9 @@ merged 2026-09-05, "centralize Webots actuation and startup"). Before that,
 `/cmd_vel`, which could diverge from `sim_actuation_node`'s copy — ground
 truth could move while `/wheel_odom` read zero, breaking the RTK
 motion-consistency gate. Now BOTH the chassis teleport and
-`diffdrive_controller` are fed the SAME post-firmware-model twist, so they
-cannot diverge by scheduler phase:
+`diffdrive_controller` are fed the SAME post-firmware-model twist. They still
+integrate different plants and can observe different delivery schedules;
+shared input does not guarantee identical motion:
 
 ```
 /cmd_vel ──> sim_actuation_node ──> /cmd_vel_wheels ─┬─> kinematic_drive plugin ──> Supervisor teleport of the chassis
@@ -70,6 +71,16 @@ cannot diverge by scheduler phase:
                                                  │
                                             /wheel_odom
 ```
+
+`diffdrive_controller.velocity_rolling_window_size` is explicitly **1** in
+`config_webots/ros2_control.yaml`. Its pose and reported Twist must describe
+the same wheel interval: Fusion Graph integrates that velocity at its source
+stamp. The upstream default ten-sample mean lags during acceleration, braking
+and turns while the pose remains current. `test_wheel_odom_interval` exercises
+the real upstream odometry implementation with the shipped configuration and
+checks this relation independently from pose increments. This preserves
+joint-derived odometry; it does not assert that wheel motion equals chassis
+ground truth.
 
 Sensors:
 

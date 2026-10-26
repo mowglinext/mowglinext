@@ -116,6 +116,17 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
+  find_package(diff_drive_controller REQUIRED)
+  find_package(yaml_cpp_vendor REQUIRED)
+  find_package(yaml-cpp REQUIRED)
+
+  ament_add_gtest(test_wheel_odom_interval test/test_wheel_odom_interval.cpp)
+  target_link_libraries(test_wheel_odom_interval
+    diff_drive_controller::diff_drive_controller yaml-cpp
+  )
+  target_compile_definitions(test_wheel_odom_interval PRIVATE
+    WHEEL_ODOM_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config_webots/ros2_control.yaml"
+  )
 
   ament_add_pytest_test(test_cutting_tool_frame
     test/test_cutting_tool_frame.py

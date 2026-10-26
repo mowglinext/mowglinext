@@ -4,6 +4,51 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Simulator wheel-interval repair (2026-10-26)
+
+Compared with fetched `main` `fe77a097` and `dev` `5d3845b1`, the PR's
+dock-dispatch, fresh-detour-snapshot, simulator-geometry and bounded-bevel
+repairs remain distinct. Newer upstream docking and FollowStrip changes
+overlap those files and must be reconciled before extracting those subsets.
+The investigation checkout fast-forwarded to the actual PR head `0caa2013`,
+including its dock-body execution exclusion; no old work was overwritten.
+
+The Webots diff-drive configuration now explicitly uses a one-sample velocity
+window. The default ten-sample trailing mean paired a current wheel-odometry
+pose/header with older velocity intervals. Fusion Graph consumes that velocity
+as its current input, so the mean introduced an additional input delay during
+acceleration, braking and turns. This repair retains joint-derived odometry
+and the existing actuation model.
+
+The new registered `test_wheel_odom_interval` drives the actual upstream
+Odometry implementation using the shipped YAML, independently recovers body
+Twist from pose increments, and compares both at the unchanged `1e-10`
+tolerance. Before the repair, its configured case fails with 25 mismatched
+intervals while the explicit ten-sample negative control passes. After the
+repair both cases pass. The simulation package builds and installs; all four
+focused CTest targets pass, including the firmware wheel-model, ground-truth
+publisher and controller-remap checks.
+
+Two new minimal Webots runs exercise rest, straight motion, pivot, arc and
+stop with the same probe and oracle. The default-window run fails over 759
+intervals (maximum forward-speed mismatch `0.08649 m/s`); the repaired run
+passes over 758 intervals (maximum linear/angular mismatches `5.28e-15 m/s`
+and `3.18e-14 rad/s`). Both finish their observations in approximately
+30 seconds under independent progress and hard-deadline watchdogs. Both
+retain the known driver segmentation fault during teardown; neither is a
+clean-shutdown result. Execution uses UID1000 and the pinned simulation image
+`0fc53b7941fa`, with current source launch/configuration and the image's
+unchanged actuation source. This is fresh component evidence, not a rerun
+using the unavailable older built overlay or a completed mowing mission.
+
+Independent review found no blocking issue in this narrow repair. The
+original boundary failure remains open: one-sample wheel velocity alone
+does not explain the previously retained call819, its residual predicted-pose
+error or earlier graph/anchor history. Source-time TF provenance remains a
+separate producer defect. Geometry tolerances, safety horizons and acceptance
+assertions remain unchanged; this simulator repair does not certify physical
+behavior.
+
 ## Targeted first-cusp investigation (2026-10-21)
 
 The original GPS01 **13.943731 mm** active-MOWING departure remains a failed

@@ -56,6 +56,9 @@
   <test_depend>ament_index_python</test_depend>
   <test_depend>tf2_ros</test_depend>
   <test_depend>python3-yaml</test_depend>
+  <test_depend>diff_drive_controller</test_depend>
+  <test_depend>rcpputils</test_depend>
+  <test_depend>yaml_cpp_vendor</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
