@@ -37,6 +37,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Prefer Ubuntu archive mirror
+        run: |
+          # Azure repeatedly stalled on package downloads; the runner's archive
+          # fallback fetched the same CMake package in two seconds. Change only
+          # the mirror URI, retaining suites, architectures and signed metadata.
+          sudo sed -i \
+            's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
+            /etc/apt/apt-mirrors.txt
+
       - name: Preinstall ROS apt source
         timeout-minutes: 5
         env:

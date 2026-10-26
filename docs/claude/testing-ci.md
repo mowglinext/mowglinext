@@ -63,6 +63,9 @@ Debug and RelWithDebInfo. Its standalone build installs the ROS workspace setup
 and OR-Tools vendor packages directly, alongside native planner dependencies;
 it does not require ROS Desktop. APT source setup and dependency installation
 have 5- and 10-minute step limits within the unchanged 45-minute job limit.
+The runner's Ubuntu mirror list uses `archive.ubuntu.com` in place of the Azure
+mirror, which repeatedly stalled before planner builds; package suites,
+architectures and signature verification remain unchanged.
 `--require-identical` requires unchanged execution bytes,
 fingerprints and metrics, along with repeated-output stability and trace passivity.
 
