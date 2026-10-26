@@ -4,6 +4,83 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Producer-time contract and remaining blocker (2026-10-26)
+
+All five required hosted checks pass on `651508c6`; the PR remains Draft.
+The simulator wheel-interval repair and FTC fixture-startup repair are separate
+from the original **13.943731 mm** boundary failure, which remains open.
+
+A fresh, bounded component build extracts the current `OnImu` and
+`TfBroadcastLoop` bodies unchanged. Their method/helper hashes still match the
+earlier producer seam. The 18 normal timing cases again reproduce eight
+timestamp/value mismatches; all emitted ages lie inside FTC's existing age
+window. The mathematical timing control passes 18/18 but predicts through the
+input lag; that result does not authorize a longer production horizon.
+
+Eleven additional transition controls and two between-leg insertion controls
+exercise the unchanged callbacks/publication method, real ROS clock, real TF
+buffer and Nav2 latest-odom-pose-to-map query. They establish why neither
+`now + lead` nor a substitution with `last_imu_stamp_ + lead` is a complete repair:
+
+- First and rejected long-interval IMU callbacks advance the received timestamp
+  without integrating pose. An out-of-order input from 10.0 to 9.99 seconds
+  also rolls that baseline back; the next 10.01 input integrates 20 ms although
+  only 10 ms is new. This is a controlled callback result, not evidence that
+  the captured boundary event contained an out-of-order IMU.
+- With integrated state at 10.02 seconds and clock at 11.02, production emits
+  stamp 11.12 (age -0.1 seconds). A bounded source-plus-lead control emits
+  stamp 10.12 (age 0.9 seconds). Both latest-time lookups succeed. FTC's existing
+  age check would reject the latter by arithmetic; full FTC authorization was
+  not executed in this producer seam.
+- At unchanged stamp 10.12, an anchor revision changes the returned map x from
+  1.024 to 1.074 m. Equal timestamps therefore do not establish unchanged state.
+  A coordinated rebase preserves 1.074 m after both TF legs are inserted, but
+  an explicit query between legs returns 0.070 or 2.078 m depending on order,
+  with that same stamp. This is a controlled cache interleaving, not an
+  observed production race or cause of the boundary event. Repeated ROS time
+  can expose the same issue with the current publisher too.
+- Reset-shaped field assignments retain old prediction rates and produce
+  approximately 19.964 mm / 0.06 rad from a zeroed pose. The callback rewind
+  control also carries state across clock generations. These controls do not
+  invoke the real graph reset or rebase paths.
+
+The graph/LiDAR sinks are inert and Pose2 is a stand-in; this evidence does not
+partition optimizer history or validate a closed-loop repair. Independent
+review confirms those limits. Each isolated build/run uses UID1000, the pinned
+image `0fc53b7941fa`, no network/devices, 2 CPUs/2 GiB and a 180-second outer
+deadline (60/90/30-second configure/build/execution stages). Source, control,
+output and binary hashes are retained under
+`~/.cache/pr950-resume-20261026/tf-time/seam/source-manifest.json`;
+the inventory and independent review are in its parent directory.
+
+### Exact remaining software questions
+
+| Unknown | Next discriminating evidence |
+| --- | --- |
+| Which source intervals and wheel cache produced each accepted pose? | Record callback sequence/source stamp, accepted IMU interval, consumed wheel identity and the atomic DR pose/rate/source snapshot in the real producer. Received-input stamps alone are insufficient. |
+| Which graph/anchor history accounts for the remaining +13.84 mm declared-time error? | Join graph-node creation inputs, optimizer snapshot and anchor revision to that DR snapshot, acquired truth and the accepted FTC tuple. The captured local seed does not recover that earlier history. |
+| Which source-aligned publication survives reset, rewind and anchor changes? | Track integrated-state lineage separately from anchor revision; test real reset paths and consumer queries across both TF legs. Keep prediction bounded to the configured lead and retain existing freshness/motion assertions. |
+
+No localization production change is selected from these controls. The next
+run is a bounded producer/first-cusp capture with those identities and complete
+signal provenance, using a fresh matching diagnostic build; former mission
+overlays are unavailable. Another uninstrumented full mission would not resolve
+these unknowns. Hardware is not required for this software discriminator.
+
+### Smaller repair families, without extraction
+
+The separately committed simulator one-sample repair (`1715574b`) is the
+clearest standalone candidate: its upstream regression and short Webots
+RED/GREEN qualify its observation contract, not mission containment. Replay-CI
+dependency/mirror repairs are also separate from motion policy. The FTC fixture
+startup barrier and exact TF-probe registration belong together; their tests
+do not repair the upstream listener implementation. Dock-dispatch and fresh
+detour/progress repairs have focused merged-dev tests but overlap newer dev
+behavior and need their own scoped review. Shared geometry/sweep/escape work
+depends on its message/producer substrate; the bevel repair depends on its
+certification/replay evidence. None inherits a containment pass from green CI,
+and no component has been extracted or marked ready.
+
 ## Simulator wheel-interval repair (2026-10-26)
 
 Compared with fetched `main` `fe77a097` and `dev` `5d3845b1`, the PR's
