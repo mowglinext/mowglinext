@@ -59,7 +59,11 @@ Two more piles of test files exist but **never execute**: the 62 CTest suites in
 [`test/replay/README.md`](../../ros2/src/mowgli_coverage/test/replay/README.md)
 documents the standalone real-F2C replay. `.github/workflows/coverage-replay.yml`
 compares the synthetic merge's exact base parent with the candidate in Release,
-Debug and RelWithDebInfo. `--require-identical` requires unchanged execution bytes,
+Debug and RelWithDebInfo. Its standalone build installs the ROS workspace setup
+and OR-Tools vendor packages directly, alongside native planner dependencies;
+it does not require ROS Desktop. APT source setup and dependency installation
+have 5- and 10-minute step limits within the unchanged 45-minute job limit.
+`--require-identical` requires unchanged execution bytes,
 fingerprints and metrics, along with repeated-output stability and trace passivity.
 
 The separate opt-in `--require-certified-fillets` mode keeps exact repetitions,
