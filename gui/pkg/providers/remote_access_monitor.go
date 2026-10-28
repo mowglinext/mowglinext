@@ -239,8 +239,8 @@ func (p *RemoteAccessProvider) checkHealth(ctx context.Context) {
 		return
 	}
 	attempt := p.monitor.RecoveryAttempts + 1
-	next = now.Add(time.Duration(1<<uint(attempt-1)) * 5 * time.Minute)
-	budget, _ := json.Marshal(remoteAccessBudget{Attempts: attempt, NextAt: &next})
+	retryAt := now.Add(time.Duration(1<<uint(attempt-1)) * 5 * time.Minute)
+	budget, _ := json.Marshal(remoteAccessBudget{Attempts: attempt, NextAt: &retryAt})
 	// Reserve before acting so process restarts cannot replenish retries.
 	if err := p.db.Set(remoteAccessRecoveryKey, budget); err != nil {
 		p.monitor.RecoveryState = "degraded"
@@ -251,7 +251,7 @@ func (p *RemoteAccessProvider) checkHealth(ctx context.Context) {
 		return
 	}
 	p.monitor.RecoveryAttempts = attempt
-	p.monitor.NextRecoveryAt = &next
+	p.monitor.NextRecoveryAt = &retryAt
 	p.monitor.RecoveryState = "cooldown"
 	p.monitor.faultSince = time.Time{}
 	p.mu.Unlock()

@@ -478,3 +478,21 @@ func TestRemoteAccessMaintenanceAcknowledgementDrainsInflightRecovery(t *testing
 	p.checkHealth(context.Background())
 	assert.Len(t, d.restarted, 1, "no new recovery after maintenance acknowledgement")
 }
+
+func TestRemoteAccessStatusTimestampsRemainImmutableDuringRecovery(t *testing.T) {
+	p, d, now := monitoredRemoteAccess(t)
+	localDaemonFault(d)
+	p.checkHealth(context.Background())
+	*now = now.Add(remoteAccessFaultGrace)
+	var snapshot RemoteAccessStatus
+	p.networkOnline = func(context.Context) bool {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		snapshot = p.Status(ctx) // API request times out waiting for the operation gate.
+		return true
+	}
+	p.checkHealth(context.Background())
+	require.NotNil(t, snapshot.NextRecoveryAt)
+	assert.Equal(t, *now, *snapshot.NextRecoveryAt, "later cooldown reservation must not mutate a status snapshot already handed to JSON encoding")
+	assert.Equal(t, now.Add(5*time.Minute), *monitorSnapshot(p).NextRecoveryAt)
+}
