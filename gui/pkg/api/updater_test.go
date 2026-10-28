@@ -6,6 +6,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/mowglinext/mowglinext/pkg/updater"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +41,7 @@ func TestUpdaterMutationsRequireSameOriginJSON(t *testing.T) {
 func TestUpdateReadinessRequiresLiveStoppedHardware(t *testing.T) {
 	ros := types.NewMockRosProvider()
 	r := gin.New()
-	UpdaterRoutes(r.Group("/api"), ros, types.NewMockDBProvider())
+	UpdaterRoutes(r.Group("/api"), ros, types.NewMockDBProvider(), nil)
 	now := time.Now()
 	stamp := map[string]any{"sec": now.Unix(), "nanosec": now.Nanosecond()}
 	emit := func(topic string, data any) { body, _ := json.Marshal(data); ros.Dispatch(topic, body) }
@@ -168,7 +170,7 @@ func TestUpdateReadinessOnOpenMowerNeedsNoMowgliProtocol(t *testing.T) {
 		}
 		ros := types.NewMockRosProvider()
 		r := gin.New()
-		UpdaterRoutes(r.Group("/api"), ros, db)
+		UpdaterRoutes(r.Group("/api"), ros, db, nil)
 		now := time.Now()
 		stamp := map[string]any{"sec": now.Unix(), "nanosec": now.Nanosecond()}
 		emit := func(topic string, data any) { body, _ := json.Marshal(data); ros.Dispatch(topic, body) }
@@ -225,7 +227,7 @@ func startFakeUpdater(t *testing.T) *fakeUpdater {
 func TestUpdaterStateIsRevalidatedWithETag(t *testing.T) {
 	fake := startFakeUpdater(t)
 	r := gin.New()
-	UpdaterRoutes(r.Group("/api"), types.NewMockRosProvider(), types.NewMockDBProvider())
+	UpdaterRoutes(r.Group("/api"), types.NewMockRosProvider(), types.NewMockDBProvider(), nil)
 	get := func(inm string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/api/system/updater/state", nil)
 		if inm != "" {
@@ -271,7 +273,7 @@ func TestUpdaterStateErrorsAreNotCachedOrRevalidated(t *testing.T) {
 	fake := startFakeUpdater(t)
 	fake.status = 409
 	r := gin.New()
-	UpdaterRoutes(r.Group("/api"), types.NewMockRosProvider(), types.NewMockDBProvider())
+	UpdaterRoutes(r.Group("/api"), types.NewMockRosProvider(), types.NewMockDBProvider(), nil)
 	req := httptest.NewRequest("GET", "/api/system/updater/state", nil)
 	req.Header.Set("If-None-Match", "*")
 	w := httptest.NewRecorder()
@@ -297,4 +299,23 @@ func TestUpdaterETagMatching(t *testing.T) {
 			t.Fatalf("If-None-Match %q: got %v, want %v", test.header, got, test.want)
 		}
 	}
+}
+
+func TestUpdateMaintenanceAcknowledgementWaitsForRemoteAccess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "maintenance")
+	t.Setenv("MOWGLI_UPDATE_MAINTENANCE", path)
+	require.NoError(t, os.WriteFile(path, []byte("pending"), 0600))
+	quiescent := false
+	r := gin.New()
+	UpdaterRoutes(r.Group("/api"), types.NewMockRosProvider(), types.NewMockDBProvider(), func() bool { return quiescent })
+	read := func() updater.Readiness {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest("GET", "/api/system/update-readiness", nil))
+		var result updater.Readiness
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+		return result
+	}
+	assert.False(t, read().Maintenance)
+	quiescent = true
+	assert.True(t, read().Maintenance)
 }

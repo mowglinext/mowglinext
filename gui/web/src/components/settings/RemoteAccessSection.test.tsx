@@ -143,6 +143,71 @@ describe("RemoteAccessSection", () => {
         expect(screen.getByTestId("remote-access-verdict").textContent).toMatch(/connected/i);
     });
 
+    it("hides connection URLs when Tailscale says the node is offline", async () => {
+        installFakeBackend({...defaultSettings, enabled: true}, {
+            ...disabledStatus, enabled: true, phase: "running", containerState: "running", backendState: "Running",
+            statusUsable: true, selfOnline: false, recoveryState: "monitoring", recoveryAttempts: 0,
+            tailscaleIps: ["100.64.0.7"], httpUrls: ["http://100.64.0.7:4006"],
+        });
+        renderSection();
+
+        const verdict = await screen.findByTestId("remote-access-verdict");
+        expect(verdict.textContent).toMatch(/offline/i);
+        expect(screen.getByText(/node is offline/i)).toBeInTheDocument();
+        expect(screen.queryByTestId("remote-access-urls")).toBeNull();
+    });
+
+    it("shows health history and the next bounded recovery check", async () => {
+        installFakeBackend({...defaultSettings, enabled: true}, {
+            ...disabledStatus, enabled: true, phase: "running", containerState: "running",
+            recoveryState: "cooldown", recoveryAttempts: 2,
+            lastSuccessAt: "2026-10-29T10:00:00Z", nextRecoveryAt: "2026-10-29T10:05:00Z",
+        });
+        renderSection();
+
+        const recovery = await screen.findByTestId("remote-access-recovery");
+        expect(recovery).toHaveTextContent(/recovery attempt is cooling down/i);
+        expect(recovery).toHaveTextContent(/2/);
+        expect(recovery).toHaveTextContent(/last successful health check/i);
+        expect(recovery).toHaveTextContent(/next recovery check/i);
+    });
+
+    it("explains that login approval needs an operator and does not offer auto-restart", async () => {
+        installFakeBackend({...defaultSettings, enabled: true}, {
+            ...disabledStatus, enabled: true, phase: "running", containerState: "running",
+            backendState: "NeedsMachineAuth", recoveryState: "operator_action", recoveryAttempts: 0,
+        });
+        renderSection();
+
+        expect(await screen.findByText(/needs approval in the tailscale admin console/i)).toBeInTheDocument();
+        expect(screen.getByTestId("remote-access-recovery")).toHaveTextContent(/needs an operator action/i);
+    });
+
+    it("offers manual Retry after automatic recovery is exhausted", async () => {
+        installFakeBackend({...defaultSettings, enabled: true}, {
+            ...disabledStatus, enabled: true, phase: "degraded", recoveryState: "degraded",
+            recoveryAttempts: 3, recoveryError: "container restart failed",
+        });
+        renderSection();
+        const user = userEvent.setup();
+
+        expect(await screen.findByText(/automatic recovery needs attention/i)).toBeInTheDocument();
+        expect(screen.getByText(/container restart failed/i)).toBeInTheDocument();
+        await user.click(screen.getByRole("button", {name: /settingsRemoteAccess.retry|Retry/i}));
+        await waitFor(() => expect(requestMock.mock.calls.some(([req]) => (req as Req).path === "/remote-access/apply")).toBe(true));
+    });
+
+    it("reports an unavailable host network without exposing a restart action", async () => {
+        installFakeBackend({...defaultSettings, enabled: true}, {
+            ...disabledStatus, enabled: true, phase: "running", containerState: "running",
+            hostNetworkOnline: false, recoveryState: "monitoring", recoveryAttempts: 0,
+        });
+        renderSection();
+
+        expect(await screen.findByText(/robot cannot reach the tailscale service/i)).toBeInTheDocument();
+        expect(screen.queryByRole("button", {name: /retry/i})).toBeNull();
+    });
+
     it("offers a retry that posts to /remote-access/apply after an error", async () => {
         installFakeBackend({...defaultSettings, enabled: true}, {
             ...disabledStatus, enabled: true, phase: "error", error: "pull tailscale/tailscale: registry unreachable",

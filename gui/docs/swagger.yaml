@@ -903,6 +903,7 @@ definitions:
     - starting
     - running
     - error
+    - degraded
     type: string
     x-enum-varnames:
     - RemoteAccessDisabled
@@ -910,6 +911,7 @@ definitions:
     - RemoteAccessStarting
     - RemoteAccessRunning
     - RemoteAccessError
+    - RemoteAccessDegraded
   providers.RemoteAccessStatus:
     properties:
       backendState:
@@ -932,6 +934,8 @@ definitions:
         items:
           type: string
         type: array
+      hostNetworkOnline:
+        type: boolean
       hostname:
         type: string
       httpUrls:
@@ -940,13 +944,27 @@ definitions:
         type: array
       httpsUrl:
         type: string
+      lastSuccessAt:
+        type: string
       loginUrl:
         description: LoginUrl is set while the node waits for an interactive login.
         type: string
       magicDnsEnabled:
         type: boolean
+      nextRecoveryAt:
+        type: string
       phase:
         $ref: '#/definitions/providers.RemoteAccessPhase'
+      recoveryAttempts:
+        type: integer
+      recoveryError:
+        type: string
+      recoveryState:
+        type: string
+      selfOnline:
+        type: boolean
+      statusUsable:
+        type: boolean
       tailscaleIps:
         items:
           type: string

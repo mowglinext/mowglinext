@@ -91,7 +91,7 @@ func TestReadinessUsesReceiverProgressWithoutChangingMowerSafety(t *testing.T) {
 		*res.(*receiverSnapshot) = receiverSample(t, "serial:/dev/gps", "boot-1", fmt.Sprint(count), true, true)
 	}
 	r := gin.New()
-	UpdaterRoutes(r.Group("/api"), ros, types.NewMockDBProvider())
+	UpdaterRoutes(r.Group("/api"), ros, types.NewMockDBProvider(), nil)
 	read := func() updater.Readiness {
 		w := httptest.NewRecorder()
 		r.ServeHTTP(w, httptest.NewRequest("GET", "/api/system/update-readiness", nil))

@@ -3431,14 +3431,16 @@ const docTemplate = `{
                 "pulling",
                 "starting",
                 "running",
-                "error"
+                "error",
+                "degraded"
             ],
             "x-enum-varnames": [
                 "RemoteAccessDisabled",
                 "RemoteAccessPulling",
                 "RemoteAccessStarting",
                 "RemoteAccessRunning",
-                "RemoteAccessError"
+                "RemoteAccessError",
+                "RemoteAccessDegraded"
             ]
         },
         "providers.RemoteAccessStatus": {
@@ -3470,6 +3472,9 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "hostNetworkOnline": {
+                    "type": "boolean"
+                },
                 "hostname": {
                     "type": "string"
                 },
@@ -3482,6 +3487,9 @@ const docTemplate = `{
                 "httpsUrl": {
                     "type": "string"
                 },
+                "lastSuccessAt": {
+                    "type": "string"
+                },
                 "loginUrl": {
                     "description": "LoginUrl is set while the node waits for an interactive login.",
                     "type": "string"
@@ -3489,8 +3497,26 @@ const docTemplate = `{
                 "magicDnsEnabled": {
                     "type": "boolean"
                 },
+                "nextRecoveryAt": {
+                    "type": "string"
+                },
                 "phase": {
                     "$ref": "#/definitions/providers.RemoteAccessPhase"
+                },
+                "recoveryAttempts": {
+                    "type": "integer"
+                },
+                "recoveryError": {
+                    "type": "string"
+                },
+                "recoveryState": {
+                    "type": "string"
+                },
+                "selfOnline": {
+                    "type": "boolean"
+                },
+                "statusUsable": {
+                    "type": "boolean"
                 },
                 "tailscaleIps": {
                     "type": "array",
