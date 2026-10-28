@@ -84,8 +84,9 @@ target_link_libraries(fusion_graph_core PUBLIC
 # Executable: fusion_graph_node
 # ---------------------------------------------------------------------------
 
-add_executable(fusion_graph_node
-  src/fusion_graph_node.cpp
+# Share the real callback implementation with focused node tests. The small
+# constructor/entry translation unit is compiled separately for each executable.
+add_library(fusion_graph_node_support OBJECT
   src/fusion_graph_node_setup_params.cpp
   src/fusion_graph_node_setup_comms.cpp
   src/fusion_graph_node_callbacks_a.cpp
@@ -96,12 +97,15 @@ add_executable(fusion_graph_node
   src/fusion_graph_node_lidar_anchor.cpp
 )
 
-target_link_libraries(fusion_graph_node
+target_link_libraries(fusion_graph_node_support PUBLIC
   fusion_graph_core
 )
-target_link_libraries(fusion_graph_node
+target_link_libraries(fusion_graph_node_support PUBLIC
   ${beluga_ros_TARGETS}
 )
+
+add_executable(fusion_graph_node src/fusion_graph_node.cpp)
+target_link_libraries(fusion_graph_node fusion_graph_node_support)
 
 # ---------------------------------------------------------------------------
 # Install
@@ -151,6 +155,17 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
   find_package(ament_cmake_ros REQUIRED)
+
+  ament_add_gtest(test_sensor_input_node
+    test/test_sensor_input_node.cpp
+    src/fusion_graph_node.cpp
+    TIMEOUT 60
+  )
+  # The production constructor shares its TU with main(). Keep its body intact
+  # and rename only the test executable's unused production entry point.
+  target_compile_definitions(test_sensor_input_node PRIVATE main=fusion_graph_test_entry)
+  target_link_libraries(test_sensor_input_node fusion_graph_node_support)
+  set_tests_properties(test_sensor_input_node PROPERTIES ENVIRONMENT "ROS_DOMAIN_ID=187")
 
   add_library(checkpoint_test_delay SHARED test/checkpoint_test_delay.cpp)
   target_link_libraries(checkpoint_test_delay ${CMAKE_DL_LIBS})

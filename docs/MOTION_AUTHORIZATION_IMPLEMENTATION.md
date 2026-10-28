@@ -4,6 +4,64 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Motion-source input repair and GNSS covariance decision (2026-10-28)
+
+The original boundary event and the 14.814 mm GNSS/node-epoch mechanism remain
+open. A separate production-node discriminator now establishes and repairs
+additional deterministic input faults without changing motion tolerances:
+
+- Ordered input integrates 6 mm. Receiving IMU10.01 after IMU10.02 previously
+  reopened the interval, so IMU10.04 produced 7.5 mm instead of 6 mm.
+- A replayed wheel sample could replace the current cached rate before its
+  timestamp was checked. The retained control moves −3 mm instead of +6 mm.
+  Duplicate timestamps with altered payload could replace the cache too.
+- A nonfinite gyro reaches Sophus and aborts the actual node (exit134);
+  nonfinite wheel velocity makes DR coordinates nonfinite.
+
+The node now checks finite used values, canonical nonnegative source stamps
+and strictly increasing source identity before mutating cached rates,
+integration baselines or graph inputs. Zero remains a valid simulation-clock
+bootstrap epoch. A shared motion-clock barrier distinguishes an actual ROS
+clock rewind from a late source message and invalidates both stream baselines
+and cached rates together. An IMU-first rewind regression caught +3 mm of
+old-wheel motion in the initial per-stream candidate; the final shared barrier
+removes it while preserving a fresh wheel-first observation.
+
+The registered `test_sensor_input_node` compiles the actual constructor and
+callbacks, with an explicit controlled ROS clock and no executor-driven inputs.
+Eight implementation translation units are shared with the production binary;
+only the constructor/entry TU is compiled separately with the test entry
+renamed. **All13 node cases pass** in a fresh build; the normal production
+entry also links. The preceding focused build additionally passed GNSS timestamp,
+GNSS freshness, factor and LiDAR-history suites (5/5 CTest targets total).
+Changed C++ passes clang-format18; independent final review has no blocker.
+This is input-state protection, not a full graph/reset, future-packet,
+TF-cache, missing-interval or physical-containment guarantee.
+
+Astra and independent Sol analysis reject a tempting GNSS unary-offset repair:
+its motion noise is shared with existing process factors. An external actual
+GTSAM prototype now passes **51 algebraic assertions** against independent
+unique-source latent and Eigen references. Shared conditional acquisition
+states preserve endpoint information before GNSS, joint means/covariances,
+reversed insertion order and duplicate identity. A single noisy rate sample
+split between two acquisitions retains its shared error, including an exactly
+zero conditional variance case. The deliberately independent-retiming control
+fails covariance equality. These are linear-Gaussian model tests, not calibrated
+physical covariance or an implemented production GNSS repair.
+
+The remaining causal path needs ordered source-interval history, SE2/bias
+covariance transport and preservation of the active correlated tail across
+rebase. Adding an ordinary cadence node at GNSS time is not a shortcut: it
+consumes accumulators and changes slip/stationary/noise state. No such cadence,
+GNSS-quality, prediction or safety-policy change is applied here.
+
+Evidence is retained under `~/.cache/pr950-resume-20261028/gnss-repair/`:
+`input-order-red/`, `epoch-cache-red/`, `input-order-green-final/` and
+`final-motion-review.md` pin the repaired callback cases; `design-astra.md`,
+`design-sol.md` and `conditional-prototype/REPORT.md` pin the GNSS decision.
+Earlier reports, raw captures and build outputs remain preserved. No hardware
+or full E2E run was performed.
+
 ## Seed error and simulator observation identity (2026-10-27)
 
 The original **13.943731 mm** boundary failure remains open. Fetched `main`

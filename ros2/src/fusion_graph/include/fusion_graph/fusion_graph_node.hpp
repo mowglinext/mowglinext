@@ -74,6 +74,7 @@ public:
   ~FusionGraphNode() override;
 
 private:
+  friend class FusionGraphNodeInputTest;
   // ── Construction helpers ───────────────────────────────────────────
   // The constructor is split into two methods (defined in
   // fusion_graph_node_setup_params.cpp / _setup_comms.cpp) so each
@@ -84,6 +85,7 @@ private:
   void SetupCommunications(double node_period_s);
 
   // ── Callbacks ──────────────────────────────────────────────────────
+  void ObserveMotionClockEpoch();
   void OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
   void OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
@@ -167,6 +169,9 @@ private:
   // Most recent wheel timestamp (for accumulator dt).
   std::optional<rclcpp::Time> last_wheel_stamp_;
   std::optional<rclcpp::Time> last_imu_stamp_;
+  // Source reordering is not a clock reset. Observe ROS clock epochs separately
+  // so a late sample cannot move either integration baseline backwards.
+  std::optional<rclcpp::Time> last_motion_callback_clock_;
 
   // ── Local-frame dead reckoning ──────────────────────────────────
   // odom→base_footprint TF + /odometry/filtered. Wheel vx + gyro_z
