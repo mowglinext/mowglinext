@@ -5,6 +5,28 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Automatic dock seed provenance (2026-10-29)
+
+A newly reproduced production path invents a dock PosePrior after six seconds
+with unknown hardware status. The actual Node adopts dock (5,8,pi) despite
+having only GNSS (1,2) and no heading. Time cannot establish dock location.
+Automatic dock seeding now requires positive charging evidence in the shared
+helper and boot fallback. Hardware-status edge predicates use the previous
+state; the new charging state is committed before the first guarded seed.
+Known-charging/no-GNSS fallback, first charging callback, GNSS plus heading
+without hardware status, and explicit operator initialization remain available.
+When both charging and absolute position/heading are unknown, map TF remains
+uninitialized; activation may wait rather than use an invented location.
+
+The two unknown-status regressions fail on the old actual Node; both charging
+controls pass. All **52 actual Node cases pass** after rebuilding the three
+touched production translation units, and the real save-service fixture passes
+against the linked production executable. Noise, COG gates, timeouts and
+acceptance tolerances are unchanged. Independent review has no blocker; exact
+source/binary pins and RED/GREEN logs are in `dock-seed-provenance/`.
+This prevents a concrete bad-prior origin; general recovery from incorrect
+authoritative seeds or corrupted gyro history remains unqualified.
+
 ## Delayed CI failure repair (2026-10-29)
 
 The failed build/test notification for older 4ba70aad contains a successful

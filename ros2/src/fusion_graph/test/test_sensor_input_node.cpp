@@ -236,6 +236,38 @@ protected:
     node_->last_is_charging_valid_ = true;
     node_->last_is_charging_ = true;
   }
+  void StartUnlocalizedBoot()
+  {
+    node_.reset();
+    CreateNode();
+    Clock(100.0);
+    Wheel(100.0, 0.0);
+    Imu(100.0);
+    Clock(100.02);
+    Wheel(100.02, 0.0);
+    Imu(100.02);
+    node_->dock_pose_x_ = 5.0;
+    node_->dock_pose_y_ = 8.0;
+    node_->dock_pose_yaw_ = M_PI;
+    Timer();
+  }
+  void AdvanceBootTimeout()
+  {
+    for (int i = 1; i <= 350; ++i)
+    {
+      const double source = 100.02 + i * .02;
+      Clock(source);
+      Wheel(source, 0.0);
+      Imu(source);
+      Timer();
+    }
+  }
+  void HardwareCharging(bool charging)
+  {
+    auto status = std::make_shared<mowgli_interfaces::msg::Status>();
+    status->is_charging = charging;
+    node_->OnHardwareStatus(status);
+  }
   auto UsableGnssReceipt() const
   {
     return node_->last_usable_gnss_stamp_;
@@ -432,6 +464,58 @@ TEST_F(FusionGraphNodeInputTest, OrderedIntervalsRetainIntegration)
 {
   Next();
   ExpectPose(.006);
+}
+
+TEST_F(FusionGraphNodeInputTest, UnknownChargingCannotInventDockPoseAfterBootTimeout)
+{
+  StartUnlocalizedBoot();
+  Gnss(100.02, 1.0, .003, 2.0);
+  ASSERT_FALSE(Snapshot());
+  AdvanceBootTimeout();
+  EXPECT_FALSE(Snapshot());
+  const auto state = OutputState();
+  ASSERT_TRUE(state);
+  EXPECT_FALSE(state->anchor_valid);
+}
+
+TEST_F(FusionGraphNodeInputTest, ConfirmedChargingRetainsNoGnssBootFallback)
+{
+  StartUnlocalizedBoot();
+  SetDocked();
+  AdvanceBootTimeout();
+  const auto snap = Snapshot();
+  ASSERT_TRUE(snap);
+  EXPECT_NEAR(snap->pose.x(), 5.0, 1e-12);
+  EXPECT_NEAR(snap->pose.y(), 8.0, 1e-12);
+  EXPECT_NEAR(std::abs(snap->pose.theta()), M_PI, 1e-12);
+}
+
+TEST_F(FusionGraphNodeInputTest, FirstConfirmedChargingCallbackCanSeedPendingGnssBoot)
+{
+  StartUnlocalizedBoot();
+  Gnss(100.02, 5.0, .003, 8.0);
+  ASSERT_FALSE(Snapshot());
+  HardwareCharging(true);
+  const auto snap = Snapshot();
+  ASSERT_TRUE(snap);
+  EXPECT_NEAR(snap->pose.x(), 5.0, 1e-12);
+  EXPECT_NEAR(snap->pose.y(), 8.0, 1e-12);
+  EXPECT_NEAR(std::abs(snap->pose.theta()), M_PI, 1e-12);
+}
+
+TEST_F(FusionGraphNodeInputTest, UnknownChargingStillAllowsGnssHeadingAfterBootTimeout)
+{
+  StartUnlocalizedBoot();
+  AdvanceBootTimeout();
+  ASSERT_FALSE(Snapshot());
+  Gnss(107.02, 1.0, .003, 2.0);
+  Heading(107.02, .4, true);
+  const auto snap = Snapshot();
+  ASSERT_TRUE(snap);
+  EXPECT_NEAR(snap->pose.x(), 1.0, 1e-8);
+  EXPECT_NEAR(snap->pose.y(), 2.0, 1e-8);
+  EXPECT_NEAR(snap->pose.theta(), .4, 1e-12);
+  EXPECT_EQ(CogRecoveries(), 0u);
 }
 
 TEST_F(FusionGraphNodeInputTest, ReorderedImuDoesNotReopenIntegratedInterval)

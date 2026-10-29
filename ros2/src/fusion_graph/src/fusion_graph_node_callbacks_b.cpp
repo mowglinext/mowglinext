@@ -465,6 +465,12 @@ void FusionGraphNode::OnHardwareStatus(mowgli_interfaces::msg::Status::ConstShar
   const bool rising_edge = last_is_charging_valid_ && !last_is_charging_ && docked;
   const bool boot_while_docked = !last_is_charging_valid_ && docked;
   const bool dock_event = rising_edge || boot_while_docked;
+  const bool undock_event = last_is_charging_valid_ && last_is_charging_ && !docked;
+  // SeedFromDockPose requires positive provenance from this very callback,
+  // including the first charging status. Keep transition predicates above
+  // based on the previous state.
+  last_is_charging_ = docked;
+  last_is_charging_valid_ = true;
   if (dock_event && auto_save_enabled_ && graph_->IsInitialized())
   {
     DispatchAsyncSave("dock-arrival");
@@ -495,12 +501,10 @@ void FusionGraphNode::OnHardwareStatus(mowgli_interfaces::msg::Status::ConstShar
   }
   // Undock transition: clear the one-shot so the next dock arrival
   // can re-seed via the rising-edge path.
-  if (last_is_charging_valid_ && last_is_charging_ && !docked)
+  if (undock_event)
   {
     dock_seeded_this_session_ = false;
   }
-  last_is_charging_ = docked;
-  last_is_charging_valid_ = true;
 }
 
 void FusionGraphNode::OnLocalizationMode(std_msgs::msg::Int32::ConstSharedPtr msg)

@@ -249,6 +249,10 @@ bool FusionGraphNode::InitializeAtSource(const gtsam::Pose2& pose,
 
 void FusionGraphNode::SeedFromDockPose()
 {
+  // A calibrated dock location is evidence only while charging is confirmed.
+  // Missing hardware status or elapsed boot time cannot establish that location.
+  if (!last_is_charging_valid_ || !last_is_charging_)
+    return;
   // Build a Pose2 from the dock_pose_* parameters and route it
   // through the same Initialize/ForceAnchor path that OnSetPose uses.
   // Using the persisted dock pose (vs. live GPS) makes re-docking
