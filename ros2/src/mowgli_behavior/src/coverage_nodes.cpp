@@ -2773,7 +2773,8 @@ BT::NodeStatus TransitToStrip::onStart()
   // finishes in the same instant it is accepted, and its terminal status
   // message can be dropped before the client registers the handle
   // (action_outcome.hpp). It also carries nav2's error code (onFailed).
-  nav_outcome_->Reset();
+  // Keep a delayed result owned by the navigation attempt that produced it.
+  nav_outcome_ = std::make_shared<ActionOutcomeSlot>();
   nav_result_ = std::make_shared<TransitResultSlot>();
   nav_abandonment_ = std::make_shared<GoalAbandonment>();
   auto send_opts = rclcpp_action::Client<Nav2Navigate>::SendGoalOptions{};
@@ -3022,7 +3023,8 @@ BT::NodeStatus DetourAroundObstacle::onStart()
 
   nav_handle_.reset();
   // See TransitToStrip::onStart (action_outcome.hpp).
-  nav_outcome_->Reset();
+  // Keep a delayed result owned by the navigation attempt that produced it.
+  nav_outcome_ = std::make_shared<ActionOutcomeSlot>();
   nav_abandonment_ = std::make_shared<GoalAbandonment>();
   auto send_opts = rclcpp_action::Client<Nav2Navigate>::SendGoalOptions{};
   send_opts.goal_response_callback =

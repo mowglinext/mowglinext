@@ -90,6 +90,14 @@ struct FollowStripOutcomeTestAccess
   {
     return node.transit_outcome_;
   }
+  static std::shared_ptr<ActionOutcomeSlot> outcome(TransitToStrip& node)
+  {
+    return node.nav_outcome_;
+  }
+  static std::shared_ptr<ActionOutcomeSlot> outcome(DetourAroundObstacle& node)
+  {
+    return node.nav_outcome_;
+  }
 };
 }  // namespace mowgli_behavior
 
@@ -331,6 +339,8 @@ protected:
     blackboard = BT::Blackboard::create();
     blackboard->set("context", ctx);
     factory.registerNodeType<FollowStrip>("FollowStrip");
+    factory.registerNodeType<mowgli_behavior::TransitToStrip>("TransitToStrip");
+    factory.registerNodeType<mowgli_behavior::DetourAroundObstacle>("DetourAroundObstacle");
     factory.registerNodeType<mowgli_behavior::EndSession>("EndSession");
   }
 
@@ -462,6 +472,61 @@ protected:
         blackboard));
   }
 
+  template <typename NodeT>
+  void checkLateOldNavigationResult(const std::string& node_name)
+  {
+    navigate->rejectCancel(true);
+    ctx->current_strip_path = straightUnit(2.0, 10.0);
+    ctx->current_transit_goal = ctx->current_strip_path.poses.front();
+    tree = std::make_unique<BT::Tree>(
+        factory.createTreeFromText("<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><" + node_name +
+                                       "/></BehaviorTree></root>",
+                                   blackboard));
+    ASSERT_EQ(tickUntil(
+                  [&]()
+                  {
+                    return navigate->goalCount() == 1;
+                  },
+                  10.0),
+              BT::NodeStatus::RUNNING);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);  // acquire the old handle
+    auto* node = dynamic_cast<NodeT*>(tree->rootNode());
+    ASSERT_NE(node, nullptr);
+    auto old_outcome = mowgli_behavior::FollowStripOutcomeTestAccess::outcome(*node);
+    tree->haltTree();
+    const auto cancel_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (navigate->cancelRequestCount() == 0 &&
+           std::chrono::steady_clock::now() < cancel_deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_GT(navigate->cancelRequestCount(), 0u);
+    ASSERT_EQ(tickUntil(
+                  [&]()
+                  {
+                    return navigate->goalCount() == 2;
+                  },
+                  10.0),
+              BT::NodeStatus::RUNNING);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);  // acquire the new handle
+    auto new_outcome = mowgli_behavior::FollowStripOutcomeTestAccess::outcome(*node);
+    navigate->succeed(0);
+    const auto result_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!old_outcome->Get().has_value() && std::chrono::steady_clock::now() < result_deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_EQ(old_outcome->Get(), mowgli_behavior::GoalOutcome::kSucceeded)
+        << "the delayed old result must actually reach its callback";
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING)
+        << "an old result must not complete the current navigation";
+    ASSERT_FALSE(new_outcome->Get().has_value());
+    navigate->succeed(1);
+    EXPECT_EQ(tickUntil(
+                  []()
+                  {
+                    return false;
+                  },
+                  5.0),
+              BT::NodeStatus::SUCCESS);
+  }
+
   /// Tick at 20 Hz until `done` or the timeout. Returns the last tree status.
   BT::NodeStatus tickUntil(const std::function<bool()>& done, double timeout_s)
   {
@@ -561,6 +626,16 @@ protected:
     ctx->blade_telemetry_seen = true;
   }
 };
+
+TEST_F(FollowStripDigTest, TransitToStripIgnoresLateOldSuccess)
+{
+  checkLateOldNavigationResult<mowgli_behavior::TransitToStrip>("TransitToStrip");
+}
+
+TEST_F(FollowStripDigTest, DetourAroundObstacleIgnoresLateOldSuccess)
+{
+  checkLateOldNavigationResult<mowgli_behavior::DetourAroundObstacle>("DetourAroundObstacle");
+}
 
 TEST_F(FollowStripDigTest, InitialCoverageWaitsForStableFreshBladeTelemetry)
 {

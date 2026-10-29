@@ -5,7 +5,7 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
-## FollowStrip late-result ownership (2026-10-29)
+## Coverage action late-result ownership (2026-10-29)
 
 The continuation found a separate real action-lifecycle defect: FollowStrip
 reset and reused one outcome slot across successive coverage goals, and one
@@ -28,9 +28,20 @@ action transport/component evidence, not a real ControllerServer or hardware
 run. Source, binaries and XML are retained in `followstrip-late-result/` and
 `followstrip-attempt-independent-review/`.
 
-Standalone TransitToStrip and DetourAroundObstacle have analogous pre-existing
-outcome-slot reuse, not exercised or changed by this FollowStrip-specific
-repair. Their late-result schedules need separate focused investigation.
+The same schedule is separately reproduced in standalone TransitToStrip and
+DetourAroundObstacle. Both real BT nodes return SUCCESS from an old result
+while their new goal is still active. Per-dispatch outcome slots repair these
+two paths as well: both stay RUNNING until their own result arrives. Two new
+cases pass; the final combined run passes all nine focused late-result and
+lifecycle cases in 18.225 s. Independent review and formatting checks pass.
+Evidence is in `standalone-nav-late-result/` and
+`standalone-attempt-independent-review/`.
+
+The generic NavigateToPose BT node retains analogous outcome reuse. It is
+registered but has no current XML instance; its own late-result schedule has
+not been tested or changed. Docking uses per-dispatch objects and is not part
+of this outcome-slot repair. None of these tests establishes physical
+cancellation or final-output ownership.
 
 ## Known-source TF knots (2026-10-29)
 
@@ -646,7 +657,7 @@ than inheriting a whole-branch CI result.
 | Wheel travel-noise accounting | Four small production edits plus source/legacy/clipped-bootstrap regressions; all three new cases RED on the old Core, 15 selected targets / 156 cases GREEN after coherent ABI rebuild. Can be separated with its bootstrap source integration dependency retained; it does not repair true-flip lineage. |
 | Post-anchor snapshot | Small Core/API repair with two baseline RED cases, 11 rebase and 48 Node GREEN cases; depends on existing source/revision semantics. It does not repair the invalid true-flip prior. |
 | Automatic dock seed provenance | Keep the shared charging guard, callback ordering and timer fallback together. Two old-Node RED cases, two charging controls and 52 actual-Node GREEN cases support the narrow repair; general bad authoritative seed recovery remains separate. |
-| FollowStrip result ownership | Two per-dispatch slot renewals and their real-class/fake-Nav2 regressions form a small separate repair. Two REDs and seven focused GREEN lifecycle cases; no dependency on the unshipped maneuver. It does not fix other BT nodes' outcome ownership or establish downstream cancellation. |
+| Coverage action result ownership | Four per-dispatch slot renewals and real-class/fake-Nav2 regressions form a small separate family. Four late-old-success REDs across FollowStrip follow/transit, TransitToStrip and DetourAroundObstacle; focused GREEN controls and independent review. No dependency on the unshipped maneuver, generic NavigateToPose fix or downstream cancellation qualification. |
 | FTC requested goal and consumer epoch | Keep the requested-distance approach, current terminal decision, goal transform provenance and final guard epoch repairs together. They depend on the selected Nav2 1.5.2 path-handler contract and existing geometry/response interfaces; extraction needs its own target-base validation. Software RED/GREEN does not establish a complete corner. |
 | Public coverage header includes | Include-only dependency reduction has unchanged coverage/replay evidence; it is separable from the unshipped constructive-corner prototype. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
