@@ -1009,6 +1009,17 @@
     }
   },
   "mowgliNextPage": {
+    "activity": {
+      "mowing": "Tonte en cours",
+      "returning": "Retour à la base",
+      "transit": "En transit",
+      "manual": "Tonte manuelle",
+      "recording": "Enregistrement du contour",
+      "autonomous": "Activité autonome"
+    },
+    "cuttingEstimate": "Environ {{value}} min de tonte",
+    "cuttingEstimateScope": "{{area}} uniquement, à la vitesse actuelle. Hors virages, transit, recharge et retour à la base.",
+    "activityDetail": "{{activity}} · {{area}}",
     "mowerOnDockTop": "Tondeuse sur sa station — vue de dessus",
     "mowerTop": "Tondeuse — vue de dessus",
     "headlineUntilHomePrefix": "Encore ",
@@ -1609,6 +1620,7 @@
     "stats": "Stats"
   },
   "actionCluster": {
+    "pending": "Commande en cours…",
     "emergencyStop": "Stop d'urgence",
     "returnToDock": "Retour base",
     "startMowing": "Démarrer la tonte",
@@ -4289,6 +4301,8 @@
     "failedToSaveConfig": "Échec de l'enregistrement de la configuration"
   },
   "liveMapMini": {
+    "positionUnknown": "Position du robot inconnue",
+    "coverageUnavailable": "Carte de couverture indisponible",
     "noAreaYet": "Aucune zone enregistrée",
     "noAreaHint": "Enregistrez une zone de tonte pour voir la carte en direct."
   },
