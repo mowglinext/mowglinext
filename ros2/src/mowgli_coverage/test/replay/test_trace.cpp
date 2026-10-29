@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "fields2cover/objectives/sg_obj/n_swath.h"
+#include "fields2cover/swath_generator/brute_force.h"
 #include "mowgli_coverage/coverage_planning.hpp"
 #include <gtest/gtest.h>
 

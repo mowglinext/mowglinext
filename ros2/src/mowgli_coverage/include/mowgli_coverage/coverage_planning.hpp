@@ -30,9 +30,11 @@
 #include <utility>
 #include <vector>
 
-// Fields2Cover v3 umbrella header — f2c::types::*, f2c::hg::ConstHL,
-// f2c::sg::BruteForce, f2c::rp::BoustrophedonOrder.
-#include "fields2cover.h"
+// Public signatures need geometry types, not the unrelated route solvers and
+// their OR-Tools headers pulled in by the Fields2Cover umbrella.
+#include "fields2cover/types/Cell.h"
+#include "fields2cover/types/LinearRing.h"
+#include "fields2cover/types/Swaths.h"
 
 namespace mowgli_coverage
 {

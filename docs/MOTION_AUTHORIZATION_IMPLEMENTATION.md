@@ -5,6 +5,71 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Further cusp and heading-reconstruction evidence (2026-10-29)
+
+The current planner, called with server-equivalent geometry, 0.55 m footprint
+width and actual pivot limits, reproduces all 9,268 captured positions exactly
+as the suffix of its 9,420-point route. The earlier bevel repair does not remove
+the problematic link: 17.691661 mm with a 151.913636-degree heading reversal and
+no pivot twin. Normal positive following at 0.15 m/s and at most 0.8 rad/s cannot
+remain above y=0.8 from that approach. A clockwise body pivot fits the raw-hole
+geometry, but inserting a pivot alone does not make its arrival safe under the
+unchanged forward-response guard.
+
+The remaining planner defect is a false continuous-path contract: when both the
+fillet and the certified pivot fail at an internal ring corner, the corner is
+still returned inside one driven unit. A candidate partitions residual corners
+through the existing blade-off sub-path transit protocol, preserving finalized
+directed geometry and ring order. Its three new tests are GREEN on the
+candidate and RED against the old archive with the identical test object.
+Review exposed two-pose fragments; collinear midpoint encoding and explicit
+rejection of unrepresentable tiny fragments resolve that issue without
+changing FTC's contracts.
+
+That candidate is **not included**: it violates the unchanged Isabey maximum
+of six sub-paths. The actual old output has four; eight added cuts produce
+twelve. One is an 84.38-degree gentle corner, while seven exceed the existing
+88-degree cusp threshold. Correcting that classification alone still gives
+eleven paths. Every local minimum-radius fillet lacks the required adjacent
+support. None of the six existing same-vertex Dubins loop variants succeeds at
+those corners or at captured #950; every valid candidate leaves the clearance
+boundary on its first moving sample. No split, pivot, radius, geometry or efficiency
+assertion is relaxed to publish the candidate. Its complete patch and exact
+files remain under `cusp-feasibility-frontier/unmerged-candidate-088ad8c9/`.
+New maneuver construction or an execution-contract decision is still required;
+complete route execution and physical transit remain unqualified.
+
+Only the include dependency repair is included from that candidate: the public
+planner header names its actual geometry types, and implementation/test users
+include their actual F2C algorithms directly. Unrelated route solvers and
+OR-Tools headers no longer enter every planner client. A fresh serial Release
+build passes all 12 unchanged coverage/replay targets at their original bounds,
+including the six-path Isabey requirement. This is a build repair, not a cusp
+repair. Earlier compiler timeouts and the rejected behavioral patch remain
+preserved separately.
+
+A new moving **accepted Core likelihood** experiment also rules out a simple
+heading-prior replacement. It retains the same consumed controls, delayed
+source unaries, nonzero antenna lever and noises in both gyro modes. Correcting
+only the initial prior leaves wrong frozen acquisition likelihood; rebuilding
+those factors through actual corrected-initialization replay restores the full
+joint mean and covariance, including bias correlations. Subsequent actual
+prefix marginalizations and boundary/future exact-once application agree with
+the untrimmed correct control. These are controlled model results, not parity
+of the Node's admission gates or operational recovery.
+
+Production reconstruction requires the accepted history back to the affected
+seed, including controls, source/cadence boundaries, gate outcomes, bias
+references and observation payloads/noises/order. Current pruning removes old
+edges and assimilated payloads; ID registries cannot reconstruct them. Copying
+their contaminated separator or anchoring an already wrong moving XY at 5 mm
+does not recover that information. No history-discarding recovery policy or
+unbounded journal is silently introduced.
+
+Exact new evidence: `~/.cache/pr950-resume-20261029/cusp-feasibility-frontier/`
+and `moving-flip-reconstruction/`, including actual source/binary pins, raw
+planner stages, keyed full-joint matrices and bounded experiment commands.
+
 ## Source-time pose and heading repairs (2026-10-29)
 
 The actual Node's GNSS phase discriminator now passes all 20 controls, admitting

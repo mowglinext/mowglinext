@@ -15,6 +15,10 @@
 #include <memory>
 #include <string>
 
+#include "fields2cover/headland_generator/constant_headland.h"
+#include "fields2cover/objectives/sg_obj/n_swath.h"
+#include "fields2cover/route_planning/boustrophedon_order.h"
+#include "fields2cover/swath_generator/brute_force.h"
 #include "mowgli_interfaces/coverage_geometry.hpp"
 #include "ring_corner_rounding.hpp"
 
