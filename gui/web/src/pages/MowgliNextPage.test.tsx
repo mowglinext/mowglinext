@@ -10,7 +10,7 @@ const mock = vi.hoisted(() => ({
   high: {} as HighLevelStatus, status: {} as Status, odom: {} as FusionOdom,
   settings: {} as Record<string, unknown>, session: false, mobile: false,
   raster: null as {width: number; height: number; resolution: number; originX: number; originY: number; dataUrl: string} | null,
-  call: vi.fn(), error: vi.fn(), warning: vi.fn(), confirm: vi.fn<(options: {onOk: () => Promise<unknown>}) => void>(),
+  call: vi.fn(), error: vi.fn(), warning: vi.fn(), confirm: vi.fn<(options: {onOk: () => Promise<unknown>; onCancel?: () => void}) => void>(),
 }));
 vi.mock('antd', async importOriginal => ({...await importOriginal<typeof import('antd')>(),
   App: {useApp: () => ({notification: {error: mock.error}, message: {warning: mock.warning}, modal: {confirm: mock.confirm}})},
@@ -39,7 +39,6 @@ vi.mock('../hooks/useDiagnosticsSnapshot', () => ({useDiagnosticsSnapshot: () =>
 vi.mock('../hooks/useMowProgress', () => ({useMowProgress: () => null}));
 vi.mock('../utils/mowProgress', () => ({rasterizeMowProgress: () => mock.raster}));
 vi.mock('../components/dashboard/StatusMowerIllustration', () => ({StatusMowerIllustration: () => null}));
-vi.mock('../components/dashboard/DigEscalationBanner', () => ({DigEscalationBanner: () => null}));
 vi.mock('../components/dashboard/SoilWetBanner', () => ({SoilWetBanner: () => null}));
 vi.mock('../components/BladeDirectionDisplay', () => ({BladeDirectionDisplay: () => null}));
 const page = () => <MemoryRouter><ThemeProvider><MowgliNextPage/></ThemeProvider></MemoryRouter>;
@@ -172,5 +171,86 @@ describe('Home command requests', () => {
     await act(async () => {pending.resolve({data: {warning: 'Request accepted with warning'}}); await pending.promise;});
     expect(mock.warning).toHaveBeenCalledWith('Request accepted with warning', 10);
     expect(screen.getByRole('button', {name: 'Pause'})).toBeEnabled();
+  });
+});
+
+
+describe('Home dig escalation command coordination', () => {
+  beforeEach(() => {
+    mock.high = {state: 1, state_name: 'DIG_OBSTRUCTION', emergency: false};
+    mock.status = {dig_escalated: true, dig_escalated_distance_m: 1, dig_escalated_required_distance_m: 0.5};
+  });
+
+  it('holds the shared lock across clear and START, with emergency stop still available', async () => {
+    const clear = deferred();
+    const start = deferred();
+    mock.call.mockImplementation((command: string) => command === 'clear_dig_escalation'
+      ? clear.promise : command === 'high_level_control' ? start.promise : Promise.resolve({data: {}}));
+    render(page());
+    const resume = screen.getByRole('button', {name: 'Clear & resume'});
+    const home = screen.getByRole('button', {name: 'Return to base'});
+    const play = screen.getByRole('button', {name: 'Start mowing'});
+    act(() => {resume.click(); home.click(); play.click(); resume.click();});
+    expect(mock.call).toHaveBeenCalledExactlyOnceWith('clear_dig_escalation', {});
+    expect(home).toBeDisabled();
+    expect(play).toBeDisabled();
+    expect(resume).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Command pending…');
+    fireEvent.click(screen.getByRole('button', {name: 'Emergency stop'}));
+    await act(async () => {await mock.confirm.mock.calls[0][0].onOk();});
+    expect(mock.call).toHaveBeenLastCalledWith('emergency', {Emergency: 1});
+    await act(async () => {clear.resolve({data: {}}); await clear.promise;});
+    expect(mock.call).toHaveBeenLastCalledWith('high_level_control', {Command: 1});
+    expect(home).toBeDisabled();
+    expect(resume).toBeDisabled();
+    await act(async () => {start.resolve({data: {}}); await start.promise;});
+    expect(home).toBeEnabled();
+    expect(resume).toBeEnabled();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(mock.call).toHaveBeenCalledTimes(3);
+  });
+
+  it('prevents the banner starting a clear while HOME is unresolved, including same-turn clicks', async () => {
+    const home = deferred(); mock.call.mockReturnValueOnce(home.promise);
+    render(page());
+    const resume = screen.getByRole('button', {name: 'Clear & resume'});
+    act(() => {screen.getByRole('button', {name: 'Return to base'}).click(); resume.click();});
+    expect(mock.call).toHaveBeenCalledExactlyOnceWith('high_level_control', {Command: 2});
+    expect(resume).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Emergency stop'})).toBeEnabled();
+    await act(async () => {home.resolve({data: {}}); await home.promise;});
+    expect(resume).toBeEnabled();
+  });
+
+  it('keeps normal controls locked during acknowledgement and releases them on cancel', async () => {
+    mock.status.dig_escalated_distance_m = 0.1;
+    render(page());
+    fireEvent.click(screen.getByRole('button', {name: 'Clear & resume'}));
+    expect(mock.confirm).toHaveBeenCalledOnce();
+    expect(mock.call).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', {name: 'Return to base'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Emergency stop'})).toBeEnabled();
+    await act(async () => {mock.confirm.mock.calls[0][0].onCancel?.(); await Promise.resolve();});
+    expect(screen.getByRole('button', {name: 'Return to base'})).toBeEnabled();
+    expect(mock.call).not.toHaveBeenCalled();
+  });
+
+  it.each(['clear', 'start'])('shows %s failure and unlocks the page without retrying', async failedStep => {
+    const failure = deferred();
+    if (failedStep === 'clear') mock.call.mockReturnValueOnce(failure.promise);
+    else mock.call.mockResolvedValueOnce({data: {}}).mockReturnValueOnce(failure.promise);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(page());
+      const resume = screen.getByRole('button', {name: 'Clear & resume'});
+      await act(async () => {resume.click(); await Promise.resolve();});
+      expect(screen.getByRole('button', {name: 'Return to base'})).toBeDisabled();
+      await act(async () => {failure.reject({error: {error: 'Request refused'}}); await Promise.resolve();});
+      expect(mock.error).toHaveBeenCalledWith(expect.objectContaining({description: 'Request refused'}));
+      expect(screen.getByRole('button', {name: 'Return to base'})).toBeEnabled();
+      expect(resume).toBeEnabled();
+      expect(mock.call).toHaveBeenCalledTimes(failedStep === 'clear' ? 1 : 2);
+      expect(errors).toHaveBeenCalledOnce();
+    } finally {errors.mockRestore();}
   });
 });

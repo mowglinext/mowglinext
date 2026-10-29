@@ -341,11 +341,9 @@ export const MowgliNextPage = () => {
     });
   };
 
-  // mowerAction() returns a fn that THROWS on service error. ActionCluster
-  // invokes these from a plain onClick, so a rejection would be swallowed with
-  // zero feedback — a robot that "won't start" would look like a hardware
-  // fault. Wrap each so failures surface a notification.
-  const withFeedback = (fn: () => Promise<unknown>) => async () => {
+  // One lock for every normal Home command, including a banner flow that
+  // awaits operator acknowledgement and multiple service responses.
+  const runCommand = async (fn: () => Promise<unknown>) => {
     // The ref also blocks a second click before React commits disabled controls.
     // Emergency stop uses its independent confirmation/request path above.
     if (actionInFlight.current) return;
@@ -353,14 +351,22 @@ export const MowgliNextPage = () => {
     setActionPending(true);
     try {
       await fn();
+    } finally {
+      actionInFlight.current = false;
+      setActionPending(false);
+    }
+  };
+
+  // ActionCluster uses plain onClick callbacks. The banner keeps its own
+  // AsyncButton error feedback while sharing runCommand's pending lifetime.
+  const withFeedback = (fn: () => Promise<unknown>) => async () => {
+    try {
+      await runCommand(fn);
     } catch (e: unknown) {
       notification.error({
         message: t('mowgliNextPage.actionFailed'),
         description: e instanceof Error ? e.message : undefined,
       });
-    } finally {
-      actionInFlight.current = false;
-      setActionPending(false);
     }
   };
 
@@ -421,7 +427,7 @@ export const MowgliNextPage = () => {
 
         {/* Repeat-dig escalation: hardware_bridge halted the mission — the
             operator needs to know why nothing is moving and how to clear it */}
-        <DigEscalationBanner variants={riseFade}/>
+        <DigEscalationBanner variants={riseFade} commandPending={actionPending} runCommand={runCommand}/>
         <StopReasonBanner reason={data.stopReason} detail={data.stopDetail}
                           sessionActive={data.sessionActive} variants={riseFade}/>
 
