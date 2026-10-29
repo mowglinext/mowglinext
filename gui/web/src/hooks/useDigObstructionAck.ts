@@ -40,21 +40,31 @@ export const useDigObstructionAck = (stateName?: string) => {
         if (distance > required) return release();
 
         return new Promise<void>((resolve, reject) => {
+            let execution: Promise<void> | undefined;
+            let cancelled = false;
             modal.confirm({
                 title: t("digObstructionAck.title"),
                 content: t("digObstructionAck.body", {distance: distance.toFixed(2)}),
                 okText: t("digObstructionAck.ok"),
                 okType: "danger",
                 cancelText: t("digObstructionAck.cancel"),
-                onOk: async () => {
-                    try {
-                        await release();
-                        resolve();
-                    } catch (e) {
+                onOk: () => {
+                    if (cancelled) return Promise.resolve();
+                    // One confirmed operation owns the promise until both
+                    // service calls finish, even if the dialog is dismissed.
+                    execution ??= release().then(resolve, (e: unknown) => {
                         reject(e instanceof Error ? e : new Error(String(e)));
+                    });
+                    return execution;
+                },
+                onCancel: () => {
+                    // Cancel/Escape cannot cancel an already sent command or
+                    // release the caller's lock while its START is still due.
+                    if (!execution) {
+                        cancelled = true;
+                        resolve();
                     }
                 },
-                onCancel: () => resolve(),
             });
         });
     };

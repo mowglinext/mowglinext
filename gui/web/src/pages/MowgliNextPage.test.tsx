@@ -1,5 +1,6 @@
-import {act, fireEvent, render, screen, within} from '@testing-library/react';
+import {act, fireEvent, render, screen, within, waitFor} from '@testing-library/react';
 import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {App, ConfigProvider} from 'antd';
 import {MemoryRouter} from 'react-router-dom';
 import {ThemeProvider} from '../theme/ThemeContext';
 import type {HighLevelStatus, Status} from '../types/ros';
@@ -8,13 +9,20 @@ import {MowgliNextPage} from './MowgliNextPage';
 
 const mock = vi.hoisted(() => ({
   high: {} as HighLevelStatus, status: {} as Status, odom: {} as FusionOdom,
-  settings: {} as Record<string, unknown>, session: false, mobile: false,
+  settings: {} as Record<string, unknown>, session: false, mobile: false, realApp: false,
   raster: null as {width: number; height: number; resolution: number; originX: number; originY: number; dataUrl: string} | null,
   call: vi.fn(), error: vi.fn(), warning: vi.fn(), confirm: vi.fn<(options: {onOk: () => Promise<unknown>; onCancel?: () => void}) => void>(),
 }));
-vi.mock('antd', async importOriginal => ({...await importOriginal<typeof import('antd')>(),
-  App: {useApp: () => ({notification: {error: mock.error}, message: {warning: mock.warning}, modal: {confirm: mock.confirm}})},
-}));
+vi.mock('antd', async importOriginal => {
+  const actual = await importOriginal<typeof import('antd')>();
+  const useApp = actual.App.useApp;
+  return {...actual, App: Object.assign(actual.App, {useApp: () => {
+    const app = useApp();
+    return mock.realApp ? app : {
+      notification: {error: mock.error}, message: {warning: mock.warning}, modal: {confirm: mock.confirm},
+    };
+  }})};
+});
 vi.mock('../hooks/useApi', () => ({useApi: () => ({mowglinext: {callCreate: mock.call}})}));
 vi.mock('../hooks/useHighLevelStatus', () => ({useHighLevelStatus: () => ({highLevelStatus: mock.high})}));
 vi.mock('../hooks/useStatus', () => ({useStatus: () => mock.status}));
@@ -41,7 +49,7 @@ vi.mock('../utils/mowProgress', () => ({rasterizeMowProgress: () => mock.raster}
 vi.mock('../components/dashboard/StatusMowerIllustration', () => ({StatusMowerIllustration: () => null}));
 vi.mock('../components/dashboard/SoilWetBanner', () => ({SoilWetBanner: () => null}));
 vi.mock('../components/BladeDirectionDisplay', () => ({BladeDirectionDisplay: () => null}));
-const page = () => <MemoryRouter><ThemeProvider><MowgliNextPage/></ThemeProvider></MemoryRouter>;
+const page = () => <ConfigProvider theme={{token: {motion: false}}}><App><MemoryRouter><ThemeProvider><MowgliNextPage/></ThemeProvider></MemoryRouter></App></ConfigProvider>;
 const heading = () => screen.getByRole('heading', {level: 1});
 function deferred() {
   let resolve!: (value: unknown) => void;
@@ -53,7 +61,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mock.high = {state: 2, state_name: 'MOWING', current_area: 2, emergency: false};
   mock.status = {}; mock.odom = {}; mock.settings = {tool_width: 0.18};
-  mock.raster = null; mock.session = false; mock.mobile = false;
+  mock.raster = null; mock.session = false; mock.mobile = false; mock.realApp = false;
   mock.call.mockReset().mockResolvedValue({data: {}});
 });
 
@@ -253,4 +261,31 @@ describe('Home dig escalation command coordination', () => {
       expect(errors).toHaveBeenCalledOnce();
     } finally {errors.mockRestore();}
   });
+});
+
+
+it.each(['clear', 'start'])('keeps Home locked when the real acknowledgement dialog is cancelled during %s', async step => {
+  mock.realApp = true;
+  mock.high = {state: 1, state_name: 'DIG_OBSTRUCTION', emergency: false};
+  mock.status = {dig_escalated: true, dig_escalated_distance_m: 0.1, dig_escalated_required_distance_m: 0.5};
+  const pending = deferred();
+  if (step === 'clear') mock.call.mockReturnValueOnce(pending.promise);
+  else mock.call.mockResolvedValueOnce({data: {}}).mockReturnValueOnce(pending.promise);
+  render(page());
+  fireEvent.click(screen.getByRole('button', {name: 'Clear & resume'}));
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', {name: /Resume mowing/i}));
+  await waitFor(() => expect(mock.call).toHaveBeenCalledTimes(step === 'clear' ? 1 : 2));
+  fireEvent.click(within(dialog).getByRole('button', {name: /Cancel/i}));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  const home = screen.getByRole('button', {name: 'Return to base'});
+  expect(home).toBeDisabled();
+  fireEvent.click(home);
+  expect(screen.getByRole('button', {name: 'Emergency stop'})).toBeEnabled();
+  expect(screen.getByRole('status')).toHaveTextContent('Command pending…');
+  await act(async () => {pending.resolve({data: {}}); await pending.promise;});
+  await waitFor(() => expect(home).toBeEnabled());
+  expect(mock.call.mock.calls).toEqual([
+    ['clear_dig_escalation', {}], ['high_level_control', {Command: 1}],
+  ]);
 });
