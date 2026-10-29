@@ -885,8 +885,9 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   // its error into this one's summary.
   tracking_slot_ = std::make_shared<TrackingFeedbackSlot>();
   rclcpp_action::Client<Nav2FollowPath>::SendGoalOptions follow_opts;
-  // The coverage goal needs a result callback too — see action_outcome.hpp.
-  follow_outcome_->Reset();
+  // A late result from an abandoned goal must not decide the new attempt.
+  // Each callback retains only the outcome slot created for its own dispatch.
+  follow_outcome_ = std::make_shared<ActionOutcomeSlot>();
   // issue #743: also capture the result's error_msg (renewed per goal, same
   // reason as tracking_slot_) so tryStartDetour can check
   // ftc_abort_reason::HasObstacleAbortMarker instead of relying solely on its
@@ -1064,7 +1065,8 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
     // options carry a result callback. The slot is shared_ptr-owned so a late
     // callback can never write through a dangling `this`.
     resetTransitResult();
-    transit_outcome_->Reset();
+    // A delayed result from an abandoned transit belongs to that dispatch.
+    transit_outcome_ = std::make_shared<ActionOutcomeSlot>();
     transit_abandonment_ = std::make_shared<GoalAbandonment>();
     rclcpp_action::Client<Nav2Navigate>::SendGoalOptions send_opts;
     send_opts.goal_response_callback =

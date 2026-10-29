@@ -327,6 +327,7 @@ public:
   void onHalted() override;
 
 private:
+  friend struct FollowStripOutcomeTestAccess;
   void setBladeEnabled(bool enabled);
   bool bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx);
   void beginBladeReadyWait(const std::shared_ptr<BTContext>& ctx);
