@@ -791,6 +791,16 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  # ---- test_area_progress ---- (area_progress.hpp, pure header, no ROS)
+  ament_add_gtest(test_area_progress
+    test/test_area_progress.cpp
+  )
+
+  target_include_directories(test_area_progress PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_action_outcome ----
   ament_add_gtest(test_action_outcome
     test/test_action_outcome.cpp

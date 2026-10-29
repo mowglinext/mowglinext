@@ -7,6 +7,7 @@ import {StyledTerminal} from "./StyledTerminal.tsx";
 import {useIsMobile} from "../hooks/useIsMobile";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {flashPercent, type FlashStage} from "./flashStage.ts";
+import {flashActionBarStyle} from "./flashActionBar.ts";
 
 export interface FlashProgressViewProps {
     stage: FlashStage | null;
@@ -16,6 +17,8 @@ export interface FlashProgressViewProps {
     flashError: string | null;
     onBackToConfig: () => void;
     onNext: () => void;
+    /** Rendered inside a dialog: the action bar stays in the flow (see FlashBoardVariant). */
+    inModal?: boolean;
 }
 
 /**
@@ -31,6 +34,7 @@ export const FlashProgressView = ({
     flashError,
     onBackToConfig,
     onNext,
+    inModal = false,
 }: FlashProgressViewProps) => {
     const {t} = useTranslation();
     const isMobile = useIsMobile();
@@ -89,7 +93,7 @@ export const FlashProgressView = ({
                     />
                 </Col>
             )}
-            <Col span={24} style={{paddingBottom: isMobile ? 80 : 60}}>
+            <Col span={24} style={inModal ? undefined : {paddingBottom: isMobile ? 80 : 60}}>
                 <Collapse
                     ghost
                     activeKey={isLogOpen ? ["log"] : []}
@@ -111,16 +115,7 @@ export const FlashProgressView = ({
                     }]}
                 />
             </Col>
-            <Col span={24} style={{
-                position: "fixed",
-                bottom: isMobile ? "calc(56px + env(safe-area-inset-bottom, 0px))" : 20,
-                left: isMobile ? 0 : undefined,
-                right: isMobile ? 0 : undefined,
-                padding: isMobile ? "8px 12px" : undefined,
-                background: isMobile ? colors.bgCard : undefined,
-                borderTop: isMobile ? `1px solid ${colors.border}` : undefined,
-                zIndex: 50,
-            }}>
+            <Col span={24} data-testid="flash-progress-actions" style={flashActionBarStyle(inModal, isMobile, colors)}>
                 <FormButtonGroup>
                     {flashError && (
                         <Button onClick={onBackToConfig}>{t("flashBoard.backToConfig")}</Button>

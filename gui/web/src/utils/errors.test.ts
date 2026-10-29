@@ -14,6 +14,21 @@ describe("errorMessage", () => {
         expect(errorMessage("plain")).toBe("plain");
         expect(errorMessage(undefined)).toBe("undefined");
     });
+
+    // What api/Api.ts throws on a non-2xx answer: the Response, its parsed body on `error`.
+    const rejected = (status: number, statusText: string, error: unknown): Response =>
+        Object.assign(new Response(null, {status, statusText}), {error});
+
+    it("reads the backend reason of a rejected API call instead of [object Response]", () => {
+        const response = rejected(503, "Service Unavailable", {error: "unsupported HARDWARE_BACKEND configuration"});
+        expect(errorMessage(response)).toBe("unsupported HARDWARE_BACKEND configuration");
+    });
+
+    it("falls back to the HTTP status when the rejected call has no usable body", () => {
+        expect(errorMessage(rejected(502, "Bad Gateway", null))).toBe("HTTP 502 Bad Gateway");
+        expect(errorMessage(rejected(500, "", new SyntaxError("Unexpected token <")))).toBe("HTTP 500");
+        expect(errorMessage(rejected(500, "Internal Server Error", {error: ""}))).toBe("HTTP 500 Internal Server Error");
+    });
 });
 
 describe("apiErrorMessage", () => {
