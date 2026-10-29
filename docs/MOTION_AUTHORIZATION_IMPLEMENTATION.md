@@ -5,6 +5,43 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Known-source TF knots (2026-10-29)
+
+A separate actual-Node probe exposes an avoidable producer-side history error.
+The node knows the consumed source estimate x=0.036 m at source time 100.400 s
+and correctly publishes its forecast x=0.046 m at 100.500 s. However, querying
+TF at the known source time still returns an older forecast x=0.042 m. The
+6 mm difference is a source-estimate presentation error in this controlled
+held-input model, not a measured physical error or proof about the old event.
+All 25 newly emitted future predictions match the independent input model.
+
+Both TF publisher modes now insert the captured source pose at its source
+timestamp before the unchanged future forecast. Map/odom and odom/base samples
+use one captured motion/anchor state; inline publication is paired in
+PublishLocalOdom after timer anchor processing. The dedicated thread retains
+exclusive TF ownership when enabled. Zero rounded lead emits one sample per
+leg. Odometry messages, prediction equations, lead, noise and tolerances do not
+change. Source backfill deliberately makes wire timestamp order nonmonotonic.
+
+The persistent real-Node `test_tf_source_epoch.py` fails against the old producer
+in both positive-lead modes; its zero-lead control passes. All three cases pass
+against the repaired executable, checking source and forecast values, paired
+TF batches, zero-lead duplicates and anchored map/base composition. The final
+52-case Node fixture also passes after relinking only the changed publisher TU.
+The final comment-corrected rebuild produces identical publisher, Node and test
+binaries to the tested controls. Python flake8/pep257 and C++ changed-line
+clang-format 18 pass. CMake configuration discovers the new isolated pytest;
+the registered CTest passes against the exact validated cached executable.
+This is focused cached compilation/registration evidence, not a clean workspace
+build. Independent review covers the publisher and test/build registration.
+
+Only the exact captured source knots are repaired. Older forecast knots can
+remain between them, and already-consumed lookups cannot be revised. Arbitrary
+interpolation accuracy, in-flight source-epoch reset races, atomic TF revision
+identity and physical pose accuracy remain unqualified. Exact packets, old/new
+binaries, controls and limits are in `producer-tf-epoch/`,
+`producer-tf-epoch-green/` and `producer-tf-independent-review/`.
+
 ## Consumer evaluation epoch (2026-10-29)
 
 Two focused production-consumer probes expose a different time error from an

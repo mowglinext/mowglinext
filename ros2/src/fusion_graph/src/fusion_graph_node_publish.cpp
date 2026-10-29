@@ -23,6 +23,51 @@
 
 namespace fusion_graph
 {
+namespace
+{
+std::vector<geometry_msgs::msg::TransformStamped> MotionTransforms(
+    const rclcpp::Time& source_stamp,
+    const rclcpp::Time& forecast_stamp,
+    const gtsam::Pose2& source_pose,
+    const gtsam::Pose2& predicted_pose,
+    const gtsam::Pose2& anchor,
+    bool anchor_valid,
+    const std::string& map_frame,
+    const std::string& odom_frame,
+    const std::string& base_frame)
+{
+  std::vector<geometry_msgs::msg::TransformStamped> transforms;
+  transforms.reserve(4);
+  const auto append = [&](const rclcpp::Time& stamp, const gtsam::Pose2& pose)
+  {
+    if (anchor_valid)
+    {
+      geometry_msgs::msg::TransformStamped map_odom;
+      map_odom.header.stamp = stamp;
+      map_odom.header.frame_id = map_frame;
+      map_odom.child_frame_id = odom_frame;
+      map_odom.transform.translation.x = anchor.x();
+      map_odom.transform.translation.y = anchor.y();
+      map_odom.transform.rotation = QuatFromYaw(anchor.theta());
+      transforms.push_back(map_odom);
+    }
+    geometry_msgs::msg::TransformStamped odom_base;
+    odom_base.header.stamp = stamp;
+    odom_base.header.frame_id = odom_frame;
+    odom_base.child_frame_id = base_frame;
+    odom_base.transform.translation.x = pose.x();
+    odom_base.transform.translation.y = pose.y();
+    odom_base.transform.rotation = QuatFromYaw(pose.theta());
+    transforms.push_back(odom_base);
+  };
+  // Reinsert the known source estimate at its own epoch before the unchanged
+  // future forecast. Existing predicted knots between them are not revised.
+  append(source_stamp, source_pose);
+  if (forecast_stamp != source_stamp)
+    append(forecast_stamp, predicted_pose);
+  return transforms;
+}
+}  // namespace
 
 bool FusionGraphNode::TrySeedInitialPose()
 {
@@ -113,23 +158,20 @@ void FusionGraphNode::PublishLocalOdom()
   const double ex_y = state->predicted_pose.y();
   const double ex_yaw = state->predicted_pose.theta();
 
-  geometry_msgs::msg::TransformStamped t_odom_base;
-  t_odom_base.header.stamp = stamp;
-  t_odom_base.header.frame_id = odom_frame_;
-  t_odom_base.child_frame_id = base_frame_;
-  t_odom_base.transform.translation.x = ex_x;
-  t_odom_base.transform.translation.y = ex_y;
-  t_odom_base.transform.translation.z = 0.0;
-  t_odom_base.transform.rotation = QuatFromYaw(ex_yaw);
-  // Only the PRIMARY localizer may own odom→base_footprint — same single-
-  // publisher rule as map→odom below. In observer mode (A/B against another
-  // odom source) we still publish /odometry/filtered for comparison but must
-  // NOT broadcast the TF, or two nodes would fight over the same transform.
-  // When the dedicated TF thread is running it owns this broadcast (single
-  // writer, monotonic stamps) — skip the inline send.
+  // In inline mode publish both TF legs from this same captured state.
+  // The dedicated thread remains the sole TF writer when enabled.
   if (primary_mode_ && !tf_thread_.joinable())
   {
-    tf_broadcaster_->sendTransform(t_odom_base);
+    const auto source_stamp = rclcpp::Time(state->source_ns, get_clock()->get_clock_type());
+    tf_broadcaster_->sendTransform(MotionTransforms(source_stamp,
+                                                    stamp,
+                                                    state->source_pose,
+                                                    state->predicted_pose,
+                                                    state->anchor,
+                                                    state->anchor_valid,
+                                                    map_frame_,
+                                                    odom_frame_,
+                                                    base_frame_));
   }
 
   const geometry_msgs::msg::Quaternion q_msg = QuatFromYaw(ex_yaw);
@@ -244,52 +286,8 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   yaw_msg.linear_acceleration_covariance[0] = -1.0;
   pub_fg_yaw_->publish(yaw_msg);
 
-  // 2. TF map -> odom. Skipped in observer mode so the active
-  //    map-frame primary (typically ekf_map_node) keeps single
-  //    ownership of the map→odom transform. The /odometry/filtered_map
-  //    publish above still happens — downstream consumers that
-  //    explicitly route to /fusion_graph/odometry (via launch remap)
-  //    can use it for diagnostics or A/B comparison.
-  if (!primary_mode_)
-    return;
-
-  // The dedicated TF thread owns the map→odom broadcast when running
-  // (single writer, monotonic stamps) — skip the inline send.
-  if (tf_thread_.joinable())
-    return;
-
-  // The map→odom TF is the CONSTANT anchor captured at the moment of
-  // the last graph node creation (see fusion_graph_node.hpp). Using
-  // out.pose × inv(dr_now) instead would zero out current odom
-  // motion in the composition map→base = map→odom × odom→base, so
-  // the robot would freeze at the snapshot pose between Ticks.
-  tf2::Transform T_map_odom;
-  if (state->anchor_valid)
-  {
-    T_map_odom.setOrigin(tf2::Vector3(state->anchor.x(), state->anchor.y(), 0.0));
-    tf2::Quaternion q_map_odom;
-    q_map_odom.setRPY(0.0, 0.0, state->anchor.theta());
-    T_map_odom.setRotation(q_map_odom);
-  }
-  else
-  {
-    // Fallback for the brief OnTimer just after init but before the
-    // anchor has been set (caller already gates on LatestSnapshot, so
-    // we shouldn't reach here in practice). Identity is safer than
-    // out.pose × inv(dr_now) — at least the robot doesn't get stuck.
-    T_map_odom.setIdentity();
-  }
-
-  geometry_msgs::msg::TransformStamped t_map_odom;
-  // Forward-stamp by tf_publish_lead_s_ so Nav2 controller_server /
-  // RotationShim queries at clock_->now() find a TF in the buffer that
-  // is >= the request time and tf2 interpolates back instead of raising
-  // ExtrapolationException. Default 0 (real hardware); sim sets ~0.1s.
-  t_map_odom.header.stamp = odom.header.stamp;
-  t_map_odom.header.frame_id = map_frame_;
-  t_map_odom.child_frame_id = odom_frame_;
-  t_map_odom.transform = tf2::toMsg(T_map_odom);
-  tf_broadcaster_->sendTransform(t_map_odom);
+  // Inline TF publication is paired in PublishLocalOdom so the source and
+  // forecast legs share one captured anchor and motion state.
 }
 
 gtsam::Pose2 FusionGraphNode::SlewPublishedAnchor(const gtsam::Pose2& target,
@@ -340,7 +338,7 @@ void FusionGraphNode::TfBroadcastLoop()
   // loop owns ALL TF broadcasting in primary mode — PublishLocalOdom
   // and PublishOutputs skip their inline sendTransform when the
   // thread is running (tf_thread_.joinable()), so there is exactly
-  // one writer per TF leg and stamps stay monotonic.
+  // one writer per TF leg; source knots intentionally backfill forecasts.
   const auto period = std::chrono::duration<double>(1.0 / tf_broadcast_rate_hz_);
   while (!tf_thread_stop_.load(std::memory_order_acquire))
   {
@@ -353,47 +351,17 @@ void FusionGraphNode::TfBroadcastLoop()
     const auto state = CaptureMotionPublishState();
     if (!state)
       continue;
-    const double x = state->predicted_pose.x();
-    const double y = state->predicted_pose.y();
-    const double yaw = state->predicted_pose.theta();
-    const auto& anchor = state->anchor;
-    const bool anchor_valid = state->anchor_valid;
-    const auto stamp = rclcpp::Time(state->source_ns, get_clock()->get_clock_type()) +
-                       rclcpp::Duration::from_seconds(tf_publish_lead_s_);
-
-    std::vector<geometry_msgs::msg::TransformStamped> transforms;
-    transforms.reserve(2);
-
-    geometry_msgs::msg::TransformStamped t_odom_base;
-    t_odom_base.header.stamp = stamp;
-    t_odom_base.header.frame_id = odom_frame_;
-    t_odom_base.child_frame_id = base_frame_;
-    t_odom_base.transform.translation.x = x;
-    t_odom_base.transform.translation.y = y;
-    t_odom_base.transform.translation.z = 0.0;
-    t_odom_base.transform.rotation = QuatFromYaw(yaw);
-    transforms.push_back(t_odom_base);
-
-    // map→odom only once the graph has produced its first node — the
-    // constant anchor is the single source of truth (see the anchor
-    // comment block in the header).
-    if (anchor_valid)
-    {
-      tf2::Transform T_map_odom;
-      T_map_odom.setOrigin(tf2::Vector3(anchor.x(), anchor.y(), 0.0));
-      tf2::Quaternion q_map_odom;
-      q_map_odom.setRPY(0.0, 0.0, anchor.theta());
-      T_map_odom.setRotation(q_map_odom);
-
-      geometry_msgs::msg::TransformStamped t_map_odom;
-      t_map_odom.header.stamp = stamp;
-      t_map_odom.header.frame_id = map_frame_;
-      t_map_odom.child_frame_id = odom_frame_;
-      t_map_odom.transform = tf2::toMsg(T_map_odom);
-      transforms.push_back(t_map_odom);
-    }
-
-    tf_broadcaster_->sendTransform(transforms);
+    const auto source_stamp = rclcpp::Time(state->source_ns, get_clock()->get_clock_type());
+    const auto forecast_stamp = source_stamp + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+    tf_broadcaster_->sendTransform(MotionTransforms(source_stamp,
+                                                    forecast_stamp,
+                                                    state->source_pose,
+                                                    state->predicted_pose,
+                                                    state->anchor,
+                                                    state->anchor_valid,
+                                                    map_frame_,
+                                                    odom_frame_,
+                                                    base_frame_));
   }
 }
 }  // namespace fusion_graph

@@ -3,6 +3,17 @@
 > `ros2/src/fusion_graph` is the GTSAM iSAM2 Pose2 factor-graph localizer — the sole owner of BOTH `map→odom` and `odom→base_footprint` (CLAUDE.md Invariants 1–2). It fuses `/wheel_odom` + `/imu/data` (between-factors), `/gps/fix` (`GnssLeverArmFactor`), `/imu/cog_heading` / `/imu/mag_yaw` (yaw unaries) and, with LiDAR, a persistent RTK-built map anchor used only after complete GNSS outages; it persists the graph and tiled map under `/ros2_ws/maps/fusion_graph*`. Scan-to-scan ICP and loop closure were removed. Index refreshed 2026-09-09; regenerate when files are added/removed. Loaded on demand from `ros2/CLAUDE.md`.
 
 ## Where to look
+
+TF publication in `fusion_graph_node_publish.cpp` emits the captured source pose
+at its consumed source timestamp and the unchanged constant-twist forecast at
+source plus lead. Both map/odom and odom/base legs share that capture. Inline
+publication is paired in `PublishLocalOdom`; the dedicated thread owns all TF
+when enabled. Source insertion intentionally backfills older forecasts, so wire
+stamps are not monotonic. Zero rounded lead emits one sample per leg. This fixes
+known source knots, not arbitrary interpolation or physical prediction accuracy.
+`test/test_tf_source_epoch.py` runs the real executable and tf2 in isolated ROS
+pytest cases for thread/inline and positive/zero lead.
+
 | Task | Start here |
 |------|------------|
 | Add / rename a ROS parameter | Graph-side (`GraphParams`) → `ros2/src/fusion_graph/src/fusion_graph_node.cpp:30-91`; node-side → `ros2/src/fusion_graph/src/fusion_graph_node_setup_params.cpp`; yaml default → `ros2/src/fusion_graph/config/fusion_graph.yaml`; struct default → `ros2/src/fusion_graph/include/fusion_graph/graph_params.hpp` |
@@ -87,6 +98,7 @@ The launch-only helper `launch/fusion_graph_simulation_geometry.py` validates th
 | **`ros2/src/fusion_graph/test/`** | | |
 | `.../test_checkpoint_file.cpp`, `.../test_persistence_faults.cpp` | | Deterministic I/O faults, process interruption, recovery and legacy migration |
 | `.../test_save_service.py`, `.../checkpoint_test_delay.cpp` | | Real-node save result, busy failure and executor progress during held file I/O |
+| `.../test_tf_source_epoch.py` | | Real-node source/forecast TF values, paired anchor/body publication, zero-lead batches and map/base composition |
 | `.../test_factors.cpp` | | Graph factor residual and Jacobian tests |
 | `.../test_gnss_timestamp.cpp` | 142 | Delayed GNSS constrains the node at `header.stamp`, bounded by the window |
 | `.../test_rtk_wrongfix_gate.cpp` | 167 | Wrong-fix budget math; reject-forever regression if reset only on accept |

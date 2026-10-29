@@ -178,6 +178,13 @@ if(BUILD_TESTING)
       PYTHONDONTWRITEBYTECODE=1
   )
 
+  ament_add_ros_isolated_pytest_test(test_tf_source_epoch test/test_tf_source_epoch.py
+    TIMEOUT 90
+    ENV
+      FUSION_GRAPH_TEST_NODE=$<TARGET_FILE:fusion_graph_node>
+      PYTHONDONTWRITEBYTECODE=1
+  )
+
   ament_add_gtest(test_factors
     test/test_factors.cpp
   )
