@@ -16,6 +16,7 @@
 // SPDX-License-Identifier: GPL-3.0
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -32,6 +33,21 @@
 #include "nav2_msgs/srv/clear_entire_costmap.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include <gtest/gtest.h>
+
+namespace mowgli_behavior
+{
+struct NavigateToPoseOutcomeTestAccess
+{
+  static std::shared_ptr<ActionOutcomeSlot> outcome(NavigateToPose& node)
+  {
+    return node.outcome_;
+  }
+  static bool hasHandle(NavigateToPose& node)
+  {
+    return static_cast<bool>(node.goal_handle_);
+  }
+};
+}  // namespace mowgli_behavior
 
 namespace
 {
@@ -78,6 +94,7 @@ protected:
     blackboard_ = BT::Blackboard::create();
     blackboard_->set("context", ctx_);
     factory_.registerNodeType<NavigateInsideBoundary>("NavigateInsideBoundary");
+    factory_.registerNodeType<mowgli_behavior::NavigateToPose>("NavigateToPose");
 
     recovery_service_ =
         server_node_->create_service<RecoverySrv>("/map_server_node/get_recovery_point",
@@ -112,16 +129,24 @@ protected:
         "/navigate_to_pose",
         [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const NavigateAction::Goal> goal)
         {
-          EXPECT_EQ(goal->behavior_tree, ctx_->boundary_recovery_tree_xml);
+          if (!manual_navigation_)
+            EXPECT_EQ(goal->behavior_tree, ctx_->boundary_recovery_tree_xml);
           events_.push_back("navigate_goal");
           return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         },
-        [](const std::shared_ptr<NavigateGoalHandle>)
+        [this](const std::shared_ptr<NavigateGoalHandle>)
         {
-          return rclcpp_action::CancelResponse::ACCEPT;
+          ++cancel_requests_;
+          return manual_navigation_ ? rclcpp_action::CancelResponse::REJECT
+                                    : rclcpp_action::CancelResponse::ACCEPT;
         },
         [this](const std::shared_ptr<NavigateGoalHandle> goal_handle)
         {
+          if (manual_navigation_)
+          {
+            navigation_handles_.push_back(goal_handle);
+            return;
+          }
           auto result = std::make_shared<NavigateAction::Result>();
           if (navigation_succeeds_)
           {
@@ -169,6 +194,9 @@ protected:
   BT::BehaviorTreeFactory factory_;
   rclcpp::executors::SingleThreadedExecutor executor_;
   std::vector<std::string> events_;
+  bool manual_navigation_{false};
+  std::size_t cancel_requests_{0};
+  std::vector<std::shared_ptr<NavigateGoalHandle>> navigation_handles_;
   bool toggle_succeeds_{true};
   bool navigation_succeeds_{true};
   rclcpp::Service<RecoverySrv>::SharedPtr recovery_service_;
@@ -176,6 +204,76 @@ protected:
   rclcpp::Service<ClearSrv>::SharedPtr clear_service_;
   rclcpp_action::Server<NavigateAction>::SharedPtr navigate_server_;
 };
+
+TEST_F(BoundaryRecoveryTest, NavigateToPoseIgnoresLateOldSuccess)
+{
+  manual_navigation_ = true;
+  auto tree = factory_.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"MainTree\">"
+      "<NavigateToPose goal=\"2;0;0\"/></BehaviorTree></root>",
+      blackboard_);
+  auto* node = dynamic_cast<mowgli_behavior::NavigateToPose*>(tree.rootNode());
+  ASSERT_NE(node, nullptr);
+  ASSERT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  const auto pump_until = [&](const std::function<bool()>& done)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!done() && std::chrono::steady_clock::now() < deadline)
+    {
+      executor_.spin_some();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return done();
+  };
+  ASSERT_TRUE(pump_until(
+      [&]()
+      {
+        return navigation_handles_.size() == 1;
+      }));
+  ASSERT_TRUE(pump_until(
+      [&]()
+      {
+        tree.tickOnce();
+        return mowgli_behavior::NavigateToPoseOutcomeTestAccess::hasHandle(*node);
+      }));
+  auto old_outcome = mowgli_behavior::NavigateToPoseOutcomeTestAccess::outcome(*node);
+  tree.haltTree();
+  ASSERT_TRUE(pump_until(
+      [&]()
+      {
+        return cancel_requests_ > 0;
+      }));
+  ASSERT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(pump_until(
+      [&]()
+      {
+        return navigation_handles_.size() == 2;
+      }));
+  ASSERT_TRUE(pump_until(
+      [&]()
+      {
+        tree.tickOnce();
+        return mowgli_behavior::NavigateToPoseOutcomeTestAccess::hasHandle(*node);
+      }));
+  auto new_outcome = mowgli_behavior::NavigateToPoseOutcomeTestAccess::outcome(*node);
+  navigation_handles_[0]->succeed(std::make_shared<NavigateAction::Result>());
+  ASSERT_TRUE(pump_until(
+      [&]()
+      {
+        return old_outcome->Get().has_value();
+      }));
+  ASSERT_EQ(old_outcome->Get(), mowgli_behavior::GoalOutcome::kSucceeded);
+  ASSERT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING)
+      << "the old result must not complete the current navigation";
+  ASSERT_FALSE(new_outcome->Get().has_value());
+  navigation_handles_[1]->succeed(std::make_shared<NavigateAction::Result>());
+  ASSERT_TRUE(pump_until(
+      [&]()
+      {
+        return new_outcome->Get().has_value();
+      }));
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+}
 
 TEST_F(BoundaryRecoveryTest, TogglesFilterAroundSuccessfulNavigation)
 {

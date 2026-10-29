@@ -37,11 +37,15 @@ lifecycle cases in 18.225 s. Independent review and formatting checks pass.
 Evidence is in `standalone-nav-late-result/` and
 `standalone-attempt-independent-review/`.
 
-The generic NavigateToPose BT node retains analogous outcome reuse. It is
-registered but has no current XML instance; its own late-result schedule has
-not been tested or changed. Docking uses per-dispatch objects and is not part
-of this outcome-slot repair. None of these tests establishes physical
-cancellation or final-output ownership.
+The generic NavigateToPose BT node has the same separately reproduced failure
+and now renews its outcome slot per dispatch. Its real-node/fake-action
+regression and all three existing boundary-recovery controls pass. It is
+registered but has no current default XML instance; custom trees can use it.
+Independent review and exact RED/GREEN evidence are retained in
+`generic-nav-late-result/` and `generic-nav-attempt-independent-review/`.
+Pending-goal cancellation is unchanged. Docking uses per-dispatch objects and
+is not part of this outcome-slot repair. None of these tests establishes
+physical cancellation or final-output ownership.
 
 ## Known-source TF knots (2026-10-29)
 
@@ -180,7 +184,9 @@ prefix and **unexecuted** R-to-J/suffix context. The exact production planner
 exports raw doubles and asserts the reconstructed old route vector matches;
 both nominal and realized-local Difference are empty. This does not establish
 actual full-route cutting, successor tracking or body/pivot permission at the
-new rejoin. The prototype's R differs from the earlier static certificate.
+new rejoin. No blade-actuation signal was acquired; cutting strokes are a
+geometric model assumption. The prototype's R differs from the earlier static
+certificate.
 
 Resume remains a concrete software blocker. Replaying the actual production
 progress helper at 10 Hz against that successful local trace jumps to future
@@ -657,7 +663,7 @@ than inheriting a whole-branch CI result.
 | Wheel travel-noise accounting | Four small production edits plus source/legacy/clipped-bootstrap regressions; all three new cases RED on the old Core, 15 selected targets / 156 cases GREEN after coherent ABI rebuild. Can be separated with its bootstrap source integration dependency retained; it does not repair true-flip lineage. |
 | Post-anchor snapshot | Small Core/API repair with two baseline RED cases, 11 rebase and 48 Node GREEN cases; depends on existing source/revision semantics. It does not repair the invalid true-flip prior. |
 | Automatic dock seed provenance | Keep the shared charging guard, callback ordering and timer fallback together. Two old-Node RED cases, two charging controls and 52 actual-Node GREEN cases support the narrow repair; general bad authoritative seed recovery remains separate. |
-| Coverage action result ownership | Four per-dispatch slot renewals and real-class/fake-Nav2 regressions form a small separate family. Four late-old-success REDs across FollowStrip follow/transit, TransitToStrip and DetourAroundObstacle; focused GREEN controls and independent review. No dependency on the unshipped maneuver, generic NavigateToPose fix or downstream cancellation qualification. |
+| BT action result ownership | Five per-dispatch slot renewals and real-class/fake-Nav2 regressions form a small separate family. Five late-old-success REDs across FollowStrip follow/transit, TransitToStrip, DetourAroundObstacle and generic NavigateToPose; nine coverage-action and four generic-navigation/boundary-recovery cases GREEN, with independent reviews. No dependency on the unshipped maneuver or downstream cancellation qualification. |
 | FTC requested goal and consumer epoch | Keep the requested-distance approach, current terminal decision, goal transform provenance and final guard epoch repairs together. They depend on the selected Nav2 1.5.2 path-handler contract and existing geometry/response interfaces; extraction needs its own target-base validation. Software RED/GREEN does not establish a complete corner. |
 | Public coverage header includes | Include-only dependency reduction has unchanged coverage/replay evidence; it is separable from the unshipped constructive-corner prototype. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
