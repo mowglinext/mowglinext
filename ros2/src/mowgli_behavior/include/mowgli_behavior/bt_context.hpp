@@ -420,6 +420,13 @@ struct BTContext
   /// indices afterwards), so idle fleet members do not all race for area 0.
   /// nullopt = plain ascending order. Ignored during a targeted run.
   std::optional<uint32_t> fleet_preferred_start;
+  /// The area that was in progress when the previous session ended unfinished (it has a resume
+  /// cursor): the next Start scans from here first and then wraps to the lower indices, the same
+  /// way fleet_preferred_start does. Without it the scan always began at the lowest incomplete
+  /// area, so a Play after the operator moved the mower sent it across the garden to an area it
+  /// had not started (field 2026-10-26). Kept until that area is completed or retired, so a
+  /// short interruption does not lose it; cleared by EndSession (a finished session).
+  std::optional<uint32_t> resume_preferred_start;
   /// Areas whose most recent FollowStrip pass ended because the area became
   /// excluded mid-mow (fleet yield, resume cursor saved). Consumed per area by
   /// the next GetNextUnmowedArea dispatch of that area, which exempts the pass

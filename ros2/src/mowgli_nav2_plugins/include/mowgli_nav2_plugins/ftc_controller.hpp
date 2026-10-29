@@ -38,6 +38,7 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -51,6 +52,7 @@
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
+#include "mowgli_nav2_plugins/retrace.hpp"
 #include <Eigen/Geometry>
 #include <visualization_msgs/msg/marker.hpp>
 
@@ -516,6 +518,18 @@ private:
   // ONLY, so a skirt never leaves the zone. (The offset samples are in the LOCAL
   // costmap / odom frame here, so the guard affine is boundary(map) <- odom.)
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr boundary_costmap_sub_;
+
+  // ── Boundary-safe reverse (retrace.hpp) ───────────────────────────────────
+  // Every reverse FTC performs (the reverse-escape and the turn fallback's reverse) is blind to the
+  // recorded boundary: the local costmap has none. Field 2026-10-26 a 0.30 m reverse-escape took
+  // the mower from 0.00 m to 0.33 m outside the area. A reverse is therefore only allowed when the
+  // robot is inside every recorded area (outside_area_) AND the piece it would undo is a straight
+  // forward drive it just made (reverse_crumbs_), i.e. ground that is known to be inside.
+  retrace::Breadcrumbs reverse_crumbs_;
+  std::atomic<bool> outside_area_{false};
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr outside_area_sub_;
+  /// The longest reverse (<= `wanted`) that is allowed here, 0 when none is.
+  double reverseAllowedDistance(double wanted);
   std::unique_ptr<nav2_costmap_2d::Costmap2D> boundary_costmap_;
   std::string boundary_frame_;  ///< frame_id of the global costmap (e.g. "map").
   std::mutex boundary_mutex_;
@@ -810,6 +824,10 @@ private:
     /// enable only after a supervised field test. When false the wedged case
     /// holds/aborts exactly as before.
     bool obstacle_reverse_enabled{false};
+    /// Boundary-safe reverse (retrace.hpp, reverseAllowedDistance): a reverse only runs while the
+    /// robot is inside every recorded area, over a straight forward piece it just drove. False in
+    /// the struct (unit tests build the controller directly), true in nav2_params_base.yaml.
+    bool reverse_boundary_safe{false};
     /// Hard cap on total reversed distance (m) per escape. Never exceeded.
     double obstacle_reverse_max_dist_m{0.30};
     /// Straight reverse speed (m/s). Must clear the firmware deadband (~0.05).

@@ -1368,6 +1368,10 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr replan_needed_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr boundary_violation_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr lethal_boundary_violation_pub_;
+  /// The robot's base pose is outside EVERY recorded area, undebounced and without the soft margin
+  /// (boundary_violation only asserts 0.30 m out). Reverse manoeuvres (FTC reverse-escape, the
+  /// turn-fallback reverse, the dig escape) refuse to run while it is true.
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr outside_area_pub_;
 
   // Docking pose publisher (transient_local so late subscribers get the last value)
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr docking_pose_pub_;

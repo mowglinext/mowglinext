@@ -106,6 +106,7 @@ Transit geometry snapshots and dock/obstacle rings are published by
 | `~/replan_needed` | `std_msgs/Bool` | pub | depth 1 | `mowgli_behavior/src/behavior_tree_node.cpp` L233 |
 | `~/boundary_violation` | `std_msgs/Bool` | pub (every odom tick) | depth 1 | `behavior_tree_node.cpp` L248; `ros2/src/e2e_test.py` L209 |
 | `~/lethal_boundary_violation` | `std_msgs/Bool` | pub (every odom tick) | depth 1 | `behavior_tree_node.cpp` L262 |
+| `~/outside_area` | `std_msgs/Bool` | pub (every odom tick, `check_boundary_violation`) | depth 1 | raw "outside every area" for the reverse gates (`FTCController`, `hardware_bridge_node` dig escape) |
 | `~/docking_pose` | `geometry_msgs/PoseStamped` | pub | depth 1, transient_local | GUI `gui/pkg/providers/ros.go` L360 |
 | `/map` | `nav_msgs/OccupancyGrid` | sub → occupancy layer | depth 1 | **no publisher in `ros2/src`** (dead input; see Pitfalls) |
 | `/hardware_bridge/status` | `mowgli_interfaces/Status` | sub | depth 1 | `mow_enabled`, `mower_esc_status`, `mower_motor_rpm`, `blade_status_stamp`, `is_charging` |

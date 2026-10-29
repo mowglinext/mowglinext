@@ -3134,14 +3134,31 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
   // targeted run keeps its clip; an out-of-range preference is ignored.
   fleet_wrap_pending_ = false;
   fleet_wrap_limit_ = 0;
-  if (!ctx->single_area_target.has_value() && ctx->fleet_preferred_start.has_value() &&
-      *ctx->fleet_preferred_start > 0 && *ctx->fleet_preferred_start < max_areas_)
+  // A Start that resumes an unfinished session scans from the area that was in progress, with the
+  // same wrap. It outranks the fleet preference and holds until that area is completed or retired.
+  std::optional<uint32_t> preferred_start = ctx->fleet_preferred_start;
+  const char* preferred_why = "fleet rotation";
+  if (ctx->resume_preferred_start.has_value())
   {
-    current_area_idx_ = *ctx->fleet_preferred_start;
+    if (isSkippedArea(*ctx, *ctx->resume_preferred_start))
+    {
+      ctx->resume_preferred_start.reset();
+    }
+    else
+    {
+      preferred_start = ctx->resume_preferred_start;
+      preferred_why = "resuming the area in progress";
+    }
+  }
+  if (!ctx->single_area_target.has_value() && preferred_start.has_value() && *preferred_start > 0 &&
+      *preferred_start < max_areas_)
+  {
+    current_area_idx_ = *preferred_start;
     fleet_wrap_pending_ = true;
     fleet_wrap_limit_ = current_area_idx_;
     RCLCPP_INFO(ctx->node->get_logger(),
-                "GetNextUnmowedArea: fleet rotation — scanning from area %u first, then 0..%u",
+                "GetNextUnmowedArea: %s — scanning from area %u first, then 0..%u",
+                preferred_why,
                 current_area_idx_,
                 fleet_wrap_limit_ - 1);
   }

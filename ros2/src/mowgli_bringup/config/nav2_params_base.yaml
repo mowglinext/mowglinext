@@ -717,6 +717,10 @@ controller_server:
       # Static default kept in sync with the template (true, 2026-07-23) so a
       # raw `ros2 launch` with no robot-config injection is behaviour-preserving.
       obstacle_reverse_enabled: true
+      # Boundary-safe reverse (retrace.hpp): FTC's reverse-escape and the turn fallback's reverse only
+      # run while the robot is inside every recorded area and only over a straight forward piece it just
+      # drove. Field 2026-10-26: a 0.30 m reverse-escape took the mower from 0.00 m to 0.33 m outside.
+      reverse_boundary_safe: true
       obstacle_reverse_max_dist_m: 0.30
       obstacle_reverse_speed_mps: 0.10   # must clear the firmware deadband (~0.05)
       # TURN FALLBACK (ftc_turn_fallback.hpp). Field 2026-09-22: all 8 WEDGED

@@ -922,6 +922,13 @@ private:
                 RCLCPP_INFO(get_logger(),
                             "HighLevelControl: resuming the area that was in progress "
                             "(coverage progress kept from the last session)");
+                // Continue the area the mower was working in, not the lowest incomplete one.
+                if (context_->current_area >= 0 &&
+                    context_->area_resume_pose_index.count(
+                        static_cast<uint32_t>(context_->current_area)) > 0)
+                {
+                  context_->resume_preferred_start = static_cast<uint32_t>(context_->current_area);
+                }
               }
             }
           }

@@ -515,6 +515,7 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       create_publisher<std_msgs::msg::Bool>("~/boundary_violation", rclcpp::QoS(1));
   lethal_boundary_violation_pub_ =
       create_publisher<std_msgs::msg::Bool>("~/lethal_boundary_violation", rclcpp::QoS(1));
+  outside_area_pub_ = create_publisher<std_msgs::msg::Bool>("~/outside_area", rclcpp::QoS(1));
 
   docking_pose_pub_ =
       create_publisher<geometry_msgs::msg::PoseStamped>("~/docking_pose",

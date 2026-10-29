@@ -308,6 +308,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `obstacle_detection_range_m` (L611) | 2.0 | `FTC.obstacle_lookahead` = max(4, clamp(0.2, 5.0)/0.05 poses) L823 | Obstacles | launch |
 | `obstacle_clearance_margin` (L627) | 0.2 | `FTC.obstacle_clearance_margin` = clamp(0.0, 0.50) L831 | Obstacles | launch |
 | `obstacle_wait_timeout_s` (L632) | 2.5 | `FTC.obstacle_wait_timeout_s` = clamp(0.5, 60.0) L838 | Obstacles | launch |
+| `reverse_boundary_safe` | `true` (struct default `false`) | `FTC.reverse_boundary_safe` (`nav2_params_base.yaml`) | Obstacles | dynamic. A reverse (reverse-escape, turn-fallback reverse) only runs inside every recorded area over a straight forward piece just driven (`retrace.hpp`). |
 | `obstacle_reverse_enabled` (L651) | `true` | `FTC.obstacle_reverse_enabled` L844 | Obstacles | dynamic (FTC param callback, `ftc_controller.cpp:260`) |
 | `obstacle_reverse_max_dist_m` (L654) | 0.30 | clamp(0.0, 1.0) L845 | Obstacles | dynamic |
 | `obstacle_reverse_speed_mps` (L657) | 0.15 | clamp(0.0, 0.30) L847 | Obstacles | dynamic |

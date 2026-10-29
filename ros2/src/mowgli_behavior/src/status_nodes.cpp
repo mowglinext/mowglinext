@@ -328,6 +328,7 @@ BT::NodeStatus EndSession::tick()
     return BT::NodeStatus::SUCCESS;
   }
   ctx->resume_after_incomplete_end = false;
+  ctx->resume_preferred_start.reset();
 
   // Swath-completion model (replaces the cell coverage grid): clear the
   // per-area completed-swath sets, swath counts, and the completed-area set so

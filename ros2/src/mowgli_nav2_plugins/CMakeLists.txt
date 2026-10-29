@@ -20,6 +20,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(nav2_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
@@ -78,6 +80,7 @@ target_link_libraries(${PROJECT_NAME}
   ${nav2_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
+  ${std_msgs_TARGETS}
   ${pluginlib_TARGETS}
   ${tf2_TARGETS}
   ${tf2_ros_TARGETS}
@@ -85,6 +88,23 @@ target_link_libraries(${PROJECT_NAME}
   ${tf2_eigen_TARGETS}
   ${visualization_msgs_TARGETS}
   ${mowgli_interfaces_TARGETS}
+)
+
+# ---------------------------------------------------------------------------
+# retrace_server: a boundary-safe replacement for Nav2's BackUp recovery
+# ---------------------------------------------------------------------------
+
+add_executable(retrace_server_node src/retrace_server_node.cpp)
+target_include_directories(retrace_server_node
+  PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+target_link_libraries(retrace_server_node
+  ${rclcpp_TARGETS}
+  ${rclcpp_action_TARGETS}
+  ${nav2_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${tf2_ros_TARGETS}
 )
 
 # pluginlib needs the export macro defined.
@@ -106,6 +126,11 @@ install(
   TARGETS ${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  TARGETS retrace_server_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -146,6 +171,12 @@ if(BUILD_TESTING)
     test/test_path_progress_end_approach.cpp
   )
   target_link_libraries(test_path_progress_end_approach ${PROJECT_NAME})
+
+  ament_add_gtest(test_retrace test/test_retrace.cpp)
+  target_include_directories(test_retrace
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
 
   ament_add_gtest(test_oscillation_detector
     test/test_oscillation_detector.cpp

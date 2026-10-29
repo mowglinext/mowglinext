@@ -54,6 +54,7 @@
  *                     estimate the wheel_pid_* set must be able to bridge)
  */
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -1105,6 +1106,17 @@ private:
         {
           on_filtered_map_odom(msg);
         });
+
+    // map_server: the robot is outside EVERY recorded area (undebounced). The dig escape's reverse
+    // refuses while it is true: backing out of a hole must not take the mower further out of the
+    // area.
+    outside_area_sub_ =
+        create_subscription<std_msgs::msg::Bool>("/map_server_node/outside_area",
+                                                 rclcpp::QoS(1),
+                                                 [this](std_msgs::msg::Bool::ConstSharedPtr msg)
+                                                 {
+                                                   outside_area_.store(msg->data);
+                                                 });
   }
 
   void create_services()
@@ -3690,7 +3702,9 @@ private:
   /// sole safety authority (Invariant 9) — this only ever declines to act.
   [[nodiscard]] bool dig_escape_allowed() const
   {
-    return !emergency_active_ && !fw_latched_emergency_ && !is_charging_;
+    // Outside every recorded area the reverse would only take the mower further out (field
+    // 2026-10-26: three dig reverses of 0.30 m next to the boundary). The hard stop stands.
+    return !emergency_active_ && !fw_latched_emergency_ && !is_charging_ && !outside_area_.load();
   }
 
   /// Drop the wheel/map baselines so the next live tick starts a fresh
@@ -4342,6 +4356,9 @@ private:
 
   /// Fused-pose (map-frame) tracking.
   bool have_map_pose_{false};
+  /// map_server: the robot is outside every recorded area (/map_server_node/outside_area).
+  std::atomic<bool> outside_area_{false};
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr outside_area_sub_;
   double last_map_pose_x_{0.0};
   double last_map_pose_y_{0.0};
   double last_map_sigma_{0.0};

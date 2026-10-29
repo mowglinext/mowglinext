@@ -1594,6 +1594,53 @@ TEST_F(GetNextUnmowedAreaTest, FleetPreferredStartRotatesTheScanAndWraps)
   }
 }
 
+// Field 2026-10-26: a Play after the operator moved the mower must continue the area it was in,
+// not start at the lowest incomplete one (which sent it across the garden to an untouched area).
+TEST_F(GetNextUnmowedAreaTest, ResumePreferredStartScansFromTheAreaInProgressThenWraps)
+{
+  areas[0] = {"a", false};
+  areas[1] = {"b", false};
+  areas[2] = {"c", false};
+  waitForService();
+  ctx->resume_preferred_start = 2u;
+
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+    uint32_t selected = 99;
+    ASSERT_TRUE(blackboard->get("area_index", selected));
+    EXPECT_EQ(selected, 2u) << "the area that was in progress comes first";
+  }
+  EXPECT_TRUE(ctx->resume_preferred_start.has_value())
+      << "kept while the area is unfinished, so a short interruption does not lose it";
+  ctx->completed_areas.insert(2u);
+  {
+    auto tree = makeTree(/*max_areas=*/5);
+    ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+    uint32_t selected = 99;
+    ASSERT_TRUE(blackboard->get("area_index", selected));
+    EXPECT_EQ(selected, 0u) << "afterwards the scan wraps to the lower indices";
+  }
+  EXPECT_FALSE(ctx->resume_preferred_start.has_value()) << "dropped once that area is done";
+}
+
+TEST_F(GetNextUnmowedAreaTest, ResumePreferredStartIsIgnoredWhenThatAreaWasRetired)
+{
+  areas[0] = {"a", false};
+  areas[1] = {"b", false};
+  areas[2] = {"c", false};
+  waitForService();
+  ctx->resume_preferred_start = 2u;
+  ctx->attempted_areas.insert(2u);
+
+  auto tree = makeTree(/*max_areas=*/5);
+  ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  uint32_t selected = 99;
+  ASSERT_TRUE(blackboard->get("area_index", selected));
+  EXPECT_EQ(selected, 0u) << "a retired area is not resumed: plain ascending order";
+  EXPECT_FALSE(ctx->resume_preferred_start.has_value());
+}
+
 // The fleet wrap into [0, preferred) must apply the SAME isSkipVerified()
 // gate as the other two skip loops. An area re-indexed into the lower range
 // carries no verified probe for its new index, so trusting the previous

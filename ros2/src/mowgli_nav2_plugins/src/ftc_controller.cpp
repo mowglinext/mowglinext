@@ -137,6 +137,15 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
       },
       rclcpp::QoS(10));
 
+  // The robot is outside every recorded area (map_server, undebounced). Reverse refuses while true.
+  outside_area_sub_ = node->create_subscription<std_msgs::msg::Bool>(
+      "/map_server_node/outside_area",
+      [this](const std_msgs::msg::Bool::SharedPtr msg)
+      {
+        outside_area_.store(msg->data);
+      },
+      rclcpp::QoS(1));
+
   current_state_ = PlannerState::PRE_ROTATE;
   last_time_ = clock_->now();
   time_last_oscillation_ = clock_->now();
@@ -155,6 +164,7 @@ void FTCController::cleanup()
   progress_plan_pub_.reset();
   obstacle_marker_pub_.reset();
   boundary_costmap_sub_.reset();
+  outside_area_sub_.reset();
   blade_status_sub_.reset();
   cm_state_sub_.reset();
   {
@@ -323,6 +333,7 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.avoidance_reaction_m = declare_double("avoidance_reaction_m", 0.5);
   config_.avoidance_min_horizon_m = declare_double("avoidance_min_horizon_m", 1.0);
   config_.obstacle_reverse_enabled = declare_bool("obstacle_reverse_enabled", false);
+  config_.reverse_boundary_safe = declare_bool("reverse_boundary_safe", false);
   config_.obstacle_reverse_max_dist_m = declare_double("obstacle_reverse_max_dist_m", 0.30);
   config_.obstacle_reverse_speed_mps = declare_double("obstacle_reverse_speed_mps", 0.10);
 
@@ -764,6 +775,10 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     {
       config_.obstacle_reverse_enabled = p.as_bool();
     }
+    else if (key == "reverse_boundary_safe")
+    {
+      config_.reverse_boundary_safe = p.as_bool();
+    }
     else if (key == "obstacle_reverse_max_dist_m")
     {
       config_.obstacle_reverse_max_dist_m = std::clamp(p.as_double(), 0.0, 2.0);
@@ -1136,6 +1151,18 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   // Cache the measured forward speed (odom feedback) for update_control_point's
   // anti-wheelspin stall detection.
   last_measured_fwd_speed_ = velocity.linear.x;
+
+  // Remember the ground the robot has just driven (odom frame): a reverse may only undo that.
+  if (config_.reverse_boundary_safe && !reverse_escape_active_ && !turnFallbackReversing())
+  {
+    geometry_msgs::msg::PoseStamped crumb_pose;
+    if (costmap_ros_->getRobotPose(crumb_pose))
+    {
+      reverse_crumbs_.add({crumb_pose.pose.position.x,
+                           crumb_pose.pose.position.y,
+                           tf2::getYaw(crumb_pose.pose.orientation)});
+    }
+  }
 
   if (is_crashed_)
   {
@@ -2462,6 +2489,21 @@ ReverseEscapeAction FTCController::reverseEscapeStep(const ObstacleDeviation::Fo
         ReverseEscapeAdvance(cfg, reverse_distance_done_, last_measured_fwd_speed_, dt);
   }
 
+  // Boundary-safe: never reverse while outside the recorded area, and only over ground the robot
+  // has just driven forward in a straight line (so the reverse stays where it came from). Decided
+  // when the reverse would START; once under way the pose has moved back over the breadcrumbs, so
+  // only the "left the area" condition can still stop it.
+  if (config_.reverse_boundary_safe)
+  {
+    const double wanted = std::max(0.0, cfg.max_dist_m - reverse_distance_done_);
+    const bool refused = reverse_escape_active_ ? outside_area_.load()
+                                                : reverseAllowedDistance(wanted) < wanted - 0.02;
+    if (refused)
+    {
+      return ReverseEscapeAction::kExhausted;
+    }
+  }
+
   bool rear_clear = false;
   if (have_pose)
   {
@@ -2489,6 +2531,58 @@ ReverseEscapeAction FTCController::reverseEscapeStep(const ObstacleDeviation::Fo
 
   return have_pose ? ReverseEscapeDecide(cfg, reverse_distance_done_, rear_clear)
                    : ReverseEscapeAction::kExhausted;
+}
+
+double FTCController::reverseAllowedDistance(double wanted)
+{
+  if (wanted <= 0.0)
+  {
+    return 0.0;
+  }
+  if (!config_.reverse_boundary_safe)
+  {
+    return wanted;
+  }
+  if (outside_area_.load())
+  {
+    RCLCPP_WARN_THROTTLE(
+        logger_,
+        *clock_,
+        5000,
+        "FTCController: reverse refused — the robot is outside the recorded area.");
+    return 0.0;
+  }
+  geometry_msgs::msg::PoseStamped robot_pose;
+  if (!costmap_ros_->getRobotPose(robot_pose))
+  {
+    return 0.0;  // no pose, no reverse
+  }
+  const retrace::Pose2D current{robot_pose.pose.position.x,
+                                robot_pose.pose.position.y,
+                                tf2::getYaw(robot_pose.pose.orientation)};
+  retrace::Refusal refusal = retrace::Refusal::kNone;
+  for (const double candidate : {wanted, 0.20, 0.12})
+  {
+    if (candidate > wanted)
+    {
+      continue;
+    }
+    const retrace::Plan plan = reverse_crumbs_.plan(current, candidate);
+    if (plan.refusal == retrace::Refusal::kNone)
+    {
+      return candidate;
+    }
+    refusal = plan.refusal;
+  }
+  RCLCPP_WARN_THROTTLE(logger_,
+                       *clock_,
+                       5000,
+                       "FTCController: reverse refused — %s.",
+                       refusal == retrace::Refusal::kNoHistory ? "not enough ground driven to undo"
+                       : refusal == retrace::Refusal::kWrongDirection
+                           ? "the last piece was itself a reverse"
+                           : "the last piece was not a straight drive behind the robot");
+  return 0.0;
 }
 
 double FTCController::progressSinceReverseEngaged() const
