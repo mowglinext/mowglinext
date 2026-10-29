@@ -87,11 +87,12 @@ a cached zero when the minimum OFF dwell expires.
 | --- | --- | --- | --- | --- |
 | `Yardforce500` | STM32F103VC | USART3, PB10/PB11 | DMA1 channels 3 / 2 | 16 bytes |
 | `Yardforce500B` | STM32F401VC | USART6, PC6/PC7 | DMA2 streams 1 / 6, channel 5 | 16 bytes |
+| `YardforceNX100i` | STM32F401VC | USART6, PC6/PC7 (same as 500B) | DMA2 streams 1 / 6, channel 5 | 16 bytes |
 
 The UART initialization and board mappings are unchanged. Both use the same
 command builder and RX callback, reached through `HAL_UART_RxCpltCallback`.
 The 14-byte response definition belongs to the unsupported LUV board, not 500B.
-Build both standard environments with `pio run -e Yardforce500 -e Yardforce500B`.
+Build the standard environments with `pio run -e Yardforce500 -e Yardforce500B -e YardforceNX100i`.
 
 ## Firmware version
 

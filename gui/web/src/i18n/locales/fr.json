@@ -522,6 +522,7 @@
   },
   "flashBoard": {
     "boardBiltemaRM1000": "Mowgli - Biltema RM1000",
+    "boardYardForceNX100i": "Mowgli - YardForce NX100i",
     "firmwareSourceTitle": "Source du firmware",
     "firmwareTargetTitle": "Cible du firmware",
     "firmwareTargetTooltip": "Avancé : choisir une cible de compilation précise. Le mode automatique utilise celle déduite du modèle de tondeuse.",
@@ -2604,6 +2605,10 @@
     "BiltemaRM1000": {
       "label": "Biltema RM1000",
       "description": "Robot tondeuse Biltema RM1000."
+    },
+    "YardForceNX100i": {
+      "label": "YardForce NX100i",
+      "description": "Tondeuse robot YardForce NX100i (carte mère GForce STM32F401, identique à la Classic 500B)."
     },
     "YardForceSA650": {
       "label": "YardForce SA650",

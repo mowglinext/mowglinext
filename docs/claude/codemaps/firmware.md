@@ -48,7 +48,7 @@
 | `firmware/scripts/package_release.py` | 182 | Stamps `.pio/build/<env>/firmware.{bin,elf}` → `mowgli-fw_<board>_<panel>_p<proto>_v<ver>_<sha>.bin` + `manifest.json` |
 | `firmware/scripts/sync_ros_lib.py` | 395 | Generates rosserial-style `ros_lib/mower_msgs/*.h` from `ros2/src/mowgli_interfaces/msg/*.msg` (output is NOT compiled — see Pitfalls) |
 | **`firmware/stm32/ros_usbnode/` — build & tooling** | | |
-| `firmware/stm32/ros_usbnode/platformio.ini` | 81 | Envs `Yardforce500` (genericSTM32F103VC), `Yardforce500_STLINK_V3`, `Yardforce500B` (custom `boards/genericSTM32F401VC.json`), `Yardforce500B_STLINK_V3`, `Yardforce500_REMOTE_UPLOAD`; `build_src_filter` excludes `proxy_inc/**` and `ros/ros_lib/**`; pre-scripts below |
+| `firmware/stm32/ros_usbnode/platformio.ini` | 81 | Envs `Yardforce500` (genericSTM32F103VC), `Yardforce500_STLINK_V3`, `Yardforce500B` (custom `boards/genericSTM32F401VC.json`), `Yardforce500B_STLINK_V3`, `BiltemaRM1000` / `BiltemaRM1000_MPU6050_Yaw180` (extend `Yardforce500B`), `YardforceNX100i` (extends `Yardforce500B`, `-DBOARD_YARDFORCE_NX100I=1`), `Yardforce500_REMOTE_UPLOAD`; `build_src_filter` excludes `proxy_inc/**` and `ros/ros_lib/**`; pre-scripts below |
 | `firmware/stm32/ros_usbnode/boards/genericSTM32F401VC.json` | 46 | PlatformIO board manifest for the 500B (Cortex-M4; declares `f_cpu` 84 MHz — `SystemClock_Config()` actually runs it at 72 MHz) |
 | `firmware/stm32/ros_usbnode/git_build_id.py` | 56 | pre: injects `MOWGLI_FW_VERSION_{MAJOR,MINOR,PATCH}` `-D` flags from git |
 | `firmware/stm32/ros_usbnode/patch_usb.py` | 21 | pre: copies `CDC/` over `~/.platformio/packages/framework-stm32cubef1/.../Class/CDC/` (mutates the host toolchain) |
@@ -143,6 +143,7 @@ IWDG (prescaler 256, reload 0xFFF) + WWDG (prescaler 8, counter 0x7F ≈ 40 ms, 
 | `PWM_PER_MPS` / `TICKS_PER_M` / `MAX_MPS` / `WHEEL_BASE` | 337.0 / 339.0 / 0.5 / 0.325 | 275.0 / 277.0 / 0.5 / 0.325 |
 | `PANEL_TYPE` | `PANEL_TYPE_YARDFORCE_500_CLASSIC` | `PANEL_TYPE_YARDFORCE_500B_CLASSIC` |
 | Debug | UART (`BOARD_HAS_MASTER_USART` 1) | SWO |
+`YardforceNX100i` (`BOARD_YARDFORCE_NX100I`, extends the 500B column): same mainboard, pinout and drive/blade UART protocols; hood stop white contact PC8 is normally closed to GND and opens when pressed, so `STOP_BUTTON_WHITE_PULL` is `GPIO_PULLUP` (1 = pressed, also when the hood cable is unplugged); PD2/PD3 hall-stop unconnected (`OPTION_BUMPER 0`); NX100i LCD panel protocol and hood ultrasonic sensors not supported yet.
 `BOARD_LUV1000RI` exists in `board.h`/template (`PANEL_TYPE_YARDFORCE_LUV1000RI`, `OPTION_ULTRASONIC` 1) but has no PlatformIO env (`platformio.ini:72-82`). Committed `board.h` sets `EXTERNAL_IMU_ACCELERATION`/`EXTERNAL_IMU_ANGULAR` 1, `OPTION_ULTRASONIC` 0, `OPTION_BUMPER` 0, no `OPTION_PERIMETER`.
 
 ### Host-side consumers
@@ -156,6 +157,7 @@ IWDG (prescaler 256, reload 0xFFF) + WWDG (prescaler 8, counter 0x7F ≈ 40 ms, 
 cd firmware/stm32/ros_usbnode
 pio run                       # default_envs = Yardforce500
 pio run -e Yardforce500B
+pio run -e YardforceNX100i                   # NX100i (extends Yardforce500B)
 pio run -e Yardforce500 -t upload            # ST-Link (upload_protocol = stlink)
 pio run -e Yardforce500_STLINK_V3 -t upload  # OpenOCD custom upload_command
 pio run -t swo_viewer                        # SWO trace (add_swo_viewer.py)
@@ -178,7 +180,7 @@ Tests — native safety tests and Python production-source harnesses run in `fir
 - `gui/pkg/providers/firmware_test.go` — `TestFlashFirmwareRouting`, `TestBuildBoard` (template rendering / env routing).
 - Anti-dig, yaw loop, PI loop: manual supervised field procedure only (`cpp_main.cpp:765-773`).
 
-CI: `.github/workflows/firmware-ci.yml` (jobs `defaults-parity`, `build` matrix `Yardforce500`/`Yardforce500B`, `release` on `v*.*.*` tags → attaches `dist/*.bin`, `dist/*.elf`, `dist/manifest.json`), `.github/workflows/protocol-version-drift.yml` (`protocol_version_guard.py --check`), `.github/workflows/msg-codegen-drift.yml` (`sync_ros_lib.py --check`). Only `firmware-ci.yml` triggers on `firmware/**`; the two drift guards trigger on their own explicit file lists (`mowgli_protocol.h` + `ll_datatypes.hpp` + guard + baseline; `mowgli_interfaces/**` + the GUI codegen paths + `sync_ros_lib.py` + `ros_lib/mower_msgs/**`). All push on `feat/**`, `fix/**`… branches.
+CI: `.github/workflows/firmware-ci.yml` (jobs `defaults-parity`, `build` matrix `Yardforce500`/`Yardforce500B`/`BiltemaRM1000`/`BiltemaRM1000_MPU6050_Yaw180`/`YardforceNX100i`/`Yardforce500_COASTDOWN_VALIDATION`, `release` on `v*.*.*` tags → attaches `dist/*.bin`, `dist/*.elf`, `dist/manifest.json`), `.github/workflows/protocol-version-drift.yml` (`protocol_version_guard.py --check`), `.github/workflows/msg-codegen-drift.yml` (`sync_ros_lib.py --check`). Only `firmware-ci.yml` triggers on `firmware/**`; the two drift guards trigger on their own explicit file lists (`mowgli_protocol.h` + `ll_datatypes.hpp` + guard + baseline; `mowgli_interfaces/**` + the GUI codegen paths + `sync_ros_lib.py` + `ros_lib/mower_msgs/**`). All push on `feat/**`, `fix/**`… branches.
 
 ## Change coupling — "if you change X, also update Y"
 

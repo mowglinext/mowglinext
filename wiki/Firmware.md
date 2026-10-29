@@ -76,7 +76,7 @@ Field-validated on the robot: linear speed tracked ~0.85–1.03 of commanded.
 
 **Runtime parameters live in the board's flash.** The compile-time values in `board.h`
 (`PWM_PER_MPS`, `TICKS_PER_M`, `MAX_MPS`, `WHEEL_BASE` — 337 / 339 / 0.5 / 0.325 on the
-Yardforce 500, 275 / 277 / 0.5 / 0.325 on the 500B) are only the defaults used when
+Yardforce 500, 275 / 277 / 0.5 / 0.325 on the 500B and the NX100i, which shares its board) are only the defaults used when
 nothing is stored. The live values come from `mowgli_robot.yaml`: `hardware_bridge_node`
 sends each one with `PKT_ID_SET_PARAM` on every connect and then commits the set to the
 board's flash (`PKT_ID_PARAM_COMMIT`), so the board boots on them before ROS2 connects
@@ -174,7 +174,7 @@ firmware/
 │                                   # package_release.py, sync_ros_lib.py
 └── stm32/
     ├── ros_usbnode/                # ← the live firmware (PlatformIO)
-    │   ├── platformio.ini          # envs: Yardforce500, Yardforce500B (+ ST-Link v3 variants)
+    │   ├── platformio.ini          # envs: Yardforce500, Yardforce500B, YardforceNX100i (+ ST-Link v3 variants)
     │   ├── include/
     │   │   ├── mowgli_protocol.h   # single source of truth for the wire format
     │   │   ├── mowgli_comms.h      # RX framing / CRC / handler dispatch API
@@ -364,9 +364,10 @@ cd firmware/stm32/ros_usbnode
 
 pio run                                      # default env: Yardforce500 (STM32F103VC)
 pio run -e Yardforce500B                     # STM32F401VC
+pio run -e YardforceNX100i                   # STM32F401VC, 500B board + NX100i stop-button wiring
 pio run -e Yardforce500 -t upload            # ST-Link v2 (upload_protocol = stlink)
 pio run -e Yardforce500_STLINK_V3 -t upload  # OpenOCD custom upload command
-pio run -t swo_viewer                        # SWO/ITM trace target (500B debug output)
+pio run -t swo_viewer                        # SWO/ITM trace target (500B / NX100i debug output)
 pio device monitor -b 115200 -p /dev/ttyAMA0 # UART debug text (Yardforce500 only)
 ```
 

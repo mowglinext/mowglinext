@@ -147,7 +147,7 @@ Three info cards summarise what the wizard will do.
 
 #### Step 1 — Robot Model
 ![Robot Model](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/02-robot-model.png)
-Pick from YardForce Classic 500 / 500B / SA650 / 900 ECO / LUV1000RI, Sabo MOWiT 500F, or Custom. Selecting a preset auto-fills `wheel_radius`, `wheel_track`, `blade_radius`, battery thresholds, encoder ticks/rev (see `gui/web/src/constants/mowerModels.ts`).
+Pick from YardForce Classic 500 / 500B / NX100i / SA650 / 900 ECO / LUV1000RI, Sabo MOWiT 500F, or Custom. Selecting a preset auto-fills `wheel_radius`, `wheel_track`, `blade_radius`, battery thresholds, encoder ticks/rev (see `gui/web/src/constants/mowerModels.ts`).
 
 #### Step 2 — GPS & Positioning
 ![GPS step](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/gui-walkthrough/screenshots/onboarding/03-gps.png)

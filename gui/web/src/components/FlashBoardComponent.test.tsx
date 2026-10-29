@@ -146,6 +146,27 @@ describe("FlashBoardComponent model-derived target", () => {
         expect(payload.firmwareTargetOrigin).toBe("auto");
     });
 
+    it("selects the native YardForce NX100i target for the NX100i mower model", async () => {
+        renderComponent("YardForceNX100i");
+        await waitFor(() => {
+            expect(within(targetSummary()).getByText("Mowgli - YardForce NX100i")).toBeInTheDocument();
+            expect(within(targetSummary()).getByText("YardForce 500B Classic")).toBeInTheDocument();
+        });
+        expect(flashButton()).toBeEnabled();
+
+        fireEvent.click(flashButton());
+        fireEvent.click(await confirmFlashButton());
+        await waitFor(() => expect(fetchEventSource).toHaveBeenCalledTimes(1));
+        const request = vi.mocked(fetchEventSource).mock.calls[0]?.[1] as {body?: string};
+        const payload = JSON.parse(request.body ?? "{}") as Record<string, unknown>;
+        expect(payload.boardType).toBe("BOARD_YARDFORCE500B");
+        expect(payload.panelType).toBe("PANEL_TYPE_YARDFORCE_500B_CLASSIC");
+        // Same board and panel as the plain 500B: only the explicit target
+        // tells the backend to pick the stop-button pull-up build.
+        expect(payload.firmwareTarget).toBe("YardforceNX100i");
+        expect(payload.firmwareTargetOrigin).toBe("auto");
+    });
+
     it("steers a model without a prebuilt to the custom build path", async () => {
         renderComponent("LUV1000RI");
 

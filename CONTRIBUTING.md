@@ -74,7 +74,8 @@ cd web && yarn && yarn build
 ```bash
 cd firmware/stm32/ros_usbnode
 pio run -e Yardforce500      # plain `pio run` builds this default env only
-pio run -e Yardforce500B     # CI builds both boards
+pio run -e Yardforce500B     # CI builds every board in the firmware-ci.yml matrix
+pio run -e YardforceNX100i   # NX100i (extends Yardforce500B)
 ```
 
 ## Code Style
