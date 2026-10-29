@@ -104,6 +104,7 @@ bool GraphManager::InitializeSource(const gtsam::Pose2& pose,
     const double dt = static_cast<double>(step.end_ns - step.start_ns) * 1e-9;
     accum_.dx += step.wheel.vx * dt;
     accum_.dy += step.wheel.vy * dt;
+    accum_.wheel_travel_m += std::hypot(step.wheel.vx, step.wheel.vy) * dt;
     accum_.dtheta_wheel += step.wheel.wz * dt;
     accum_.dt_total += dt;
     accum_.dtheta_gyro += (step.gyro.raw_z - step.bias_linearization) * dt;

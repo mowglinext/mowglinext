@@ -5,6 +5,30 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Wheel-travel cancellation defect (2026-10-29)
+
+A further public-Core regression finds an independent covariance defect: wheel
+random-walk distance used the norm of signed accumulated displacement. A
+forward/reverse pair inside one cadence edge therefore cancelled its travel
+noise. Two 100 ms intervals at +0.2/-0.2 m/s produce process x variance 0.000020
+in one 200 ms edge, versus 0.000120 in two 100 ms edges. The same physical
+straight trajectory has identical endpoint and midpoint means; the x marginal
+differs by 0.000100. Same-sign forward/reverse controls pass on the old Core.
+
+The narrow repair accumulates each raw wheel translation magnitude separately
+from signed motion. Bootstrap rebuilds that magnitude from only the retained,
+clipped consumed intervals. Existing noise coefficients, creep floor, fault
+releases, motion gates and safety tolerances stay intact. This restores the
+claimed travel-distance random-walk rule; it does not establish calibrated
+physical covariance or general nonlinear posterior cadence invariance.
+
+Exact failing baseline inputs, test source, old ABI header, binary identities
+and bounds are retained in `source-reversal-red/`. The identical final three new cases all fail on the old Core; its six existing
+cases pass. After a coherent Core/actual Node rebuild, all **15 selected CTest
+targets / 156 GTests pass**, including all nine wheel-noise cases. Independent
+review has no blocker. Exact GREEN validation and review are recorded in
+`source-reversal-green/` and `source-reversal-review.md`.
+
 ## Further cusp and heading-reconstruction evidence (2026-10-29)
 
 The current planner, called with server-equivalent geometry, 0.55 m footprint
@@ -36,6 +60,19 @@ those corners or at captured #950; every valid candidate leaves the clearance
 boundary on its first moving sample. No split, pivot, radius, geometry or efficiency
 assertion is relaxed to publish the candidate. Its complete patch and exact
 files remain under `cusp-feasibility-frontier/unmerged-candidate-088ad8c9/`.
+
+A further fixed neighborhood probe tests the existing six Dubins words at
+radius 0.20 m, with supports 0.2/0.4/0.8 m before and after each of the eight
+Isabey corners and captured #950: 486 variants. Both unchanged baselines first
+pass continuous original-line coverage. Only one Isabey corner has a contained
+replacement preserving global 9 cm mowing-line coverage; captured #950 has
+none. Its best contained shortcut leaves 0.354825 m of required line uncovered.
+One additional Isabey variant has unknown coverage because its sampling violates
+the unchanged minimum-step contract; even qualifying it cannot close the route
+budget. No missing coverage is waived. These individual centreline certificates
+keep every other old pass unchanged and do not qualify combined replacements,
+body sweeps or controller response.
+
 New maneuver construction or an execution-contract decision is still required;
 complete route execution and physical transit remain unqualified.
 
@@ -53,10 +90,24 @@ heading-prior replacement. It retains the same consumed controls, delayed
 source unaries, nonzero antenna lever and noises in both gyro modes. Correcting
 only the initial prior leaves wrong frozen acquisition likelihood; rebuilding
 those factors through actual corrected-initialization replay restores the full
-joint mean and covariance, including bias correlations. Subsequent actual
-prefix marginalizations and boundary/future exact-once application agree with
-the untrimmed correct control. These are controlled model results, not parity
-of the Node's admission gates or operational recovery.
+joint mean and covariance, including bias correlations. In that mutually
+consistent fixture, subsequent actual prefix marginalizations and boundary/future
+exact-once application agree with the untrimmed correct control. These are
+controlled model results, not parity of the Node's admission gates or operational
+recovery.
+
+A follow-up uses actual learned nonzero bias and fixed conflicting observations.
+Correct-initialization replay matches the independently instantiated control
+exactly through two prefixes when both use the same construction and
+relinearization schedule. Reusing the wrong run's prediction-bias references is
+numerically different from causal raw replay, which must regenerate them and
+rebuild endpoint factors as well as acquisition bridges. Raw gyro must enter
+absolute-bias preintegration once. Exact equality to an untrimmed nonlinear
+posterior does not generalize: the unchanged 1e-9 comparison remains RED, with
+maximum mean difference 2.59e-4 after the second causal-model prefix. This is the
+usual frozen-prefix approximation, not evidence of a new common-linearization
+information-loss defect. The reconstruction contract must specify reference
+policy and the rebase/relinearization schedule.
 
 Production reconstruction requires the accepted history back to the affected
 seed, including controls, source/cadence boundaries, gate outcomes, bias
@@ -67,8 +118,9 @@ does not recover that information. No history-discarding recovery policy or
 unbounded journal is silently introduced.
 
 Exact new evidence: `~/.cache/pr950-resume-20261029/cusp-feasibility-frontier/`
-and `moving-flip-reconstruction/`, including actual source/binary pins, raw
-planner stages, keyed full-joint matrices and bounded experiment commands.
+and `moving-flip-reconstruction/`, plus `cusp-neighborhood-probe/` and
+`moving-flip-bias-probe/`, including actual source/binary pins, raw planner
+stages, keyed full-joint matrices and bounded experiment commands.
 
 ## Source-time pose and heading repairs (2026-10-29)
 
@@ -269,13 +321,16 @@ Fixed hold/phase replays identify compatible value families, not actual cached
 wheel-message IDs or proof of callback ownership. Full results and exact source
 windows are in `native-source-component/`; no second baseline profile was run.
 
-Latest `main` remains fe77a097; `dev` has advanced from the integrated 5d3845b1
-baseline to **95ab1b6d**. Its #1041 repairs dock-neighbour fleet refusal and stale
-no-LiDAR fleet marks, and #1042 repairs GUI settings-save errors. These do not
-replace the source-time, measured-wheel, forward-response or snapshot repairs.
-No unrelated base update is performed; local evidence retains its exact
-5d3845b1 integration baseline. The original capture
-still lacks accepted graph-node identities, optimizer/anchor revision history
+Latest fetched `main` is **5ba9ad46** and `dev` is **112be1eb**. Since the
+previous 95ab1b6d check, #1043 adds route-aware transit deadlines and credits
+partial progress inside long unfinished coverage units; #1047 fixes the GUI
+flash dialog. A separate low-battery docking-attempt change is reverted on dev.
+The earlier #1041 dock-neighbour/fleet-mark and #1042 settings-save repairs are
+also present. These do not replace the source-time, measured-wheel,
+forward-response or snapshot repairs, nor remove the planner cusp. The new
+behavior changes overlap the broader branch's coverage consumer and would need
+their own integration validation before adopting latest dev. No base update is
+performed; local evidence retains its exact 5d3845b1 integration baseline. The original capture still lacks accepted graph-node identities, optimizer/anchor revision history
 and calibrated physical acquisition timing. Its retrospective seed-error
 associations remain hypotheses. The new component retains actual accepted
 command/response/consumed-pose tuples and native braking, plus source-registry
@@ -305,6 +360,7 @@ than inheriting a whole-branch CI result.
 | Measured-wheel simulator body | Plugin, URDF contract and regressions belong together, depending on native GT/applied-IMU observation binding. 74 selected cases and native RED/GREEN support one wheel/motion authority; actual braking is reported, not a new physical-stop qualification. |
 | Motion-input finite/order protection | The input guards and actual Node fixture can stand independently of GNSS retiming; 13 original Node cases passed. Later source-history consumers depend on these guards. |
 | Rebase information and absolute gyro bias | Two independently causal Core repairs, with their tests/lifecycle pieces; source acquisition retention depends on information-preserving typed rebase. 52 focused cases passed before source integration. |
+| Wheel travel-noise accounting | Four small production edits plus source/legacy/clipped-bootstrap regressions; all three new cases RED on the old Core, 15 selected targets / 156 cases GREEN after coherent ABI rebuild. Can be separated with its bootstrap source integration dependency retained; it does not repair true-flip lineage. |
 | Post-anchor snapshot | Small Core/API repair with two baseline RED cases, 11 rebase and 48 Node GREEN cases; depends on existing source/revision semantics. It does not repair the invalid true-flip prior. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
 | FTC forward geometry response | Depends on existing raw geometry authorization and the assumed coast contract; shared envelope plus gate/tests belong together. 106 controller and 27 critic cases, plus one native containment GREEN. It stops before the cusp; route completion and calibrated physical containment remain unqualified. |

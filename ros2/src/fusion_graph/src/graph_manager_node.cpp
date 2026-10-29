@@ -290,7 +290,9 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // believe we did not move, ± the distance the wheels claimed", which is
   // exactly the uncertainty we want. Scoring the vetoed zero would instead
   // pin the pose to "stationary" at the moment we know least.
-  const double claimed_step_m = std::hypot(accum_.dx, accum_.dy);
+  // Signed displacement can cancel within a node when direction changes.
+  // Random-walk variance follows all reported travel, including that return.
+  const double claimed_step_m = accum_.wheel_travel_m;
   const double accum_dt = (accum_.dt_total > 0.0) ? accum_.dt_total : params_.node_period_s;
   const double noise_dist_m = claimed_step_m + params_.wheel_creep_speed_mps * accum_dt;
   const double sigma_x_travel =
