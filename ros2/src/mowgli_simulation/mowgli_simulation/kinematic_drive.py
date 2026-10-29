@@ -2,7 +2,8 @@
 #
 # Licensed under the GNU GPL v3.
 
-"""Kinematic chassis driven by actual Webots wheel-position acquisitions.
+"""
+Kinematic chassis driven by actual Webots wheel-position acquisitions.
 
 ODE wheel-floor coupling on this PROTO pitches the chassis and loses most of
 its forward motion. We retain the kinematic body workaround, but derive each

@@ -6,8 +6,8 @@
 import importlib.util
 import math
 import os
-import time
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 from geometry_msgs.msg import TwistStamped
@@ -28,6 +28,7 @@ def _load_module():
 
 
 class Field:
+
     def __init__(self, values):
         self.values = values
 

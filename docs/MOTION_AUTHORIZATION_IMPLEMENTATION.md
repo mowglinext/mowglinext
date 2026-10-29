@@ -5,6 +5,18 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Delayed CI failure repair (2026-10-29)
+
+The failed build/test notification for older 4ba70aad contains a successful
+workspace build but three lint errors and a save-service fixture failure.
+The fixture supplied wheel callbacks without IMU intervals, leaving its explicit
+seed pending under the repaired source-time contract. Adding stamped zero-rate
+IMU input preserves all original save/busy/executor-progress assertions and
+10-second limits: the actual Node test is RED before and GREEN afterward.
+Simulator docstring/import/blank-line fixes pass package-wide flake8/pep257 and
+all 17 existing wheel regressions. No production behavior or acceptance limit
+changes. Exact evidence is in `ci-4ba70aa-save-fixture/`.
+
 ## Delayed COG producer motion context (2026-10-29)
 
 A separate actual-producer-to-Node experiment finds another false-flip cause.
