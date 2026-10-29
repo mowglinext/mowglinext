@@ -5,6 +5,45 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Delayed COG producer motion context (2026-10-29)
+
+A separate actual-producer-to-Node experiment finds another false-flip cause.
+Identical reverse GNSS fixes produce body yaw zero when delivered in sequence.
+If processed after a newer forward wheel callback, the old producer uses that
+latest sign and publishes three yaw-pi headings at the original fix stamps.
+The actual Node accepts them and triggers erroneous recovery before their yaw
+factors run, moving the previously correct heading to 1.665649789 rad. This is
+an upstream context error, separate from historical factor association and the
+still-unresolved genuine-flip prior problem.
+
+The producer repair retains bounded, ordered wheel/gyro source history and uses
+held context at the fix epoch. Every recorded direction/rest transition inside
+the baseline invalidates it; baseline rotation is integrated in source time.
+Missing context rejects explicitly instead of substituting a future cached rate.
+Existing heading/noise equations, timing limits and gate thresholds stay intact.
+This is a declared held-input model, not physical acquisition calibration.
+
+Independent review also exposed two lifecycle requirements: a delayed heading
+must carry already-observed intervening rotation into its stationary latch,
+and stationary timer observations must participate in ROS-clock rewind detection.
+A historical heading cannot become a current latch by erasing a completed turn;
+a timer-only clock high-water cannot be ignored when the next input arrives.
+Their exact discriminating fixtures and review findings are retained alongside
+the producer/Node RED in `cog-delayed-direction-repro/` and the focused repair
+validation in `cog-source-motion-validation/`.
+
+The actual production executable builds and all **48 focused tests pass**:
+7 history, 7 actual publisher, 15 existing yaw-math and 19 existing observation/
+latch-timing cases. Independent review has no remaining finding. The same
+safe-heading/recovery assertions fail against the old producer/actual Node.
+A new combined producer/Node translation unit reached its 90 s compile cap;
+it was stopped. The alternative new-producer capture uses identical callback
+inputs and its complete stamp/quaternion/variance rows are byte-identical to
+the retained correct control already consumed by the actual Node with zero
+recoveries. This is deterministic input-equivalence composition, not a new
+end-to-end Node rerun. Exact proof and preserved failed build attempts are in
+`cog-delayed-direction-paired/`; no full mission or hardware run is claimed.
+
 ## Wheel-travel cancellation defect (2026-10-29)
 
 A further public-Core regression finds an independent covariance defect: wheel
@@ -360,6 +399,7 @@ than inheriting a whole-branch CI result.
 | Measured-wheel simulator body | Plugin, URDF contract and regressions belong together, depending on native GT/applied-IMU observation binding. 74 selected cases and native RED/GREEN support one wheel/motion authority; actual braking is reported, not a new physical-stop qualification. |
 | Motion-input finite/order protection | The input guards and actual Node fixture can stand independently of GNSS retiming; 13 original Node cases passed. Later source-history consumers depend on these guards. |
 | Rebase information and absolute gyro bias | Two independently causal Core repairs, with their tests/lifecycle pieces; source acquisition retention depends on information-preserving typed rebase. 52 focused cases passed before source integration. |
+| COG producer source context | Producer/history/tests form a separate repair from GraphManager. Its pre-change producer, timing/math helpers and package CMake match latest fetched dev byte-for-byte; direct base application is plausible, but any extracted PR still needs its own validation. Retain delayed heading, completed-pivot latch and clock-epoch cases together. |
 | Wheel travel-noise accounting | Four small production edits plus source/legacy/clipped-bootstrap regressions; all three new cases RED on the old Core, 15 selected targets / 156 cases GREEN after coherent ABI rebuild. Can be separated with its bootstrap source integration dependency retained; it does not repair true-flip lineage. |
 | Post-anchor snapshot | Small Core/API repair with two baseline RED cases, 11 rebase and 48 Node GREEN cases; depends on existing source/revision semantics. It does not repair the invalid true-flip prior. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
