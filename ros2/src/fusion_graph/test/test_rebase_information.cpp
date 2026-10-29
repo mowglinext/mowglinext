@@ -6,6 +6,7 @@
 #include <stdexcept>
 
 #include "fusion_graph/graph_manager.hpp"
+#include "fusion_graph/motion_source_history.hpp"
 #include <gtest/gtest.h>
 #include <gtsam/linear/GaussianFactorGraph.h>
 #include <gtsam/nonlinear/Marginals.h>
@@ -20,6 +21,13 @@ public:
   {
     std::lock_guard<std::mutex> lock(manager.mu_);
     return {manager.isam_.getFactorsUnsafe(), manager.isam_.calculateEstimate()};
+  }
+
+  static std::pair<gtsam::Pose2, Eigen::Matrix3d> MarginalSnapshot(GraphManager& manager,
+                                                                   uint64_t node_index)
+  {
+    std::lock_guard<std::mutex> lock(manager.mu_);
+    return {manager.PoseAt(node_index), manager.isam_.marginalCovariance(PoseKey(node_index))};
   }
 
   static bool AddFactor(GraphManager& manager, const gtsam::NonlinearFactor::shared_ptr& factor)
@@ -153,6 +161,36 @@ void Drive(fg::GraphManager& manager, int first, int last)
   }
 }
 
+void DriveSource(fg::GraphManager& manager, int last)
+{
+  manager.SetConsumedMotionBaseline(1, 0);
+  ASSERT_TRUE(manager.InitializeSource(gtsam::Pose2(), 0, 0, 1));
+  for (int i = 1; i <= last; ++i)
+  {
+    const int64_t start_ns = (i - 1) * 100000000LL;
+    const int64_t end_ns = i * 100000000LL;
+    const double dt = static_cast<double>(end_ns - start_ns) * 1e-9;
+    constexpr double vx = 0.5;
+    manager.AddWheelTwist(vx, 0.0, 0.0, dt);
+    manager.AddGyroDelta(0.0, dt);
+    const fg::ConsumedMotionStep step{
+        1,
+        start_ns,
+        end_ns,
+        {{fg::MotionSourceKind::Wheel, static_cast<uint64_t>(i), end_ns},
+         {start_ns, end_ns},
+         vx,
+         0.0,
+         0.0},
+        {{fg::MotionSourceKind::Gyro, static_cast<uint64_t>(i), end_ns}, {start_ns, end_ns}, 0.0},
+        0.0,
+        true,
+        true};
+    ASSERT_TRUE(manager.AddConsumedMotionStep(step));
+    ASSERT_TRUE(manager.TickSource(end_ns, end_ns, 1));
+  }
+}
+
 // Compare the complete retained joint information at ONE linearization point.
 // Covariance of each pose alone would miss discarded cross-correlations, and
 // comparing optimizer caches would miss a rebase that never changed latest_.
@@ -225,6 +263,96 @@ TEST(RebaseInformation, HistoricalGnssStillCorrectsTheCurrentState)
   EXPECT_GT(expected->pose.x(), 0.65 + 0.005);
   EXPECT_NEAR(actual->pose.x(), expected->pose.x(), 1e-8);
   EXPECT_LT((actual->covariance - expected->covariance).norm(), 1e-8);
+}
+
+TEST(RebaseInformation, ForceAnchorLatestRefreshesSnapshotMarginals)
+{
+  fg::GraphManager manager(Params(100));
+  manager.Initialize(gtsam::Pose2(), 0.0);
+  Drive(manager, 1, 8);
+
+  const auto before = manager.LatestSnapshot();
+  ASSERT_TRUE(before);
+  const auto before_marginal =
+      fg::GraphManagerRebaseTestAccess::MarginalSnapshot(manager, before->node_index);
+  manager.ForceAnchor(before->node_index, gtsam::Pose2(0.9, -0.4, 0.8), 0.01, 0.01);
+
+  const auto after = manager.LatestSnapshot();
+  ASSERT_TRUE(after);
+  const auto actual =
+      fg::GraphManagerRebaseTestAccess::MarginalSnapshot(manager, after->node_index);
+  EXPECT_NEAR(after->pose.x(), actual.first.x(), 1e-10);
+  EXPECT_NEAR(after->pose.y(), actual.first.y(), 1e-10);
+  EXPECT_NEAR(after->pose.theta(), actual.first.theta(), 1e-10);
+  EXPECT_LT((after->covariance - actual.second).norm(), 1e-10);
+  EXPECT_GT((actual.first.translation() - before_marginal.first.translation()).norm(), 1e-4);
+  EXPECT_GT((actual.second - before_marginal.second).norm(), 1e-6);
+  EXPECT_EQ(after->node_index, before->node_index);
+  EXPECT_EQ(after->timestamp, before->timestamp);
+  EXPECT_EQ(after->revision, before->revision + 1);
+  EXPECT_EQ(manager.Stats().total_nodes, before->node_index + 1);
+}
+
+TEST(RebaseInformation, ForceAnchorOlderNodeRefreshesLatestSnapshot)
+{
+  fg::GraphManager manager(Params(100));
+  DriveSource(manager, 8);
+
+  const auto before = manager.LatestSnapshot();
+  ASSERT_TRUE(before);
+  const uint64_t anchor_index = before->node_index - 3;
+  const auto before_marginal =
+      fg::GraphManagerRebaseTestAccess::MarginalSnapshot(manager, before->node_index);
+  const auto anchor_pose = manager.GetPose(anchor_index);
+  ASSERT_TRUE(anchor_pose);
+  manager.ForceAnchor(anchor_index, gtsam::Pose2(0.2, -0.1, 1.1), 0.01, 0.01);
+
+  const auto after = manager.LatestSnapshot();
+  ASSERT_TRUE(after);
+  const auto actual =
+      fg::GraphManagerRebaseTestAccess::MarginalSnapshot(manager, after->node_index);
+  EXPECT_NEAR(after->pose.x(), actual.first.x(), 1e-10);
+  EXPECT_NEAR(after->pose.y(), actual.first.y(), 1e-10);
+  EXPECT_NEAR(after->pose.theta(), actual.first.theta(), 1e-10);
+  EXPECT_LT((after->covariance - actual.second).norm(), 1e-10);
+  EXPECT_GT((actual.first.translation() - before_marginal.first.translation()).norm(), 1e-4);
+  EXPECT_GT((actual.second - before_marginal.second).norm(), 1e-6);
+  EXPECT_EQ(after->node_index, before->node_index);
+  EXPECT_EQ(after->timestamp, before->timestamp);
+  EXPECT_EQ(after->source_stamp_ns, before->source_stamp_ns);
+  EXPECT_EQ(after->source_epoch, before->source_epoch);
+  EXPECT_EQ(after->revision, before->revision + 1);
+  EXPECT_EQ(manager.Stats().total_nodes, before->node_index + 1);
+
+  EXPECT_FALSE(manager.TickSource(800000001LL, 800000000LL, 1));
+  EXPECT_EQ(manager.Stats().total_nodes, before->node_index + 1);
+  constexpr int64_t next_source_ns = 900000000LL;
+  const double dt = 0.1;
+  constexpr double vx = 0.5;
+  manager.AddWheelTwist(vx, 0.0, 0.0, dt);
+  manager.AddGyroDelta(0.0, dt);
+  const fg::ConsumedMotionStep next_step{1,
+                                         800000000LL,
+                                         next_source_ns,
+                                         {{fg::MotionSourceKind::Wheel, 9, next_source_ns},
+                                          {800000000LL, next_source_ns},
+                                          vx,
+                                          0.0,
+                                          0.0},
+                                         {{fg::MotionSourceKind::Gyro, 9, next_source_ns},
+                                          {800000000LL, next_source_ns},
+                                          0.0},
+                                         0.0,
+                                         true,
+                                         true};
+  ASSERT_TRUE(manager.AddConsumedMotionStep(next_step));
+  const auto next = manager.TickSource(next_source_ns, next_source_ns, 1);
+  ASSERT_TRUE(next);
+  EXPECT_EQ(next->node_index, before->node_index + 1);
+  EXPECT_EQ(next->source_stamp_ns, next_source_ns);
+  EXPECT_EQ(next->source_epoch, before->source_epoch);
+  EXPECT_GT(next->revision, after->revision);
+  EXPECT_EQ(manager.Stats().total_nodes, before->node_index + 2);
 }
 
 TEST(RebaseInformation, BiasVariablesKeepTheirTypesAndCorrelations)

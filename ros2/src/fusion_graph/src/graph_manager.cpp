@@ -362,10 +362,13 @@ void GraphManager::ForceAnchor(uint64_t node_index,
     return;  // ill-posed reset; latest_ is now null, nothing to anchor
   }
   estimate_dirty_ = true;
-  // Update latest_ snapshot so PublishOutputs sees the new pose.
-  if (latest_ && latest_->node_index == node_index)
+  // Any live anchor can change the latest optimized state, even when the
+  // prior was attached to an older node. Refresh the published snapshot and
+  // advance its revision without changing its source or schedule timestamps.
+  if (latest_)
   {
-    latest_->pose = PoseAt(node_index);
+    latest_->pose = PoseAt(latest_->node_index);
+    latest_->covariance = isam_.marginalCovariance(PoseKey(latest_->node_index));
     ++latest_->revision;
   }
 }
