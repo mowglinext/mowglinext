@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <random>
 
 #include "mowgli_interfaces/motion_authorization.hpp"
@@ -477,5 +478,121 @@ TEST(FtcMotionCritic, ForwardSweepRotationTailAndOutOfGridFailClosed)
   EXPECT_TRUE(mn::ForwardSweepBlocked(grid, body, {4.8, 0, 0}, command, measured, .1, .5));
   grid.setCost(x, y, 253);
   EXPECT_FALSE(mn::ForwardSweepBlocked(grid, body, {0, 0, 0}, command, measured, .1, .5));
+}
+
+TEST(FtcMotionCritic, ForwardResponseChecksReferenceCoastBeyondIntendedArc)
+{
+  visualization_msgs::msg::MarkerArray message;
+  Add(message, {{-1, -1}, {.04, -1}, {.04, 1}, {-1, 1}});
+  const auto geometry = motion::Snapshot::parse(message);
+  geometry_msgs::msg::Twist command, measured;
+  command.linear.x = .02;
+  measured.linear.x = .2;
+  ASSERT_TRUE(geometry->permits({0, 0, 0}, Body(), .02, 0, .1, true));
+  EXPECT_TRUE(mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, 0));
+  EXPECT_FALSE(
+      mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, .5));
+}
+
+TEST(FtcMotionCritic, ForwardResponseAllowsOuterOverhangAndBoundaryStart)
+{
+  visualization_msgs::msg::MarkerArray message;
+  Add(message, {{0, 0}, {6, 0}, {6, 6}, {0, 6}});
+  const auto geometry = motion::Snapshot::parse(message);
+  geometry_msgs::msg::Twist command, measured;
+  command.linear.x = measured.linear.x = .2;
+  for (double yaw : {0., .3})
+    EXPECT_TRUE(
+        mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, yaw}, command, measured, .1, .5));
+  command.angular.z = .2;  // Entire uncertain heading sector turns inward.
+  EXPECT_TRUE(
+      mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, .5));
+  command.angular.z = -.2;
+  EXPECT_FALSE(
+      mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, .5));
+}
+
+TEST(FtcMotionCritic, ForwardResponseIncludesInitiallyBackwardMeasuredMotion)
+{
+  visualization_msgs::msg::MarkerArray message;
+  Add(message, {{-.04, -1}, {1, -1}, {1, 1}, {-.04, 1}});
+  const auto geometry = motion::Snapshot::parse(message);
+  geometry_msgs::msg::Twist command, measured;
+  command.linear.x = .02;
+  measured.linear.x = .2;
+  EXPECT_TRUE(
+      mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, .5));
+  measured.linear.x = -.2;
+  EXPECT_FALSE(
+      mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, .5));
+}
+
+TEST(FtcMotionCritic, ForwardResponseUsesCompleteUnionIncludingInteriorVoids)
+{
+  visualization_msgs::msg::MarkerArray overlap;
+  Add(overlap, {{-1, -1}, {.06, -1}, {.06, 1}, {-1, 1}});
+  Add(overlap, {{.04, -1}, {1, -1}, {1, 1}, {.04, 1}});
+  geometry_msgs::msg::Twist command, measured;
+  command.linear.x = .2;
+  command.angular.z = 1;
+  measured.angular.z = -1;
+  EXPECT_TRUE(mn::ForwardResponsePermitted(
+      *motion::Snapshot::parse(overlap), Body(), {0, 0, 0}, command, measured, .1, .5));
+  visualization_msgs::msg::MarkerArray voided;
+  Add(voided, {{-1, -1}, {.03, -1}, {.03, 1}, {-1, 1}});
+  Add(voided, {{.05, -1}, {1, -1}, {1, 1}, {.05, 1}});
+  Add(voided, {{.03, -1}, {.05, -1}, {.05, .005}, {.03, .005}});
+  Add(voided, {{.03, .015}, {.05, .015}, {.05, 1}, {.03, 1}});
+  EXPECT_FALSE(mn::ForwardResponsePermitted(
+      *motion::Snapshot::parse(voided), Body(), {0, 0, 0}, command, measured, .1, .5));
+}
+
+TEST(FtcMotionCritic, ForwardResponseKeepsMeasuredSignedYawAndRawBodyHoles)
+{
+  geometry_msgs::msg::Twist command, measured;
+  command.linear.x = .02;
+  for (double sign : {-1., 1.})
+  {
+    visualization_msgs::msg::MarkerArray message;
+    Add(message, {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+    const double y = sign * .12;
+    Add(message, {{.07, y - .001}, {.08, y - .001}, {.08, y + .001}, {.07, y + .001}}, "obstacle");
+    const auto geometry = motion::Snapshot::parse(message);
+    ASSERT_TRUE(geometry->permits({0, 0, 0}, Body(), .02, 0, .1, true));
+    EXPECT_TRUE(
+        mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, .5));
+    measured.angular.z = sign;
+    EXPECT_FALSE(
+        mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, .5));
+    measured = geometry_msgs::msg::Twist{};
+  }
+}
+
+TEST(FtcMotionCritic, ForwardResponseFailsClosedOnInvalidInputsButAlwaysPermitsStop)
+{
+  visualization_msgs::msg::MarkerArray message;
+  Add(message, {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}});
+  const auto geometry = motion::Snapshot::parse(message);
+  geometry_msgs::msg::Twist command, measured;
+  command.linear.x = .2;
+  for (double bad :
+       {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity(), 2.1})
+  {
+    measured.linear.x = bad;
+    EXPECT_FALSE(
+        mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, .5));
+  }
+  measured = geometry_msgs::msg::Twist{};
+  EXPECT_FALSE(mn::ForwardResponsePermitted(*geometry, {}, {0, 0, 0}, command, measured, .1, .5));
+  EXPECT_FALSE(
+      mn::ForwardResponsePermitted(*geometry, Body(), {NAN, 0, 0}, command, measured, .1, .5));
+  EXPECT_FALSE(
+      mn::ForwardResponsePermitted(*geometry, Body(), {0, 0, 0}, command, measured, .1, NAN));
+  motion::Snapshot invalid;
+  EXPECT_FALSE(mn::ForwardResponsePermitted(invalid, Body(), {0, 0, 0}, command, measured, .1, .5));
+  command = geometry_msgs::msg::Twist{};
+  measured.linear.x = NAN;
+  EXPECT_TRUE(
+      mn::ForwardResponsePermitted(invalid, {}, {NAN, NAN, NAN}, command, measured, NAN, NAN));
 }
 }  // namespace

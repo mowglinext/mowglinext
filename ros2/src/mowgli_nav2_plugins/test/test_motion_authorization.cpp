@@ -47,7 +47,13 @@ struct FTCSpeedLimitTestAccess
     controller.angle_error_ = error;
     geometry_msgs::msg::Twist command;
     command.angular.z = angular;
-    controller.authorizeCommand(command);
+    controller.authorizeCommand(command, geometry_msgs::msg::Twist{});
+  }
+  static void AuthorizeForward(FTCController& controller,
+                               const geometry_msgs::msg::Twist& command,
+                               const geometry_msgs::msg::Twist& measured)
+  {
+    controller.authorizeCommand(command, measured);
   }
   static bool ReceivedAuthorization(FTCController& controller,
                                     const visualization_msgs::msg::MarkerArray& message)
@@ -210,8 +216,12 @@ protected:
     if (child == "base_footprint")
     {
       transform.transform.translation.x = robot_x_;
+      transform.transform.translation.y = robot_y_;
+      transform.transform.rotation.z = std::sin(robot_yaw_ / 2);
+      transform.transform.rotation.w = std::cos(robot_yaw_ / 2);
     }
-    transform.transform.rotation.w = 1.0;
+    else
+      transform.transform.rotation.w = 1.0;
     ASSERT_TRUE(tf_->setTransform(transform, "test", fixed));
   }
 
@@ -396,7 +406,62 @@ protected:
   rclcpp::executors::SingleThreadedExecutor executor_;
   int64_t time_ns_{1000000000000};
   double robot_x_{0.0};
+  double robot_y_{0.0};
+  double robot_yaw_{0.0};
 };
+
+TEST_P(MotionAuthorization, LastAcceptedNativeCuspRequestRequiresResponsePermission)
+{
+  ASSERT_NO_FATAL_FAILURE(Deliver(Grid(0)));
+  // Captured native first cusp: the last accepted 0.1 s arc ended at
+  // original y=.8004639337490984, but measured-wheel STOP coast crossed .8.
+  // Express the captured map pose in the original recorded geometry frame.
+  constexpr double alignment = -1.4726215563702667;
+  constexpr double native_x = .39908099235456701, native_y = .1181224665199949;
+  robot_x_ = 2.23100004768372 + std::cos(alignment) * native_x - std::sin(alignment) * native_y;
+  robot_y_ = 1.1960698997021633 + std::sin(alignment) * native_x + std::cos(alignment) * native_y;
+  robot_yaw_ = alignment + .73045534387013422;
+  time_ns_ += 100000000;
+  SetTime();
+  Transform("odom", "base_footprint", false);
+  visualization_msgs::msg::MarkerArray message;
+  visualization_msgs::msg::Marker area;
+  area.header.frame_id = "map";
+  area.ns = "area";
+  area.text = "mowing";
+  area.type = area.LINE_STRIP;
+  area.action = area.ADD;
+  area.pose.orientation.w = 1;
+  for (const auto& xy : std::vector<std::pair<double, double>>{{-4.5, double(float(.8))},
+                                                               {4.5, double(float(.8))},
+                                                               {4.5, double(float(6.8))},
+                                                               {-4.5, double(float(6.8))}})
+  {
+    geometry_msgs::msg::Point point;
+    point.x = xy.first;
+    point.y = xy.second;
+    area.points.push_back(point);
+  }
+  message.markers.push_back(area);
+  ASSERT_NO_FATAL_FAILURE(DeliverGeometry(message));
+  geometry_msgs::msg::Twist command, measured;
+  command.linear.x = .15;
+  command.angular.z = .20425889646400938;
+  // Observed compatible wheel sample, source 3.74 s. The original harness did
+  // not record which sample compute consumed; the request alone suffices here.
+  measured.linear.x = .15344999999999961;
+  measured.angular.z = .3147692307692215;
+  const auto snapshot = mowgli_interfaces::motion::Snapshot::parse(message);
+  mowgli_interfaces::motion::Ring body;
+  for (const auto& p : costmap_->getRobotFootprint())
+    body.push_back({p.x, p.y});
+  ASSERT_TRUE(snapshot->permits(
+      {robot_x_, robot_y_, robot_yaw_}, body, command.linear.x, command.angular.z, .1, true));
+  EXPECT_THROW(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::AuthorizeForward(controller_,
+                                                                              command,
+                                                                              measured),
+               nav2_core::ControllerException);
+}
 
 TEST_P(MotionAuthorization, ClearGeometryControlProducesForwardMotion)
 {

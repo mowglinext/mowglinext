@@ -1,7 +1,8 @@
 # Motion authorization implementation and acceptance (#924)
 
 This is a safety-critical, partial implementation of #924. It verifies FTC's
-intended commands and bounds EscapeStartBlocked. It does not establish the
+intended commands, checks the assumed forward response against mowing geometry,
+and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
 ## Source-time pose and heading repairs (2026-10-29)
@@ -86,14 +87,31 @@ A separate physical true-flip criterion is still **failed**: the new temporal
 recovery and its identical-trajectory finite-prior control agree, but both leave
 posterior yaw 0.598188373 rather than physical 0.285 rad (17.94 degrees error).
 The pre-existing `ForceAnchor` adds another prior while keeping the disproven
-old heading prior; nominal 3-degree versus 1-degree weights retain roughly one
-tenth of a pi error. Relative-oracle agreement is not physical recovery proof.
+old heading prior. Actual factor ablation now establishes that cause: full
+batch optimization leaves the error unchanged; replacing only the initial yaw
+contribution with an XY-only prior gives physical yaw 0.285 within 5e-16 rad,
+with all other factors retained. Correcting only the initial yaw mean gives
+the same result. The fixture uses the shipped 0.05 rad initial sigma (2.8648
+degrees) versus 1-degree recovery sigma. After actual prefix marginalization,
+the identifiable initial prior is gone but its wrong information and posterior
+remain in a separator. Deleting only a visible prior cannot repair that case.
+Relative-oracle agreement is not physical recovery proof.
 The independent design review rejects sigma tuning as a repair: an explicit
 current-source recovery cut would discard historical likelihood/correlation;
 preserving it requires selective lineage reconstruction, including marginalized
 prefix information. That recovery-policy choice is not silently made here.
 The exact existing behavior, failed physical criterion, and proposed lifecycle
 are retained in `true-flip-astra-decision.md` and the final Node log.
+
+The ablation also exposes a separate snapshot defect: `ForceAnchor` changes the
+solver but leaves the published covariance stale, and anchoring an older live
+node does not refresh the latest pose/revision. The narrow repair refreshes the
+latest pose and iSAM2 marginal together, preserving source/cadence timestamps.
+Both new regressions fail against the untouched baseline Core; all 11 rebase
+cases and all 48 actual Node cases pass with the repaired Core. This retains
+the existing iSAM2 linearization/covariance model, rather than adding a full
+batch marginal computation on every dock anchor. It does not fix the wrong
+heading-prior lineage above.
 
 The bounded first-cusp component connects the actual Node, its actual published
 TF and the real FTC controller. Both declared GNSS delays (0/60 ms) pass the
@@ -148,6 +166,35 @@ a containment gap after the command-only certificate denies further motion;
 the intended 100 ms command sweep is explicitly not a stopping certificate.
 This is a component, not attribution of the old mission or a hardware result.
 
+The narrow forward-response repair now has an empirical native **GREEN**:
+one unchanged first-cusp component keeps reference y >= 0.8 throughout actual
+motion and braking, minimum **0.871303315602 m**. After 24 nonzero commands it
+denies at cursor 35 / ROS 3.02 s: the intended-command predicate still permits
+the request, while the new response predicate rejects it. Native y at denial
+is 0.883093136805 m; actual twist reaches zero 180 ms later and 45 stationary
+samples follow. All 24 nonzero returns have actual successful response checks;
+every helper's measured input matches the exact same-executor compute argument.
+Fourteen profile/seed/plan/plant/configuration inputs and baseline Node/Core
+artifacts are unchanged. The separate covariance repair is intentionally
+excluded from this native comparison and validated with the Node tests above.
+
+The response gate reuses the existing 0.5 s assumed coast-integral bound and
+shared lethal-cell envelope builder. It checks the full reference envelope
+against the mowing union and the body against raw holes, preserving legal
+outer overhang, unconditional STOP and existing reverse/rotation contracts.
+Geometry applies independently of obstacle/deviation flags. The old compiled
+FTC fails both new expected-denial controls; **106/106 real-controller cases**
+and **27/27 optimized critic cases** pass. Three unchanged 100 ms timing checks
+fail in the retained unoptimized build, then pass at 5.39/32.72/12.73 ms with
+optimized hot-source objects; no threshold or assertion changes. Independent
+review finds no blocker in the response code. Native comparison build/run take
+92.864/19.023 seconds under explicit hard/progress bounds.
+
+This closes the demonstrated forward braking-tail gap in this component under
+the existing response assumption. It stops before completing the sharp cusp;
+it does not establish route completion, a calibrated physical response bound,
+full controller-server velocity-cache qualification or original-event attribution.
+
 The native run uses known stationary truth for explicit seed, zero TF lead,
 no COG stimulus and the unchanged approved Node/core binaries. It completes in
 31.028 seconds, with verified cleanup. Three pre-Node observer startup failures
@@ -157,14 +204,18 @@ Fixed hold/phase replays identify compatible value families, not actual cached
 wheel-message IDs or proof of callback ownership. Full results and exact source
 windows are in `native-source-component/`; no second baseline profile was run.
 
-Current `main` and `dev` were fetched again: fe77a097 and 5d3845b1 remain unchanged.
-No corresponding upstream repair replaces these changes. The original capture
+Latest `main` remains fe77a097; `dev` has advanced from the integrated 5d3845b1
+baseline to **95ab1b6d**. Its #1041 repairs dock-neighbour fleet refusal and stale
+no-LiDAR fleet marks, and #1042 repairs GUI settings-save errors. These do not
+replace the source-time, measured-wheel, forward-response or snapshot repairs.
+No unrelated base update is performed; local evidence retains its exact
+5d3845b1 integration baseline. The original capture
 still lacks accepted graph-node identities, optimizer/anchor revision history
 and calibrated physical acquisition timing. Its retrospective seed-error
-associations remain hypotheses. The next discriminating native simulator
-capture must retain each accepted source identity/target state and the exact
-anchor/TF tuple consumed by FTC together with native truth/applied motion;
-another uninstrumented E2E success cannot establish that attribution.
+associations remain hypotheses. The new component retains actual accepted
+command/response/consumed-pose tuples and native braking, plus source-registry
+snapshots; it cannot recover missing optimizer history from the old mission.
+Another uninstrumented E2E success cannot establish that attribution.
 
 Evidence under `~/.cache/pr950-resume-20261029/`: `source-core/`,
 `source-core-yaw/`, `source-core-query/`, `yaw-epoch/`, `yaw-repair/`,
@@ -172,7 +223,8 @@ Evidence under `~/.cache/pr950-resume-20261029/`: `source-core/`,
 `clear-counterfactual-red/`, `final-review-counterfactual-red/`,
 `cog-flip-delay/`, `cusp-source-component/`, `native-source-component/`,
 `native-source-component-green/`, `native-cusp-component/`, `wheel-plant-repair/`,
-`true-flip-physical-oracle/` and
+`true-flip-physical-oracle/`, `flip-prior-ablation/`, `anchor-snapshot-repair/`,
+`geometry-response-repair/`, `native-cusp-response-green/` and
 independent review reports. All earlier outputs remain preserved.
 
 ### Independently useful repair families
@@ -188,7 +240,9 @@ than inheriting a whole-branch CI result.
 | Measured-wheel simulator body | Plugin, URDF contract and regressions belong together, depending on native GT/applied-IMU observation binding. 74 selected cases and native RED/GREEN support one wheel/motion authority; actual braking is reported, not a new physical-stop qualification. |
 | Motion-input finite/order protection | The input guards and actual Node fixture can stand independently of GNSS retiming; 13 original Node cases passed. Later source-history consumers depend on these guards. |
 | Rebase information and absolute gyro bias | Two independently causal Core repairs, with their tests/lifecycle pieces; source acquisition retention depends on information-preserving typed rebase. 52 focused cases passed before source integration. |
+| Post-anchor snapshot | Small Core/API repair with two baseline RED cases, 11 rebase and 48 Node GREEN cases; depends on existing source/revision semantics. It does not repair the invalid true-flip prior. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
+| FTC forward geometry response | Depends on existing raw geometry authorization and the assumed coast contract; shared envelope plus gate/tests belong together. 106 controller and 27 critic cases, plus one native containment GREEN. It stops before the cusp; route completion and calibrated physical containment remain unqualified. |
 | FTC fixture startup and replay CI setup | Independently tested fixture/TF-probe and build-infrastructure repairs. They do not authorize motion or fix the original event. |
 
 Dock dispatch, fresh detour acquisition and planner bevel repairs remain prior

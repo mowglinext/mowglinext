@@ -1162,7 +1162,8 @@ double FTCController::maxLinearSpeed() const
   return std::min(base_max_cmd_vel_speed_, external_cap);
 }
 
-void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command)
+void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command,
+                                     const geometry_msgs::msg::Twist& measured)
 {
   // Zero commands never depend on authorization, TF or the presence of a map.
   if (command.linear.x == 0 && command.angular.z == 0)
@@ -1200,6 +1201,21 @@ void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command)
   const char* checked_sweep = "command";
   double checked_horizon = kIntendedCommandHorizonSec;
   double checked_omega = command.angular.z;
+  if (permitted && command.linear.x > 0)
+  {
+    // Recorded geometry needs the same assumed forward response as lethal
+    // cells, including measured motion when the proposed request is smaller.
+    // This remains conditional on the documented actuator integral bound.
+    permitted = ForwardResponsePermitted(*authorization_,
+                                         footprint,
+                                         pose,
+                                         command,
+                                         measured,
+                                         kIntendedCommandHorizonSec,
+                                         config_.obstacle_coast_time_bound_s);
+    checked_sweep = "forward_response";
+    checked_horizon += config_.obstacle_coast_time_bound_s;
+  }
   if (permitted && command.linear.x == 0 && command.angular.z != 0 &&
       (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT ||
        current_state_ == PlannerState::POST_ROTATE))
@@ -1301,7 +1317,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       waitOrThrowForObstacle("proposed forward chassis/response sweep intersects lethal cells");
       cmd_vel.twist = geometry_msgs::msg::Twist{};
     }
-    authorizeCommand(cmd_vel.twist);
+    authorizeCommand(cmd_vel.twist, velocity);
     last_cmd_fwd_speed_ = cmd_vel.twist.linear.x;
     last_reverse_budget_speed_ = reverse_budget_speed;
     turn_fallback_.last_reverse_speed_mps =

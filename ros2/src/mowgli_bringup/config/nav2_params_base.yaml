@@ -463,7 +463,8 @@ controller_server:
       # freshly recomputed PID cannot jump directly from 0 to ±max_cmd_vel_ang.
       # At the 10 Hz controller rate, 1.0 rad/s² changes omega by ~0.1 per tick.
       obstacle_restart_angular_acceleration: 1.0
-      # Assumed STOP-response integral bound for FTC's forward lattice sweep.
+      # Assumed STOP-response integral bound for FTC's forward geometry and
+      # lattice lethal-cell sweeps; geometry applies independently of obstacles.
       # Not a measured physical stopping guarantee. Lower only with validated
       # response evidence; accepted startup/live range [0.01, 2.0] seconds.
       obstacle_coast_time_bound_s: 0.5

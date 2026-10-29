@@ -111,7 +111,8 @@ private:
   friend struct FTCSpeedLimitTestAccess;
 
   /// Final FTC output gate, after all speed floors and recovery commands.
-  void authorizeCommand(const geometry_msgs::msg::Twist& command);
+  void authorizeCommand(const geometry_msgs::msg::Twist& command,
+                        const geometry_msgs::msg::Twist& measured);
   bool forwardCommandSweepBlocked(const geometry_msgs::msg::Twist& command,
                                   const geometry_msgs::msg::Twist& measured);
   LatticeGeometryBlocked motionLatticeCritic(

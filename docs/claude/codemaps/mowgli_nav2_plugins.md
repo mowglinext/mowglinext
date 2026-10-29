@@ -11,6 +11,24 @@ Global fixed-grid geometry and mandatory authorization are owned by `GardenKeepo
 current observation buffers. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md)
 for geometry synchronization, recovery toggles, budgets and hardware acceptance.
 
+## Forward geometry response (#950)
+
+`authorizeCommand` retains the intended 0.1 s command sweep and additionally
+checks strictly forward proposals with `ForwardResponsePermitted` in
+`ftc_forward_sweep.hpp/.cpp`. It uses the actual compute-input velocity and the
+existing `obstacle_coast_time_bound_s` assumption, independently of obstacle,
+deviation and lattice flags. The reference envelope must fit the complete mowing
+union; only raw holes constrain the chassis, retaining legal outer overhang.
+The same builder supplies the existing lethal-cell chassis sweep. Tests live in
+`test_ftc_motion_critic.cpp` and `test_motion_authorization.cpp`.
+
+STOP is unconditional. Reverse and pure-rotation guards, including the remaining
+rotation sweep, retain their existing contracts. The response envelope assumes
+bounded speed/yaw response and remaining integrals; it does not establish a
+calibrated physical stop, a downstream command lease or pose accuracy. The
+native failure and focused repair evidence belong to
+`docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
+
 ## Reverse-escape budget authorization (#950)
 
 `FTCController::computeVelocityCommands` charges an active reverse attempt once

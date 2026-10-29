@@ -5,6 +5,11 @@
 #include "mowgli_interfaces/motion_geometry_types.hpp"
 #include "nav2_costmap_2d/costmap_2d.hpp"
 
+namespace mowgli_interfaces::motion
+{
+struct Snapshot;
+}
+
 namespace mowgli_nav2_plugins
 {
 // Forward-only execution envelope. Assumes no speed/yaw overshoot beyond the
@@ -19,4 +24,15 @@ bool ForwardSweepBlocked(const nav2_costmap_2d::Costmap2D& costmap,
                          const geometry_msgs::msg::Twist& measured,
                          double command_horizon,
                          double coast_time_bound);
+
+// The same assumed forward response against recorded geometry: the reference
+// stays in the mowing union, while only raw holes constrain the body. STOP and
+// non-forward proposals retain their separate authorization/rotation guards.
+bool ForwardResponsePermitted(const mowgli_interfaces::motion::Snapshot& geometry,
+                              const mowgli_interfaces::motion::Ring& footprint,
+                              mowgli_interfaces::motion::Pose pose,
+                              const geometry_msgs::msg::Twist& proposed,
+                              const geometry_msgs::msg::Twist& measured,
+                              double command_horizon,
+                              double coast_time_bound);
 }  // namespace mowgli_nav2_plugins
