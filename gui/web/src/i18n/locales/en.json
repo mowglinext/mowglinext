@@ -37,7 +37,14 @@
     "cancel": "Cancel",
     "interrupted": "Capture interrupted",
     "dropped": "{{count}} capture observations dropped",
-    "phase": {"ready": "Ready", "disabled": "Disabled", "capturing": "Collecting post-event history", "writing": "Saving snapshot", "pruning": "Applying storage limits", "stopped": "Stopped"}
+    "phase": {
+      "ready": "Ready",
+      "disabled": "Disabled",
+      "capturing": "Collecting post-event history",
+      "writing": "Saving snapshot",
+      "pruning": "Applying storage limits",
+      "stopped": "Stopped"
+    }
   },
   "bladeDirection": {
     "title": "Requested blade direction",
@@ -5373,5 +5380,92 @@
     "body": "The wheels dug in repeatedly here and the mower is still {{distance}} m from the spot. Check that nothing is stuck under or in front of it. If it digs in once more at this spot, it will stop again.",
     "ok": "Resume mowing",
     "cancel": "Cancel"
+  },
+  "gamepad": {
+    "title": "Controller",
+    "controller": "Connected controller",
+    "selectController": "Select a controller",
+    "connectHelp": "Pair your controller in this phone, tablet or computer’s Bluetooth settings, or connect it by USB. Press a controller button to make it visible, then select it here. Keep this robot’s Map page open and in focus.",
+    "pwaHelp": "iPad tip: try adding this GUI to the Home Screen and opening it as a web app (PWA), especially if controller buttons navigate the browser. Keep it visible and focused; web apps use the same stop checks.",
+    "diagnosticsHelp": "Recent controller events and connection health are sent to this robot for troubleshooting, without map coordinates. If control stops, leave this page open so the report can arrive when the connection returns. Reports are kept briefly in memory and cleared when the GUI server restarts.",
+    "noController": "Connect a controller and press a button.",
+    "disconnected": "Controller disconnected. Reconnect, select it and enable again.",
+    "storageHelp": "Mappings are saved in this browser for this robot and controller. Driving is always disabled when the page opens.",
+    "liveInput": "Live inputs (test before enabling)",
+    "buttonIndex": "Button {{index}}",
+    "axisIndex": "Axis {{index}}",
+    "linearAxis": "Forward / reverse axis",
+    "angularAxis": "Steering axis",
+    "invertAxis": "Invert {{axis}}",
+    "invert": "Invert",
+    "deadzone": "Stick dead zone",
+    "speedScale": "Speed scale (maximum 0.25 m/s and 0.6 rad/s)",
+    "bind": "Bind input",
+    "learning": "Release all controls, then press or move one input for {{binding}}.",
+    "cancelBind": "Cancel binding",
+    "save": "Save mapping",
+    "saveFailed": "Could not save the mapping. Allow browser storage and try again.",
+    "restoreDefaults": "Restore defaults",
+    "invalidProfile": "Use a different button for each function and a different axis for driving and steering. All assigned inputs must exist on this controller.",
+    "enable": "Enable for this robot",
+    "disable": "Disable controller",
+    "safetyHelp": "Choose area recording or Manual Mowing first, then center the sticks and release all buttons. Hold the mapped deadman before moving a stick. In Manual Mowing, release stops the wheels and blade but keeps the controller connected. After the pause completes, release all controls, then hold deadman with centered sticks to restart Manual Mowing and the blade. STOP cancels this restart permission. For recording actions, release deadman and hold the assigned button for 0.8 seconds. Opening settings stops controller input. Close settings with Done, then tap Enable on the map.",
+    "stopManual": "Stop Manual Mowing",
+    "stopManualHint": "Stop Manual Mowing and cancel deadman restart. The controller stays connected.",
+    "profiles": {
+      "default": "Built-in standard mapping",
+      "saved": "Saved mapping",
+      "unsaved": "Unsaved mapping — test and save before enabling"
+    },
+    "bindings": {
+      "deadman": "Hold to drive (deadman)",
+      "stop": "Stop / pause",
+      "recordStart": "Start area recording",
+      "recordFinish": "Finish and save recording",
+      "recordCancel": "Cancel and discard recording"
+    },
+    "states": {
+      "releaseControls": "Center sticks and release {{deadman}} and all other buttons",
+      "ready": "Ready — hold {{deadman}}, then move a stick",
+      "driving": "{{deadman}} held — release to stop",
+      "inputLost": "Input lost",
+      "waitingForMode": "Choose area recording or Manual Mowing in robot controls. Manual Mowing starts the blade.",
+      "holding": "Hold to confirm recording action",
+      "connecting": "Connecting controller…",
+      "statusLost": "Waiting for live robot status — driving stopped",
+      "emergency": "Robot emergency active — driving stopped",
+      "manualPausing": "Stopping Manual Mowing — release all controls and wait for the robot to confirm IDLE",
+      "manualPaused": "Manual Mowing paused — release all controls, then hold {{deadman}} with centered sticks to restart the blade",
+      "manualResuming": "Starting Manual Mowing — keep {{deadman}} held and sticks centered",
+      "actionPending": "Waiting for the robot command to finish — driving stopped"
+    },
+    "inputLossReasons": {
+      "pollGap": "The browser paused controller reads for {{pollGapMs}} ms (limit {{limit}} ms).",
+      "clockInvalid": "The browser clock changed unexpectedly.",
+      "disconnected": "The browser no longer reports the selected controller as connected.",
+      "identityChanged": "The controller in the selected slot changed.",
+      "mappingChanged": "The selected mapping no longer matches the controller inputs.",
+      "timestampInvalid": "The browser returned an invalid controller timestamp ({{timestamp}}).",
+      "timestampRegressed": "The controller timestamp went backwards ({{previousTimestamp}} → {{timestamp}}).",
+      "axisInvalid": "Axis {{inputIndex}} returned an invalid value ({{inputValue}}).",
+      "buttonInvalid": "Button {{inputIndex}} returned an invalid value ({{inputValue}}).",
+      "focusLost": "The browser page lost focus.",
+      "pageHidden": "The browser page was hidden or its visibility changed.",
+      "pageExit": "The browser left this page.",
+      "controllerChanged": "The browser replaced or reconnected the selected controller."
+    },
+    "faults": {
+      "unsupported": "Controller input is unavailable or blocked by this browser. Try a browser with Gamepad API support, or HTTPS if input is blocked over HTTP.",
+      "inputLost": "Controller stopped. Center the sticks, release all buttons and enable again.",
+      "connectionLost": "Controller session ended. If this was unexpected, check the connection or whether another tab owns the controller.",
+      "actionFailed": "Robot command failed. Check the robot status and connection before enabling again."
+    },
+    "done": "Done",
+    "enableHelp": "Tap Enable on the map when you are ready. Controller settings never start driving.",
+    "setupRequired": "Open Controller to select a device and save a valid mapping.",
+    "driveSummary": "Drive: hold {{deadman}} · Stop: {{stop}} · Max {{speed}} m/s",
+    "retryHelp": "Center sticks, release all buttons, then tap Enable again.",
+    "selectionSaveFailed": "Controller selected for this tab only. Browser storage could not remember it.",
+    "chooseController": "Press a controller button, or open Controller to choose a device."
   }
 }
