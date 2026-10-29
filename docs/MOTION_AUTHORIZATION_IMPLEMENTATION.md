@@ -5,6 +5,33 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## FollowStrip late-result ownership (2026-10-29)
+
+The continuation found a separate real action-lifecycle defect: FollowStrip
+reset and reused one outcome slot across successive coverage goals, and one
+across its blade-off transits. An abandoned goal's callback still owned that
+same slot. After halt and a new dispatch, a delayed old success could decide
+the new nonterminal handle, marking an unfinished unit mowed or permitting
+coverage before the new transit finished. Current fetched dev has the same
+pattern; this is not retrospective attribution of the original boundary event.
+
+Each FollowStrip follow/transit dispatch now allocates its own outcome slot,
+matching the existing ownership of result-detail and feedback slots. Old
+callbacks retain their old slot. Cancellation, deadlines, result precedence,
+blade checks and completion criteria are unchanged. Two real FollowStrip tests
+with controlled fake Nav2 servers reject the old cancellation, restart the
+same tree, accept a new goal and then deliver the old result. Both are RED on
+the previous production objects, with observed callback arrival and new-slot
+contamination; both pass after the fix. Seven focused lifecycle tests pass in
+17.736 s. Independent review and clang-format 18 checks pass. This is real ROS
+action transport/component evidence, not a real ControllerServer or hardware
+run. Source, binaries and XML are retained in `followstrip-late-result/` and
+`followstrip-attempt-independent-review/`.
+
+Standalone TransitToStrip and DetourAroundObstacle have analogous pre-existing
+outcome-slot reuse, not exercised or changed by this FollowStrip-specific
+repair. Their late-result schedules need separate focused investigation.
+
 ## Known-source TF knots (2026-10-29)
 
 A separate actual-Node probe exposes an avoidable producer-side history error.
@@ -41,6 +68,18 @@ interpolation accuracy, in-flight source-epoch reset races, atomic TF revision
 identity and physical pose accuracy remain unqualified. Exact packets, old/new
 binaries, controls and limits are in `producer-tf-epoch/`,
 `producer-tf-epoch-green/` and `producer-tf-independent-review/`.
+
+A combined current-Node/Core and current-FTC/goal-checker native component also
+passes one precise straight stop with the unchanged 0.03 m XY request and
+0.1 s TF lead. At first checker success/STOP the modeled native body is at
+x=0.772644 m; real modeled wheel coast adds 0.012834 m and settles at
+x=0.785478 m, 14.522 mm from the 0.80 m goal. There are 93 exact-rest sample
+pairs and no later checker reversal. This directly constructed component uses
+public initialization and the real goal/local-plan transform-header contract;
+it does not run ControllerServer, BT or mux. It is a combined integration
+control, not a failing-before comparison or hardware result. One failed
+pre-motion executable-permission start is retained separately. Exact provenance
+and the single valid attempt are in `native-precision-source-consumer-attempt02/`.
 
 ## Consumer evaluation epoch (2026-10-29)
 
@@ -114,13 +153,40 @@ shipped-parameter command/measurement sequence is still required. A previously
 permitted command can enter a STOP-only endpoint, so a denied nonzero endpoint
 request alone is not an impossibility proof.
 
-The construction contains two bounded retreats. Existing runtime phase,
-retry/cancellation and cumulative-budget semantics have not been established
-for that construction; individual 0.30 m bounds do not establish the combined
-operation. No production planner/phase change or extraction is shipped from
-this probe. Exact geometry, command samples, analytic endpoint derivation and
-limits are in `cusp-critical-terminal-topology/`; the earlier coverage/body
-GREEN but response-RED LSR remains in `cusp-composite-original-spur/`.
+An external experimental copy of actual FTC and a dedicated checker now
+completes the two-visit local maneuver in one controlled, current-only TF,
+0.1 s zero-order-hold run. Both original retreat endpoints are reached within
+5 mm; conservative debit stays below the existing 0.30 m ordinary allowance.
+The first version refilled after only 0.54 m of actual forward travel because
+the indexed carrot was ahead. A targeted experimental progress-credit change
+refills only after 0.615 m of modeled qualifying forward travel, beyond the
+unchanged 0.60 m requirement. It does not grant a new allowance per phase or
+change legacy accounting. This attempt-local experiment is outside production.
+
+The 162 actually executed positive-command intervals preserve all 34 original
+continuous required lines at 9 cm when inserted into the specified nominal
+prefix and **unexecuted** R-to-J/suffix context. The exact production planner
+exports raw doubles and asserts the reconstructed old route vector matches;
+both nominal and realized-local Difference are empty. This does not establish
+actual full-route cutting, successor tracking or body/pivot permission at the
+new rejoin. The prototype's R differs from the earlier static certificate.
+
+Resume remains a concrete software blocker. Replaying the actual production
+progress helper at 10 Hz against that successful local trace jumps to future
+overlapping visits: by tick 30 the cursor is 52, beyond both retreat legs, before
+the first reverse begins. A halt at tick 55 would therefore save the wrong
+suffix under the inspected FollowStrip persistence/trim code. This is a helper
+replay and source-derived halt consequence, not an executed geared FollowStrip
+halt/reload. Five separately executed real FollowStrip tests with fake Nav2
+servers pass their existing forward-path lifecycle controls. The experimental
+controller/checker are direct executable objects, without plugin factories;
+actual ControllerServer plus geared FollowStrip cancel/resume remains unrun.
+
+No production planner/phase change or extraction is shipped. Exact evidence is
+in `maneuver-seam-prototype/actual-progress/`, `realized-coverage-export/` and
+`coverage-maneuver-contract/seam-followstrip/`. The static certificate remains
+in `cusp-critical-terminal-topology/`; the earlier coverage/body GREEN but
+response-RED LSR remains in `cusp-composite-original-spur/`.
 
 ## Precise terminal approach prerequisite (2026-10-29)
 
@@ -580,6 +646,7 @@ than inheriting a whole-branch CI result.
 | Wheel travel-noise accounting | Four small production edits plus source/legacy/clipped-bootstrap regressions; all three new cases RED on the old Core, 15 selected targets / 156 cases GREEN after coherent ABI rebuild. Can be separated with its bootstrap source integration dependency retained; it does not repair true-flip lineage. |
 | Post-anchor snapshot | Small Core/API repair with two baseline RED cases, 11 rebase and 48 Node GREEN cases; depends on existing source/revision semantics. It does not repair the invalid true-flip prior. |
 | Automatic dock seed provenance | Keep the shared charging guard, callback ordering and timer fallback together. Two old-Node RED cases, two charging controls and 52 actual-Node GREEN cases support the narrow repair; general bad authoritative seed recovery remains separate. |
+| FollowStrip result ownership | Two per-dispatch slot renewals and their real-class/fake-Nav2 regressions form a small separate repair. Two REDs and seven focused GREEN lifecycle cases; no dependency on the unshipped maneuver. It does not fix other BT nodes' outcome ownership or establish downstream cancellation. |
 | FTC requested goal and consumer epoch | Keep the requested-distance approach, current terminal decision, goal transform provenance and final guard epoch repairs together. They depend on the selected Nav2 1.5.2 path-handler contract and existing geometry/response interfaces; extraction needs its own target-base validation. Software RED/GREEN does not establish a complete corner. |
 | Public coverage header includes | Include-only dependency reduction has unchanged coverage/replay evidence; it is separable from the unshipped constructive-corner prototype. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
