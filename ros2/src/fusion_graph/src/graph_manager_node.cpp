@@ -233,7 +233,9 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     ++stats_slip_veto_;
   }
 
-  const gtsam::Pose2 between(dx_eff, dy_eff, dtheta);
+  const auto between = SourceBetweenLocked(gtsam::Pose2(dx_eff, dy_eff, dtheta),
+                                           !slip_detected,
+                                           !truly_stationary || params_.use_imu_preint);
 
   const auto k_prev = PoseKey(next_index_ - 1);
   const auto k_curr = PoseKey(next_index_);
@@ -426,6 +428,12 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     new_factors_.add(gtsam::BetweenFactor<double>(k_bias_prev, k_bias_curr, 0.0, bias_rw_noise));
   }
 
+  FreezeSourceEdgeLocked(k_prev,
+                         k_curr,
+                         X_prev,
+                         X_pred,
+                         gtsam::Vector3(wheel_sigma_x_eff, sigma_y_travel, sigma_theta));
+
   // 3. Queued unary factors. Wrap in Huber when caller flagged the
   // measurement as outlier-prone (RTK-Float / single fix on GPS;
   // magnetometer on yaw).
@@ -551,12 +559,16 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   out.covariance = cov;
   out.node_index = next_index_;
   out.timestamp = now_s;
+  CommitSourceNodeLocked(out);
   latest_ = out;
 
   // 6. Reset for next tick.
   ++next_index_;
   last_node_time_s_ = now_s;
-  node_time_index_.emplace_back(now_s, out.node_index);
+  node_time_index_.emplace_back(out.source_epoch || out.source_stamp_ns
+                                    ? static_cast<double>(out.source_stamp_ns) * 1e-9
+                                    : now_s,
+                                out.node_index);
   const size_t time_index_cap =
       params_.max_graph_nodes > 0 ? static_cast<size_t>(params_.max_graph_nodes) : 10000U;
   while (node_time_index_.size() > std::max<size_t>(1U, time_index_cap))

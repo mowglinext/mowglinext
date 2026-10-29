@@ -38,6 +38,9 @@
 namespace fusion_graph
 {
 
+struct ConsumedMotionStep;
+struct GraphMotionState;
+
 // Pose-variable key for node index i (symbol 'x'). Inline + namespace-scope so
 // every graph_manager_*.cpp translation unit shares one definition (the class
 // implementation is split across several TUs to stay within the file-size budget).
@@ -52,7 +55,10 @@ struct TickOutput
   gtsam::Pose2 pose;
   Eigen::Matrix3d covariance;  // (x, y, theta) marginal
   uint64_t node_index;  // monotonically increasing
-  double timestamp;  // ROS time, seconds
+  double timestamp;  // Schedule time, seconds
+  int64_t source_stamp_ns = 0;
+  uint64_t source_epoch = 0;
+  uint64_t revision = 0;
 };
 
 // Lightweight stats snapshot for diagnostics.
@@ -105,7 +111,41 @@ public:
   void AddWheelTwist(double vx, double vy, double wz, double dt);
 
   // Gyro yaw rate (rad/s) integrated with given dt.
-  void AddGyroDelta(double wz, double dt);
+  double AddGyroDelta(double wz, double dt);
+
+  // Source-time path: states end at wholly consumed integration boundaries.
+  bool AddConsumedMotionStep(const ConsumedMotionStep& step);
+  void ResetConsumedMotionEpoch(uint64_t epoch);
+  void SetConsumedMotionBaseline(uint64_t epoch, int64_t source_ns);
+  bool InitializeSource(const gtsam::Pose2& pose,
+                        int64_t schedule_ns,
+                        int64_t source_ns,
+                        uint64_t epoch,
+                        std::optional<double> sigma_xy = std::nullopt);
+  std::optional<TickOutput> TickSource(int64_t schedule_ns, int64_t source_ns, uint64_t epoch);
+  bool QueueGnssAtEpoch(double x,
+                        double y,
+                        double sigma,
+                        bool robust,
+                        int64_t source_ns,
+                        uint64_t observation_id,
+                        uint64_t epoch);
+  std::optional<int64_t> OldestRetainedSourceNs(uint64_t epoch) const;
+  // Read-only optimized acquisition pose or frozen first-order conditional
+  // mean. Only committed, retained source support is eligible; no new value,
+  // factor, observation identity, revision or cadence state is introduced.
+  std::optional<gtsam::Pose2> EstimatePoseAtSource(uint64_t epoch, int64_t source_ns) const;
+  uint64_t SourceGnssFactorCount() const;
+  // Dynamic absolute headings retain source time and a separate identity
+  // namespace from GNSS. COG/Mag callers distinguish their producer IDs.
+  bool QueueYawAtEpoch(double yaw,
+                       double sigma,
+                       bool robust,
+                       int64_t source_ns,
+                       uint64_t observation_id,
+                       uint64_t epoch);
+  uint64_t SourceYawFactorCount() const;
+  bool NeedsSourceRebase() const;
 
   // GPS measurement (in map frame, datum-anchored). Cached and consumed
   // at next tick. sigma is per-axis; pass < 0 to use floor. When
@@ -177,11 +217,12 @@ public:
   // node, for non-finite timestamps, or while uninitialized.
   std::optional<uint64_t> FindNodeAtOrBefore(double timestamp_s) const;
 
-  // Count of pose ('x') variables currently live in the iSAM2 graph.
+  // Count of cadence ('x') and acquisition ('a') Pose2 states live in iSAM2.
   // Distinct from GraphStats::total_nodes, which is the monotonic
   // next-index (never decreases). After a windowed RebaseISAM2 the
   // live count is capped at max_graph_nodes while total_nodes keeps
-  // climbing. Exposed primarily for the sliding-window unit test.
+  // climbing. Growth between maintenance checks is allowed. Exposed primarily
+  // for the sliding-window unit test.
   uint64_t LiveNodeCount() const;
 
   // GPS wrong-fix rejection counter; mutex-protected.
@@ -251,10 +292,12 @@ public:
 
 private:
   friend class GraphManagerRebaseTestAccess;
+  friend class GraphManagerSourceTestAccess;
 
   // Reset() body without taking mu_ — for callers that already hold the lock
   // (e.g. the iSAM2 indeterminate-system catch inside ApplyIsamUpdateLocked).
   void ResetLocked();
+  void InitializeLocked(const gtsam::Pose2& pose, double timestamp, std::optional<double> sigma_xy);
 
   // Per-node accumulator for between-factors.
   struct Accumulator
@@ -318,6 +361,19 @@ private:
     };
     std::optional<LidarMapXy> lidar_map_xy;
   };
+
+  std::shared_ptr<GraphMotionState> motion_;
+  gtsam::Pose2 SourceBetweenLocked(const gtsam::Pose2& fallback, bool translation, bool rotation);
+  void FreezeSourceEdgeLocked(gtsam::Key left,
+                              gtsam::Key right,
+                              const gtsam::Pose2& previous,
+                              const gtsam::Pose2& predicted,
+                              const gtsam::Vector3& sigmas);
+  void CommitSourceNodeLocked(TickOutput& output);
+  bool AssimilateSourceObservationsLocked();
+  void InvalidateSourceBridgesLocked();
+  void PruneSourceStateLocked();
+  std::map<gtsam::Key, uint64_t> AcquisitionOwnersLocked() const;
 
   GraphParams params_;
   mutable std::mutex mu_;

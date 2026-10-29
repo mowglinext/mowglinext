@@ -28,8 +28,30 @@ bool FusionGraphNode::TrySeedInitialPose()
 {
   if (graph_->IsInitialized())
     return true;
-  if (!seed_xy_ || !seed_yaw_)
+  if (pending_explicit_seed_)
+  {
+    if (!integrated_source_ns_ ||
+        !InitializeAtSource(*pending_explicit_seed_, *integrated_source_ns_))
+      return false;
+    pending_explicit_seed_.reset();
+    return true;
+  }
+  if (!seed_xy_ || !seed_yaw_ || !seed_source_ns_ || !seed_yaw_source_ns_ ||
+      seed_yaw_source_epoch_ != integration_epoch_)
     return false;
+  const auto dr_at_position = DrPoseAtSource(integration_epoch_, *seed_source_ns_);
+  const auto dr_at_heading = DrPoseAtSource(integration_epoch_, *seed_yaw_source_ns_);
+  if (!dr_at_position || !dr_at_heading)
+    return false;
+  // Absolute heading and antenna position can arrive from different source
+  // epochs. Undo only the rotation actually consumed between those epochs;
+  // later replay must not integrate that same turn a second time.
+  const double yaw_at_position = *seed_yaw_ + dr_at_heading->between(*dr_at_position).theta();
+  const double c = std::cos(yaw_at_position);
+  const double s = std::sin(yaw_at_position);
+  const gtsam::Pose2 base_seed(seed_xy_->x() - c * lever_arm_x_m_ + s * lever_arm_y_m_,
+                               seed_xy_->y() - s * lever_arm_x_m_ - c * lever_arm_y_m_,
+                               yaw_at_position);
   // When the seed came from an RTK-Fixed fix, override the prior to
   // match the measurement quality. 5 mm is conservative w.r.t the
   // F9P's typical RTK-Fixed σ ~3 mm; tight enough that the wheel
@@ -39,40 +61,57 @@ bool FusionGraphNode::TrySeedInitialPose()
   std::optional<double> prior_override;
   if (seed_xy_rtk_fixed_)
     prior_override = 0.005;
-  graph_->Initialize(gtsam::Pose2(seed_xy_->x(), seed_xy_->y(), *seed_yaw_),
-                     this->now().seconds(),
-                     prior_override);
+  if (!InitializeAtSource(base_seed, *seed_source_ns_, prior_override))
+    return false;
   t_map_odom_anchor_valid_ = false;
   RCLCPP_INFO(get_logger(),
               "fusion_graph: initialized at (%.3f, %.3f, %.3f rad)%s",
-              seed_xy_->x(),
-              seed_xy_->y(),
-              *seed_yaw_,
+              base_seed.x(),
+              base_seed.y(),
+              base_seed.theta(),
               seed_xy_rtk_fixed_ ? " [RTK-Fixed seed, σ=5mm prior]" : " [non-Fixed seed]");
   return true;
 }
 
+std::optional<FusionGraphNode::MotionPublishState> FusionGraphNode::CaptureMotionPublishState()
+{
+  std::lock_guard<std::mutex> lock(tf_state_mu_);
+  if (!integrated_source_ns_)
+    return std::nullopt;
+  const auto prediction = gtsam::Pose2::Expmap(
+      gtsam::Vector3(dr_last_vx_eff_ * tf_publish_lead_s_, 0.0, dr_last_gz_ * tf_publish_lead_s_));
+  const auto source_pose = ContinuousDrPoseLocked();
+  return MotionPublishState{*integrated_source_ns_,
+                            source_pose,
+                            source_pose.compose(prediction),
+                            t_map_odom_anchor_,
+                            t_map_odom_anchor_valid_,
+                            dr_last_vx_eff_,
+                            dr_last_gz_};
+}
+
+bool FusionGraphNode::FastPoseSourceIsCurrent(double now_s) const
+{
+  if (!fast_pose_source_ns_ || fast_pose_source_epoch_ != integration_epoch_ ||
+      !integrated_source_ns_ || *fast_pose_source_ns_ > *integrated_source_ns_ ||
+      !t_map_odom_anchor_valid_ || !pose_extrap_.HasFusionPose())
+    return false;
+  // Match the helper's existing 200 ms constant-rate prediction limit. Once
+  // that source support expires, its baseline cannot be relabelled as now.
+  const double dt = now_s - static_cast<double>(*fast_pose_source_ns_) * 1e-9;
+  return dt >= 0.0 && dt <= 0.2;
+}
+
 void FusionGraphNode::PublishLocalOdom()
 {
-  // odom→base_footprint TF + /odometry/filtered from the dead-reckoning
-  // state. Replaces ekf_odom_node. Streams every OnTimer tick so the
-  // local frame is ready before the graph itself initializes (Nav2's
-  // local costmap and FTCController both rely on this TF, and they
-  // can come up before any GPS fix has landed).
-  const rclcpp::Time now = this->now();
-  // Forward-stamp the TF by tf_publish_lead_s_ so Nav2 controller_server
-  // lookups at clock()->now() land in tf2 interpolation territory instead of
-  // throwing ExtrapolationException. The pose is propagated forward by the same
-  // lead via ForwardStampPose so the future stamp is an honest prediction —
-  // without that, a future-stamped current pose injects wz·lead of yaw error
-  // during pivots. (On hardware the dedicated TF thread owns this broadcast;
-  // this inline path runs only in observer mode / when the thread is disabled.)
-  const rclcpp::Time stamp = now + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
-
-  double ex_x = dr_x_;
-  double ex_y = dr_y_;
-  double ex_yaw = dr_yaw_;
-  ForwardStampPose(tf_publish_lead_s_, dr_last_gz_, dr_last_vx_eff_, ex_x, ex_y, ex_yaw);
+  const auto state = CaptureMotionPublishState();
+  if (!state)
+    return;
+  const auto stamp = rclcpp::Time(state->source_ns, get_clock()->get_clock_type()) +
+                     rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+  const double ex_x = state->predicted_pose.x();
+  const double ex_y = state->predicted_pose.y();
+  const double ex_yaw = state->predicted_pose.theta();
 
   geometry_msgs::msg::TransformStamped t_odom_base;
   t_odom_base.header.stamp = stamp;
@@ -93,16 +132,16 @@ void FusionGraphNode::PublishLocalOdom()
     tf_broadcaster_->sendTransform(t_odom_base);
   }
 
-  const geometry_msgs::msg::Quaternion q_msg = QuatFromYaw(dr_yaw_);
+  const geometry_msgs::msg::Quaternion q_msg = QuatFromYaw(ex_yaw);
   nav_msgs::msg::Odometry odom;
-  odom.header.stamp = now;
+  odom.header.stamp = stamp;
   odom.header.frame_id = odom_frame_;
   odom.child_frame_id = base_frame_;
-  odom.pose.pose.position.x = dr_x_;
-  odom.pose.pose.position.y = dr_y_;
+  odom.pose.pose.position.x = ex_x;
+  odom.pose.pose.position.y = ex_y;
   odom.pose.pose.position.z = 0.0;
   odom.pose.pose.orientation = q_msg;
-  odom.twist.twist.linear.x = wheel_vx_;
+  odom.twist.twist.linear.x = state->vx;
   odom.twist.twist.linear.y = 0.0;
   // Bias-corrected gyro yaw rate — the SAME rate dead-reckoning integrates into
   // dr_yaw_. Leaving this 0 made /odometry/filtered unusable as Nav2's
@@ -110,7 +149,7 @@ void FusionGraphNode::PublishLocalOdom()
   // from twist.angular.z — the documented "controllers had zero velocity
   // feedback" gap that forced odom_topic onto raw /wheel_odom). Same executor
   // thread as the dr_* writers, so no lock needed here.
-  odom.twist.twist.angular.z = dr_last_gz_;
+  odom.twist.twist.angular.z = state->gz;
   // Dead reckoning has unbounded drift — leave pose covariance loose
   // and let Nav2 trust the graph's /odometry/filtered_map for absolute
   // positioning. Tight roll/pitch/z so 2D consumers don't see NaN.
@@ -131,19 +170,15 @@ void FusionGraphNode::PublishLocalOdom()
 
 void FusionGraphNode::PublishOutputs(const TickOutput& out)
 {
-  // Extrapolate the last-node pose through current odom integration
-  // so the published map-frame outputs reflect motion that happened
-  // since the snapshot was taken. Without this, /odometry/filtered_map
-  // and the map→odom TF stay glued to out.pose for up to
-  // stationary_node_period_s (5 s by default) → robot looks frozen
-  // in viz, then teleports when the next Tick lands.
-  const gtsam::Pose2 dr_now(dr_x_, dr_y_, dr_yaw_);
-  const gtsam::Pose2 extrapolated_map_base =
-      t_map_odom_anchor_valid_ ? t_map_odom_anchor_.compose(dr_now) : out.pose;
+  const auto state = CaptureMotionPublishState();
+  if (!state || !state->anchor_valid)
+    return;
+  const auto extrapolated_map_base = state->anchor.compose(state->predicted_pose);
 
   // 1. nav_msgs/Odometry on /odometry/filtered_map.
   nav_msgs::msg::Odometry odom;
-  odom.header.stamp = this->now();
+  odom.header.stamp = rclcpp::Time(state->source_ns, get_clock()->get_clock_type()) +
+                      rclcpp::Duration::from_seconds(tf_publish_lead_s_);
   odom.header.frame_id = map_frame_;
   odom.child_frame_id = base_frame_;
   odom.pose.pose.position.x = extrapolated_map_base.x();
@@ -182,7 +217,10 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   // Rebaseline the high-rate extrapolator (item #15). The fast
   // publisher will project yaw forward from this pose until the
   // next fusion tick.
-  pose_extrap_.OnFusionPose(this->now().seconds(), out.pose);
+  pose_extrap_.OnFusionPose(static_cast<double>(state->source_ns) * 1e-9,
+                            state->anchor.compose(state->source_pose));
+  fast_pose_source_ns_ = state->source_ns;
+  fast_pose_source_epoch_ = integration_epoch_;
 
   // 1b. /imu/fg_yaw — yaw-only sensor_msgs/Imu (cov_yaw, others 1e6
   //     to disable). Published in both primary and observer mode so
@@ -226,11 +264,11 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   // motion in the composition map→base = map→odom × odom→base, so
   // the robot would freeze at the snapshot pose between Ticks.
   tf2::Transform T_map_odom;
-  if (t_map_odom_anchor_valid_)
+  if (state->anchor_valid)
   {
-    T_map_odom.setOrigin(tf2::Vector3(t_map_odom_anchor_.x(), t_map_odom_anchor_.y(), 0.0));
+    T_map_odom.setOrigin(tf2::Vector3(state->anchor.x(), state->anchor.y(), 0.0));
     tf2::Quaternion q_map_odom;
-    q_map_odom.setRPY(0.0, 0.0, t_map_odom_anchor_.theta());
+    q_map_odom.setRPY(0.0, 0.0, state->anchor.theta());
     T_map_odom.setRotation(q_map_odom);
   }
   else
@@ -247,7 +285,7 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   // RotationShim queries at clock_->now() find a TF in the buffer that
   // is >= the request time and tf2 interpolates back instead of raising
   // ExtrapolationException. Default 0 (real hardware); sim sets ~0.1s.
-  t_map_odom.header.stamp = this->now() + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+  t_map_odom.header.stamp = odom.header.stamp;
   t_map_odom.header.frame_id = map_frame_;
   t_map_odom.child_frame_id = odom_frame_;
   t_map_odom.transform = tf2::toMsg(T_map_odom);
@@ -312,31 +350,16 @@ void FusionGraphNode::TfBroadcastLoop()
       break;
     }
 
-    double x;
-    double y;
-    double yaw;
-    double gz;
-    double vx_eff;
-    bool anchor_valid;
-    gtsam::Pose2 anchor;
-    {
-      std::lock_guard<std::mutex> lock(tf_state_mu_);
-      x = dr_x_;
-      y = dr_y_;
-      yaw = dr_yaw_;
-      gz = dr_last_gz_;
-      vx_eff = dr_last_vx_eff_;
-      anchor_valid = t_map_odom_anchor_valid_;
-      anchor = t_map_odom_anchor_;
-    }
-
-    // Honest forward-stamp: advance the DR pose by the lead so the now()+lead
-    // stamp predicts the pose at that instant. The rotation happens in the
-    // odom→base leg (dr_yaw_); the map→odom anchor is time-invariant, so only
-    // odom→base is propagated. Removes the wz·lead heading error during pivots.
-    ForwardStampPose(tf_publish_lead_s_, gz, vx_eff, x, y, yaw);
-
-    const rclcpp::Time stamp = this->now() + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+    const auto state = CaptureMotionPublishState();
+    if (!state)
+      continue;
+    const double x = state->predicted_pose.x();
+    const double y = state->predicted_pose.y();
+    const double yaw = state->predicted_pose.theta();
+    const auto& anchor = state->anchor;
+    const bool anchor_valid = state->anchor_valid;
+    const auto stamp = rclcpp::Time(state->source_ns, get_clock()->get_clock_type()) +
+                       rclcpp::Duration::from_seconds(tf_publish_lead_s_);
 
     std::vector<geometry_msgs::msg::TransformStamped> transforms;
     transforms.reserve(2);

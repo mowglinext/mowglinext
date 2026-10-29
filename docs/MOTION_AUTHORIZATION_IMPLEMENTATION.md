@@ -4,6 +4,168 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Source-time pose and heading repairs (2026-10-29)
+
+The actual Node's GNSS phase discriminator now passes all 20 controls, admitting
+and applying all 18 valid fixes. Each perfect-motion final position stays within
+1 micrometre of the oracle; immediate/delayed delivery agrees within 1 nanometre.
+The retained old discriminator produced 14.814123 mm error by attaching epoch
+1.24 s to node 1.14 s. No observation-dropping workaround is used. These are
+software regressions, not attribution of the original 13.943731 mm event.
+
+The production integration separates the integer timer schedule from the last
+wholly consumed IMU source boundary. Wheel callbacks retain their existing gate
+statistics/noise horizon; immutable consumed wheel/gyro controls define a shared
+Expmap trajectory and its actual source epoch. Cadence gates are evaluated once,
+and their translation/rotation verdicts and final process sigmas are frozen per
+edge. Valid observations beyond the committed boundary wait for support instead
+of forcing cadence nodes or being assigned to an older pose.
+
+GNSS and COG/magnetometer factors share conditional acquisition states. The
+frozen normalized **first-order** trajectory extension retains the original
+endpoint likelihood, uses existing process diffusion, conditions on held wheel
+controls, and handles multiple observations with their joint conditional law.
+It is not exact sensor preintegration or a physical calibration of wheel noise.
+Optional gyro sample identities cannot be split/reused across the supported
+production intervals; unsupported repetitions fail explicitly. Observation
+identity and same-time pose aliasing remain separate. Rebase retires complete
+old edges and their acquisitions, retaining separator information. The Pose2
+budget counts cadence and acquisition states and is checked by the existing
+30-second maintenance timer; transient growth between checks remains possible.
+
+TF and local/map odometry represent consumed source time plus only the configured
+lead, propagated by Expmap. Timer delivery lag is not silently added to that
+prediction. Anchors compare graph and DR at the same source epoch and refresh on
+unary-only optimizer revisions. Internal numeric recentering keeps the published
+odom SE2 gauge continuous. Source reset and loss of a graph snapshot invalidate
+cached map/fast output; the optional display publisher respects its existing
+200 ms prediction limit instead of relabeling an old baseline indefinitely.
+
+Additional causal controls expose and repair heading/initialization defects:
+
+- An absolute heading at T combined with GNSS at S was stamped as S, then replay
+  integrated S-to-T rotation again. The actual old initializer gives seed yaw
+  0.3 rather than 0.1 rad, followed by current yaw 0.5 rather than 0.3 rad.
+  Stamped heading seeds now retime through supported same-epoch DR history.
+- Antenna position was used as the initial base position despite a nonzero lever
+  arm. The actual old initializer gives (1.217390206, 2.052359318) rather than
+  (1, 2) m at yaw 0.7. Initialization now subtracts the rotated lever at the
+  correct source heading; the original GNSS antenna measurement stays intact.
+- Dynamic COG/magnetometer consumers discarded their source stamps. A
+  producer-feasible delayed COG causes 1.063925 mm XY error through legacy
+  `QueueYaw`; the source-aware factor returns 1.37e-15 m on identical inputs.
+- Three distinct old straight COGs delivered after a correct half-turn trigger
+  a false 180-degree recovery: actual Node yaw changes from pi to 0.128810002,
+  a 3.012782651 rad error. Recovery now compares the observed source pose and
+  applies a demonstrated heading offset to the latest state, preserving the
+  intervening turn. Supported checks are processed before their own factors;
+  a future check cannot block mature checks. Existing recovery thresholds,
+  debounce, consistency, finite prior and minimum interval remain unchanged.
+  The ROS-time cooldown is invalidated only on an actual clock rewind.
+
+Explicit stationary `clear_graph` retains only a heading prior derived at a
+verified consumed boundary and accepted input baselines. It discards graph
+likelihood/bias and position evidence, preserves GNSS identity high-water state
+so a cached fix cannot undo the clear, and waits for a genuinely new position.
+Real IMU gaps and clock rewinds still discard that carried prior. Clear observes
+the clock before taking its exception; it cannot carry an old source across a
+rewind. Calibrated dock seeding retries only while charging remains confirmed
+and a consumed source exists; it does not persist a dock command after undock.
+Pose-only checkpoint loading has no live source provenance: the new source path
+requires a fresh absolute seed, while legacy Core Load/Tick remains compatible.
+
+Final reviewed-source validation passes **14 CTest targets / 145 GTest cases**:
+48 actual Node cases, 79 Core cases and 18 trajectory/conditional component
+cases. All 64 source hashes match before/after the bounded build/tests. Actual
+old-source counterfactuals fail both bootstrap cases (six assertions), five of
+seven clear/dock cases, and all three final-review regressions. The two already
+passing clear controls remain recorded. No acceptance threshold or tolerance
+is changed.
+
+A separate physical true-flip criterion is still **failed**: the new temporal
+recovery and its identical-trajectory finite-prior control agree, but both leave
+posterior yaw 0.598188373 rather than physical 0.285 rad (17.94 degrees error).
+The pre-existing `ForceAnchor` adds another prior while keeping the disproven
+old heading prior; nominal 3-degree versus 1-degree weights retain roughly one
+tenth of a pi error. Relative-oracle agreement is not physical recovery proof.
+The independent design review rejects sigma tuning as a repair: an explicit
+current-source recovery cut would discard historical likelihood/correlation;
+preserving it requires selective lineage reconstruction, including marginalized
+prefix information. That recovery-policy choice is not silently made here.
+The exact existing behavior, failed physical criterion, and proposed lifecycle
+are retained in `true-flip-astra-decision.md` and the final Node log.
+
+The bounded first-cusp component connects the actual Node, its actual published
+TF and the real FTC controller. Both declared GNSS delays (0/60 ms) pass the
+unchanged y >= 0.8 criterion, with minima 0.814573880930/0.814573896669 m.
+All 15 distinct nonseed fixes per variant apply (13 interior, two endpoint),
+and all 58 nonzero returns match successful same-command checks. Both following
+requests deny at cursor 37 and the fixture applies ideal immediate zero. Exact
+source/anchor/TF/command/plant tuples and a 101-file frozen subject are retained.
+This is an ideal SE2 plant with explicit initialization/geometry/footprint and
+50 ms production TF lead, not Webots-native truth, a mux/actuator experiment or
+a full mission. It does not clear the original boundary failure.
+
+A further single 15-second **native Webots + real Node DDS/timer** profile
+reveals a distinct simulator plant defect. There are 387 exact source-epoch
+map/DR pairs: maxima 16.206979 mm / 35.548900 mm, while DR yaw matches native
+truth to 1.8e-15 rad. At source 2.520 s, 13.137979 mm is already between raw
+wheel pose and native chassis pose; another 3.069 mm separates raw wheel from
+Node DR. Actual N1 wheel intervals agree internally to 4.42e-14, so changing
+velocity averaging again is not the answer. Native chassis moves immediately
+at firmware velocity 0.215 m/s, while the real wheel controller ramps at its
+unchanged 1 m/s² acceleration limit (first measured velocity 0.0186 m/s).
+Shared command input was feeding two different plants. A measured-native-wheel
+chassis repair is under focused validation; its stop semantics must truthfully
+report measured residual braking, preserving controller limits/timeouts rather
+than pretending the body stops instantly. No new pose tolerance is introduced.
+
+The native run uses known stationary truth for explicit seed, zero TF lead,
+no COG stimulus and the unchanged approved Node/core binaries. It completes in
+31.028 seconds, with verified cleanup. Three pre-Node observer startup failures
+are retained. Serialized CDR is reserialization of received decoded messages,
+not original DDS wire bytes; metadata repr is not decoded publisher identity.
+Fixed hold/phase replays identify compatible value families, not actual cached
+wheel-message IDs or proof of callback ownership. Full results and exact source
+windows are in `native-source-component/`; no second baseline profile was run.
+
+Current `main` and `dev` were fetched again: fe77a097 and 5d3845b1 remain unchanged.
+No corresponding upstream repair replaces these changes. The original capture
+still lacks accepted graph-node identities, optimizer/anchor revision history
+and calibrated physical acquisition timing. Its retrospective seed-error
+associations remain hypotheses. The next discriminating native simulator
+capture must retain each accepted source identity/target state and the exact
+anchor/TF tuple consumed by FTC together with native truth/applied motion;
+another uninstrumented E2E success cannot establish that attribution.
+
+Evidence under `~/.cache/pr950-resume-20261029/`: `source-core/`,
+`source-core-yaw/`, `source-core-query/`, `yaw-epoch/`, `yaw-repair/`,
+`helper-reviewed/`, `source-epoch-node/`, `bootstrap-counterfactual-red/`,
+`clear-counterfactual-red/`, `final-review-counterfactual-red/`,
+`cog-flip-delay/`, `cusp-source-component/`, `native-source-component/` and
+independent review reports. All earlier outputs remain preserved.
+
+### Independently useful repair families
+
+This is an assessment only; no extraction is performed and #950 stays Draft.
+Each extracted result would need its own target-base focused validation rather
+than inheriting a whole-branch CI result.
+
+| Family | Dependency and tested limit |
+| --- | --- |
+| Wheel N1 interval configuration | Standalone simulator configuration plus real-upstream odometry/YAML test; retained Webots A/B. It does not repair source timestamps or the boundary event. |
+| Native simulator observation identity | Keep applied-state producer, synthetic IMU/GNSS/status consumers and launch/test wiring together. 54 regressions and exact live component pairs; actuation dynamics remain separate. |
+| Motion-input finite/order protection | The input guards and actual Node fixture can stand independently of GNSS retiming; 13 original Node cases passed. Later source-history consumers depend on these guards. |
+| Rebase information and absolute gyro bias | Two independently causal Core repairs, with their tests/lifecycle pieces; source acquisition retention depends on information-preserving typed rebase. 52 focused cases passed before source integration. |
+| GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
+| FTC fixture startup and replay CI setup | Independently tested fixture/TF-probe and build-infrastructure repairs. They do not authorize motion or fix the original event. |
+
+Dock dispatch, fresh detour acquisition and planner bevel repairs remain prior
+standalone candidates with their existing software evidence. Keep each package's
+source, dependencies and test wiring together; planner geometry changes still
+need their own behavior review. None inherits physical containment or a completed
+mission from these component results.
+
 ## Graph information and preintegration repairs (2026-10-29)
 
 The active investigation continues independently of CI. The original boundary

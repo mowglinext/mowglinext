@@ -67,6 +67,9 @@ bool FusionGraphNode::DockingApproachActive() const
 
 void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
 {
+  ObserveMotionClockEpoch();
+  if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000u)
+    return;
   // Suppress the COG yaw factor during the dock approach. The COG is the
   // physical travel direction; in the slow reverse approach it is noise-
   // dominated and jolts the fused yaw, which the graceful controller chases
@@ -92,94 +95,158 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
     return;
   }
   const double yaw = YawFromQuat(msg->orientation);
+  if (!std::isfinite(yaw))
+    return;
   // Soft σ (floored): COG only TRENDS the gyro heading, never snaps to a noisy
   // per-fix course. covariance[8] is the message yaw variance.
   const double sigma = CogEffectiveSigma(msg->orientation_covariance[8], cog_min_sigma_rad_);
-  graph_->QueueYaw(yaw, sigma);
-  seed_yaw_ = yaw;
-
-  // 180° yaw-flip recovery. The COG yaw is the physical travel direction
-  // (wheels + GPS displacement, only emitted on a solid straight baseline),
-  // so a sustained ~180° disagreement with the fused estimate means the
-  // estimate is flipped — and the non-robust COG unary above can fail to pull
-  // it back across the half-turn. After N consecutive flipped samples, snap
-  // the yaw onto the COG (keep the estimated xy) so the robot stops believing
-  // it faces backwards.
-  if (cog_flip_recovery_enabled_ && graph_->IsInitialized())
+  const auto source_ns = rclcpp::Time(msg->header.stamp).nanoseconds();
+  const bool queued = graph_->QueueYawAtEpoch(yaw,
+                                              sigma,
+                                              /*robust=*/false,
+                                              source_ns,
+                                              static_cast<uint64_t>(source_ns) << 1,
+                                              integration_epoch_);
+  if (graph_->IsInitialized() && !queued)
   {
-    // Only trust the COG for a flip recovery when it is GPS-grounded
-    // (RTK-Fixed fresh). With cog_to_imu's straight-baseline gate the COGs
-    // that arrive are already clean; requiring RTK-Fixed avoids snapping the
-    // yaw onto a Float-era COG.
-    const bool rtk_fresh = !cog_flip_require_rtk_ || RtkFixedReceiptIsFresh(cog_rtk_max_age_s_);
-    auto snap = graph_->LatestSnapshot();
-    if (!rtk_fresh || !snap)
+    if (const auto oldest = graph_->OldestRetainedSourceNs(integration_epoch_);
+        oldest && source_ns < *oldest)
     {
+      ++cog_flip_source_rejects_;
       cog_flip_count_ = 0;
       cog_flip_prev_yaw_.reset();
     }
-    else
+    return;
+  }
+  seed_yaw_ = yaw;
+  seed_yaw_source_ns_ = rclcpp::Time(msg->header.stamp).nanoseconds();
+  seed_yaw_source_epoch_ = integration_epoch_;
+
+  if (cog_flip_recovery_enabled_ && graph_->IsInitialized() && queued)
+  {
+    if (pending_cog_flip_checks_.size() >= kPendingCogFlipCapacity)
     {
-      std::optional<double> seconds_since_last_recovery;
-      if (last_flip_recovery_stamp_)
-      {
-        seconds_since_last_recovery = (this->now() - *last_flip_recovery_stamp_).seconds();
-      }
-      const CogFlipRecoveryCfg cfg{cog_flip_threshold_rad_,
-                                   cog_flip_consistency_rad_,
-                                   cog_flip_consecutive_n_,
-                                   cog_flip_min_interval_s_};
-      // See cog_flip_recovery.hpp for the pure decision function + unit
-      // tests (test_cog_flip_recovery.cpp).
-      const CogFlipRecoveryResult flip = CogFlipRecoveryFeed(yaw,
-                                                             snap->pose.theta(),
-                                                             seconds_since_last_recovery,
-                                                             cfg,
-                                                             cog_flip_count_,
-                                                             cog_flip_prev_yaw_);
-      if (flip.should_anchor)
-      {
-        last_flip_recovery_stamp_ = this->now();
-        const gtsam::Pose2 anchor(snap->pose.x(), snap->pose.y(), yaw);
-        // Tight yaw (1°) — we are deliberately overriding the flipped
-        // estimate with the physics-grounded COG heading. Keep xy at its
-        // current σ-equivalent (5 mm) since only yaw is wrong.
-        graph_->ForceAnchor(snap->node_index, anchor, 0.005, 1.0 * M_PI / 180.0);
-        // Re-datum dead reckoning to the re-anchored node. dr_* carries the
-        // OLD (flipped) heading lineage; without this reset the map→odom
-        // recompute cancels against the stale dr_yaw_ and odom→base keeps
-        // publishing the flipped heading — the two TF legs disagree by 180°
-        // the moment the robot moves. SeedFromDockPose does the same after
-        // a large yaw change (the RTK-override path doesn't, because it only
-        // shifts xy and dr_yaw_ stays valid there).
-        {
-          // tf_state_mu_: dr_* / anchor are read concurrently by
-          // TfBroadcastLoop.
-          std::lock_guard<std::mutex> lock(tf_state_mu_);
-          dr_x_ = 0.0;
-          dr_y_ = 0.0;
-          dr_yaw_ = 0.0;
-          ResetLidarTiming();
-          t_map_odom_anchor_valid_ = false;
-        }
-        ++cog_flip_recoveries_;
-        RCLCPP_WARN(get_logger(),
-                    "fusion_graph: 180° yaw-flip recovery — estimate %.1f° vs "
-                    "COG %.1f° (Δ=%.0f°); re-anchored yaw to COG on node %lu.",
-                    snap->pose.theta() * 180.0 / M_PI,
-                    yaw * 180.0 / M_PI,
-                    flip.err_rad * 180.0 / M_PI,
-                    static_cast<unsigned long>(snap->node_index));
-      }
+      ++cog_flip_source_rejects_;
+      cog_flip_count_ = 0;
+      cog_flip_prev_yaw_.reset();
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           5000,
+                           "fusion_graph: COG recovery source queue full; check rejected");
     }
+    else
+      pending_cog_flip_checks_.push_back({integration_epoch_, source_ns, yaw});
+    ProcessPendingCogFlipChecks();
   }
 
   TrySeedInitialPose();
 }
 
+void FusionGraphNode::ProcessPendingCogFlipChecks()
+{
+  const auto reset_debounce = [this]()
+  {
+    cog_flip_count_ = 0;
+    cog_flip_prev_yaw_.reset();
+  };
+  if (!cog_flip_recovery_enabled_ || !graph_->IsInitialized())
+  {
+    pending_cog_flip_checks_.clear();
+    reset_debounce();
+    return;
+  }
+  // Inspect every check that was pending on entry. A newer source awaiting
+  // IMU support must not block mature checks before their own yaw factors run.
+  for (size_t remaining = pending_cog_flip_checks_.size(); remaining > 0; --remaining)
+  {
+    const auto check = pending_cog_flip_checks_.front();
+    pending_cog_flip_checks_.pop_front();
+    if (check.epoch != integration_epoch_ || !integrated_source_ns_)
+    {
+      ++cog_flip_source_rejects_;
+      reset_debounce();
+      continue;
+    }
+    if (check.source_ns > *integrated_source_ns_)
+    {
+      pending_cog_flip_checks_.push_back(check);
+      continue;  // Its unary stays queued; other mature checks still run now.
+    }
+    const bool rtk_fresh = !cog_flip_require_rtk_ || RtkFixedReceiptIsFresh(cog_rtk_max_age_s_);
+    const auto snap = graph_->LatestSnapshot();
+    if (!rtk_fresh || !snap || snap->source_epoch != integration_epoch_ ||
+        (gate_cog_during_docking_ && DockingApproachActive()) ||
+        !CogShouldApply(true,
+                        RtkFixedReceiptIsFresh(cog_rtk_max_age_s_),
+                        wheel_vx_,
+                        cog_require_rtk_,
+                        cog_min_speed_mps_))
+    {
+      reset_debounce();
+      continue;
+    }
+    std::optional<gtsam::Pose2> at_source;
+    if (check.source_ns <= snap->source_stamp_ns)
+      at_source = graph_->EstimatePoseAtSource(check.epoch, check.source_ns);
+    else
+    {
+      const auto dr_at_snapshot = DrPoseAtSource(check.epoch, snap->source_stamp_ns);
+      const auto dr_at_source = DrPoseAtSource(check.epoch, check.source_ns);
+      if (dr_at_snapshot && dr_at_source)
+        at_source = snap->pose.compose(dr_at_snapshot->inverse()).compose(*dr_at_source);
+    }
+    if (!at_source)
+    {
+      ++cog_flip_source_rejects_;
+      reset_debounce();
+      continue;  // Retired/uncovered source checks can never target the current head.
+    }
+    std::optional<double> seconds_since_last_recovery;
+    if (last_flip_recovery_stamp_)
+      seconds_since_last_recovery = (this->now() - *last_flip_recovery_stamp_).seconds();
+    const CogFlipRecoveryCfg cfg{cog_flip_threshold_rad_,
+                                 cog_flip_consistency_rad_,
+                                 cog_flip_consecutive_n_,
+                                 cog_flip_min_interval_s_};
+    const auto flip = CogFlipRecoveryFeed(check.yaw,
+                                          at_source->theta(),
+                                          seconds_since_last_recovery,
+                                          cfg,
+                                          cog_flip_count_,
+                                          cog_flip_prev_yaw_);
+    if (!flip.should_anchor)
+      continue;
+    const double difference = check.yaw - at_source->theta();
+    const double offset = std::atan2(std::sin(difference), std::cos(difference));
+    const gtsam::Pose2 anchor(snap->pose.x(), snap->pose.y(), snap->pose.theta() + offset);
+    // Apply the proven acquisition-time heading offset to the latest state,
+    // retaining all intervening integrated rotation and the existing prior.
+    graph_->ForceAnchor(snap->node_index, anchor, 0.005, 1.0 * M_PI / 180.0);
+    last_flip_recovery_stamp_ = this->now();
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      RecenterDrLocked(/*reset_heading=*/true);
+      t_map_odom_anchor_valid_ = false;
+    }
+    ++cog_flip_recoveries_;
+    RCLCPP_WARN(get_logger(),
+                "fusion_graph: 180° yaw-flip recovery — source estimate %.1f° vs COG %.1f° "
+                "(Δ=%.0f°); applied heading offset on node %lu.",
+                at_source->theta() * 180.0 / M_PI,
+                check.yaw * 180.0 / M_PI,
+                flip.err_rad * 180.0 / M_PI,
+                static_cast<unsigned long>(snap->node_index));
+  }
+}
+
 void FusionGraphNode::OnMagYaw(sensor_msgs::msg::Imu::ConstSharedPtr msg)
 {
+  ObserveMotionClockEpoch();
+  if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000u)
+    return;
   const double yaw = YawFromQuat(msg->orientation);
+  if (!std::isfinite(yaw))
+    return;
   double var = msg->orientation_covariance[8];
   if (!std::isfinite(var) || var <= 0.0)
     var = 0.1 * 0.1;
@@ -187,9 +254,22 @@ void FusionGraphNode::OnMagYaw(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   // even after tilt compensation. Always robustify so when COG is also
   // active the optimizer pulls toward COG and treats mag as a soft
   // anchor that prevents free drift, not as a precise observation.
-  graph_->QueueYaw(yaw, std::sqrt(var), /*robust=*/true);
-  if (!seed_yaw_)
+  const auto source_ns = rclcpp::Time(msg->header.stamp).nanoseconds();
+  const bool queued = graph_->QueueYawAtEpoch(yaw,
+                                              std::sqrt(var),
+                                              /*robust=*/true,
+                                              source_ns,
+                                              (static_cast<uint64_t>(source_ns) << 1) | 1U,
+                                              integration_epoch_);
+  if (graph_->IsInitialized() && !queued)
+    return;
+  if (!seed_yaw_ || !seed_yaw_source_ns_ || seed_yaw_source_epoch_ != integration_epoch_ ||
+      !DrPoseAtSource(integration_epoch_, *seed_yaw_source_ns_))
+  {
     seed_yaw_ = yaw;
+    seed_yaw_source_ns_ = rclcpp::Time(msg->header.stamp).nanoseconds();
+    seed_yaw_source_epoch_ = integration_epoch_;
+  }
   TrySeedInitialPose();
 }
 
@@ -272,7 +352,11 @@ void FusionGraphNode::OnSetPose(geometry_msgs::msg::PoseWithCovarianceStamped::C
   // use the message as the bootstrap seed: build X_0 here.
   if (!graph_->IsInitialized())
   {
-    graph_->Initialize(pose, this->now().seconds());
+    if (!integrated_source_ns_ || !InitializeAtSource(pose, *integrated_source_ns_))
+    {
+      pending_explicit_seed_ = pose;
+      return;
+    }
     // Initialize updates latest_ but the map→odom anchor was either
     // never captured or based on a now-stale init pose; force OnTimer
     // to recompute it against the new snap.pose + current dr_*.
@@ -407,7 +491,7 @@ void FusionGraphNode::OnHardwareStatus(mowgli_interfaces::msg::Status::ConstShar
   if (pre_init_seed_pending || session_seed_pending || (dock_event && gps_seen_once_))
   {
     SeedFromDockPose();
-    dock_seeded_this_session_ = true;
+    dock_seeded_this_session_ = graph_->IsInitialized();
   }
   // Undock transition: clear the one-shot so the next dock arrival
   // can re-seed via the rising-edge path.

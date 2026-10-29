@@ -45,6 +45,7 @@ add_library(fusion_graph_core
   src/factors.cpp
   src/graph_manager.cpp
   src/graph_manager_node.cpp
+  src/graph_manager_motion.cpp
   src/graph_manager_rebase.cpp
   src/graph_manager_persistence.cpp
   src/checkpoint_file.cpp
@@ -221,6 +222,30 @@ if(BUILD_TESTING)
     test/test_graph_window.cpp
   )
   target_link_libraries(test_graph_window fusion_graph_core)
+
+  ament_add_gtest(test_source_epoch_query
+    test/test_source_epoch_query.cpp
+    TIMEOUT 60
+  )
+  target_link_libraries(test_source_epoch_query fusion_graph_core)
+
+  ament_add_gtest(test_source_epoch
+    test/test_source_epoch.cpp
+    TIMEOUT 60
+  )
+  target_link_libraries(test_source_epoch fusion_graph_core)
+
+  ament_add_gtest(test_motion_source_history
+    test/test_motion_source_history.cpp
+    TIMEOUT 60
+  )
+  target_link_libraries(test_motion_source_history fusion_graph_core)
+
+  ament_add_gtest(test_conditional_process_bridge
+    test/test_conditional_process_bridge.cpp
+    TIMEOUT 60
+  )
+  target_link_libraries(test_conditional_process_bridge fusion_graph_core)
 
   ament_add_gtest(test_rebase_information
     test/test_rebase_information.cpp

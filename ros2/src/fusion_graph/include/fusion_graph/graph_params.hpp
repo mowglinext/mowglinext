@@ -127,19 +127,12 @@ struct GraphParams
   // loss for our well-constrained Pose2 graph.
   int isam2_relinearize_skip = 5;
 
-  // Sliding-window cap. RebaseISAM2 keeps only the most recent
-  // `max_graph_nodes` pose nodes; everything older is dropped (its
-  // accumulated constraints were already collapsed into the kept
-  // nodes' priors during the rebase, so dropping them is loss-free
-  // for the current estimate). Without this the graph grew unbounded
-  // — observed 48,000+ nodes after a few sessions, which (a) blew up
-  // iSAM2 marginal-covariance cost and pushed cov_xx to ~1 m, and (b)
-  // kept stale far-away nodes anchoring the trajectory shape. 0 means
-  // "no cap" (legacy behaviour: rebase keeps everything). At the 25 Hz
-  // node rate, 3000 nodes ≈ 2 min of trajectory, which comfortably
-  // covers a single mowing pass. Combined with isam2_rebase_every_nodes the
-  // live graph oscillates in [max_graph_nodes, max_graph_nodes +
-  // rebase_interval].
+  // Sliding-window Pose2 budget, counting cadence and acquisition states.
+  // Rebase retires whole old edges into a separator at the snapshot's
+  // linearization point and preserves the nonlinear live tail. The removed
+  // history retains the usual fixed-lag approximation after large corrections.
+  // Zero disables the cap. The 30-second maintenance check also triggers on
+  // source-state budget overrun; growth between checks is not a hard cap.
   uint64_t max_graph_nodes = 3000;
 
   // Stationary node-creation throttle. If the per-tick accumulator

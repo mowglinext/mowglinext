@@ -35,16 +35,10 @@ void FusionGraphNode::ObserveMotionClockEpoch()
     // first invalidates both baselines/rate caches, so an IMU-first restart
     // cannot integrate the previous epoch's wheel velocity. The next callback
     // in this epoch must preserve any newly received wheel observation.
-    last_wheel_stamp_.reset();
-    last_imu_stamp_.reset();
-    wheel_vx_ = 0.0;
-    wheel_wz_ = 0.0;
-    {
-      std::lock_guard<std::mutex> lock(tf_state_mu_);
-      dr_last_gz_ = 0.0;
-      dr_last_vx_eff_ = 0.0;
-    }
-    ResetLidarTiming();
+    ResetMotionSourceEpoch();
+    // This cooldown uses ROS time. A timestamp in the old clock epoch cannot
+    // rate-limit genuine recovery after a rewind. Same-clock resets keep it.
+    last_flip_recovery_stamp_.reset();
   }
   last_motion_callback_clock_ = now;
 }
@@ -64,6 +58,13 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
   // (tight vy covariance) — we mirror that by only integrating vx.
   wheel_vx_ = msg->twist.twist.linear.x;
   wheel_wz_ = msg->twist.twist.angular.z;
+  wheel_vy_ = msg->twist.twist.linear.y;
+  held_wheel_source_ = {{MotionSourceKind::Wheel, ++wheel_source_sequence_, stamp.nanoseconds()},
+                        {last_wheel_stamp_ ? last_wheel_stamp_->nanoseconds() : stamp.nanoseconds(),
+                         stamp.nanoseconds()},
+                        wheel_vx_,
+                        wheel_vy_,
+                        wheel_wz_};
   if (last_wheel_stamp_)
   {
     double dt = (stamp - *last_wheel_stamp_).seconds();
@@ -103,32 +104,9 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
     double dt = (stamp - *last_imu_stamp_).seconds();
     if (dt > 0.0 && dt < 1.0)
     {
-      graph_->AddGyroDelta(msg->angular_velocity.z, dt);
-      // Local-frame dead reckoning. Yaw integrates the bias-corrected
-      // gyro_z (hardware_bridge subtracts the dock-time IMU bias);
-      // position uses the latest wheel vx with the just-updated yaw.
-      // Sub-cm/sub-° accuracy per IMU sample at typical 91 Hz / 0.5 m/s.
+      if (!RecordConsumedImu(stamp, msg->angular_velocity.z, dt))
+        return;
       const double gz = msg->angular_velocity.z;
-      // Slip veto (see header): if the wheels claim a yaw rate the
-      // gyro doesn't see, the chassis is being skated, not driven —
-      // its forward velocity is phantom. Drop the translation for
-      // this sample; yaw still integrates from the gyro, which is the
-      // honest source during a slipping pivot. Without this the odom
-      // frame accumulates the fictitious forward motion unbounded.
-      const bool dr_slip =
-          DrSlipVetoed(wheel_wz_, gz, dr_slip_wheel_min_rad_per_s_, dr_slip_gyro_max_rad_per_s_);
-      const double vx_eff = dr_slip ? 0.0 : wheel_vx_;
-      {
-        // tf_state_mu_: dr_* is read concurrently by TfBroadcastLoop.
-        std::lock_guard<std::mutex> lock(tf_state_mu_);
-        dr_yaw_ += gz * dt;
-        dr_x_ += vx_eff * std::cos(dr_yaw_) * dt;
-        dr_y_ += vx_eff * std::sin(dr_yaw_) * dt;
-        // Cache the velocities that produced this step so the TF broadcast can
-        // honestly forward-propagate the pose by tf_publish_lead_s_.
-        dr_last_gz_ = gz;
-        dr_last_vx_eff_ = vx_eff;
-      }
       // Accumulate |Δθ| since the last accepted GPS for the wrong-fix
       // gate. A stationary pivot sweeps the GPS antenna by lever_arm
       // × Δθ in the map frame; without this term the gate sees a
@@ -141,21 +119,37 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       abs_dtheta_since_last_gps_sample_rad_ += std::abs(gz) * dt;
     }
   }
-  const auto odom =
-      lidar_anchor_odom_.Advance(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)));
-  lidar_scan_history_.Push(stamp.seconds(),
-                           gtsam::Pose2(odom.translation().x(),
-                                        odom.translation().y(),
-                                        odom.so2().log()));
+  if (last_imu_stamp_ && (stamp - *last_imu_stamp_).seconds() >= 1.0)
+  {
+    // A missing interval is not motion support. Start a new consumer epoch;
+    // this sample establishes only its integration baseline.
+    ResetMotionSourceEpoch();
+  }
+  if (!last_imu_stamp_)
+  {
+    graph_->SetConsumedMotionBaseline(integration_epoch_, stamp.nanoseconds());
+    dr_source_baseline_ns_ = stamp.nanoseconds();
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      dr_source_baseline_pose_ = ContinuousDrPoseLocked();
+    }
+    // Establish the raw gauge for the LiDAR delta integrator. This is a
+    // baseline, not a publishable consumed interval.
+    const auto odom =
+        lidar_anchor_odom_.Advance(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)));
+    lidar_scan_history_.Push(stamp.seconds(),
+                             gtsam::Pose2(odom.translation().x(),
+                                          odom.translation().y(),
+                                          odom.so2().log()));
+  }
   last_imu_stamp_ = stamp;
-  // Feed the high-rate extrapolator (item #15) too. Safe even when
-  // fast_pose_timer_ is null — the extrapolator is just a value
-  // cache.
-  pose_extrap_.OnImuGyro(stamp.seconds(), msg->angular_velocity.z);
 }
 
 void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
 {
+  ObserveMotionClockEpoch();
+  if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000u)
+    return;
   if (msg->status.status < sensor_msgs::msg::NavSatStatus::STATUS_FIX)
     return;
 
@@ -358,21 +352,12 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // detectable wheel discrepancy).
   const bool rtk_fixed = msg->status.status == sensor_msgs::msg::NavSatStatus::STATUS_GBAS_FIX;
 
-  // Resolve the receipt provenance against the live graph window BEFORE any
-  // current-RTK latch is committed below. This is the same lookup the factor
-  // path performs further down (measurement_stamp is this same stamp); it is
-  // hoisted here because the docking and on-dock branches return early, and an
-  // observation too old to still have a live graph node must not refresh their
-  // freshness latches either. Stateless per sample — it cannot latch GPS out.
-  if (graph_->IsInitialized() && !graph_->FindNodeAtOrBefore(receipt_stamp.seconds()))
-  {
-    RCLCPP_WARN_THROTTLE(
-        get_logger(),
-        *get_clock(),
-        5000,
-        "fusion_graph: no live graph node at/before GNSS receipt time; sample dropped");
+  // All early-return docking branches also latch current GNSS evidence.
+  // Reject retired source epochs before any latch, while allowing an accepted
+  // fix ahead of the consumed boundary to wait for its motion bracket.
+  if (const auto oldest = graph_->OldestRetainedSourceNs(integration_epoch_);
+      oldest && receipt_stamp.nanoseconds() < *oldest)
     return;
-  }
 
   const auto commit_current_gnss_evidence = [this, rtk_fixed, receipt_stamp]()
   {
@@ -564,45 +549,16 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                          wheel_dist_since_gps_value_changed_m_);
     return;
   }
-  // GNSS bridges preserve the receiver measurement epoch in header.stamp,
-  // which may precede callback delivery by hundreds of milliseconds or more.
-  // Resolve that epoch only after the quality/docking gates above so the
-  // factor constrains the state that was actually observed instead of the
-  // state at callback-delivery time.
-  const rclcpp::Time measurement_stamp(msg->header.stamp, get_clock()->get_clock_type());
-  std::optional<uint64_t> measurement_node;
-  if (graph_->IsInitialized() && measurement_stamp.nanoseconds() != 0)
-  {
-    constexpr double kFutureStampToleranceS = 0.5;
-    const double future_offset_s = (measurement_stamp - this->now()).seconds();
-    if (future_offset_s > kFutureStampToleranceS)
-    {
-      RCLCPP_WARN_THROTTLE(get_logger(),
-                           *get_clock(),
-                           5000,
-                           "fusion_graph: GNSS stamp is %.3f s in the future; sample dropped",
-                           future_offset_s);
-      return;
-    }
-    measurement_node = graph_->FindNodeAtOrBefore(measurement_stamp.seconds());
-    if (!measurement_node)
-    {
-      RCLCPP_WARN_THROTTLE(get_logger(),
-                           *get_clock(),
-                           5000,
-                           "fusion_graph: no live graph node at/before GNSS epoch; sample dropped");
-      return;
-    }
-  }
-
-  if (!graph_->QueueGnss(mx, my, sigma, /*robust=*/true, measurement_node))
-  {
-    RCLCPP_WARN_THROTTLE(get_logger(),
-                         *get_clock(),
-                         5000,
-                         "fusion_graph: GNSS epoch node left the live graph; sample dropped");
+  // Preserve the accepted header epoch. A fix newer than the consumed IMU
+  // boundary stays pending in the core until its trajectory is bracketed.
+  if (!graph_->QueueGnssAtEpoch(mx,
+                                my,
+                                sigma,
+                                /*robust=*/true,
+                                receipt_stamp.nanoseconds(),
+                                static_cast<uint64_t>(receipt_stamp.nanoseconds()),
+                                integration_epoch_))
     return;
-  }
   commit_current_gnss_evidence();
   // Latch whether the most recent seed came from RTK-Fixed so the next
   // graph initialization can use a tight prior matching that quality.
@@ -613,6 +569,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   if (!docked_gps_override)
   {
     seed_xy_ = gtsam::Vector2(mx, my);
+    seed_source_ns_ = receipt_stamp.nanoseconds();
     seed_xy_rtk_fixed_ = rtk_fixed;
   }
 

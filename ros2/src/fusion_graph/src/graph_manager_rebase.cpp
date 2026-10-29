@@ -43,6 +43,7 @@ void GraphManager::RebaseISAM2()
     gtsam::NonlinearFactorGraph graph_snapshot;
     int relinearize_skip = 1;
     uint64_t cutoff_index = 0;
+    std::map<gtsam::Key, uint64_t> acquisition_owners;
     {
       std::lock_guard<std::mutex> lock(mu_);
       if (rebase_in_progress_)
@@ -52,9 +53,30 @@ void GraphManager::RebaseISAM2()
         return;
       estimate_snapshot = current_estimate_;
       graph_snapshot = isam_.getFactorsUnsafe();
+      acquisition_owners = AcquisitionOwnersLocked();
       relinearize_skip = params_.isam2_relinearize_skip;
-      if (params_.max_graph_nodes > 0 && next_index_ > params_.max_graph_nodes)
-        cutoff_index = next_index_ - params_.max_graph_nodes;
+      if (params_.max_graph_nodes > 0)
+      {
+        // Acquisition poses consume the same finite Pose2 budget. Retire
+        // complete old edges (including their acquisitions), preserving the
+        // boundary cadence pose as the separator. A latest edge larger than
+        // the budget retires its interior history while keeping its endpoint.
+        std::map<uint64_t, size_t> acquisition_cost;
+        size_t pose_count = 0;
+        for (const auto& [key, owner] : acquisition_owners)
+          ++acquisition_cost[owner];
+        for (const auto& value : estimate_snapshot)
+          if (gtsam::Symbol(value.key).chr() == 'x' || acquisition_owners.count(value.key))
+            ++pose_count;
+        cutoff_index = 0;
+        while (pose_count > params_.max_graph_nodes && cutoff_index + 1 < next_index_)
+        {
+          if (estimate_snapshot.exists(PoseKey(cutoff_index)))
+            --pose_count;
+          ++cutoff_index;
+          pose_count -= acquisition_cost[cutoff_index];
+        }
+      }
       generation = ++rebase_generation_;
       rebase_in_progress_ = true;
       rebase_pending_factors_.resize(0);
@@ -74,7 +96,11 @@ void GraphManager::RebaseISAM2()
       const gtsam::Symbol symbol(kv.key);
       // Bias is the per-pose preintegration state. Other namespaces keep their
       // original type and factors; never assume every variable is a Pose2.
-      if ((symbol.chr() == 'x' || symbol.chr() == 'b') && symbol.index() < cutoff_index)
+      const auto owner = acquisition_owners.find(kv.key);
+      const bool old_acquisition =
+          owner != acquisition_owners.end() && owner->second <= cutoff_index;
+      if (((symbol.chr() == 'x' || symbol.chr() == 'b') && symbol.index() < cutoff_index) ||
+          old_acquisition)
       {
         removed_keys.push_back(kv.key);
         removed.insert(kv.key);
@@ -141,6 +167,7 @@ void GraphManager::RebaseISAM2()
     if (!rebase_pending_factors_.empty() || !rebase_pending_values_.empty())
       fresh.update(rebase_pending_factors_, rebase_pending_values_);
     isam_ = std::move(fresh);
+    PruneSourceStateLocked();
     estimate_dirty_ = true;
     rebase_pending_factors_.resize(0);
     rebase_pending_values_.clear();
@@ -285,6 +312,7 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
     return;
   }
   isam_ = std::move(fresh);
+  InvalidateSourceBridgesLocked();
   estimate_dirty_ = true;
 
   // Cancel any in-flight async rebase (D2 race, field 2026-06-10 dock walk).

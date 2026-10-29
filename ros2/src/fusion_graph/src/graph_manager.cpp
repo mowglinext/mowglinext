@@ -106,10 +106,10 @@ void GraphManager::AddWheelTwist(double vx, double vy, double wz, double dt)
   accum_.dt_total += dt;
 }
 
-void GraphManager::AddGyroDelta(double wz, double dt)
+double GraphManager::AddGyroDelta(double wz, double dt)
 {
   if (dt <= 0.0)
-    return;
+    return 0.0;
   std::lock_guard<std::mutex> lock(mu_);
 
   // Track the running maximum on the RAW sample for the multi-source
@@ -161,6 +161,7 @@ void GraphManager::AddGyroDelta(double wz, double dt)
     const double sigma = params_.gyro_noise_density_rad_per_s;
     accum_.gyro_preint_variance += dt * dt * sigma * sigma;
   }
+  return bias_correction;
 }
 
 bool GraphManager::QueueGnss(
@@ -206,6 +207,13 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
                               std::optional<double> sigma_xy_override)
 {
   std::lock_guard<std::mutex> lock(mu_);
+  InitializeLocked(X0, timestamp, sigma_xy_override);
+}
+
+void GraphManager::InitializeLocked(const gtsam::Pose2& X0,
+                                    double timestamp,
+                                    std::optional<double> sigma_xy_override)
+{
   if (initialized_)
     return;
 
@@ -280,7 +288,8 @@ uint64_t GraphManager::LiveNodeCount() const
   uint64_t n = 0;
   for (const auto& kv : current_estimate_)
   {
-    if (gtsam::Symbol(kv.key).chr() == 'x')
+    const char kind = gtsam::Symbol(kv.key).chr();
+    if (kind == 'x' || kind == 'a')
       ++n;
   }
   return n;
@@ -357,6 +366,7 @@ void GraphManager::ForceAnchor(uint64_t node_index,
   if (latest_ && latest_->node_index == node_index)
   {
     latest_->pose = PoseAt(node_index);
+    ++latest_->revision;
   }
 }
 

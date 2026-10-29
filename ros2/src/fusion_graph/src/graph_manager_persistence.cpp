@@ -131,6 +131,7 @@ void GraphManager::ResetLocked()
   initialized_ = false;
 
   accum_.Reset();
+  motion_.reset();
   // A new graph's absolute bias prior starts at zero. A reused instance must
   // not seed pose-only restored states from the previous graph/session bias.
   current_bias_estimate_ = 0.0;

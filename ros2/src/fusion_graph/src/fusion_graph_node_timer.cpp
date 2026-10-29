@@ -24,7 +24,21 @@ namespace fusion_graph
 
 void FusionGraphNode::OnTimer()
 {
+  ObserveMotionClockEpoch();
   const double now_s = this->now().seconds();
+  // Mature accepted COG recovery checks before their queued yaw factors can
+  // change the source estimate used by the recovery decision.
+  ProcessPendingCogFlipChecks();
+  TrySeedInitialPose();
+  // Clear or Core failure can consume the original dock status edge. Retry
+  // only while the live status still says charging; no dock pose is queued
+  // into the unrelated explicit-pose path across an undock.
+  if (!graph_->IsInitialized() && integrated_source_ns_ && last_is_charging_valid_ &&
+      last_is_charging_ && gps_seen_once_)
+  {
+    SeedFromDockPose();
+    dock_seeded_this_session_ = graph_->IsInitialized();
+  }
 
   // Boot dock-seed fallback. The normal init paths are (a) is_charging →
   // SeedFromDockPose, and (b) GPS xy + COG/mag yaw → TrySeedInitialPose.
@@ -53,7 +67,7 @@ void FusionGraphNode::OnTimer()
                   "(is_charging/COG unavailable) — seeding from dock pose",
                   now_s - boot_stamp_s_);
       SeedFromDockPose();
-      dock_seed_fallback_done_ = true;
+      dock_seed_fallback_done_ = graph_->IsInitialized();
     }
   }
 
@@ -109,18 +123,27 @@ void FusionGraphNode::OnTimer()
   if (UsableGnssReceiptIsFresh(lidar_anchor_engage_age_s_) || !last_is_charging_valid_ ||
       last_is_charging_)
     graph_->ClearLidarObservations();
-  auto out = graph_->Tick(now_s);
+  const auto out = integrated_source_ns_ && !motion_source_fault_
+                       ? graph_->TickSource(this->now().nanoseconds(),
+                                            *integrated_source_ns_,
+                                            integration_epoch_)
+                       : std::nullopt;
   if (out)
   {
-    if (last_imu_stamp_)
-      lidar_scan_history_.AddNode(last_imu_stamp_->seconds(), out->node_index, odom_now);
+    // GNSS-only revisions also return an output, but cannot re-label current
+    // scan odometry as the older graph snapshot's source state.
+    if (out->source_epoch == integration_epoch_ && out->source_stamp_ns == integrated_source_ns_ &&
+        out->node_index != last_lidar_source_node_index_)
+    {
+      lidar_scan_history_.AddNode(static_cast<double>(out->source_stamp_ns) * 1e-9,
+                                  out->node_index,
+                                  odom_now);
+      last_lidar_source_node_index_ = out->node_index;
+    }
   }
 
-  // Local-frame DR (odom→base_footprint TF + /odometry/filtered) is
-  // always published — it's independent of graph state. Nav2's local
-  // costmap and FTCController need this TF before any GPS fix arrives,
-  // and before the graph has been initialized.
-  PublishLocalOdom();
+  // Local odometry also streams before graph initialization once an actual
+  // source interval has been consumed; a timer supplies no new pose epoch.
 
   // Map-frame outputs (map→odom TF + /odometry/filtered_map). Two
   // jobs here:
@@ -136,40 +159,47 @@ void FusionGraphNode::OnTimer()
   //      windows.
   if (auto snap = graph_->LatestSnapshot())
   {
-    if (!t_map_odom_anchor_valid_ || snap->node_index != last_anchored_node_index_)
+    if (!t_map_odom_anchor_valid_ || snap->node_index != last_anchored_node_index_ ||
+        snap->revision != last_anchored_revision_)
     {
-      // tf_state_mu_: the anchor VALUE and valid flag are read together by
-      // TfBroadcastLoop; write the {value, valid=true} pair atomically so the
-      // loop never composes a stale anchor with fresh dr_*. dr_* is read here
-      // too (it is concurrently integrated by OnImu).
+      const auto dr_at_node = DrPoseAtSource(snap->source_epoch, snap->source_stamp_ns);
       std::lock_guard<std::mutex> lock(tf_state_mu_);
-      const gtsam::Pose2 dr_at_node(dr_x_, dr_y_, dr_yaw_);
-      t_map_odom_anchor_ = snap->pose.compose(dr_at_node.inverse());
-      last_anchored_node_index_ = snap->node_index;
-      t_map_odom_anchor_valid_ = true;
+      if (dr_at_node)
+      {
+        t_map_odom_anchor_ = snap->pose.compose(dr_at_node->inverse());
+        last_anchored_node_index_ = snap->node_index;
+        last_anchored_revision_ = snap->revision;
+        anchored_dr_source_ns_ = snap->source_stamp_ns;
+        t_map_odom_anchor_valid_ = true;
+      }
+      else
+        t_map_odom_anchor_valid_ = false;
     }
-    // Odom re-base: once the robot has driven odom_rebase_dist_m from the odom
-    // origin, reset the odom POSITION onto the robot (heading kept) and shift
-    // the anchor so map→base is unchanged. This keeps the lever arm |dr| small
-    // so graph-yaw jitter can't rotate it into large map→odom position steps.
-    // OnImu (same executor thread) can't interrupt; the lock guards the TF
-    // reader thread. force_pub_resync_ makes the slew snap the published anchor
-    // to the new (coordinated) target so map→base stays continuous.
+    // Bound internal numeric coordinates while the published odom gauge and
+    // source snapshots remain continuous.
     if (odom_rebase_dist_m_ > 0.0 && t_map_odom_anchor_valid_)
     {
       std::lock_guard<std::mutex> lock(tf_state_mu_);
       if (std::hypot(dr_x_, dr_y_) > odom_rebase_dist_m_)
       {
-        const gtsam::Pose2 map_base =
-            t_map_odom_anchor_.compose(gtsam::Pose2(dr_x_, dr_y_, dr_yaw_));
-        dr_x_ = 0.0;
-        dr_y_ = 0.0;
-        lidar_anchor_odom_.RebaseRaw(Sophus::SE2d(dr_yaw_, Eigen::Vector2d::Zero()));
-        t_map_odom_anchor_ = map_base.compose(gtsam::Pose2(0.0, 0.0, dr_yaw_).inverse());
-        force_pub_resync_.store(true, std::memory_order_release);
+        RecenterDrLocked(/*reset_heading=*/false);
       }
     }
+    PublishLocalOdom();
     PublishOutputs(*snap);
+  }
+  else
+  {
+    // Core can fail closed internally without a new integration epoch. Clear
+    // every map-pose cache when that removes its snapshot.
+    pose_extrap_ = PoseExtrapolator();
+    fast_pose_source_ns_.reset();
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      t_map_odom_anchor_valid_ = false;
+      t_map_odom_pub_shared_valid_ = false;
+    }
+    PublishLocalOdom();
   }
 }
 
