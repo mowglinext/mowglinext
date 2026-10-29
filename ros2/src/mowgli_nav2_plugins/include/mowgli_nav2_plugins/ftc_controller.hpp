@@ -148,12 +148,12 @@ private:
   /// Seconds elapsed since the current state was entered.
   double time_in_current_state() const;
 
-  PlannerState update_planner_state();
+  PlannerState update_planner_state(double goal_distance_error);
 
   // ── Control point / path tracking ─────────────────────────────────────────
 
   /// Advance the virtual carrot and project it into base_link.
-  void update_control_point(double dt);
+  void update_control_point(double dt, bool approach_goal);
 
   /// Compute the look-ahead distance along the remaining straight path.
   double distanceLookahead() const;
@@ -222,7 +222,9 @@ private:
 
   // ── PID state ────────────────────────────────────────────────────────────
 
-  void calculate_velocity_commands(double dt, geometry_msgs::msg::TwistStamped& cmd_vel);
+  void calculate_velocity_commands(double dt,
+                                   geometry_msgs::msg::TwistStamped& cmd_vel,
+                                   bool approach_goal = false);
 
   double lat_error_{0.0};
   double lon_error_{0.0};

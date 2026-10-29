@@ -1275,10 +1275,11 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   geometry_msgs::msg::TwistStamped cmd_vel;
   cmd_vel.header.frame_id = "base_link";
   cmd_vel.header.stamp = clock_->now();
+  bool strict_goal_approach = false;
 
   // Apply the hard linear cap at every output boundary, after movement floors
   // and including reverse escape / turn-fallback commands that bypass the PID.
-  const auto bounded_command = [this, &cmd_vel, &velocity]()
+  const auto bounded_command = [this, &cmd_vel, &velocity, &strict_goal_approach]()
   {
     const double max_speed = maxLinearSpeed();
     cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
@@ -1310,8 +1311,8 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       cmd_vel.twist.linear.x = std::max(cmd_vel.twist.linear.x, -budget_speed);
     }
     if (config_.enable_obstacle_deviation && config_.use_offset_lattice &&
-        current_state_ == PlannerState::FOLLOWING && cmd_vel.twist.linear.x > 0 &&
-        !reverse_escape_active_ && !turnFallbackReversing() &&
+        (current_state_ == PlannerState::FOLLOWING || strict_goal_approach) &&
+        cmd_vel.twist.linear.x > 0 && !reverse_escape_active_ && !turnFallbackReversing() &&
         forwardCommandSweepBlocked(cmd_vel.twist, velocity))
     {
       waitOrThrowForObstacle("proposed forward chassis/response sweep intersects lethal cells");
@@ -1399,11 +1400,31 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   // threshold on any real coverage path. The coverage goal checker could
   // therefore never report success during FOLLOWING; strips only terminated
   // via FTC's own state-machine timeout/abort. The stateless SimpleGoalChecker
-  // (transit FollowPath) is unaffected either way. (void) the unused arg.
-  (void)goal_checker;
+  // (transit FollowPath) is unaffected either way. A stricter checker also needs
+  // FTC to approach its final carrot instead of parking at our normal
+  // coverage tolerance. Never enlarge the configured approach distance.
+  double goal_distance_error = config_.max_goal_distance_error;
+  if (goal_checker != nullptr)
+  {
+    geometry_msgs::msg::Pose pose_tolerance;
+    geometry_msgs::msg::Twist velocity_tolerance;
+    double path_length_tolerance;
+    if (goal_checker->getTolerances(pose_tolerance, velocity_tolerance, path_length_tolerance) &&
+        std::isfinite(pose_tolerance.position.x) && pose_tolerance.position.x > 0.0 &&
+        std::isfinite(pose_tolerance.position.y) && pose_tolerance.position.y > 0.0)
+    {
+      // The API reports the independent X/Y maxima. The smaller one respects
+      // both axes when a checker supplies unequal tolerances.
+      goal_distance_error =
+          std::min(goal_distance_error,
+                   std::min(pose_tolerance.position.x, pose_tolerance.position.y));
+    }
+  }
 
   // 1. Advance the carrot; compute lat/lon/angle errors in base_link.
-  update_control_point(safe_dt);
+  strict_goal_approach = current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH &&
+                         goal_distance_error < config_.max_goal_distance_error;
+  update_control_point(safe_dt, strict_goal_approach);
 
   RCLCPP_INFO_THROTTLE(logger_,
                        *clock_,
@@ -1422,7 +1443,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
                        local_control_point_.translation().y());
 
   // 2. Update the state machine.
-  const PlannerState new_state = update_planner_state();
+  const PlannerState new_state = update_planner_state(goal_distance_error);
   const bool entering_pivot =
       new_state == PlannerState::PIVOT && current_state_ != PlannerState::PIVOT;
   if (new_state != current_state_)
@@ -1444,6 +1465,10 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     state_entered_time_ = clock_->now();
     current_state_ = new_state;
   }
+  // Keep the existing goal-approach state's timeout, including when a strict
+  // goal is unreachable or has been overshot with forward_only enabled.
+  strict_goal_approach = current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH &&
+                         goal_distance_error < config_.max_goal_distance_error;
 
   // A running turn fallback ends once FOLLOWING has reached its rejoin pose,
   // and is bounded in time (throws past turn_fallback_timeout_s).
@@ -1599,7 +1624,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   }
 
   // 4. PID velocity computation.
-  calculate_velocity_commands(safe_dt, cmd_vel);
+  calculate_velocity_commands(safe_dt, cmd_vel, strict_goal_approach);
 
   if (is_crashed_)
   {
@@ -1617,7 +1642,7 @@ double FTCController::time_in_current_state() const
   return (clock_->now() - state_entered_time_).seconds();
 }
 
-FTCController::PlannerState FTCController::update_planner_state()
+FTCController::PlannerState FTCController::update_planner_state(double goal_distance_error)
 {
   switch (current_state_)
   {
@@ -1758,7 +1783,12 @@ FTCController::PlannerState FTCController::update_planner_state()
 
     case PlannerState::WAITING_FOR_GOAL_APPROACH:
     {
-      const double distance = local_control_point_.translation().norm();
+      const auto& position = local_control_point_.translation();
+      // A requested XY tolerance excludes the base_link height above a z=0
+      // path. Keep the historical 3D parking comparison for ordinary coverage.
+      const double distance = goal_distance_error < config_.max_goal_distance_error
+                                  ? std::hypot(position.x(), position.y())
+                                  : position.norm();
       if (time_in_current_state() > config_.goal_timeout)
       {
         // Approach timed out — robot didn't reach within max_goal_distance_error.
@@ -1772,11 +1802,11 @@ FTCController::PlannerState FTCController::update_planner_state()
                     "FTCController: timeout in WAITING_FOR_GOAL_APPROACH (dist=%.3fm > "
                     "max_goal_distance_error=%.3fm); aborting strip.",
                     distance,
-                    config_.max_goal_distance_error);
+                    goal_distance_error);
         is_crashed_ = true;
         return PlannerState::FINISHED;
       }
-      if (distance < config_.max_goal_distance_error)
+      if (distance < goal_distance_error)
       {
         RCLCPP_INFO(logger_, "FTCController: goal position reached, entering POST_ROTATE.");
         return PlannerState::POST_ROTATE;
@@ -1851,7 +1881,7 @@ double FTCController::distanceLookahead() const
   return lookahead_distance;
 }
 
-void FTCController::update_control_point(double dt)
+void FTCController::update_control_point(double dt, bool approach_goal)
 {
   switch (current_state_)
   {
@@ -1862,6 +1892,10 @@ void FTCController::update_control_point(double dt)
       tf2::fromMsg(global_plan_[current_index_].pose, current_control_point_);
       break;
 
+    case PlannerState::WAITING_FOR_GOAL_APPROACH:
+      if (!approach_goal)
+        break;  // Preserve the normal coverage parking behavior.
+      [[fallthrough]];
     case PlannerState::FOLLOWING:
     {
       // Rebuild the carrot from the plan (SLERP between the two bounding poses).
@@ -2052,10 +2086,6 @@ void FTCController::update_control_point(double dt)
       tf2::fromMsg(global_plan_.back().pose, current_control_point_);
       break;
 
-    case PlannerState::WAITING_FOR_GOAL_APPROACH:
-      // Carrot stays at the last interpolated position.
-      break;
-
     case PlannerState::FINISHED:
       break;
   }
@@ -2132,7 +2162,8 @@ void FTCController::update_control_point(double dt)
 // ── PID velocity computation ──────────────────────────────────────────────────
 
 void FTCController::calculate_velocity_commands(double dt,
-                                                geometry_msgs::msg::TwistStamped& cmd_vel)
+                                                geometry_msgs::msg::TwistStamped& cmd_vel,
+                                                bool approach_goal)
 {
   if (current_state_ == PlannerState::FINISHED || is_crashed_)
   {
@@ -2178,9 +2209,9 @@ void FTCController::calculate_velocity_commands(double dt,
     d_angle = d_angle_filt_;
   }
 
-  // ── Linear velocity (FOLLOWING only) ──────────────────────────────────────
+  // ── Linear velocity (path following or a requested precise goal approach) ─
 
-  if (current_state_ == PlannerState::FOLLOWING)
+  if (current_state_ == PlannerState::FOLLOWING || approach_goal)
   {
     double lin_speed =
         lon_error_ * config_.kp_lon + i_lon_error_ * config_.ki_lon + d_lon * config_.kd_lon;
@@ -2241,7 +2272,7 @@ void FTCController::calculate_velocity_commands(double dt,
   // the next cycle's derivative computation.
   const double lat_error_for_steering = (cmd_vel.twist.linear.x < 0.0) ? -lat_error_ : lat_error_;
 
-  if (current_state_ == PlannerState::FOLLOWING)
+  if (current_state_ == PlannerState::FOLLOWING || approach_goal)
   {
     // Combined angle + lateral PID during path following. NOTE: the heading
     // gain here is kp_ang_following, NOT kp_ang. On a straight swath the full

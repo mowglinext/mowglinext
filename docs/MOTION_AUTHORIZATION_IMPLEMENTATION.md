@@ -5,6 +5,32 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Precise terminal approach prerequisite (2026-10-29)
+
+A separate actual-controller regression shows FTC ignores the supplied goal
+checker's tighter XY tolerance. On a 0.80 m straight path with a 0.03 m checker,
+the old controller stops at x=0.675 m. It cannot execute a precise terminal
+coverage visit merely by selecting a stricter goal checker.
+
+The repair uses a stack-local minimum of the existing configured cap and a
+valid tighter requested XY tolerance. Existing final-carrot transition into
+WAITING and its goal timeout remain intact; only that stricter terminal approach
+can keep driving there. The same flag preserves forward body/response checks.
+Null, default, looser, unavailable and invalid checker inputs retain the old
+command sequence. No shipped tolerance, reverse limit or controller state budget
+is enlarged. All 66 speed-limit/controller cases pass, including the preserved
+stalled/overshot timeout, transient-obstacle restart and the shipped 0.093 m
+base-link height with nonzero heading. Strict XY completion uses planar distance;
+legacy/default completion retains its old behavior. Another 44 progress, 28
+authorization and seven focused fallback cases pass with the final FTC overlay. Independent final review and additional guard evidence
+are retained in `ftc-goal-tolerance/` and `ftc-goal-tolerance-repair/`.
+
+A coverage-equivalent terminal spur plus the earlier LSR shortcut covers every
+captured required line. Existing 0.30 m reverse geometry reaches a certified
+full-disc pivot, but the route still needs explicit bounded phase execution and
+certified rejoin/unit budget. These prerequisites and ideal-controller tests do
+not establish native braking, a complete corner or physical containment.
+
 ## Automatic dock seed provenance (2026-10-29)
 
 A newly reproduced production path invents a dock PosePrior after six seconds

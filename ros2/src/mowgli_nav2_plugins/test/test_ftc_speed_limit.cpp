@@ -76,6 +76,10 @@ struct FTCSpeedLimitTestAccess
   {
     return controller.is_stalled_;
   }
+  static bool ApproachingGoal(const FTCController& controller)
+  {
+    return controller.current_state_ == FTCController::PlannerState::WAITING_FOR_GOAL_APPROACH;
+  }
 };
 }  // namespace mowgli_nav2_plugins
 
@@ -210,7 +214,7 @@ protected:
     ASSERT_TRUE(node_->set_parameter({std::string(kPlugin) + "." + key, value}).successful);
   }
 
-  double Tick(double elapsed_s = 0.10)
+  double Tick(double elapsed_s = 0.10, nav2_core::GoalChecker* goal_checker = nullptr)
   {
     time_ns_ += static_cast<int64_t>(std::llround(elapsed_s * 1e9));
     SetTime();
@@ -218,7 +222,7 @@ protected:
     geometry_msgs::msg::Twist measured;
     measured.linear.x = measured_speed_;
     return controller_
-        .computeVelocityCommands(Pose{}, measured, nullptr, nav_msgs::msg::Path{}, Pose{})
+        .computeVelocityCommands(Pose{}, measured, goal_checker, nav_msgs::msg::Path{}, Pose{})
         .twist.linear.x;
   }
 
@@ -254,14 +258,21 @@ protected:
               RCL_RET_OK);
   }
 
-  void SetTransform(const std::string& parent, const std::string& child, double x, bool fixed)
+  void SetTransform(const std::string& parent,
+                    const std::string& child,
+                    double x,
+                    bool fixed,
+                    double z = 0.0,
+                    double yaw = 0.0)
   {
     geometry_msgs::msg::TransformStamped transform;
     transform.header.stamp = rclcpp::Time(time_ns_, RCL_ROS_TIME);
     transform.header.frame_id = parent;
     transform.child_frame_id = child;
     transform.transform.translation.x = x;
-    transform.transform.rotation.w = 1.0;
+    transform.transform.translation.z = z;
+    transform.transform.rotation.z = std::sin(yaw / 2.0);
+    transform.transform.rotation.w = std::cos(yaw / 2.0);
     ASSERT_TRUE(tf_->setTransform(transform, "test", fixed));
   }
 
@@ -274,6 +285,214 @@ protected:
   double robot_x_{0.0};
   double measured_speed_{0.20};
 };
+
+class RequestedGoalTolerance : public nav2_core::GoalChecker
+{
+public:
+  double x{0.03};
+  double y{0.03};
+  bool available{true};
+  unsigned int queries{0};
+
+  void initialize(const nav2::LifecycleNode::WeakPtr&,
+                  const std::string&,
+                  const std::shared_ptr<nav2_costmap_2d::Costmap2DROS>) override
+  {
+  }
+  void reset() override
+  {
+  }
+  bool isGoalReached(const geometry_msgs::msg::Pose&,
+                     const geometry_msgs::msg::Pose&,
+                     const geometry_msgs::msg::Twist&,
+                     const nav_msgs::msg::Path&) override
+  {
+    return false;
+  }
+  bool isGoalXYReached(const geometry_msgs::msg::Pose&,
+                       const geometry_msgs::msg::Pose&,
+                       const geometry_msgs::msg::Twist&,
+                       const nav_msgs::msg::Path&) override
+  {
+    return false;
+  }
+  bool getTolerances(geometry_msgs::msg::Pose& pose, geometry_msgs::msg::Twist&, double&) override
+  {
+    ++queries;
+    pose.position.x = x;
+    pose.position.y = y;
+    return available;
+  }
+};
+
+class FtcRequestedGoalTolerance : public FtcSpeedLimit
+{
+protected:
+  void WaitAtFinalCarrot(double robot_x, RequestedGoalTolerance& checker)
+  {
+    robot_x_ = robot_x;
+    measured_speed_ = 0.0;
+    nav_msgs::msg::Path plan;
+    plan.header.frame_id = "map";
+    for (int i = 0; i <= 16; ++i)
+      plan.poses.push_back(MakePose(0.05 * i));
+    controller_.newPathReceived(plan);
+    for (int i = 0; i < 100; ++i)
+    {
+      Tick(0.10, &checker);
+      if (mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ApproachingGoal(controller_))
+        return;
+    }
+    FAIL() << "Controller did not enter its timed terminal approach";
+  }
+
+  double FollowShortPath(nav2_core::GoalChecker* goal_checker,
+                         std::vector<double>* commands = nullptr,
+                         double heading = 0.0)
+  {
+    robot_x_ = 0.0;
+    measured_speed_ = 0.0;
+    nav_msgs::msg::Path plan;
+    plan.header.frame_id = "map";
+    for (int i = 0; i <= 16; ++i)
+      plan.poses.push_back(
+          MakePose(0.05 * i * std::cos(heading), 0.05 * i * std::sin(heading), heading));
+    controller_.newPathReceived(plan);
+    for (int i = 0; i < 100; ++i)
+    {
+      const double command = Tick(0.10, goal_checker);
+      if (commands != nullptr)
+        commands->push_back(command);
+      EXPECT_GE(command, 0.0);
+      EXPECT_LE(command, 0.20);
+      robot_x_ += command * 0.10;
+      measured_speed_ = command;
+    }
+    return robot_x_;
+  }
+};
+
+TEST_F(FtcRequestedGoalTolerance, StricterCheckerKeepsFollowingUntilRequestedPosition)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  RequestedGoalTolerance checker;
+  const double reached = FollowShortPath(&checker);
+  EXPECT_GT(checker.queries, 0u);
+  EXPECT_GE(reached, 0.80 - checker.x);
+  EXPECT_LE(reached, 0.80 + 0.02);
+  EXPECT_DOUBLE_EQ(Tick(0.10, &checker), 0.0);
+}
+
+TEST_F(FtcRequestedGoalTolerance, StrictXYApproachIgnoresBaseLinkHeightAtRotatedHeading)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  SetParameter("goal_timeout", 1.0);
+  // Shipped Webots base_footprint->base_link height: the path remains at z=0.
+  SetTransform("base_footprint", "base_link", 0.0, true, 0.093);
+  constexpr double heading = 0.60;
+  SetTransform("map", "odom", 0.0, true, 0.0, heading);
+  RequestedGoalTolerance checker;
+  double reached = 0.0;
+  // The actual outgoing commands move odom's X axis; the map-frame path is
+  // rotated with that axis. A 3D terminal comparison can never finish and
+  // eventually throws at goal_timeout even once the XY position is reached.
+  ASSERT_NO_THROW(reached = FollowShortPath(&checker, nullptr, heading));
+  EXPECT_GE(reached, 0.80 - checker.x);
+  EXPECT_LE(reached, 0.80 + 0.02);
+  EXPECT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ApproachingGoal(controller_));
+  EXPECT_DOUBLE_EQ(Tick(0.10, &checker), 0.0);
+}
+
+TEST_F(FtcRequestedGoalTolerance, DefaultLooseAndInvalidCheckersKeepConfiguredApproach)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  std::vector<double> baseline_commands;
+  const double baseline = FollowShortPath(nullptr, &baseline_commands);
+  EXPECT_LT(baseline, 0.80 - 0.03);
+  RequestedGoalTolerance checker;
+  for (const auto& xy :
+       std::vector<std::pair<double, double>>{{0.50, 0.50},
+                                              {0.80, 0.80},
+                                              {std::numeric_limits<double>::quiet_NaN(), 0.03},
+                                              {0.03, std::numeric_limits<double>::infinity()},
+                                              {-1.0, 0.03},
+                                              {0.03, 0.0}})
+  {
+    checker.x = xy.first;
+    checker.y = xy.second;
+    std::vector<double> commands;
+    EXPECT_DOUBLE_EQ(FollowShortPath(&checker, &commands), baseline);
+    EXPECT_EQ(commands, baseline_commands);
+  }
+  checker.x = checker.y = 0.03;
+  checker.available = false;
+  std::vector<double> commands;
+  EXPECT_DOUBLE_EQ(FollowShortPath(&checker, &commands), baseline);
+  EXPECT_EQ(commands, baseline_commands);
+}
+
+class FtcUnreachableRequestedGoal : public FtcRequestedGoalTolerance,
+                                    public ::testing::WithParamInterface<double>
+{
+};
+
+TEST_P(FtcUnreachableRequestedGoal, StrictApproachRetainsExistingTimeout)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  SetParameter("goal_timeout", 0.30);
+  robot_x_ = GetParam();
+  measured_speed_ = 0.0;
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  for (int i = 0; i <= 16; ++i)
+    plan.poses.push_back(MakePose(0.05 * i));
+  controller_.newPathReceived(plan);
+  RequestedGoalTolerance checker;
+  bool aborted = false;
+  double peak = 0.0;
+  for (int i = 0; i < 100; ++i)
+  {
+    try
+    {
+      // Hold the actual robot pose: one case cannot reach the precise goal;
+      // the other has overshot it and forward_only forbids backing up.
+      const double command = Tick(0.10, &checker);
+      EXPECT_GE(command, 0.0);
+      peak = std::max(peak, command);
+    }
+    catch (const nav2_core::ControllerException&)
+    {
+      aborted = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(aborted) << "Strict terminal approach must retain FTC's goal_timeout";
+  if (robot_x_ > 0.80)
+    EXPECT_DOUBLE_EQ(peak, 0.0);
+  else
+    EXPECT_GT(peak, 0.0);
+}
+
+INSTANTIATE_TEST_SUITE_P(StalledOrOvershot,
+                         FtcUnreachableRequestedGoal,
+                         ::testing::Values(0.74, 0.84));
+
+TEST_F(FtcRequestedGoalTolerance, StrictApproachResumesAfterTransientObstacleClears)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  SetParameter("enable_obstacle_deviation", true);
+  SetParameter("obstacle_reverse_enabled", false);
+  RequestedGoalTolerance checker;
+  ASSERT_NO_FATAL_FAILURE(WaitAtFinalCarrot(0.74, checker));
+  Wall(1.20);
+  EXPECT_DOUBLE_EQ(Tick(0.10, &checker), 0.0);
+  EXPECT_DOUBLE_EQ(Tick(0.10, &checker), 0.0);
+  costmap_->getCostmap()->resetMap(0, 0, 400, 400);
+  double resumed = 0.0;
+  for (int i = 0; i < 25; ++i)
+    resumed = std::max(resumed, Tick(0.10, &checker));
+  EXPECT_GT(resumed, 0.0) << "A cleared hold must restore terminal approach motion";
+}
 
 class FtcPercentageLimit : public FtcSpeedLimit, public ::testing::WithParamInterface<double>
 {
