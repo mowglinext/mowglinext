@@ -5,6 +5,86 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Consumer evaluation epoch (2026-10-29)
+
+Two focused production-consumer probes expose a different time error from an
+incorrectly stamped producer. With supported x=0.76 at ROS time 100 and forecast
+x=0.78 at 100.1, the actual goal checker accepts a 0.80 m goal with 0.03 m
+tolerance while the supported current error is still 0.04 m. FTC can likewise
+park using the future pose. Separately, a response sweep starting at forecast
+x=0.72 rejects a request that fits from supported x=0.70: at 0.15 m/s the unchanged
+0.6 s response reaches x=0.79 inside the x=0.80 boundary.
+
+Consumers now select a supported TF epoch no later than the captured ROS time.
+Past latest samples retain their existing behavior. Each nonzero FTC output
+selects one complete map/base-chain timestamp for both final guards; STOP needs
+no TF. Terminal decisions use the supported epoch, and a valid supplied checker
+can continue the bounded approach only outside the effective distance cap.
+The existing default/null/looser 100-command controls remain identical. Geometry,
+coast bounds, speed settings, timeout and the existing strict-XY versus legacy-3D
+distance rule remain unchanged.
+
+The goal checker also recovers the supplied goal's original transform epoch
+from the fourth argument's local-plan header, rather than substituting a topic
+endpoint or comparing an old odom goal with a new map correction. The installed
+Nav2 1.5.2 binary and matching upstream FeasiblePathHandler source confirm that
+header provenance. XY-only checks continue to ignore only yaw. Missing required
+TF or goal metadata holds completion without advancing progress. If no full
+plan has ever identified its fixed frame and TF is future-dated, the old
+no-plan proximity fallback cannot be evaluated safely: its watchdog reports the
+missing context, and completion waits for the plan. The past-latest fallback
+and recovery on plan arrival are tested.
+
+Eight actual-FTC cases are RED on the previous object; **77 FTC cases pass** with
+the final repair. The separate old-checker probe has two RED cases and a passing
+past-latest control. Fresh coherent builds pass **14 goal-checker and 44
+end-approach cases**, including moving anchors, asynchronous TF edges, missing
+metadata/brackets and the missing-plan lifecycle. All 28 authorization cases
+also pass after recompiling their fixture against the changed private API.
+Seven existing focused turn-fallback cases pass with the same final FTC object.
+Independent review pins all six changed C++ files. Evidence is retained in
+`ftc-consumer-epoch/`, `terminal-reachability-review/` and
+`consumer-epoch-independent-review/`.
+
+The common selected time is not atomic TF revision identity: same-stamp edge
+updates can still interleave. These tests do not establish actuator response,
+downstream command ownership or complete mowing. The earlier native precise
+stop, before this consumer repair, passes at 11.081 mm final physical error with
+90 exact-rest epochs; it is not a native RED for this newly isolated software
+defect. Its exact baseline and failed instrument starts remain in
+`native-precise-stop/`.
+
+One new controlled native cusp comparison with the final FTC passes the
+unchanged y>=0.80 reference condition through actual coast and rest: minimum
+y=0.8587798966 m, first zero applied twist at 3.30 s after denial at 3.14 s.
+All 14 comparison inputs and the prior pre-anchor Node/Core/support artifacts
+remain unchanged; this isolates the new FTC against that older component
+baseline. The fixture uses a private captured-cursor seed and null goal checker.
+It records 27 actual caller inputs, 26 returns and one geometry denial, without
+new internal predicate logging. It is containment regression evidence, not a
+complete current-stack run or corner traversal. The single attempt and exact
+provenance are in `native-cusp-consumer-epoch/`.
+
+## Constructive corner frontier (2026-10-29)
+
+One fixed external route now preserves the entire original continuous 9 cm
+required-line coverage, passes continuous body sweeps and required full-disc
+pivots, and includes a proof for the unchanged 3 cm terminal endpoint band.
+It replaces the response-rejected LSR with a fixed right arc and a secondary
+visit to retained point 187. Sampled 0.15 m/s response checks pass through the
+earliest covering endpoint. The shipped slow speed is 0.16 m/s; an actual
+shipped-parameter command/measurement sequence is still required. A previously
+permitted command can enter a STOP-only endpoint, so a denied nonzero endpoint
+request alone is not an impossibility proof.
+
+The construction contains two bounded retreats. Existing runtime phase,
+retry/cancellation and cumulative-budget semantics have not been established
+for that construction; individual 0.30 m bounds do not establish the combined
+operation. No production planner/phase change or extraction is shipped from
+this probe. Exact geometry, command samples, analytic endpoint derivation and
+limits are in `cusp-critical-terminal-topology/`; the earlier coverage/body
+GREEN but response-RED LSR remains in `cusp-composite-original-spur/`.
+
 ## Precise terminal approach prerequisite (2026-10-29)
 
 A separate actual-controller regression shows FTC ignores the supplied goal
@@ -462,6 +542,9 @@ than inheriting a whole-branch CI result.
 | COG producer source context | Producer/history/tests form a separate repair from GraphManager. Its pre-change producer, timing/math helpers and package CMake match latest fetched dev byte-for-byte; direct base application is plausible, but any extracted PR still needs its own validation. Retain delayed heading, completed-pivot latch and clock-epoch cases together. |
 | Wheel travel-noise accounting | Four small production edits plus source/legacy/clipped-bootstrap regressions; all three new cases RED on the old Core, 15 selected targets / 156 cases GREEN after coherent ABI rebuild. Can be separated with its bootstrap source integration dependency retained; it does not repair true-flip lineage. |
 | Post-anchor snapshot | Small Core/API repair with two baseline RED cases, 11 rebase and 48 Node GREEN cases; depends on existing source/revision semantics. It does not repair the invalid true-flip prior. |
+| Automatic dock seed provenance | Keep the shared charging guard, callback ordering and timer fallback together. Two old-Node RED cases, two charging controls and 52 actual-Node GREEN cases support the narrow repair; general bad authoritative seed recovery remains separate. |
+| FTC requested goal and consumer epoch | Keep the requested-distance approach, current terminal decision, goal transform provenance and final guard epoch repairs together. They depend on the selected Nav2 1.5.2 path-handler contract and existing geometry/response interfaces; extraction needs its own target-base validation. Software RED/GREEN does not establish a complete corner. |
+| Public coverage header includes | Include-only dependency reduction has unchanged coverage/replay evidence; it is separable from the unshipped constructive-corner prototype. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
 | FTC forward geometry response | Depends on existing raw geometry authorization and the assumed coast contract; shared envelope plus gate/tests belong together. 106 controller and 27 critic cases, plus one native containment GREEN. It stops before the cusp; route completion and calibrated physical containment remain unqualified. |
 | FTC fixture startup and replay CI setup | Independently tested fixture/TF-probe and build-infrastructure repairs. They do not authorize motion or fix the original event. |

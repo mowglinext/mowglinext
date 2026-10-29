@@ -31,6 +31,7 @@
 #include <rclcpp/rclcpp.hpp>
 
 #include "motion_fixture.hpp"
+#include "mowgli_interfaces/motion_authorization.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
 #include <gtest/gtest.h>
 #include <rcl/time.h>
@@ -70,6 +71,48 @@ struct FTCSpeedLimitTestAccess
     // Inject only the stored prior ROS instant. The node clock and the fresh
     // TF stamps stay unchanged, isolating one shortened accounting interval.
     controller.last_time_ = controller.clock_->now() - rclcpp::Duration::from_seconds(ros_dt);
+  }
+
+  static rclcpp::Time SupportedEpoch(FTCController& controller)
+  {
+    return controller.supportedPoseEpoch();
+  }
+  static bool ForwardBlockedAt(FTCController& controller, double speed, const rclcpp::Time& epoch)
+  {
+    geometry_msgs::msg::Twist command;
+    command.linear.x = speed;
+    return controller.forwardCommandSweepBlocked(command, command, &epoch);
+  }
+  static void AuthorizeForwardAt(FTCController& controller, double speed, const rclcpp::Time& epoch)
+  {
+    geometry_msgs::msg::Twist command;
+    command.linear.x = speed;
+    controller.authorizeCommand(command, command, &epoch);
+  }
+  static bool ForwardBlocked(FTCController& controller, double speed)
+  {
+    geometry_msgs::msg::Twist command;
+    command.linear.x = speed;
+    return controller.forwardCommandSweepBlocked(command, command);
+  }
+  static void EnterPostRotate(FTCController& controller)
+  {
+    controller.current_state_ = FTCController::PlannerState::POST_ROTATE;
+  }
+  static bool Finished(const FTCController& controller)
+  {
+    return controller.current_state_ == FTCController::PlannerState::FINISHED;
+  }
+  static void AuthorizeForward(FTCController& controller, double speed)
+  {
+    geometry_msgs::msg::Twist command;
+    command.linear.x = speed;
+    controller.authorizeCommand(command, command);
+  }
+  static void SetAuthorization(FTCController& controller,
+                               const visualization_msgs::msg::MarkerArray& markers)
+  {
+    controller.authorization_ = mowgli_interfaces::motion::Snapshot::parse(markers);
   }
 
   static bool Stalled(const FTCController& controller)
@@ -381,6 +424,194 @@ TEST_F(FtcRequestedGoalTolerance, StricterCheckerKeepsFollowingUntilRequestedPos
   EXPECT_GE(reached, 0.80 - checker.x);
   EXPECT_LE(reached, 0.80 + 0.02);
   EXPECT_DOUBLE_EQ(Tick(0.10, &checker), 0.0);
+}
+
+TEST_F(FtcRequestedGoalTolerance, FutureTransformDoesNotParkBeforeCurrentPosition)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  RequestedGoalTolerance checker;
+  WaitAtFinalCarrot(0.76, checker);
+  // Cache an extrapolated pose 100 ms ahead while the actual clock remains here.
+  time_ns_ += 100000000;
+  SetTransform("odom", "base_footprint", 0.78, false);
+  time_ns_ -= 100000000;
+  EXPECT_GT(Tick(0.0, &checker), 0.0);
+  EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ApproachingGoal(controller_));
+}
+
+TEST_F(FtcSpeedLimit, ForwardAuthorizationStartsAtCurrentNotFuturePose)
+{
+  visualization_msgs::msg::MarkerArray markers;
+  visualization_msgs::msg::Marker marker;
+  marker.header.frame_id = "map";
+  marker.ns = "area";
+  marker.text = "mowing";
+  marker.type = marker.LINE_STRIP;
+  marker.action = marker.ADD;
+  marker.pose.orientation.w = 1.0;
+  for (const auto& xy :
+       std::vector<std::pair<double, double>>{{-5, -5}, {0.80, -5}, {0.80, 5}, {-5, 5}})
+  {
+    geometry_msgs::msg::Point p;
+    p.x = xy.first;
+    p.y = xy.second;
+    marker.points.push_back(p);
+  }
+  markers.markers.push_back(marker);
+  mowgli_nav2_plugins::FTCSpeedLimitTestAccess::SetAuthorization(controller_, markers);
+  SetTransform("odom", "base_footprint", 0.70, false);
+  time_ns_ += 100000000;
+  SetTransform("odom", "base_footprint", 0.72, false);
+  time_ns_ -= 100000000;
+  EXPECT_NO_THROW(
+      mowgli_nav2_plugins::FTCSpeedLimitTestAccess::AuthorizeForward(controller_, 0.15));
+}
+
+TEST_F(FtcSpeedLimit, ForwardLethalSweepStartsAtCurrentNotFuturePose)
+{
+  Wall(1.36);
+  SetTransform("odom", "base_footprint", 0.70, false);
+  time_ns_ += 100000000;
+  SetTransform("odom", "base_footprint", 0.73, false);
+  time_ns_ -= 100000000;
+  EXPECT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ForwardBlocked(controller_, 0.15));
+}
+
+TEST_F(FtcSpeedLimit, BothForwardGuardsReuseSelectedEpochAfterNewTransform)
+{
+  visualization_msgs::msg::MarkerArray markers;
+  visualization_msgs::msg::Marker marker;
+  marker.header.frame_id = "map";
+  marker.ns = "area";
+  marker.text = "mowing";
+  marker.type = marker.LINE_STRIP;
+  marker.action = marker.ADD;
+  marker.pose.orientation.w = 1.0;
+  for (const auto& xy :
+       std::vector<std::pair<double, double>>{{-5, -5}, {0.80, -5}, {0.80, 5}, {-5, 5}})
+  {
+    geometry_msgs::msg::Point p;
+    p.x = xy.first;
+    p.y = xy.second;
+    marker.points.push_back(p);
+  }
+  markers.markers.push_back(marker);
+  mowgli_nav2_plugins::FTCSpeedLimitTestAccess::SetAuthorization(controller_, markers);
+  Wall(1.36);
+  SetTransform("odom", "base_footprint", 0.70, false);
+  const auto epoch = mowgli_nav2_plugins::FTCSpeedLimitTestAccess::SupportedEpoch(controller_);
+  time_ns_ += 100000000;
+  SetTime();
+  SetTransform("odom", "base_footprint", 0.73, false);
+  EXPECT_FALSE(
+      mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ForwardBlockedAt(controller_, 0.15, epoch));
+  EXPECT_NO_THROW(
+      mowgli_nav2_plugins::FTCSpeedLimitTestAccess::AuthorizeForwardAt(controller_, 0.15, epoch));
+}
+
+TEST_F(FtcSpeedLimit, MissingCurrentBracketRejectsBothForwardGuards)
+{
+  tf_->clear();
+  SetTransform("map", "odom", 0.0, true);
+  SetTransform("base_footprint", "base_link", 0.0, true);
+  time_ns_ += 100000000;
+  SetTransform("odom", "base_footprint", 0.72, false);
+  time_ns_ -= 100000000;
+  EXPECT_THROW(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::AuthorizeForward(controller_, 0.15),
+               nav2_core::ControllerException);
+  EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ForwardBlocked(controller_, 0.15));
+}
+
+TEST_F(FtcSpeedLimit, StaleSupportedPoseRejectsBothForwardGuards)
+{
+  time_ns_ += 1000000000;
+  SetTime();
+  EXPECT_THROW(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::AuthorizeForward(controller_, 0.15),
+               nav2_core::ControllerException);
+  EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ForwardBlocked(controller_, 0.15));
+}
+
+TEST_F(FtcSpeedLimit, LatestCompletePastChainIsAcceptedWhenEdgesAreAsynchronous)
+{
+  tf_->clear();
+  SetTransform("base_footprint", "base_link", 0.0, true);
+  time_ns_ -= 50000000;
+  SetTransform("map", "odom", 0.0, false);
+  SetTransform("odom", "base_footprint", 0.70, false);
+  time_ns_ += 150000000;
+  SetTransform("odom", "base_footprint", 0.72, false);
+  time_ns_ -= 100000000;
+  EXPECT_NO_THROW(
+      mowgli_nav2_plugins::FTCSpeedLimitTestAccess::AuthorizeForward(controller_, 0.15));
+}
+
+TEST_F(FtcRequestedGoalTolerance, PostRotateUsesSupportedYawForStrictRequest)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  RequestedGoalTolerance checker;
+  WaitAtFinalCarrot(0.78, checker);
+  mowgli_nav2_plugins::FTCSpeedLimitTestAccess::EnterPostRotate(controller_);
+  SetTransform("odom", "base_footprint", 0.78, false, 0.0, 0.4);
+  time_ns_ += 100000000;
+  SetTransform("odom", "base_footprint", 0.78, false, 0.0, 0.0);
+  time_ns_ -= 100000000;
+  Tick(0.0, &checker);
+  EXPECT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::Finished(controller_));
+}
+
+TEST_F(FtcRequestedGoalTolerance, EqualToleranceEntryInsideCapDoesNotAddForwardCommand)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  RequestedGoalTolerance checker;
+  checker.x = checker.y = 0.50;
+  robot_x_ = 0.70;
+  measured_speed_ = 0.0;
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  for (int i = 0; i <= 16; ++i)
+    plan.poses.push_back(MakePose(0.05 * i));
+  controller_.newPathReceived(plan);
+  for (int i = 0; i < 100; ++i)
+  {
+    const double command = Tick(0.10, &checker);
+    if (mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ApproachingGoal(controller_))
+    {
+      EXPECT_DOUBLE_EQ(command, 0.0);
+      return;
+    }
+  }
+  FAIL() << "Controller did not enter its timed terminal approach";
+}
+
+TEST_F(FtcRequestedGoalTolerance, EqualToleranceApproachesFromSupportedCurrentPosition)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  RequestedGoalTolerance checker;
+  checker.x = checker.y = 0.50;
+  WaitAtFinalCarrot(0.70, checker);
+  time_ns_ += 100000000;
+  SetTime();
+  robot_x_ = 0.27;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  time_ns_ += 100000000;
+  SetTransform("odom", "base_footprint", 0.32, false);
+  time_ns_ -= 100000000;
+  EXPECT_GT(Tick(0.0, &checker), 0.0);
+  EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ApproachingGoal(controller_));
+}
+
+TEST_F(FtcSpeedLimit, ForwardLethalSweepUsesCompleteMapBaseEpoch)
+{
+  Wall(1.36);
+  tf_->clear();
+  SetTransform("base_footprint", "base_link", 0.0, true);
+  time_ns_ -= 50000000;
+  SetTransform("map", "odom", 0.0, false);
+  SetTransform("odom", "base_footprint", 0.70, false);
+  time_ns_ += 150000000;
+  SetTransform("odom", "base_footprint", 0.76, false);
+  time_ns_ -= 100000000;
+  EXPECT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::ForwardBlocked(controller_, 0.15));
 }
 
 TEST_F(FtcRequestedGoalTolerance, StrictXYApproachIgnoresBaseLinkHeightAtRotatedHeading)

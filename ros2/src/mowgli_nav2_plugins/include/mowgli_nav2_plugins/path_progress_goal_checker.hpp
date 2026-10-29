@@ -100,6 +100,10 @@ private:
   friend class PathProgressGoalCheckerTest;
   friend class PathProgressEndApproachTest;
   void onPath(nav_msgs::msg::Path::SharedPtr msg);
+  bool isGoalReachedImpl(const geometry_msgs::msg::Pose& query_pose,
+                         const geometry_msgs::msg::Pose& goal_pose,
+                         const nav_msgs::msg::Path& transformed_global_plan,
+                         bool check_yaw);
   // Path length from the furthest monotonically-reached point to the last pose.
   double remainingPathLength(const geometry_msgs::msg::Point& robot) const;
 
@@ -108,6 +112,7 @@ private:
   std::shared_ptr<rclcpp::Clock> clock_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::string query_frame_;
+  std::string base_frame_;
   std::string path_frame_;
 
   // Parameters

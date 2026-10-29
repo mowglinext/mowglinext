@@ -133,6 +133,7 @@ void PathProgressGoalChecker::initialize(
   {
     tf_buffer_ = costmap_ros->getTfBuffer();
     query_frame_ = costmap_ros->getGlobalFrameID();
+    base_frame_ = costmap_ros->getBaseFrameID();
   }
 
   auto declare = [&](const std::string& key, auto default_value)
@@ -308,9 +309,87 @@ double PathProgressGoalChecker::remainingPathLength(const geometry_msgs::msg::Po
 bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& query_pose,
                                             const geometry_msgs::msg::Pose& goal_pose,
                                             const geometry_msgs::msg::Twist& /*velocity*/,
-                                            const nav_msgs::msg::Path& /*transformed_global_plan*/)
+                                            const nav_msgs::msg::Path& transformed_global_plan)
+{
+  return isGoalReachedImpl(query_pose, goal_pose, transformed_global_plan, true);
+}
+
+bool PathProgressGoalChecker::isGoalReachedImpl(const geometry_msgs::msg::Pose& input_query_pose,
+                                                const geometry_msgs::msg::Pose& input_goal_pose,
+                                                const nav_msgs::msg::Path& transformed_global_plan,
+                                                bool check_yaw)
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  const bool start_empty_path_watchdog = path_poses_.empty() && !empty_path_first_call_.has_value();
+  if (start_empty_path_watchdog)
+    empty_path_first_call_ = clock_->now();
+  auto query_pose = input_query_pose;
+  auto goal_pose = input_goal_pose;
+  bool query_in_path_frame = false;
+  if (tf_buffer_ && !query_frame_.empty() && !base_frame_.empty())
+  {
+    const auto now = clock_->now();
+    try
+    {
+      const auto latest =
+          tf_buffer_->lookupTransform(query_frame_, base_frame_, tf2::TimePointZero);
+      if (rclcpp::Time(latest.header.stamp, now.get_clock_type()) > now)
+      {
+        // Lyrical queries latest TF, which can be a coherently predicted future
+        // pose. Evaluate completion no later than now. Past latest samples keep
+        // their existing behavior and do not require a future bracket.
+        if (path_frame_.empty())
+        {
+          // The local-plan header identifies the supplied goal's epoch, but
+          // not its original fixed frame. A timeout cannot supply that missing
+          // identity. Keep the watchdog observable while awaiting the full plan.
+          if (empty_path_first_call_.has_value() &&
+              (now - *empty_path_first_call_).seconds() >= fallback_timeout_s_)
+            RCLCPP_WARN_THROTTLE(logger_,
+                                 *clock_,
+                                 5000,
+                                 "PathProgressGoalChecker: cannot evaluate future TF without "
+                                 "the full plan's fixed frame on %s; holding completion",
+                                 plan_topic_.c_str());
+          return false;
+        }
+        const auto& header = transformed_global_plan.header;
+        if (header.frame_id != query_frame_ || header.stamp.sec < 0 ||
+            header.stamp.nanosec >= 1000000000u ||
+            (header.stamp.sec == 0 && header.stamp.nanosec == 0))
+          return false;
+
+        // transformedPlanAndGoal uses one robot timestamp for the supplied goal
+        // and local-plan header. Recover THAT goal in the full-plan frame before
+        // comparing it with the current robot; do not substitute our topic's
+        // endpoint or mix an old odom goal with a current map->odom correction.
+        geometry_msgs::msg::PoseStamped stamped_goal;
+        stamped_goal.header = header;
+        stamped_goal.pose = goal_pose;
+        goal_pose = tf_buffer_->transform(stamped_goal, path_frame_).pose;
+        // Different TF edges can arrive separately. The complete chain may
+        // still end before now even though odom->base already predicts beyond
+        // it; retain that supported past epoch instead of requiring a bracket.
+        const auto supported =
+            tf_buffer_->lookupTransform(path_frame_, base_frame_, tf2::TimePointZero);
+        const auto supported_time = rclcpp::Time(supported.header.stamp, now.get_clock_type());
+        const auto evaluation_time =
+            supported_time.nanoseconds() == 0 ? now : std::min(now, supported_time);
+        const auto current = tf_buffer_->lookupTransform(path_frame_, base_frame_, evaluation_time);
+        query_pose.position.x = current.transform.translation.x;
+        query_pose.position.y = current.transform.translation.y;
+        query_pose.position.z = current.transform.translation.z;
+        query_pose.orientation = current.transform.rotation;
+        query_in_path_frame = true;
+      }
+    }
+    catch (const tf2::TransformException&)
+    {
+      // A missing current-time bracket or goal epoch must not fall back to the
+      // future query, nor advance the monotonic path-progress cursor.
+      return false;
+    }
+  }
 
   // Empty path watchdog. Normally we refuse to fire until FTC has
   // published its global_plan (prevents the legacy SimpleGoalChecker
@@ -319,17 +398,14 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
   // controller_server activation, plugin_name mismatch, transient
   // hiccup — we'd block forever and only abort on goal_timeout
   // (10 s default in nav2_params). After fallback_timeout_s_ of
-  // empty-path isGoalReached calls, fall back to SimpleGoalChecker
-  // semantics: assert as soon as the robot is within tolerance of
-  // the goal pose. WARN once when the fallback engages so an
-  // operator can investigate.
+  // empty-path isGoalReached calls, retain SimpleGoalChecker proximity for
+  // nonfuture queries. A future query still needs the full plan's fixed frame
+  // to recover the supplied goal at its original epoch; its deadline cannot
+  // replace that identity. The rejection above reports this missing context.
   if (path_poses_.empty())
   {
-    if (!empty_path_first_call_.has_value())
-    {
-      empty_path_first_call_ = clock_->now();
+    if (start_empty_path_watchdog)
       return false;
-    }
     const double age = (clock_->now() - *empty_path_first_call_).seconds();
     if (age < fallback_timeout_s_)
     {
@@ -352,7 +428,7 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
     const double yaw_q = tf2::getYaw(query_pose.orientation);
     const double yaw_g = tf2::getYaw(goal_pose.orientation);
     const double yaw_err = std::atan2(std::sin(yaw_q - yaw_g), std::cos(yaw_q - yaw_g));
-    return std::abs(yaw_err) <= yaw_goal_tolerance_;
+    return !check_yaw || std::abs(yaw_err) <= yaw_goal_tolerance_;
   }
 
   // Path arrived — fall through to the normal progress check.
@@ -375,7 +451,7 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
     const double yaw_q = tf2::getYaw(query_pose.orientation);
     const double yaw_g = tf2::getYaw(goal_pose.orientation);
     const double yaw_err = std::atan2(std::sin(yaw_q - yaw_g), std::cos(yaw_q - yaw_g));
-    return std::abs(yaw_err) <= yaw_goal_tolerance_;
+    return !check_yaw || std::abs(yaw_err) <= yaw_goal_tolerance_;
   }
 
   // Update max-reached index by finding the closest pose to the robot
@@ -398,7 +474,7 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
   // FTC publishes the complete path in map. Transform only the progress query;
   // the final XY/yaw comparison below already has both poses in odom.
   auto progress_pose = query_pose;
-  if (!query_frame_.empty() && path_frame_ != query_frame_)
+  if (!query_in_path_frame && !query_frame_.empty() && path_frame_ != query_frame_)
   {
     if (!tf_buffer_ || path_frame_.empty())
       return false;
@@ -765,7 +841,7 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
   const double yaw_q = tf2::getYaw(query_pose.orientation);
   const double yaw_g = tf2::getYaw(goal_pose.orientation);
   double yaw_err = std::atan2(std::sin(yaw_q - yaw_g), std::cos(yaw_q - yaw_g));
-  if (std::abs(yaw_err) > yaw_goal_tolerance_)
+  if (check_yaw && std::abs(yaw_err) > yaw_goal_tolerance_)
   {
     return false;
   }
@@ -787,10 +863,10 @@ bool PathProgressGoalChecker::isGoalXYReached(const geometry_msgs::msg::Pose& qu
                                               const geometry_msgs::msg::Twist& velocity,
                                               const nav_msgs::msg::Path& transformed_global_plan)
 {
-  // Keep the same full-path progress gate while ignoring only the final yaw.
-  auto xy_goal = goal_pose;
-  xy_goal.orientation = query_pose.orientation;
-  return isGoalReached(query_pose, xy_goal, velocity, transformed_global_plan);
+  // Keep the same full-path progress gate while ignoring only the final yaw,
+  // including when the evaluation epoch changes the query's heading.
+  (void)velocity;
+  return isGoalReachedImpl(query_pose, goal_pose, transformed_global_plan, false);
 }
 
 bool PathProgressGoalChecker::getTolerances(geometry_msgs::msg::Pose& pose_tolerance,

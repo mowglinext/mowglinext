@@ -6,6 +6,21 @@
 
 > Lyrical API: full plans enter `newPathReceived`; local processed plans do not replace FTC progress. The goal checker transforms the costmap-frame query into the full-plan frame and exposes both XY and XY+yaw checks. Regression tests: `test/test_lyrical_goal_checker.cpp`; end-approach rule (short sub-paths FTC parks short of): `test/test_path_progress_end_approach.cpp`.
 
+Terminal evaluation and the final FTC guards select supported TF epochs no later
+than ROS now (`supportedPoseEpoch` in `ftc_controller.cpp`). Both final guards
+share one selected timestamp for each nonzero output; this is not atomic TF
+revision identity. A valid goal checker can keep the timed terminal approach
+moving outside its effective distance cap. Strict XY requests use planar
+distance; the existing default 3D comparison remains.
+
+When the goal checker's query TF is future-dated, it recovers the supplied goal
+at the transformed local-plan header epoch and evaluates progress/completion in
+the full-plan frame. This relies on the selected Lyrical FeasiblePathHandler
+contract. Missing transform/goal provenance holds progress. A never-received full
+plan cannot supply its fixed frame through a timeout: future-TF completion stays
+blocked with a diagnostic, while the past-latest proximity fallback remains.
+Tests are in `test_lyrical_goal_checker.cpp` and `test_ftc_speed_limit.cpp`.
+
 Global fixed-grid geometry and mandatory authorization are owned by `GardenKeepoutLayer` in
 `garden_keepout_layer.hpp/.cpp`. `RecentObstacleLayer` rebuilds global marks from
 current observation buffers. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md)

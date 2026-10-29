@@ -1162,8 +1162,25 @@ double FTCController::maxLinearSpeed() const
   return std::min(base_max_cmd_vel_speed_, external_cap);
 }
 
+rclcpp::Time FTCController::supportedPoseEpoch()
+{
+  // Select the latest complete map/base epoch, clipped to the current clock.
+  const auto common = tf_buffer_->lookupTransform("map", "base_link", tf2::TimePointZero);
+  const auto now = clock_->now();
+  const rclcpp::Time latest(common.header.stamp, now.get_clock_type());
+  return latest.nanoseconds() == 0 ? now : std::min(now, latest);
+}
+
+geometry_msgs::msg::TransformStamped FTCController::supportedPoseTransform(
+    const std::string& target, const std::string& source, const rclcpp::Time* epoch)
+{
+  const auto selected = epoch ? *epoch : supportedPoseEpoch();
+  return tf_buffer_->lookupTransform(target, source, selected, tf2::durationFromSec(0.0));
+}
+
 void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command,
-                                     const geometry_msgs::msg::Twist& measured)
+                                     const geometry_msgs::msg::Twist& measured,
+                                     const rclcpp::Time* epoch)
 {
   // Zero commands never depend on authorization, TF or the presence of a map.
   if (command.linear.x == 0 && command.angular.z == 0)
@@ -1172,21 +1189,24 @@ void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command,
   if (!authorization_ || !authorization_->valid)
     throw nav2_core::ControllerException("FTCController: missing/invalid motion geometry");
   geometry_msgs::msg::PoseStamped robot;
-  if (!costmap_ros_->getRobotPose(robot))
-    throw nav2_core::ControllerException("FTCController: no current pose for authorization");
   try
   {
-    robot = tf_buffer_->transform(robot, "map", tf2::durationFromSec(0.0));
+    const auto transform = supportedPoseTransform("map", costmap_ros_->getBaseFrameID(), epoch);
+    robot.header = transform.header;
+    robot.pose.position.x = transform.transform.translation.x;
+    robot.pose.position.y = transform.transform.translation.y;
+    robot.pose.position.z = transform.transform.translation.z;
+    robot.pose.orientation = transform.transform.rotation;
   }
   catch (const tf2::TransformException&)
   {
-    throw nav2_core::ControllerException("FTCController: no map transform for authorization");
+    throw nav2_core::ControllerException("FTCController: no supported map pose for authorization");
   }
   const double age = (clock_->now() - rclcpp::Time(robot.header.stamp)).seconds();
   const auto& q = robot.pose.orientation;
   const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
-  if (!std::isfinite(age) || age < -0.1 || age > 0.3 || !std::isfinite(norm) ||
-      std::abs(norm - 1) > 1e-3)
+  if (!std::isfinite(age) || age < 0 || age > 0.3 || age > costmap_ros_->getTransformTolerance() ||
+      !std::isfinite(norm) || std::abs(norm - 1) > 1e-3)
     throw nav2_core::ControllerException("FTCController: invalid/stale authorization pose");
   mowgli_interfaces::motion::Ring footprint;
   for (const auto& point : costmap_ros_->getRobotFootprint())
@@ -1275,11 +1295,11 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   geometry_msgs::msg::TwistStamped cmd_vel;
   cmd_vel.header.frame_id = "base_link";
   cmd_vel.header.stamp = clock_->now();
-  bool strict_goal_approach = false;
+  bool requested_goal_approach = false;
 
   // Apply the hard linear cap at every output boundary, after movement floors
   // and including reverse escape / turn-fallback commands that bypass the PID.
-  const auto bounded_command = [this, &cmd_vel, &velocity, &strict_goal_approach]()
+  const auto bounded_command = [this, &cmd_vel, &velocity, &requested_goal_approach]()
   {
     const double max_speed = maxLinearSpeed();
     cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
@@ -1310,15 +1330,33 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       const double budget_speed = std::nextafter(remaining / kMaxControlDtSec, 0.0);
       cmd_vel.twist.linear.x = std::max(cmd_vel.twist.linear.x, -budget_speed);
     }
-    if (config_.enable_obstacle_deviation && config_.use_offset_lattice &&
-        (current_state_ == PlannerState::FOLLOWING || strict_goal_approach) &&
-        cmd_vel.twist.linear.x > 0 && !reverse_escape_active_ && !turnFallbackReversing() &&
-        forwardCommandSweepBlocked(cmd_vel.twist, velocity))
+    const bool check_forward_sweep =
+        config_.enable_obstacle_deviation && config_.use_offset_lattice &&
+        (current_state_ == PlannerState::FOLLOWING || requested_goal_approach) &&
+        cmd_vel.twist.linear.x > 0 && !reverse_escape_active_ && !turnFallbackReversing();
+    std::optional<rclcpp::Time> guard_epoch;
+    if (cmd_vel.twist.linear.x != 0 || cmd_vel.twist.angular.z != 0)
+    {
+      try
+      {
+        // Both the local lethal sweep and map authorization use this same
+        // complete epoch, even if a newer TF arrives between the checks.
+        guard_epoch = supportedPoseEpoch();
+      }
+      catch (const tf2::TransformException&)
+      {
+        if (!check_forward_sweep)
+          throw nav2_core::ControllerException(
+              "FTCController: no supported pose for authorization");
+      }
+    }
+    if (check_forward_sweep &&
+        (!guard_epoch || forwardCommandSweepBlocked(cmd_vel.twist, velocity, &*guard_epoch)))
     {
       waitOrThrowForObstacle("proposed forward chassis/response sweep intersects lethal cells");
       cmd_vel.twist = geometry_msgs::msg::Twist{};
     }
-    authorizeCommand(cmd_vel.twist, velocity);
+    authorizeCommand(cmd_vel.twist, velocity, guard_epoch ? &*guard_epoch : nullptr);
     last_cmd_fwd_speed_ = cmd_vel.twist.linear.x;
     last_reverse_budget_speed_ = reverse_budget_speed;
     turn_fallback_.last_reverse_speed_mps =
@@ -1404,6 +1442,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   // FTC to approach its final carrot instead of parking at our normal
   // coverage tolerance. Never enlarge the configured approach distance.
   double goal_distance_error = config_.max_goal_distance_error;
+  bool valid_goal_tolerance = false;
   if (goal_checker != nullptr)
   {
     geometry_msgs::msg::Pose pose_tolerance;
@@ -1413,6 +1452,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
         std::isfinite(pose_tolerance.position.x) && pose_tolerance.position.x > 0.0 &&
         std::isfinite(pose_tolerance.position.y) && pose_tolerance.position.y > 0.0)
     {
+      valid_goal_tolerance = true;
       // The API reports the independent X/Y maxima. The smaller one respects
       // both axes when a checker supplies unequal tolerances.
       goal_distance_error =
@@ -1422,9 +1462,11 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   }
 
   // 1. Advance the carrot; compute lat/lon/angle errors in base_link.
-  strict_goal_approach = current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH &&
-                         goal_distance_error < config_.max_goal_distance_error;
-  update_control_point(safe_dt, strict_goal_approach);
+  requested_goal_approach =
+      current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH && valid_goal_tolerance;
+  const bool terminal_epoch = current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH ||
+                              current_state_ == PlannerState::POST_ROTATE;
+  update_control_point(safe_dt, requested_goal_approach, terminal_epoch);
 
   RCLCPP_INFO_THROTTLE(logger_,
                        *clock_,
@@ -1446,6 +1488,8 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   const PlannerState new_state = update_planner_state(goal_distance_error);
   const bool entering_pivot =
       new_state == PlannerState::PIVOT && current_state_ != PlannerState::PIVOT;
+  const bool entering_goal_approach = new_state == PlannerState::WAITING_FOR_GOAL_APPROACH &&
+                                      current_state_ != PlannerState::WAITING_FOR_GOAL_APPROACH;
   if (new_state != current_state_)
   {
     RCLCPP_INFO(logger_,
@@ -1467,8 +1511,14 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   }
   // Keep the existing goal-approach state's timeout, including when a strict
   // goal is unreachable or has been overshot with forward_only enabled.
-  strict_goal_approach = current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH &&
-                         goal_distance_error < config_.max_goal_distance_error;
+  if (entering_goal_approach)
+    update_local_control_point(true);
+  const auto& terminal_position = local_control_point_.translation();
+  const double terminal_distance = goal_distance_error < config_.max_goal_distance_error
+                                       ? std::hypot(terminal_position.x(), terminal_position.y())
+                                       : terminal_position.norm();
+  requested_goal_approach = current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH &&
+                            valid_goal_tolerance && terminal_distance >= goal_distance_error;
 
   // A running turn fallback ends once FOLLOWING has reached its rejoin pose,
   // and is bounded in time (throws past turn_fallback_timeout_s).
@@ -1597,10 +1647,13 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     {
       try
       {
-        const auto map_to_base = tf_buffer_->lookupTransform("base_link",
-                                                             "map",
-                                                             tf2::TimePointZero,
-                                                             tf2::durationFromSec(1.0));
+        const auto map_to_base = (current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH ||
+                                  current_state_ == PlannerState::POST_ROTATE)
+                                     ? supportedPoseTransform("base_link", "map")
+                                     : tf_buffer_->lookupTransform("base_link",
+                                                                   "map",
+                                                                   tf2::TimePointZero,
+                                                                   tf2::durationFromSec(1.0));
         tf2::doTransform(current_control_point_, local_control_point_, map_to_base);
         lat_error_ = local_control_point_.translation().y();
         lon_error_ = local_control_point_.translation().x();
@@ -1624,7 +1677,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   }
 
   // 4. PID velocity computation.
-  calculate_velocity_commands(safe_dt, cmd_vel, strict_goal_approach);
+  calculate_velocity_commands(safe_dt, cmd_vel, requested_goal_approach);
 
   if (is_crashed_)
   {
@@ -1881,7 +1934,7 @@ double FTCController::distanceLookahead() const
   return lookahead_distance;
 }
 
-void FTCController::update_control_point(double dt, bool approach_goal)
+void FTCController::update_control_point(double dt, bool approach_goal, bool supported_epoch)
 {
   switch (current_state_)
   {
@@ -2099,13 +2152,20 @@ void FTCController::update_control_point(double dt, bool approach_goal)
     global_point_pub_->publish(viz);
   }
 
+  update_local_control_point(supported_epoch);
+}
+
+void FTCController::update_local_control_point(bool supported_epoch)
+{
   // Transform carrot from map into base_link to get the PID errors.
   try
   {
-    const auto map_to_base = tf_buffer_->lookupTransform("base_link",
-                                                         "map",
-                                                         tf2::TimePointZero,
-                                                         tf2::durationFromSec(1.0));
+    const auto map_to_base = supported_epoch
+                                 ? supportedPoseTransform("base_link", "map")
+                                 : tf_buffer_->lookupTransform("base_link",
+                                                               "map",
+                                                               tf2::TimePointZero,
+                                                               tf2::durationFromSec(1.0));
 
     tf2::doTransform(current_control_point_, local_control_point_, map_to_base);
   }
@@ -3394,14 +3454,31 @@ bool FTCController::planWindowInCostmapFrame(std::size_t first,
 }
 
 bool FTCController::forwardCommandSweepBlocked(const geometry_msgs::msg::Twist& command,
-                                               const geometry_msgs::msg::Twist& measured)
+                                               const geometry_msgs::msg::Twist& measured,
+                                               const rclcpp::Time* epoch)
 {
   if (command.linear.x == 0 && command.angular.z == 0)
     return false;
   if (!costmap_map_ || !costmap_ros_)
     return true;
   geometry_msgs::msg::PoseStamped robot;
-  if (!costmap_ros_->getRobotPose(robot))
+  try
+  {
+    const auto transform = supportedPoseTransform(costmap_ros_->getGlobalFrameID(),
+                                                  costmap_ros_->getBaseFrameID(),
+                                                  epoch);
+    robot.header = transform.header;
+    robot.pose.position.x = transform.transform.translation.x;
+    robot.pose.position.y = transform.transform.translation.y;
+    robot.pose.position.z = transform.transform.translation.z;
+    robot.pose.orientation = transform.transform.rotation;
+  }
+  catch (const tf2::TransformException&)
+  {
+    return true;
+  }
+  const double age = (clock_->now() - rclcpp::Time(robot.header.stamp)).seconds();
+  if (!std::isfinite(age) || age < 0 || age > costmap_ros_->getTransformTolerance())
     return true;
   const auto& q = robot.pose.orientation;
   const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;

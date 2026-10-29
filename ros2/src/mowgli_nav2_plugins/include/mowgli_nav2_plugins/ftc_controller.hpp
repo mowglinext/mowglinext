@@ -110,11 +110,17 @@ public:
 private:
   friend struct FTCSpeedLimitTestAccess;
 
+  rclcpp::Time supportedPoseEpoch();
+  geometry_msgs::msg::TransformStamped supportedPoseTransform(const std::string& target,
+                                                              const std::string& source,
+                                                              const rclcpp::Time* epoch = nullptr);
   /// Final FTC output gate, after all speed floors and recovery commands.
   void authorizeCommand(const geometry_msgs::msg::Twist& command,
-                        const geometry_msgs::msg::Twist& measured);
+                        const geometry_msgs::msg::Twist& measured,
+                        const rclcpp::Time* epoch = nullptr);
   bool forwardCommandSweepBlocked(const geometry_msgs::msg::Twist& command,
-                                  const geometry_msgs::msg::Twist& measured);
+                                  const geometry_msgs::msg::Twist& measured,
+                                  const rclcpp::Time* epoch = nullptr);
   LatticeGeometryBlocked motionLatticeCritic(
       const geometry_msgs::msg::TransformStamped* costmap_from_plan = nullptr);
   std::mutex authorization_mutex_;
@@ -153,7 +159,8 @@ private:
   // ── Control point / path tracking ─────────────────────────────────────────
 
   /// Advance the virtual carrot and project it into base_link.
-  void update_control_point(double dt, bool approach_goal);
+  void update_control_point(double dt, bool approach_goal, bool supported_epoch);
+  void update_local_control_point(bool supported_epoch);
 
   /// Compute the look-ahead distance along the remaining straight path.
   double distanceLookahead() const;
