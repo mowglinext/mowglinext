@@ -4012,6 +4012,7 @@
       "starting": "Démarrage du sidecar…",
       "running": "Sidecar en marche",
       "error": "Sidecar en échec",
+      "degraded": "Action requise",
       "unknown": "État inconnu"
     },
     "verdict": {
@@ -4019,7 +4020,8 @@
       "working": "En cours…",
       "needsLogin": "Connexion requise",
       "connected": "Connecté",
-      "error": "Erreur"
+      "error": "Erreur",
+      "offline": "Nœud hors ligne"
     },
     "backendState": "Tailscale : {{state}}",
     "errorTitle": "L'accès distant n'a pas pu démarrer",
@@ -4027,6 +4029,21 @@
     "needsLoginBody": "Ouvrez le lien, connectez-vous à Tailscale et approuvez l'appareil. Cette page se met à jour toute seule une fois le nœud connecté.",
     "openLogin": "Ouvrir la connexion Tailscale",
     "workingHint": "En attente du nœud… le premier démarrage télécharge l'image, ce qui peut prendre une minute sur une connexion lente.",
+    "recovery": {
+      "monitoring": "Les contrôles de santé sont actifs. Redémarrages de récupération utilisés : {{count}}.",
+      "suspect": "Tailscale ne répond pas de façon fiable. Vérification d'une panne locale avant tout redémarrage.",
+      "cooldown": "Un délai est observé avant la prochaine récupération. Redémarrages utilisés : {{count}}.",
+      "degraded": "La récupération automatique s'est arrêtée après {{count}} tentatives. Vérifiez la connexion, puis réessayez.",
+      "paused": "La récupération automatique est en pause ; attente du réseau ou de la fin de la maintenance.",
+      "operator_action": "Tailscale nécessite une action. Le sidecar ne redémarrera pas automatiquement.",
+      "disabled": "Les contrôles de santé automatiques sont désactivés."
+    },
+    "lastSuccess": "Dernier contrôle réussi : {{value}}",
+    "nextRecovery": "Prochain contrôle de récupération : {{value}}",
+    "networkUnavailable": "Le robot ne peut pas joindre le service Tailscale. Le sidecar ne redémarrera pas pour cette panne réseau ; il se reconnectera quand l'accès sera rétabli.",
+    "nodeOffline": "Tailscale signale que ce nœud est hors ligne. Les adresses d'accès distant sont masquées jusqu'à sa reconnexion.",
+    "machineAuthRequired": "Cet appareil doit être approuvé dans la console d'administration Tailscale. Approuvez-le là-bas ; les redémarrages automatiques ne résoudront pas ce problème.",
+    "degradedTitle": "La récupération automatique nécessite une intervention",
     "reachableAt": "Depuis n'importe quel appareil de votre tailnet, ouvrez :",
     "noHttpsHint": "Pas encore d'adresse HTTPS : activez MagicDNS et les certificats HTTPS dans la console Tailscale (page DNS), ou utilisez l'adresse http://.",
     "noMagicDnsHint": "MagicDNS est désactivé sur votre tailnet, seules les adresses IP sont résolues.",

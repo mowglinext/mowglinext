@@ -4016,6 +4016,7 @@
       "starting": "Starting the sidecar…",
       "running": "Sidecar running",
       "error": "Sidecar failed",
+      "degraded": "Needs attention",
       "unknown": "Status unknown"
     },
     "verdict": {
@@ -4023,7 +4024,8 @@
       "working": "Working…",
       "needsLogin": "Login required",
       "connected": "Connected",
-      "error": "Error"
+      "error": "Error",
+      "offline": "Node offline"
     },
     "backendState": "Tailscale: {{state}}",
     "errorTitle": "Remote access could not be started",
@@ -4031,6 +4033,21 @@
     "needsLoginBody": "Open the link, sign in to Tailscale and approve the device. This page updates by itself once the node is connected.",
     "openLogin": "Open Tailscale login",
     "workingHint": "Waiting for the node to come up… the first start downloads the image, which can take a minute on a slow connection.",
+    "recovery": {
+      "monitoring": "Health checks are running. Recovery restarts used: {{count}}.",
+      "suspect": "Tailscale is not responding reliably. Checking whether the fault is local before restarting.",
+      "cooldown": "A recovery attempt is cooling down. Restarts used: {{count}}.",
+      "degraded": "Automatic recovery stopped after {{count}} attempts. Check the connection, then use Retry.",
+      "paused": "Automatic recovery is paused; waiting for network access or maintenance to finish.",
+      "operator_action": "Tailscale needs an operator action. The sidecar will not restart automatically.",
+      "disabled": "Automatic health checks are off."
+    },
+    "lastSuccess": "Last successful health check: {{value}}",
+    "nextRecovery": "Next recovery check: {{value}}",
+    "networkUnavailable": "The robot cannot reach the Tailscale service. The sidecar will not restart for this network outage; it will reconnect when access returns.",
+    "nodeOffline": "Tailscale reports that this node is offline. Remote access URLs are hidden until it reconnects.",
+    "machineAuthRequired": "This device needs approval in the Tailscale admin console. Approve it there; automatic restarts will not resolve this.",
+    "degradedTitle": "Automatic recovery needs attention",
     "reachableAt": "From any device on your tailnet, open:",
     "noHttpsHint": "No HTTPS address yet: enable MagicDNS and HTTPS certificates in the Tailscale admin console (DNS page), or use the http:// address.",
     "noMagicDnsHint": "MagicDNS is off in your tailnet, so only the IP addresses resolve.",

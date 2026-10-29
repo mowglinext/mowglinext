@@ -78,6 +78,47 @@ Status (`GET /api/remote-access/status`) runs `tailscale status --json` inside
 the container and projects `BackendState`, `AuthURL`, `Self.DNSName`,
 `TailscaleIPs`, `CertDomains` and `Health` into the login link and URL list.
 
+## Health monitoring and bounded recovery
+
+While enabled, the GUI observes the sidecar once a minute, even when no browser
+is open. Settings → Remote access shows Docker state separately from daemon
+readiness, backend/login state, node online state and Tailscale health warnings.
+It also shows the last usable daemon-status observation, cumulative recovery
+attempts and the earliest next recovery time. A successful status check is not
+proof that a remote phone can reach the GUI.
+
+Tailscale handles ordinary reconnects itself. Offline nodes, WAN/Wi-Fi outages,
+health warnings, `Starting`, `Stopped`, `NeedsLogin` (including expired/revoked
+keys) and `NeedsMachineAuth` never trigger a restart. Missing/stopped containers,
+Docker API errors, malformed status and changed container specs require operator
+action rather than speculative repair.
+
+Automatic recovery requires repeated **local** daemon socket failures or a
+status command killed by its in-container eight-second timeout, sustained for
+at least three minutes on the same running container with the expected spec.
+A failed host TCP probe to `controlplane.tailscale.com:443` suppresses recovery
+and starts a fresh grace period. This probe is additional reachability evidence,
+not a full internet diagnostic, and runs only after a sustained local fault.
+
+Recovery restarts that same container: no image pull, recreation, logout,
+credential changes, Serve changes or identity-volume removal. Attempts have a
+45-second deadline and a 5/10/20-minute exponential cooldown. At most three
+automatic attempts are allowed; the budget is saved **before** each restart and
+survives GUI restarts and healthy observations. Storage failures disable further
+automatic repair. If a fault persists after the budget is exhausted, the state
+is **Degraded** and requires attention. **Retry** or saving settings explicitly
+resets the budget. The GUI does not automatically reset authentication.
+
+Docker operations, settings changes, Retry and logout are serialized. An
+operator action waits for any already-started, bounded recovery to finish;
+subsequent work uses the new settings. Update maintenance pauses observation and
+recovery; the updater acknowledges maintenance only after in-flight sidecar work
+has drained. If that takes longer than the updater acknowledgement deadline, the
+update remains gated and must be retried. Requested reconciliation remains pending
+until maintenance clears.
+When disabled the health ticks perform no Docker or network operations. The
+monitor runs inside the GUI, so it cannot repair a stopped GUI process.
+
 ## Routes
 
 `GET/PUT /api/remote-access/settings`, `GET /api/remote-access/status`,

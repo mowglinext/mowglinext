@@ -268,12 +268,19 @@ func (i *DockerProvider) ContainerExec(ctx context.Context, containerID string, 
 		copyDone <- copyErr
 	}()
 
-	if err := i.client.ContainerExecStart(ctx, created.ID, types.ExecStartCheck{Tty: false}); err != nil {
-		return types2.ContainerExecResult{}, err
-	}
-
-	if copyErr := <-copyDone; copyErr != nil {
-		return types2.ContainerExecResult{}, copyErr
+	// ContainerExecAttach already issued POST /exec/{id}/start. Starting it
+	// a second time is rejected while the attached process is running.
+	select {
+	case copyErr := <-copyDone:
+		if copyErr != nil {
+			return types2.ContainerExecResult{}, copyErr
+		}
+	case <-ctx.Done():
+		// Closing the hijacked connection unblocks StdCopy even when the exec
+		// never closes stdout. HTTP request cancellation alone cannot do that.
+		attached.Close()
+		<-copyDone
+		return types2.ContainerExecResult{}, ctx.Err()
 	}
 
 	inspectResult, err := i.waitForExec(ctx, created.ID)

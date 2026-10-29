@@ -21,11 +21,15 @@ type fakeServiceDocker struct {
 	findErr error
 	pullErr error
 
-	pulled  []string
-	created []types.ServiceContainerSpec
-	started []string
-	removed []string
-	execFn  func(spec types.ContainerExecSpec) (types.ContainerExecResult, error)
+	pulled     []string
+	created    []types.ServiceContainerSpec
+	started    []string
+	removed    []string
+	restarted  []string
+	restartErr error
+	restartFn  func(context.Context, string) error
+	execCtxFn  func(context.Context, types.ContainerExecSpec) (types.ContainerExecResult, error)
+	execFn     func(spec types.ContainerExecSpec) (types.ContainerExecResult, error)
 }
 
 func (f *fakeServiceDocker) ImagePull(_ context.Context, ref string) error {
@@ -55,13 +59,24 @@ func (f *fakeServiceDocker) ContainerStart(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeServiceDocker) ContainerRestart(ctx context.Context, id string) error {
+	f.restarted = append(f.restarted, id)
+	if f.restartFn != nil {
+		return f.restartFn(ctx, id)
+	}
+	return f.restartErr
+}
+
 func (f *fakeServiceDocker) ContainerStop(context.Context, string) error { return nil }
 
 func (f *fakeServiceDocker) ContainerInspect(context.Context, string) (types.ContainerDetails, error) {
 	return f.details, nil
 }
 
-func (f *fakeServiceDocker) ContainerExec(_ context.Context, _ string, spec types.ContainerExecSpec) (types.ContainerExecResult, error) {
+func (f *fakeServiceDocker) ContainerExec(ctx context.Context, _ string, spec types.ContainerExecSpec) (types.ContainerExecResult, error) {
+	if f.execCtxFn != nil {
+		return f.execCtxFn(ctx, spec)
+	}
 	if f.execFn != nil {
 		return f.execFn(spec)
 	}

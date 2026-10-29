@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -18,21 +17,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/providers"
 	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/mowglinext/mowglinext/pkg/updater"
 )
 
-func updateMaintenance() bool {
-	path := os.Getenv("MOWGLI_UPDATE_MAINTENANCE")
-	if path == "" {
-		return false
-	}
-	if _, err := os.Stat(filepath.Dir(path)); err != nil {
-		return true
-	}
-	_, err := os.Stat(path)
-	return err == nil || !os.IsNotExist(err)
-}
+func updateMaintenance() bool { return providers.UpdateMaintenanceActive() }
 func updateMaintenanceMiddleware(c *gin.Context) {
 	path := c.Request.URL.Path
 	if c.Request.Method != "GET" && c.Request.Method != "HEAD" && c.Request.Method != "OPTIONS" && updateMaintenance() && !strings.HasPrefix(path, "/api/system/updater/") && path != "/api/mowglinext/call/emergency" && path != "/api/mowglinext/call/high_level_control" {
@@ -86,7 +76,7 @@ func updaterETagMatches(header, etag string) bool {
 // @Failure 409 {object} ErrorResponse
 // @Failure 503 {object} ErrorResponse
 // @Router /system/updater/{operation} [post]
-func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider, db types.IDBProvider) {
+func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider, db types.IDBProvider, remoteAccessQuiescent func() bool) {
 	socket := os.Getenv("MOWGLI_UPDATER_SOCKET")
 	if socket == "" {
 		socket = "/run/mowgli-updater/updater.sock"
@@ -246,6 +236,12 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider, db types.IDBProvi
 			}
 		}
 		mu.Unlock()
+		if result.Maintenance && remoteAccessQuiescent != nil {
+			result.Maintenance = remoteAccessQuiescent()
+			if !result.Maintenance && result.Reason == "" {
+				result.Reason = "Waiting for remote access operations to finish"
+			}
+		}
 		if !result.GPSFresh {
 			result.GPSReceiverFresh, result.GPSReason = receiverFresh, receiverReason
 		}

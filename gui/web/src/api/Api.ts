@@ -16,6 +16,7 @@ export enum ProvidersRemoteAccessPhase {
   RemoteAccessStarting = "starting",
   RemoteAccessRunning = "running",
   RemoteAccessError = "error",
+  RemoteAccessDegraded = "degraded",
 }
 
 export interface ApiBlackboxStatusResponse {
@@ -547,13 +548,21 @@ export interface ProvidersRemoteAccessStatus {
   enabled?: boolean;
   error?: string;
   health?: string[];
+  hostNetworkOnline?: boolean;
   hostname?: string;
   httpUrls?: string[];
   httpsUrl?: string;
+  lastSuccessAt?: string;
   /** LoginUrl is set while the node waits for an interactive login. */
   loginUrl?: string;
   magicDnsEnabled?: boolean;
+  nextRecoveryAt?: string;
   phase?: ProvidersRemoteAccessPhase;
+  recoveryAttempts?: number;
+  recoveryError?: string;
+  recoveryState?: string;
+  selfOnline?: boolean;
+  statusUsable?: boolean;
   tailscaleIps?: string[];
   version?: string;
 }
