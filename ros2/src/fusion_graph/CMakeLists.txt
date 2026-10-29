@@ -222,6 +222,17 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_graph_window fusion_graph_core)
 
+  ament_add_gtest(test_rebase_information
+    test/test_rebase_information.cpp
+    TIMEOUT 60
+  )
+  target_link_libraries(test_rebase_information fusion_graph_core)
+
+  ament_add_gtest(test_gyro_preint_bias
+    test/test_gyro_preint_bias.cpp
+  )
+  target_link_libraries(test_gyro_preint_bias fusion_graph_core)
+
   ament_add_gtest(test_adaptive_noise
     test/test_adaptive_noise.cpp
   )

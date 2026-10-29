@@ -11,11 +11,8 @@
 //   3. Run iSAM2 update.
 //   4. Return the latest optimized Pose2 + marginal covariance.
 //
-// The sliding window is implemented as a fixed-lag smoother (we keep
-// the full graph but never reorder nodes older than the window). The
-// plan called for explicit marginalization; that's a future cleanup —
-// for now iSAM2's incremental Bayes-tree handles the cost adequately
-// at our graph sizes (a few thousand nodes max per session).
+// Periodic rebases marginalize removed history into a linear separator
+// factor and retain the original nonlinear factors in the live window.
 
 #pragma once
 #include <chrono>
@@ -213,11 +210,10 @@ public:
                    double sigma_xy,
                    double sigma_theta);
 
-  // Reset iSAM2 with the current optimized values as tight priors,
-  // dropping every accumulated factor. Bounds the
-  // per-tick update cost on long sessions where factor count grows
-  // unbounded. Call periodically (e.g. every 2000 nodes); pose
-  // estimates and the variable set are preserved.
+  // Rebuild iSAM2, retaining the nonlinear factors in the live window and
+  // marginalizing removed history at its current linearization point.
+  // This preserves the retained joint information and process correlations.
+  // Call periodically (e.g. every 2000 nodes) to bound graph history.
   void RebaseISAM2();
 
   // Apply a map-frame correction to every live pose and rebuild their priors.
@@ -254,6 +250,8 @@ public:
   void Reset();
 
 private:
+  friend class GraphManagerRebaseTestAccess;
+
   // Reset() body without taking mu_ — for callers that already hold the lock
   // (e.g. the iSAM2 indeterminate-system catch inside ApplyIsamUpdateLocked).
   void ResetLocked();
@@ -276,7 +274,7 @@ private:
     // gyro_dt_total separately from dt_total because IMU may publish
     // at a different rate than wheel odom — we want strictly the
     // integrated gyro time horizon.
-    double gyro_preint_dtheta = 0.0;
+    double gyro_preint_dtheta = 0.0;  // raw integral; factor applies absolute bias once
     double gyro_preint_dt = 0.0;
     double gyro_preint_variance = 0.0;  // Σ(dt_i² · σ_gyro²)
     void Reset()
@@ -402,19 +400,14 @@ private:
   bool wheel_stationary_now_ = false;
 
   // ── Async-rebase pipeline ───────────────────────────────────────
-  // RebaseISAM2 rebuilds the iSAM2 Bayes tree from scratch with one
-  // PriorFactor per existing variable. For a 50k-node graph that
-  // update() call is ~1 s, and holding mu_ for that long stalls the
-  // tick that publishes map→odom (observed 2026-05-14, caused
-  // DockRobot to abort with `Transform data too old`). The fix is to
-  // do the heavy iSAM2 rebuild OUTSIDE the lock: phase 1 snapshots
-  // current_estimate_ under mu_; phase 2 builds the fresh iSAM2 on
-  // that snapshot without holding mu_; phase 3 takes mu_ briefly to
-  // replay anything Tick() added in the meantime and atomically swap
-  // isam_. Tick() accumulates its post-snapshot factors/values into
-  // rebase_pending_factors_ / rebase_pending_values_ when
-  // rebase_in_progress_ is true.
+  // Snapshot factors/values under mu_, marginalize and rebuild outside mu_,
+  // then replay post-snapshot updates and swap under mu_. Keeping the heavy
+  // work off the lock prevents maintenance from stalling TF publication.
+  // Reset/RigidTransform cancels by clearing the flag. Each new worker owns
+  // a distinct generation so a cancelled worker cannot consume another's
+  // pending buffer or overwrite its result.
   bool rebase_in_progress_ = false;
+  uint64_t rebase_generation_ = 0;
   gtsam::NonlinearFactorGraph rebase_pending_factors_;
   gtsam::Values rebase_pending_values_;
 

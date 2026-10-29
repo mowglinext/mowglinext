@@ -390,6 +390,20 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     const auto k_bias_prev = Symbol('b', next_index_ - 1);
     const auto k_bias_curr = Symbol('b', next_index_);
 
+    // Pose-only restores/reanchors intentionally discard historical bias
+    // states. Establish the predecessor before extending its random walk.
+    // A live reanchor keeps the current prediction estimate; a fresh load
+    // starts from the configured cold-bias prior, not a prior-session sensor
+    // calibration. Normal live intervals already have this key.
+    if (!isam_.valueExists(k_bias_prev) && !new_values_.exists(k_bias_prev))
+    {
+      new_values_.insert(k_bias_prev, current_bias_estimate_);
+      const auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
+          gtsam::Vector1(params_.gyro_bias_prior_sigma_rad_per_s));
+      new_factors_.add(
+          gtsam::PriorFactor<double>(k_bias_prev, current_bias_estimate_, prior_noise));
+    }
+
     // Insert the new bias variable initialised at the current best
     // estimate. iSAM2 will refine it on the next update.
     new_values_.insert(k_bias_curr, current_bias_estimate_);

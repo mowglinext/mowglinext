@@ -152,7 +152,11 @@ void GraphManager::AddGyroDelta(double wz, double dt)
   // ω itself. Independent of which bias correction is applied above.
   if (params_.use_imu_preint)
   {
-    accum_.gyro_preint_dtheta += wz_corrected * dt;
+    // The factor's bias variable is absolute, not an increment around this
+    // window's prediction bias. Keep the raw integral here so the factor
+    // subtracts that bias exactly once. Only the pose prediction above uses
+    // wz_corrected; pre-correcting this integral would subtract it twice.
+    accum_.gyro_preint_dtheta += wz * dt;
     accum_.gyro_preint_dt += dt;
     const double sigma = params_.gyro_noise_density_rad_per_s;
     accum_.gyro_preint_variance += dt * dt * sigma * sigma;

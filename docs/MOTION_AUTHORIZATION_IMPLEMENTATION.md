@@ -4,6 +4,77 @@ This is a safety-critical, partial implementation of #924. It verifies FTC's
 intended commands and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Graph information and preintegration repairs (2026-10-29)
+
+The active investigation continues independently of CI. The original boundary
+capture still does not expose its accepted graph-node identities: a bounded
+raw audit found ten fix/status pairs near the event but no graph diagnostics
+or target-node records. No original-event attribution is inferred from receipt
+time or from a later proxy node.
+
+Two more production causes are reproduced and repaired:
+
+- `RebaseISAM2` replaced all retained process factors with independent 5 cm
+  priors. In the regression, an older correct GNSS update moved the unre-based
+  current pose to 0.659706745 m, while the rebased graph stayed at 0.650000000 m.
+  The rebase also attempted to cast scalar bias states to Pose2 outside its
+  exception guard. It now retains nonlinear tail factors and typed values,
+  marginalizes only the removed prefix into a Gaussian separator, and protects
+  asynchronous worker ownership against cancellation/new-worker ABA. Pending
+  data targeting a removed state abandons the rebase while keeping the already
+  updated live graph. Nine new tests and seven existing focused cases pass;
+  joint information is compared at the same linearization point. Removed
+  history retains the standard fixed-lag linearization approximation.
+- Optional gyro preintegration subtracted the prediction bias from its integral
+  and then subtracted the absolute graph bias again. Four actual-core cases
+  gave 0.18/0.23 rad instead of 0.20 rad after learning positive/negative bias.
+  The factor now receives the raw integral and applies the absolute bias once;
+  pose prediction retains its corrected rate. Pose-only reanchors/restores also
+  need a valid bias predecessor before extending the random walk. Checkpoints
+  now serialize canonical trajectory poses, matching the existing restore
+  contract; transient scalar bias serialization had failed as an unregistered
+  type. Historical bias is re-estimated against the new session's calibration.
+  Reset also clears the prediction bias: a reused Reset+Load instance previously
+  advanced 0.18 rad where a fresh load advanced 0.20 rad. The nonzero-bias
+  regression now passes with identical behavior.
+
+The representative rebase check builds 4,000 nodes with and without optional
+preintegration, retains a 2,000-node window and advances another 20 nodes.
+Both stay initialized with finite results and no printed mean shift. Rebase
+wall times are 56/133 ms in this bounded test, peak child RSS about 51 MiB;
+these are software measurements, not a robot throughput qualification.
+
+Fresh core-only validation passes **9 CTest targets / 52 GTest cases**,
+including seven preintegration/bias lifecycle cases and both persistence suites.
+Local normal-node integration validation did
+not complete: repeated bounded builds stopped in the unchanged communications
+translation unit without a compiler diagnostic. Its flags match the prior
+successful build; measured container peak was about 2.13 GiB with no cgroup
+OOM, while the host experienced severe memory pressure. No larger blind
+retry, compiler/configuration weakening or robot run is substituted for that
+missing evidence. Hosted checks remain separate and do not pause this goal.
+
+The next GNSS repair is now specified: a frozen first-order normalized
+conditional trajectory bridge. Held wheel inputs are conditioned controls;
+existing distance/fault sigmas describe process diffusion. A globally exact
+raw-wheel measurement model is not a prerequisite. Multiple acquisition states
+must share their joint conditional law; optional gyro sample error uses shared
+identities within an edge. This supersedes the earlier implication that new
+physical wheel-noise calibration is needed before software implementation.
+It does not claim physically calibrated/conservative uncertainty or exact
+sensor preintegration. Source-epoch/mean coherence is still required before
+production integration; covariance alone cannot fix a falsely stamped pose.
+
+The new source-history and conditional-bridge components have focused GTSAM
+coverage and remain under integration. They are not treated as a production
+GNSS repair or as clearance of the 14.814 mm phase discriminator. All existing
+motion, freshness, geometry and acceptance tolerances remain unchanged.
+
+Evidence: `~/.cache/pr950-resume-20261029/rebase-information/`,
+`gyro-bias-preint/`, `core-final-reviewed/`, `core-repairs-validation/`, `source-history/`,
+`conditional-bridge/`, `original-gnss-inventory/` and
+`gnss-model-decision-astra.md`. Earlier reports and build outputs are retained.
+
 ## Motion-source input repair and GNSS covariance decision (2026-10-28)
 
 The original boundary event and the 14.814 mm GNSS/node-epoch mechanism remain
