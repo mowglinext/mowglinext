@@ -115,10 +115,38 @@ Node DR. Actual N1 wheel intervals agree internally to 4.42e-14, so changing
 velocity averaging again is not the answer. Native chassis moves immediately
 at firmware velocity 0.215 m/s, while the real wheel controller ramps at its
 unchanged 1 m/s² acceleration limit (first measured velocity 0.0186 m/s).
-Shared command input was feeding two different plants. A measured-native-wheel
-chassis repair is under focused validation; its stop semantics must truthfully
-report measured residual braking, preserving controller limits/timeouts rather
-than pretending the body stops instantly. No new pose tolerance is introduced.
+Shared command input was feeding two different plants. The measured-native-wheel
+chassis repair now passes 74 selected tests (17 new); the identical new tests
+fail 16 cases against the old plugin. Independent review also runs all 17 new
+cases successfully. Controller limits, actuator code and command watchdogs stay
+unchanged. The observation plugin reports measured residual braking instead of
+fabricating instantaneous body zero; stationary zero/unchanged-pose assertions
+remain at a new supported native epoch. No external stop acceptance test or
+numerical tolerance changes.
+
+One identical 15-second native GREEN profile completes in 31.027 seconds with
+the same approved Node/core binaries and byte-identical observer/profile/seed/
+analysis. Map maximum falls from 16.206979 to **0.418496 mm**, DR from 35.548900
+to **0.333758 mm**. All 922 native producer packets reconstruct their measured
+wheel distance/turn/rates exactly; GT SE2 increments agree within 6.43e-16.
+Across 751 exactly paired intervals, raw wheel and native body increments
+agree to arithmetic precision under the predeclared +20 ms header-phase
+hypothesis. Same-header phase remains distinct, and two consumer hold-value
+exceptions remain retained. No new pose acceptance threshold, fitted lag or
+blanket all-errors-fixed claim is introduced.
+
+The single native first-cusp component is **RED** with unchanged y >= 0.8:
+minimum transformed reference-point y is 0.794580169403 m, 5.419831 mm outside.
+All four runtime FTC obstacle/deviation parameter/config checks are true; source
+period is 40 ms and TF lead 100 ms as shipped by the full simulation launch.
+There are 32 accepted commands followed by denial at cursor 37 / ROS 3.86 s.
+Exact native reference-point y at denial is still 0.803333450372 m; it first
+crosses at 3.90 s and reaches its minimum at 4.02 s. Native applied twist first
+reaches zero at 4.04 s; 48 stationary truth samples are retained. No ideal stop,
+threshold adjustment or acceptance rerun follows the failure. This reproduces
+a containment gap after the command-only certificate denies further motion;
+the intended 100 ms command sweep is explicitly not a stopping certificate.
+This is a component, not attribution of the old mission or a hardware result.
 
 The native run uses known stationary truth for explicit seed, zero TF lead,
 no COG stimulus and the unchanged approved Node/core binaries. It completes in
@@ -142,7 +170,9 @@ Evidence under `~/.cache/pr950-resume-20261029/`: `source-core/`,
 `source-core-yaw/`, `source-core-query/`, `yaw-epoch/`, `yaw-repair/`,
 `helper-reviewed/`, `source-epoch-node/`, `bootstrap-counterfactual-red/`,
 `clear-counterfactual-red/`, `final-review-counterfactual-red/`,
-`cog-flip-delay/`, `cusp-source-component/`, `native-source-component/` and
+`cog-flip-delay/`, `cusp-source-component/`, `native-source-component/`,
+`native-source-component-green/`, `native-cusp-component/`, `wheel-plant-repair/`,
+`true-flip-physical-oracle/` and
 independent review reports. All earlier outputs remain preserved.
 
 ### Independently useful repair families
@@ -155,6 +185,7 @@ than inheriting a whole-branch CI result.
 | --- | --- |
 | Wheel N1 interval configuration | Standalone simulator configuration plus real-upstream odometry/YAML test; retained Webots A/B. It does not repair source timestamps or the boundary event. |
 | Native simulator observation identity | Keep applied-state producer, synthetic IMU/GNSS/status consumers and launch/test wiring together. 54 regressions and exact live component pairs; actuation dynamics remain separate. |
+| Measured-wheel simulator body | Plugin, URDF contract and regressions belong together, depending on native GT/applied-IMU observation binding. 74 selected cases and native RED/GREEN support one wheel/motion authority; actual braking is reported, not a new physical-stop qualification. |
 | Motion-input finite/order protection | The input guards and actual Node fixture can stand independently of GNSS retiming; 13 original Node cases passed. Later source-history consumers depend on these guards. |
 | Rebase information and absolute gyro bias | Two independently causal Core repairs, with their tests/lifecycle pieces; source acquisition retention depends on information-preserving typed rebase. 52 focused cases passed before source integration. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |

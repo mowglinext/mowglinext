@@ -159,6 +159,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_nav2_readiness_gate
     test/test_nav2_readiness_gate.py
   )
+  ament_add_pytest_test(test_kinematic_wheel_feedback
+    test/test_kinematic_wheel_feedback.py
+  )
   ament_add_pytest_test(test_ground_truth_publisher
     test/test_ground_truth_publisher.py
   )

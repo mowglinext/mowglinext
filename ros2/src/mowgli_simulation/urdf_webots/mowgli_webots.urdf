@@ -203,19 +203,13 @@
 
     <plugin type="webots_ros2_control::Ros2Control" />
 
-    <!-- Phase 2.2: kinematic drivetrain. Replaces wheel-friction body
-         coupling with Supervisor.setVelocity() driven directly from
-         /cmd_vel. Without this plugin the chassis pitches ~12° forward
-         under cmd_vel and only ~10 % of the commanded velocity reaches
-         the body (90 % wheel-floor slip). See
-         mowgli_simulation/kinematic_drive.py for the full rationale. -->
-    <plugin type="mowgli_simulation.kinematic_drive.KinematicDrive">
-      <!-- sim_actuation_node is the sole firmware-model authority. Feed its
-           achievable twist to both this chassis driver and ros2_control so
-           ground truth and wheel odometry cannot diverge by scheduler phase. -->
-      <cmdVelTopic>/cmd_vel_wheels</cmdVelTopic>
-      <applyFirmwareModel>false</applyFirmwareModel>
-    </plugin>
+    <!-- Kinematic body motion comes from native measured wheel increments.
+         ros2_control remains the sole wheel-motor writer, with its existing
+         velocity/acceleration limits and command timeout. The chassis must
+         follow those actual wheels instead of independently integrating the
+         pre-limit /cmd_vel_wheels stream. ODE ground-friction coupling is
+         still replaced by the planar kinematic chassis model. -->
+    <plugin type="mowgli_simulation.kinematic_drive.KinematicDrive" />
   </webots>
 
   <!-- ── ros2_control joint declarations ───────────────────────────── -->
