@@ -60,14 +60,45 @@ observer. The bounded candidate uses the controller's longitudinal criterion
 only when the phase-local nearest cursor has reached that endpoint; without
 that extra condition it falsely credits another corner from 0.338 m away.
 The corrected replay saves cursor 80 and reloads the original 15-pose forward
-tail, with no unit or area marked mowed. Both 5 mm reverse-endpoint checks remain
+tail, with no unit or area marked mowed; all 13 focused BT cases pass. Both 5 mm reverse-endpoint checks remain
 unchanged. Five sampled approximately 10 Hz phase offsets agree with the full
 retained trace; they are not a universal sampling guarantee. A separate actual
 ControllerServer zero-reverse tail parser comparison is RED/GREEN, with final
 error 18.469 mm against the unchanged 30 mm request. These candidates remain
-outside the production diff; consecutive-goal late-halt validation and general
-ordered-path recovery are still open. Exact data and limitations are retained in
+outside the production diff. General ordered-path recovery is still open: an
+independent synthetic pose 0.5 m lateral to another endpoint wrongly advances
+the observer even when that endpoint is nearest. The retained replay is not a
+general traversal certificate. Exact data and limitations are retained in
 `pr950-resume-20261030/{actual-server-seam,pivot-progress-repair,zero-reverse-tail}/`.
+
+A subsequent actual FollowStrip/ControllerServer trial now completes both
+halt/reload seams and the zero-reverse tail. The first attempt loaded an old
+regular plugin file left by a dereferenced prefix symlink; its raw evidence is
+preserved as an old-plugin baseline. It independently passes checkpoints 16 then
+80, both real CANCELED/zero seams and third-action success, but does not execute
+the new governor. Runtime plugin attribution was corrected before any such
+claim. The additional single trial records the actual server's mapped DSO inode
+and unchanged before/after hash, and observes the new internal-goal distance /
+0.7 s cap reducing near-G requests from roughly 0.126 to 0.043 m/s. Measured
+velocity, phase endpoints, geometry and all guard/tolerance settings stay intact.
+
+The corrected-plugin run finishes in 44.99 s: original N/R errors are 4.932 and
+4.551 mm; final goal error is 18.416 mm against the unchanged 30 mm request.
+The actual third goal contains the original 15-pose forward suffix, and the unit
+is booked only after real server success. All 2,261 retained Euler intervals
+are continuous and unclipped; their 1,220 positive intervals in seven forward
+strokes again leave none of the 34 continuous required lines uncovered in the
+explicitly nominal/unexecuted prefix and suffix context. The model directly
+integrates commands without actuator dynamics and keeps mowing disabled.
+Independent evidence review passes for this one corrected-plugin sequence and
+conditional geometry result. Builds including the failed header attempt take
+65.83 s under the 90 s cap. The initial 44.56 s old-plugin trial and explicitly
+authorized additional trial remain separately recorded; no more runs were made.
+The old-plugin baseline also passes, so these trials do not isolate braking as
+the sole cause of earlier failures or establish general repeatability. The
+unexecuted R-to-J continuation and observer counterexample remain blockers to
+production adoption. See `internal-goal-braking/` and
+`internal-goal-braking-governor-cut/` alongside the other external evidence.
 
 ## Coverage action late-result ownership (2026-10-29)
 
