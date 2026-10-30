@@ -5,6 +5,70 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Strict straight-goal response braking (2026-10-30)
+
+A focused real-FTC loop exposes a separate completion defect under the existing
+forward-response guard: on a straight 0.80 m path with a 0.03 m XY request and a
+boundary at x=0.80 m, the old controller still requests/measures 0.15 m/s at
+x=0.72 m. Its unchanged 0.60 s response envelope reaches x=0.81 m, so the guard
+correctly rejects motion before the goal band. This is a controlled software
+reproduction, not retrospective attribution of the recorded boundary event.
+
+FTC now reduces forward requests before that terminal stop, reserving the
+existing response horizon plus one intended 0.10 s command interval. The cap
+uses planar goal distance and the same supported TF epoch as final authorization;
+measured speed and all geometry, coast, timeout and acceptance limits remain
+unchanged. Eligibility requires a globally straight, monotone forward plan with
+consistent headings. Curved, reversing and crossing plans retain their previous
+behavior; a turn-fallback splice clears eligibility. This narrow scope avoids
+mistaking an intermediate visit to the endpoint for final progress.
+
+The original straight case is RED on the old controller and GREEN after repair.
+A separate stale-pose regression is RED on the first governor: rejected pose data
+could arm its departure latch. Departure now commits only after authorized
+nonzero forward output. The final coherent fixture/controller/fallback build
+passes **82 focused controller cases** in 23.35 s, including the unchanged
+one-second goal-timeout/height control and default/looser/null traces. Exact and
+5 mm near-crossing tests verify eligibility exclusion, not executed loop
+completion. Fallback invalidation is source-reviewed without a direct splice
+assertion. Independent final review and clang-format 18 pass. Cached-object
+component evidence is not a clean workspace, hosted CI or hardware result.
+Exact RED/GREEN artifacts and review are retained in
+`pr950-resume-20261030/strict-terminal-governor/` outside version control.
+
+## Ordered maneuver continuation experiments (2026-10-30)
+
+External plugin factories now load the experimental ordered FTC/checker through
+actual Nav2 ControllerServer 1.5.2. One real FollowStrip plus ControllerServer
+95-pose alignment run halts in the first reverse, observes cancellation and STOP,
+reloads its disk checkpoint, preserves original retreat endpoints, and completes
+the local goal before marking its unit mowed. Its 2,230 retained plant intervals
+also preserve all 34 continuous 9 cm required lines when combined with the
+explicitly unexecuted nominal prefix and suffix. This is a local, blade-off
+software experiment; the remaining roughly 5.7 m R-to-J continuation is unrun.
+A later repeat correctly aborts on the unchanged forward-response guard before
+the second retreat. The one successful run does not establish repeatability or
+production readiness, and the straight-goal repair above does not repair these
+internal maneuver endpoints.
+
+A later two-halt run reveals an independent checkpoint defect: the experimental
+observer demands Euclidean 2 cm arrival at an internal pivot, while actual FTC
+uses its longitudinal robot-frame coordinate. The robot passes 31.718 mm from
+pivot A and completes both retreats, but FollowStrip saves cursor 41/95. A
+retained-pose replay through actual FollowStrip reproduces cursor 41 on the old
+observer. The bounded candidate uses the controller's longitudinal criterion
+only when the phase-local nearest cursor has reached that endpoint; without
+that extra condition it falsely credits another corner from 0.338 m away.
+The corrected replay saves cursor 80 and reloads the original 15-pose forward
+tail, with no unit or area marked mowed. Both 5 mm reverse-endpoint checks remain
+unchanged. Five sampled approximately 10 Hz phase offsets agree with the full
+retained trace; they are not a universal sampling guarantee. A separate actual
+ControllerServer zero-reverse tail parser comparison is RED/GREEN, with final
+error 18.469 mm against the unchanged 30 mm request. These candidates remain
+outside the production diff; consecutive-goal late-halt validation and general
+ordered-path recovery are still open. Exact data and limitations are retained in
+`pr950-resume-20261030/{actual-server-seam,pivot-progress-repair,zero-reverse-tail}/`.
+
 ## Coverage action late-result ownership (2026-10-29)
 
 The continuation found a separate real action-lifecycle defect: FollowStrip

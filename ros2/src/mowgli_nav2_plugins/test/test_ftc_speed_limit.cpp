@@ -115,6 +115,16 @@ struct FTCSpeedLimitTestAccess
     controller.authorization_ = mowgli_interfaces::motion::Snapshot::parse(markers);
   }
 
+  static bool StrictGoalStraightPlan(const FTCController& controller)
+  {
+    return controller.strict_goal_straight_plan_;
+  }
+
+  static bool StrictGoalDeparted(const FTCController& controller)
+  {
+    return controller.strict_goal_departed_;
+  }
+
   static bool Stalled(const FTCController& controller)
   {
     return controller.is_stalled_;
@@ -424,6 +434,142 @@ TEST_F(FtcRequestedGoalTolerance, StricterCheckerKeepsFollowingUntilRequestedPos
   EXPECT_GE(reached, 0.80 - checker.x);
   EXPECT_LE(reached, 0.80 + 0.02);
   EXPECT_DOUBLE_EQ(Tick(0.10, &checker), 0.0);
+}
+
+TEST_F(FtcRequestedGoalTolerance, StrictApproachSlowsBeforeBoundaryResponseReachesGoal)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  visualization_msgs::msg::MarkerArray markers;
+  visualization_msgs::msg::Marker marker;
+  marker.header.frame_id = "map";
+  marker.ns = "area";
+  marker.text = "mowing";
+  marker.type = marker.LINE_STRIP;
+  marker.action = marker.ADD;
+  marker.pose.orientation.w = 1.0;
+  for (const auto& xy :
+       std::vector<std::pair<double, double>>{{-5, -5}, {0.80, -5}, {0.80, 5}, {-5, 5}})
+  {
+    geometry_msgs::msg::Point p;
+    p.x = xy.first;
+    p.y = xy.second;
+    marker.points.push_back(p);
+  }
+  markers.markers.push_back(marker);
+  mowgli_nav2_plugins::FTCSpeedLimitTestAccess::SetAuthorization(controller_, markers);
+  RequestedGoalTolerance checker;
+  std::vector<double> commands;
+  const double reached = FollowShortPath(&checker, &commands);
+  EXPECT_GE(reached, 0.80 - checker.x);
+  EXPECT_LE(reached, 0.80);
+  EXPECT_TRUE(std::any_of(commands.begin(),
+                          commands.end(),
+                          [](double speed)
+                          {
+                            return speed > 0.0 && speed < 0.15;
+                          }));
+}
+
+TEST_F(FtcRequestedGoalTolerance, ClosedPathStartsMovingBeforeDepartingGoalBand)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  RequestedGoalTolerance checker;
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  for (int i = 0; i <= 16; ++i)
+    plan.poses.push_back(MakePose(0.05 * i));
+  for (int i = 15; i >= 0; --i)
+    plan.poses.push_back(MakePose(0.05 * i));
+  controller_.newPathReceived(plan);
+  measured_speed_ = 0.0;
+  double furthest = 0.0;
+  for (int i = 0; i < 25; ++i)
+  {
+    const double command = Tick(0.10, &checker);
+    robot_x_ += command * 0.10;
+    measured_speed_ = command;
+    furthest = std::max(furthest, robot_x_);
+  }
+  EXPECT_GT(furthest, checker.x);
+}
+
+TEST_F(FtcRequestedGoalTolerance, SelfNearPathKeepsInitialFollowingCommands)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  for (int i = 0; i <= 16; ++i)
+    plan.poses.push_back(MakePose(0.05 * i));
+  for (int i = 15; i >= 2; --i)
+    plan.poses.push_back(MakePose(0.05 * i));
+  plan.poses.push_back(MakePose(0.06));
+  auto first_commands = [&](nav2_core::GoalChecker* checker)
+  {
+    robot_x_ = 0.0;
+    measured_speed_ = 0.0;
+    controller_.newPathReceived(plan);
+    std::vector<double> commands;
+    for (int i = 0; i < 5; ++i)
+    {
+      const double command = Tick(0.10, checker);
+      commands.push_back(command);
+      robot_x_ += command * 0.10;
+      measured_speed_ = command;
+    }
+    return commands;
+  };
+  const auto baseline = first_commands(nullptr);
+  RequestedGoalTolerance checker;
+  const auto strict = first_commands(&checker);
+  EXPECT_EQ(strict, baseline);
+  EXPECT_GT(robot_x_, 0.0);
+}
+
+TEST_F(FtcRequestedGoalTolerance, RejectedStalePoseDoesNotArmDeparture)
+{
+  SetParameter("max_goal_distance_error", 0.50);
+  RequestedGoalTolerance checker;
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  for (int i = 0; i <= 16; ++i)
+    plan.poses.push_back(MakePose(0.05 * i));
+  controller_.newPathReceived(plan);
+  measured_speed_ = 0.0;
+  ASSERT_DOUBLE_EQ(Tick(0.10, &checker), 0.0);
+  ASSERT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::StrictGoalDeparted(controller_));
+
+  // Advance the clock without publishing a new robot transform. The stale
+  // pose is outside the goal band, but cannot authorize forward motion.
+  time_ns_ += 500000000;
+  SetTime();
+  geometry_msgs::msg::Twist measured;
+  EXPECT_THROW(controller_.computeVelocityCommands(
+                   Pose{}, measured, &checker, nav_msgs::msg::Path{}, Pose{}),
+               nav2_core::ControllerException);
+  EXPECT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::StrictGoalDeparted(controller_));
+  EXPECT_GT(Tick(0.10, &checker), 0.0);
+  EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::StrictGoalDeparted(controller_));
+}
+
+TEST_F(FtcRequestedGoalTolerance, CrossingAndNearCrossingAreNotStraightTerminalPlans)
+{
+  for (const double offset : {0.0, 0.005})
+  {
+    nav_msgs::msg::Path plan;
+    plan.header.frame_id = "map";
+    // The goal is visited before the end; no explicit pivot marker is used.
+    for (const auto& xy : std::vector<std::pair<double, double>>{
+             {-0.10, 0.0}, {0.0, 0.0}, {0.04, 0.04}, {0.08, 0.0}, {0.0, offset}})
+      plan.poses.push_back(MakePose(xy.first, xy.second));
+    controller_.newPathReceived(plan);
+    EXPECT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::StrictGoalStraightPlan(controller_));
+  }
+  nav_msgs::msg::Path straight;
+  straight.header.frame_id = "map";
+  for (int i = 0; i <= 16; ++i)
+    straight.poses.push_back(MakePose(0.05 * i));
+  controller_.newPathReceived(straight);
+  EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::StrictGoalStraightPlan(controller_));
 }
 
 TEST_F(FtcRequestedGoalTolerance, FutureTransformDoesNotParkBeforeCurrentPosition)

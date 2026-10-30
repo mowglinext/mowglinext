@@ -891,6 +891,8 @@ private:
   // Configured max linear speed, captured at configure() and on every
   // max_cmd_vel_speed parameter change. External limits never overwrite it.
   double base_max_cmd_vel_speed_{2.0};
+  bool strict_goal_departed_{false};
+  bool strict_goal_straight_plan_{false};
 };
 
 }  // namespace mowgli_nav2_plugins

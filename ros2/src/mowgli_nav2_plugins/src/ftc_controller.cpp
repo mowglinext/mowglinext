@@ -56,6 +56,44 @@ constexpr double kIntendedCommandHorizonSec = 0.1;
 // Existing integration ceiling; budget commands must also fit this longest
 // supported controller interval. This is not a downstream command lease.
 constexpr double kMaxControlDtSec = 0.5;
+
+// Only a globally straight forward path identifies the goal approach without
+// needing the robot's progress through a self-crossing or curved path. The
+// tolerance only absorbs floating-point path construction noise.
+bool IsStraightForwardPlan(const nav_msgs::msg::Path& path)
+{
+  constexpr double kGeometryEpsilon = 1e-6;
+  if (path.poses.size() < 3)
+    return false;
+  const auto& start = path.poses.front().pose.position;
+  const auto& end = path.poses.back().pose.position;
+  const double dx = end.x - start.x;
+  const double dy = end.y - start.y;
+  const double length = std::hypot(dx, dy);
+  if (!std::isfinite(length) || length <= kGeometryEpsilon)
+    return false;
+  const double ux = dx / length;
+  const double uy = dy / length;
+  const double heading = std::atan2(uy, ux);
+  double previous = 0.0;
+  for (const auto& stamped : path.poses)
+  {
+    const auto& pose = stamped.pose;
+    const double x = pose.position.x - start.x;
+    const double y = pose.position.y - start.y;
+    const double along = x * ux + y * uy;
+    const double lateral = x * uy - y * ux;
+    const double yaw = tf2::getYaw(pose.orientation);
+    const double angle = std::atan2(std::sin(yaw - heading), std::cos(yaw - heading));
+    if (!std::isfinite(along) || !std::isfinite(lateral) || !std::isfinite(angle) ||
+        std::abs(lateral) > kGeometryEpsilon || along + kGeometryEpsilon < previous ||
+        along < -kGeometryEpsilon || along > length + kGeometryEpsilon ||
+        std::abs(angle) > kGeometryEpsilon)
+      return false;
+    previous = along;
+  }
+  return true;
+}
 }  // namespace
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -65,6 +103,8 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
                               std::shared_ptr<tf2_ros::Buffer> tf,
                               std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros)
 {
+  strict_goal_departed_ = false;
+  strict_goal_straight_plan_ = false;
   node_ = parent;
   plugin_name_ = name;
   tf_buffer_ = tf;
@@ -882,6 +922,8 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
 void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
 {
   current_state_ = PlannerState::PRE_ROTATE;
+  strict_goal_departed_ = false;
+  strict_goal_straight_plan_ = IsStraightForwardPlan(path);
   state_entered_time_ = clock_->now();
   is_crashed_ = false;
 
@@ -1296,10 +1338,13 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   cmd_vel.header.frame_id = "base_link";
   cmd_vel.header.stamp = clock_->now();
   bool requested_goal_approach = false;
+  bool strict_goal = false;
+  double strict_goal_tolerance = 0.0;
 
   // Apply the hard linear cap at every output boundary, after movement floors
   // and including reverse escape / turn-fallback commands that bypass the PID.
-  const auto bounded_command = [this, &cmd_vel, &velocity, &requested_goal_approach]()
+  const auto bounded_command =
+      [this, &cmd_vel, &velocity, &requested_goal_approach, &strict_goal, &strict_goal_tolerance]()
   {
     const double max_speed = maxLinearSpeed();
     cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
@@ -1350,13 +1395,68 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
               "FTCController: no supported pose for authorization");
       }
     }
-    if (check_forward_sweep &&
+    bool candidate_departure = false;
+    if (strict_goal && strict_goal_straight_plan_ && cmd_vel.twist.linear.x > 0 && guard_epoch &&
+        (current_state_ == PlannerState::FOLLOWING ||
+         current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH))
+    {
+      try
+      {
+        Eigen::Affine3d goal, local_goal;
+        tf2::fromMsg(global_plan_.back().pose, goal);
+        const auto transform =
+            supportedPoseTransform("base_link", plan_header_.frame_id, &*guard_epoch);
+        tf2::doTransform(goal, local_goal, transform);
+        const auto& position = local_goal.translation();
+        const double distance = std::hypot(position.x(), position.y());
+        if (!std::isfinite(distance))
+          throw nav2_core::ControllerException("FTCController: invalid terminal goal position");
+        // A closed path can start at its goal. Do not govern it until a
+        // supported pose has actually left the requested XY band.
+        candidate_departure = distance > strict_goal_tolerance;
+        // A nearby endpoint on an unfinished loop is not yet a terminal
+        // approach. Measure the remaining path from the current carrot, and
+        // begin braking before the carrot reaches the final pose.
+        const double horizon =
+            2.0 * kIntendedCommandHorizonSec + config_.obstacle_coast_time_bound_s;
+        const double arc_window = max_speed * horizon;
+        double remaining_arc = 0.0;
+        double px = current_control_point_.translation().x();
+        double py = current_control_point_.translation().y();
+        for (std::size_t i = current_index_ + 1; i < global_plan_.size(); ++i)
+        {
+          const auto& point = global_plan_[i].pose.position;
+          remaining_arc += std::hypot(point.x - px, point.y - py);
+          px = point.x;
+          py = point.y;
+          if (remaining_arc > arc_window)
+            break;
+        }
+        // Reserve one intended command interval in addition to the response
+        // horizon: the next measured velocity may still equal this request.
+        // Use the full distance so the tolerance band can be entered in finite
+        // time. Neither interval establishes a downstream command lease.
+        if ((strict_goal_departed_ || candidate_departure) && !nextPivotCorner() &&
+            std::isfinite(remaining_arc) && remaining_arc <= arc_window)
+          cmd_vel.twist.linear.x =
+              std::min(cmd_vel.twist.linear.x, std::nextafter(distance / horizon, 0.0));
+      }
+      catch (const tf2::TransformException&)
+      {
+        throw nav2_core::ControllerException("FTCController: no supported terminal goal pose");
+      }
+    }
+    if (check_forward_sweep && cmd_vel.twist.linear.x > 0 &&
         (!guard_epoch || forwardCommandSweepBlocked(cmd_vel.twist, velocity, &*guard_epoch)))
     {
       waitOrThrowForObstacle("proposed forward chassis/response sweep intersects lethal cells");
       cmd_vel.twist = geometry_msgs::msg::Twist{};
     }
     authorizeCommand(cmd_vel.twist, velocity, guard_epoch ? &*guard_epoch : nullptr);
+    // A stale or invalid pose, a geometry rejection, or a STOP cannot prove
+    // departure. Commit only after forward motion is actually authorized.
+    if (cmd_vel.twist.linear.x > 0)
+      strict_goal_departed_ = strict_goal_departed_ || candidate_departure;
     last_cmd_fwd_speed_ = cmd_vel.twist.linear.x;
     last_reverse_budget_speed_ = reverse_budget_speed;
     turn_fallback_.last_reverse_speed_mps =
@@ -1460,6 +1560,9 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
                    std::min(pose_tolerance.position.x, pose_tolerance.position.y));
     }
   }
+
+  strict_goal = valid_goal_tolerance && goal_distance_error < config_.max_goal_distance_error;
+  strict_goal_tolerance = goal_distance_error;
 
   // 1. Advance the carrot; compute lat/lon/angle errors in base_link.
   requested_goal_approach =

@@ -13,6 +13,14 @@ revision identity. A valid goal checker can keep the timed terminal approach
 moving outside its effective distance cap. Strict XY requests use planar
 distance; the existing default 3D comparison remains.
 
+Strict XY approaches on globally straight monotone forward plans proactively
+cap the final forward request using supported planar distance / (existing
+response horizon + one intended 0.1 s interval). `newPathReceived` classifies the
+whole plan; a turn-fallback splice clears eligibility. Curved/reversing/crossing
+plans retain prior behavior. Measured speed, final authorization, coast bounds
+and timeout remain authoritative. `test_ftc_speed_limit.cpp` contains the
+boundary RED/GREEN, stale-pose latch and crossing-eligibility controls.
+
 When the goal checker's query TF is future-dated, it recovers the supplied goal
 at the transformed local-plan header epoch and evaluates progress/completion in
 the full-plan frame. This relies on the selected Lyrical FeasiblePathHandler
