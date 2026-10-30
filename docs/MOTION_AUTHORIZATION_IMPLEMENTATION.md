@@ -5,6 +5,108 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Production terminal-point repair (2026-10-31)
+
+The retained curved endpoint exposed a production cause distinct from map size:
+WAITING followed the penultimate path heading while the strict requested final
+point remained sideways. Angular and lateral terms could oppose the turn toward
+that point, leaving the controller outside its unchanged 30 mm goal until the
+original timeout. An actual-controller component using the captured parameters
+fails on `15c562fa` and reaches FINISHED with zero output at **29.190 mm** after
+`89d56b27`, both in original coordinates and after a 90-degree rotation.
+
+The repair targets the final point only for valid stricter XY requests on cached
+finite forward-monotone map-frame plans without pivots. It preserves the timed
+WAITING state, restores final yaw on entry to POST_ROTATE, excludes avoidance and
+reverse/fallback, and invalidates eligibility on a fallback splice. Translation
+is limited by radial distance and the existing response horizon. Angular
+alignment requires stopped measured translation, the full local lethal-cell
+sweep and raw remaining-rotation authorization. Default/equal/looser requests,
+loops, pivots and reversing plans retain prior control.
+
+Independent review found another concrete defect before shipping: the sweep
+could select a newer supported TF epoch than the alignment decision. With zero
+or smaller new bearing, retained PID history could request rotation beyond the
+locally checked arc. Two deterministic actual-controller regressions advance TF
+between those decisions and retain a lethal cell outside the checked arc but
+inside the old output arc. Frozen prior point-mode code requests **0.8 rad/s at
+zero bearing**, and **0.08 rad per intended interval after checking only 0.02
+rad**. Both fail as expected; the corrected code rechecks the alignment threshold,
+requires the checked direction and caps rotation to the checked arc over the
+existing 0.1 s interval. Both tests then pass without relaxing a limit.
+
+Final validation is **151 passing cases** against the repaired production DSO:
+90 FTC, 17 goal-checker and 44 end-approach. Independent strong final review has
+no actionable findings; clang-format 18 and whitespace checks pass. Coherent
+builds include FTC, fallback, plugin factory and constructing fixture after the
+header change. All attempts, including earlier fixture failures and review
+iterations, consume **302.976 s build/link** under the explicitly extended 340 s
+total cap and **106.621 s tests** across bounded phases; no TU exceeds 45 s.
+Exact snapshots, old/new DSOs, XML, commands and reviews are retained under
+`pr950-resume-20261030/production-terminal-point/`, with final pins in
+`REVIEW_FIX_RESULTS.md` and `review-fix-final-manifest.json`.
+
+This closes the scoped production endpoint and checked-arc defects. The complete
+213-pose success below still uses a separate experimental controller ABI and
+geometric progress prototype; it is not current-production chain validation.
+Production maneuver generation, reliable restart/reposition composition and the
+invalid true-flip prior remain separate unresolved questions. Intended intervals
+are not actuator leases, supported timestamps are not atomic TF revisions, and
+no robot/field acceptance is inferred. PR #950 remains Draft.
+
+## Corrected local composition (2026-10-30, experimental chain)
+
+One final targeted actual FollowStrip/ControllerServer run combines the unchanged
+213-pose program, corrected point-entry and terminal controller, and checked-in
+rolling local-map contract. It compiles nothing and retries nothing. The same
+immutable mapped experimental DSO and input/driver are reused; original mowing
+geometry, holes, footprint, PID parameters, reverse limits and 30 mm final goal
+request remain unchanged. This is a local controller/BT composition, not a full
+robot or 9,420-pose mission run, and its experimental ABI is not the new production
+FTC/goal-checker ABI.
+
+The complete action passes in **75.44 s**. Original N/R endpoint errors are
+4.807 and 4.040 mm under the unchanged 5 mm controller criterion. The borrowed
+driver observer allowed 5.5 mm; an independent post-hoc validator instead checks
+the chronological raw reverse endpoints against the strict 5 mm bound and passes
+both. The frozen driver is not rewritten. Both real halt checkpoints
+(16 then 80) retain no unit/area completion, and each observed CANCELED plus zero
+precedes its successor. The third 133-pose forward suffix constructed from the original unit reaches
+real Nav2 goal success before FollowStrip books the unit and area. Retained
+driver checks cover count, original first pose and forward direction, rather
+than a separate full-array packet-equality assertion. Final goal error
+is **26.543 mm** under **30 mm**, with zero output. All 139 recorded point-reference
+samples use supported epochs no later than ROS now; the rolling domain is
+observed, not inferred from its YAML. Maximum uncapped plant interval is 55.934 ms,
+with no clipping, verified from raw intervals/source rather than the literal
+zero clip-counter field. A separate numerical interpolation analysis finds
+21.451 mm reference margin inside the raw mowing rectangle and 19.726 mm
+computed body/hole separation after the rotation-remainder bound. Its
+convex-hull/second-derivative argument has independent review; ordinary floating-
+point/GDAL error is not formally bounded, and its linear-center/linear-yaw model
+is not physical containment evidence. Exact 3,852 Euler intervals and seven
+positive strokes again leave zero deficit on all 34 continuous 9 cm required lines, without any nominal
+R-to-J bridge. Only the explicitly unexecuted original pre-S and post-old268
+context remains nominal. Nearest J distance is 49.732 mm; J is an intermediate
+waypoint, and strict 30 mm J arrival is not asserted.
+
+This closes the previously unexecuted local rejoin/endpoint composition question
+for one ideal-plant case. It does not establish general repeatability, an actual
+native wheel/actuator run, production planner/controller integration, or physical
+cutting. The run still uses the earlier geometric ordered checkpoint prototype;
+its separate false-credit counterexample remains. The conservative whole-unit
+alternative below has component/source evidence and has not been run through
+real repositioning transit. The separately rebuilt production controller above
+now has adversarial angular-history/local-obstacle coverage; that does not
+requalify this older experimental DSO or establish production execution of the
+complete program. The historical 13.943731 mm event still
+lacks its accepted graph/anchor/optimizer facts; new success cannot reconstruct
+them. All prior REDs and unqualified draft results are preserved. Exact current
+artifacts are `pr950-resume-20261030/full-rejoin-composition/RESULTS.md`, its
+manifest, actual-cut result, `RAW_AUDIT.md`, strict endpoint check and
+`CONTAINMENT_REVIEW.md`. The audit distinguishes program J from an unused legacy
+scaffold J and filtered origin-change samples from every costmap publication.
+
 ## Goal-checker plan ownership (2026-10-30)
 
 A new current-production reproduction exposes a separate premature completion:
@@ -44,6 +146,164 @@ review, clang-format 18 and whitespace checks pass. This is focused cached-objec
 evidence, not a clean workspace, hosted CI, actual ControllerServer integration
 or hardware run of this new ownership code. Exact artifacts are retained in
 `pr950-resume-20261030/{goal-checker-reset-probe,goal-plan-ownership}/`.
+
+For a smaller independently reviewable repair, keep the FTC/checker handshake,
+revision changes and fallback binding together; applying only checker reset
+would leave completion blocked. Its tests are current-branch evidence, not an
+extracted target-base validation. Callback outcome ownership and include-only
+planner header repairs remain separate useful families. None of the external
+geared/reverse-entry/atomic prototypes is an already integrated production subset, and
+no extraction is performed.
+
+## Reverse-entry and full-rejoin discriminator (2026-10-30, continuation)
+
+The next external input preserves the original first 95 poses and appends the
+previously assumed R-to-J ray plus original successor poses 265–268 (213 poses).
+A single actual FollowStrip/ControllerServer run fails before its second retreat.
+Its last retained stopped G pose is 26.914 mm away, within the unchanged 30 mm
+arrival disk, but the original reverse axis reconstructs 9.950 mm sideways,
+outside the unchanged 5 mm span limit; the internal rejected tuple is not retained. The
+candidate stops on radial proximity before evaluating that span; the actual
+reverse remains guarded and does not start. At this retained pose, heading and
+lateral P terms nearly cancel while body lateral error is 9.754 mm. Continuing
+unchanged following therefore does not establish arrival alignment. The BT
+observer separately advances 70→71→72 on the same stationary pose and saves
+72/213 despite no second reverse command. This strengthens the checkpoint
+ownership counterexample beyond the earlier hypothetical lateral pose.
+
+A bounded external correction uses point bearing on the qualified final straight
+to M/G, through the existing PID, and requires the existing backward/lateral/yaw
+span predicates before stopping for reverse entry. All original full-span,
+rear/body/geometry/authorization guards remain intact. The exact G P-term
+cancellation becomes a corrective positive request; this algebra is not a global
+convergence proof. The 213-pose actual run verifies the new mapped DSO and 128
+active point-reference samples at supported epochs no later than ROS now. G
+entry lateral error is 0.212 mm, both original retreats finish within 4.977 mm,
+and both real halt/CANCELED/zero/reload sequences pass. No geometry, gain,
+acceptance or timeout parameter is changed.
+
+The complete action is still **RED** after 81.71 s: its third forward suffix
+reaches the original successor region, then the unchanged forward chassis/
+response lethal-cell guard aborts after its existing four-second wait. The
+minimum final-goal error over all 4,095 retained plant endpoints is 37.862 mm,
+outside the unchanged 30 mm request. Nearest approach to J is 49.857 mm, so no
+strict J-point arrival is claimed. Nevertheless, the nine executed positive
+strokes cover all 34 continuous 9 cm required lines with **no assumed R-to-J
+bridge**; only the explicitly unexecuted original pre-S and post-old268 context
+remains nominal. Independent review repeats that conditional geometry check and
+retains the overall motion failure. This is an ideal Euler/TF component with
+mowing disabled, not actuator, full-mission or physical cutting evidence.
+
+The final body fits the fixed fixture grid (min x=-4.961 m, grid edge=-5 m),
+while a counterfactual response using its last positive command reaches
+x=-5.005 m. That is not a replay of the exact rejected internal tuple. The
+checked-in production local costmap instead rolls a 12 m square window at 5 cm
+resolution; changing fixture bounds alone cannot prove completion. At the final
+pose the goal has body coordinates (+4.597,+37.581) mm and bearing +1.449 rad.
+WAITING still uses the penultimate old267 orientation, giving a negative
+heading/lateral P sum (-0.0829 rad/s), rather than steering toward that point.
+True old268 orientation is restored in POST_ROTATE. The subsequent terminal position/heading discriminator below addresses this
+software question while retaining the 30 mm threshold.
+
+The progress analysis rejects two apparent shortcuts: ordinary Nav2 path-index
+feedback is another geometric search, and splitting phases into separate goals
+resets reverse budgets and earned-forward credit. A controller-confirmed phase
+prefix must distinguish accepted reverse entry (completes the forward phase)
+from an owned <=5 mm reverse exit (completes the retreat). The current plugin API
+does not carry the action UUID into the controller, so fine-grained phase
+transport into the BT is still an explicit integration gap. Conservative whole-unit replay below avoids
+requiring that transport for checkpoint correctness. No generic timeout or
+larger lateral band solves that identity question. Exact data, negative properties and independent
+review are in `full-rejoin-discriminator/`, `progress-new-angle/` and
+`point-entry-approach/` under the 2026-10-30 cache. These remain external candidates.
+
+## Terminal point/reference versus costmap domain (2026-10-30)
+
+A paired actual-ControllerServer component starts once at the retained final
+pose and follows only original old266–268. No pose is reset during a run and no
+private FTC state is injected. It preserves the original 30 mm XY request,
+10 s WAITING deadline, raw mowing/holes, footprint, gains and response guards.
+The domain comparison changes only the fixture's fixed 20 m window into the
+checked-in rolling 12 m window (same 5 cm resolution and 10 Hz updates). Both
+old-law cases time out outside the goal band: fixed 37.705 mm, rolling 39.818 mm.
+Their raw maps contain zero lethal/unknown cells; rolling bounds alone therefore
+do not repair endpoint nonconvergence. These components reproduce the failed
+position acceptance, not the full chain's exact sweep-abort exception.
+
+The external position-first candidate uses the actual goal bearing in WAITING,
+reuses the existing 30 degree PRE_ROTATE criterion, waits for the existing
+<=0.01 m/s stopped condition, then applies complete local pivot and raw remaining-
+rotation checks before pure angular output. Translation retains the distance /
+0.7 s cap. Entering POST_ROTATE restores the true original goal orientation;
+no state/deadline is restarted. Independent review found a direction mismatch
+in the first draft's combined angular/lateral PID: it could request the opposite
+turn from the local short sweep. Those first two new-case outputs are preserved
+as unqualified. The corrected draft reuses the pure-rotation PID and returns
+STOP on an output opposing the checked wrapped angle, including adverse/invalid
+sign products. This external source fix is reviewed; its own adverse-history/local-obstacle
+regression has not been performed. The separately rebuilt production counterpart
+above now includes that regression plus mid-call TF-epoch controls.
+
+The accepted corrected cases use a mapped immutable DSO and otherwise identical
+inputs. Fixed-domain motion remains RED at 34.303 mm on the original forward
+response/lethal guard. The rolling-domain component actually SUCCEEDS and emits
+zero, with final error **28.989 mm** under the unchanged **30 mm** request. All
+accepted Euler intervals and time/pose sequences are retained; no dt is clipped.
+The six cases together take 52.67 s; cumulative build including both reviewed
+source versions is 81.41 s under the explicitly expanded 90 s cap. No old control
+or 213-pose full workflow is rerun. Independent review supports only this narrow
+component comparison. The later full experimental workflow above passes; native
+actuator, general checkpoint and complete production-chain qualification remain
+open. Exact matrix, source revisions, reviewer
+finding and correction are in `terminal-point-approach/` alongside the other
+external evidence. This exact experimental DSO is not production code; the
+separate restricted production repair is recorded above.
+
+## Conservative whole-unit replay alternative (2026-10-30)
+
+A separate external mode avoids claiming uncertain partial traversal at all.
+For an unfinished ordered unit it saves the original unit base plus local zero,
+normalizes both the absolute cursor and max-merged per-unit progress before
+planner first-drive selection and FollowStrip trimming, and replays the original
+whole unit through one FollowPath goal. Completed units are retained only under
+the matching ordered geometry/yaw fingerprint. Every atomic start takes the
+existing blade-off transit to its original start, even below the unchanged
+0.6 m gap threshold. Only that transit's own result can release the follow goal;
+the original blade-readiness gate remains. This needs no controller phase wire
+or fresh per-phase reverse allowance. Whole-attempt budget reset semantics stay
+unchanged; no cross-retry physical budget claim is added.
+
+This explicit experimental selector leaves normal and earlier ordered behavior
+unchanged. Abort, dig, blocked-start and detour routes cannot manufacture a
+partial atomic suffix or mark the unfinished unit mowed; they use the existing
+bounded pass failure/retry. The cost is more than recutting: a recorded dig can
+withhold an entire unit and repeated incomplete runs can exhaust the existing
+no-progress budget. It is a conservative correctness/availability tradeoff,
+not an optimization of fine-grained resume.
+
+Real FollowStrip/fake-Nav2 tests replay the retained G observations, save/reload
+zero, require the original-S transit and then all 213 original XY/body-yaw poses
+including N/R. A near-first-reverse case only 0.48 m from S still transits. Abort
+and recorded-dig cases leave completion empty. A mowing-enabled case verifies
+OFF requests and no ENABLE before the current transit result, then ENABLE and
+fresh 3000 RPM readiness before FollowPath. Disk-context reload and same-client
+late-result delivery are separate test seams; destroying a process/client cannot
+produce its old callback. The initial two fixture failures preserved that
+mistake; only client lifetime was corrected, retaining receipt and blade/RPM
+assertions. All 13 prior controls and five new atomic cases pass across the
+preserved combined and focused runs. Compiler/link total is 59.08 s; total tests
+are approximately 38.24 s. Independent source review passes the limited policy;
+historical generators are disabled with drafts retained and pinned final sources
+used for reproduction.
+
+The previous object does not recognize the new mode ID and saves 77 in its RED;
+this is distinct from old ordered mode's actual 72. Matching partial migration
+with completed-unit sets, the real PlanCoverageArea action callback, active dig
+settle and repeated area budget exhaustion have only source review here. A real
+server alias, physical transit and whole-unit replay with this policy have not
+been run. This is an external alternative, not production code or general field
+qualification. Exact source, tests, split XML evidence, review and remaining
+cases are in `progress-unit-restart-option/`.
 
 ## Strict straight-goal response braking (2026-10-30)
 
@@ -800,6 +1060,8 @@ than inheriting a whole-branch CI result.
 | Automatic dock seed provenance | Keep the shared charging guard, callback ordering and timer fallback together. Two old-Node RED cases, two charging controls and 52 actual-Node GREEN cases support the narrow repair; general bad authoritative seed recovery remains separate. |
 | BT action result ownership | Five per-dispatch slot renewals and real-class/fake-Nav2 regressions form a small separate family. Five late-old-success REDs across FollowStrip follow/transit, TransitToStrip, DetourAroundObstacle and generic NavigateToPose; nine coverage-action and four generic-navigation/boundary-recovery cases GREEN, with independent reviews. No dependency on the unshipped maneuver or downstream cancellation qualification. |
 | FTC requested goal and consumer epoch | Keep the requested-distance approach, current terminal decision, goal transform provenance and final guard epoch repairs together. They depend on the selected Nav2 1.5.2 path-handler contract and existing geometry/response interfaces; extraction needs its own target-base validation. Software RED/GREEN does not establish a complete corner. |
+| Controller-owned goal plan | FTC/checker/fallback owner-and-revision handshake stays together; reset alone would hold completion. 147 completed focused cases, including both original causal cases, passed on `15c562fa`. Depends on the selected Nav2 first-query/path-handler ordering. |
+| Strict terminal point and checked angular arc | Four-file repair plus focused tests depends on requested XY/consumer epoch and existing raw response/rotation guards. Captured curved endpoint RED/GREEN and two mid-call TF arc RED/GREEN cases; final 151 component cases pass. It does not add geared maneuvers or establish full production route completion. |
 | Public coverage header includes | Include-only dependency reduction has unchanged coverage/replay evidence; it is separable from the unshipped constructive-corner prototype. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
 | FTC forward geometry response | Depends on existing raw geometry authorization and the assumed coast contract; shared envelope plus gate/tests belong together. 106 controller and 27 critic cases, plus one native containment GREEN. It stops before the cusp; route completion and calibrated physical containment remain unqualified. |
