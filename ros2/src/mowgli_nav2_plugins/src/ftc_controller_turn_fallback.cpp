@@ -345,6 +345,10 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
                  global_plan_.end());
 
   global_plan_ = std::move(spliced);
+  ++goal_plan_revision_;
+  // Publish controller ownership immediately, including when later control
+  // processing throws instead of returning a command.
+  bindGoalCheckerPlan();
   // A fallback splice replaces the original path with new turn geometry.
   strict_goal_straight_plan_ = false;
   {

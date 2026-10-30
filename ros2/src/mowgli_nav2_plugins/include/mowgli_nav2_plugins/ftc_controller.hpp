@@ -192,6 +192,11 @@ private:
   bool pivotSweepGate(double dt);
 
   std::vector<geometry_msgs::msg::PoseStamped> global_plan_;
+  // Incremented only when the controller's complete working plan changes.
+  uint64_t goal_plan_revision_{0};
+  // Valid only for the duration of computeVelocityCommands (including splices).
+  nav2_core::GoalChecker* active_goal_checker_{nullptr};
+  void bindGoalCheckerPlan();
   Eigen::Affine3d current_control_point_;  ///< Carrot pose in map frame.
   Eigen::Affine3d local_control_point_;  ///< Carrot pose in base_link frame.
 

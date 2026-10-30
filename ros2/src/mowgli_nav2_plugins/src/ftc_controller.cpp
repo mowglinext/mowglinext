@@ -45,6 +45,7 @@
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include "mowgli_nav2_plugins/ftc_start_index.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
+#include "mowgli_nav2_plugins/path_progress_goal_checker.hpp"
 
 namespace mowgli_nav2_plugins
 {
@@ -957,6 +958,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   angle_error_raw_prev_ = std::numeric_limits<double>::quiet_NaN();
 
   global_plan_ = path.poses;
+  ++goal_plan_revision_;
   current_index_ = 0;
   current_progress_ = 0.0;
 
@@ -1323,6 +1325,12 @@ void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command,
   }
 }
 
+void FTCController::bindGoalCheckerPlan()
+{
+  if (auto* progress = dynamic_cast<PathProgressGoalChecker*>(active_goal_checker_))
+    progress->bindControllerPlan(this, goal_plan_revision_, plan_header_, global_plan_);
+}
+
 // ── computeVelocityCommands ───────────────────────────────────────────────────
 
 geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
@@ -1334,6 +1342,16 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
 {
   // FTC owns the complete coverage path and its monotonic carrot cursor.
   // Do not replace it with the path handler's pruned local path each tick.
+  active_goal_checker_ = goal_checker;
+  struct ClearActiveChecker
+  {
+    nav2_core::GoalChecker*& checker;
+    ~ClearActiveChecker()
+    {
+      checker = nullptr;
+    }
+  } clear_active_checker{active_goal_checker_};
+  bindGoalCheckerPlan();
   geometry_msgs::msg::TwistStamped cmd_vel;
   cmd_vel.header.frame_id = "base_link";
   cmd_vel.header.stamp = clock_->now();

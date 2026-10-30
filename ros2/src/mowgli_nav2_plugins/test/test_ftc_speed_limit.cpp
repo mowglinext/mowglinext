@@ -33,6 +33,7 @@
 #include "motion_fixture.hpp"
 #include "mowgli_interfaces/motion_authorization.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
+#include "mowgli_nav2_plugins/path_progress_goal_checker.hpp"
 #include <gtest/gtest.h>
 #include <rcl/time.h>
 
@@ -40,6 +41,16 @@ namespace mowgli_nav2_plugins
 {
 struct FTCSpeedLimitTestAccess
 {
+  static bool SpliceTerminalPlan(FTCController& controller, nav2_core::GoalChecker* checker)
+  {
+    TurnFallbackPlan plan;
+    plan.rejoin = controller.global_plan_.size() - 4;
+    plan.connector_m = 0.0;
+    controller.active_goal_checker_ = checker;
+    const bool result = controller.spliceTurnFallback(plan, 0);
+    controller.active_goal_checker_ = nullptr;
+    return result;
+  }
   static bool GeometryReady(FTCController& controller)
   {
     std::lock_guard<std::mutex> lock(controller.authorization_mutex_);
@@ -338,6 +349,61 @@ protected:
   double robot_x_{0.0};
   double measured_speed_{0.20};
 };
+
+TEST_F(FtcSpeedLimit, GoalCheckerBindsCompleteCurrentPlanAfterReset)
+{
+  mowgli_nav2_plugins::PathProgressGoalChecker checker;
+  checker.initialize(node_, "coverage", costmap_);
+  auto loop = StraightPlan();
+  for (int i = 119; i >= 0; --i)
+    loop.poses.push_back(MakePose(0.05 * i));
+  controller_.newPathReceived(loop);
+  checker.reset();
+  auto at_start = MakePose(0.0).pose;
+  EXPECT_FALSE(checker.isGoalReached(
+      at_start, at_start, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  Tick(0.1, &checker);
+  for (int i = 0; i < 20; ++i)
+  {
+    EXPECT_FALSE(checker.isGoalReached(
+        at_start, at_start, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+    EXPECT_FALSE(checker.isGoalXYReached(
+        at_start, at_start, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  }
+  // The next full plan may have the same stamp, size and start. Its actual
+  // controller revision, rather than those heuristics, replaces the loop.
+  nav_msgs::msg::Path terminal;
+  terminal.header = loop.header;
+  terminal.poses.assign(loop.poses.size(), MakePose(0.0));
+  controller_.newPathReceived(terminal);
+  checker.reset();
+  EXPECT_FALSE(checker.isGoalReached(
+      at_start, at_start, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  Tick(0.1, &checker);
+  EXPECT_TRUE(checker.isGoalReached(
+      at_start, at_start, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+}
+
+TEST_F(FtcSpeedLimit, FallbackSpliceImmediatelyRebindsGoalChecker)
+{
+  mowgli_nav2_plugins::PathProgressGoalChecker checker;
+  checker.initialize(node_, "coverage", costmap_);
+  auto loop = StraightPlan();
+  for (int i = 119; i >= 0; --i)
+    loop.poses.push_back(MakePose(0.05 * i));
+  controller_.newPathReceived(loop);
+  checker.reset();
+  Tick(0.1, &checker);
+  const auto at_start = MakePose(0.0).pose;
+  EXPECT_FALSE(checker.isGoalReached(
+      at_start, at_start, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  // Exercise the actual splice commit with the selected checker, independent
+  // of lattice eligibility. No subsequent compute/output call supplies a bind.
+  ASSERT_TRUE(
+      mowgli_nav2_plugins::FTCSpeedLimitTestAccess::SpliceTerminalPlan(controller_, &checker));
+  EXPECT_TRUE(checker.isGoalReached(
+      at_start, at_start, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+}
 
 class RequestedGoalTolerance : public nav2_core::GoalChecker
 {

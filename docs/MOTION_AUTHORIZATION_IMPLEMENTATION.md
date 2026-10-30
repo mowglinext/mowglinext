@@ -5,6 +5,46 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Goal-checker plan ownership (2026-10-30)
+
+A new current-production reproduction exposes a separate premature completion:
+a previous three-pose path remains cached across `PathProgressGoalChecker::reset`.
+Before the new long loop's topic message arrives, its initial robot/goal pose
+matches the old short endpoint. Both goal methods return true without traversing
+the loop. The actual Nav2 1.5.2 order is newPathReceived, path-handler setPlan,
+checker reset, first goal query, then first controller compute. Topic arrival can
+precede reset or lag behind that first query; receipt time cannot identify the
+current goal's path. The same closed-loop input with the correct full plan does
+not complete. This software defect is independent of retrospective event attribution.
+
+Reset now revokes completion until the selected FTC instance directly binds its
+complete working plan and local plan revision. Its first compute supplies that
+binding; each new path or successful fallback splice changes the revision. A
+splice binds immediately, including before a later exception could leave stale
+checker authority. An unchanged binding preserves progress and avoids per-tick
+path copies. Topic messages cannot replace a controller-owned plan. Empty or
+missing-owner/frame bindings do not release completion or expire into proximity.
+Other goal-checker types, numeric progress/XY/yaw criteria, geometry, response
+limits and timeouts are unchanged. This is an in-process plan-identity contract,
+not physical pose provenance or a completed-phase checkpoint transport.
+
+The two original causal tests run unchanged against the repaired objects and
+pass. Final focused validation passes **147 completed cases**: 17 goal-checker,
+44 end-approach, 84 real-FTC and those two original controls. New cases exercise
+reset/rebind, late topic delivery, same stamp/size/start with a different revision,
+and actual fallback-splice binding. Existing numerical assertions remain intact;
+fixtures now supply the controller binding used in production. The legacy empty-
+topic watchdog is tested separately before controller ownership. The full
+fallback-controller suite is incomplete after the shared 60 s test cap (nine
+cases passed); it is not reported GREEN. The actual splice/rebind case is in the
+84-case passing fixture. The separately authorized original two-case check takes
+35 ms. Coherent affected TUs and constructing fixtures compile in 169.46 s under
+the 180 s cap, including a retained failed setup attempt. Independent final
+review, clang-format 18 and whitespace checks pass. This is focused cached-object
+evidence, not a clean workspace, hosted CI, actual ControllerServer integration
+or hardware run of this new ownership code. Exact artifacts are retained in
+`pr950-resume-20261030/{goal-checker-reset-probe,goal-plan-ownership}/`.
+
 ## Strict straight-goal response braking (2026-10-30)
 
 A focused real-FTC loop exposes a separate completion defect under the existing

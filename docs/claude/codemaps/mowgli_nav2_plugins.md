@@ -6,6 +6,14 @@
 
 > Lyrical API: full plans enter `newPathReceived`; local processed plans do not replace FTC progress. The goal checker transforms the costmap-frame query into the full-plan frame and exposes both XY and XY+yaw checks. Regression tests: `test/test_lyrical_goal_checker.cpp`; end-approach rule (short sub-paths FTC parks short of): `test/test_path_progress_end_approach.cpp`.
 
+The goal checker revokes completion on `reset()` until the selected FTC instance
+binds its complete working plan/revision through `bindControllerPlan`. FTC binds
+at compute entry; new paths and successful fallback splices advance revision,
+and splice binding is immediate even if later processing throws. Unchanged
+bindings preserve progress without per-tick path copies. Topic publications are
+legacy input before ownership and cannot replace an active controller plan.
+Tests cover the actual reset/first-query race, late old topics and splice rebind.
+
 Terminal evaluation and the final FTC guards select supported TF epochs no later
 than ROS now (`supportedPoseEpoch` in `ftc_controller.cpp`). Both final guards
 share one selected timestamp for each nonzero output; this is not atomic TF
@@ -190,7 +198,7 @@ None. Both classes are pluginlib plugins loaded by Nav2's `controller_server` (l
 |-------|------|-----|-----|-------------------|
 | `/FollowCoveragePath/global_point` | `geometry_msgs/PoseStamped` | pub | depth 1, lifecycle | Carrot pose (map frame) every tick — viz only. The relative name `<plugin>/global_point` resolves at the root namespace, NOT under `/controller_server` (the 2026-09-22 bag) |
 | `/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub | `QoS(1).transient_local()` | `global_plan_pub_`: the plan FTC drives, ONCE per `newPathReceived` (tail pose duplicated) and once per turn-fallback splice (detour included) — viz only; nothing subscribes |
-| `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub + BT pub | `QoS(1).transient_local()` | The progress trackers' plan. Published by BT `FollowStrip` at each dispatch (`coverage_nodes.cpp`) and by FTC's `progress_plan_pub_` (`~/<plugin>/global_plan`) ONLY when a turn fallback rejoins: the remainder from the rejoin pose, stamped now. Subs: `PathProgressGoalChecker` (`plan_topic`, resets progress on the new pose count) and FollowStrip (`ControllerRejoin` → cursor jump) |
+| `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub + BT pub | `QoS(1).transient_local()` | The progress trackers' plan. Published by BT `FollowStrip` at each dispatch (`coverage_nodes.cpp`) and by FTC's `progress_plan_pub_` (`~/<plugin>/global_plan`) ONLY when a turn fallback rejoins: the remainder from the rejoin pose, stamped now. Subs: legacy `PathProgressGoalChecker` topic input (active FTC ownership uses direct plan binding) and FollowStrip (`ControllerRejoin` → cursor jump) |
 | `/controller_server/FollowCoveragePath/costmap_marker` | `visualization_msgs/Marker` | pub | depth 10 | Only when `debug_obstacle` and deviation OFF (`debugObstacle`) |
 | `/global_costmap/costmap` | `nav_msgs/OccupancyGrid` | sub | `QoS(1).transient_local()` | Rebuilt into `boundary_costmap_` (`data >= 99 → 254`, else 0) for the zone guard/mask (`ftc_controller.cpp:75-96`) |
 | `/hardware_bridge/status` | `mowgli_interfaces/Status` | sub | `QoS(1)` | `mower_esc_status` / `mower_motor_rpm` / `blade_status_stamp` → `blade_active_` / `blade_rpm_` / `blade_status_time_` under `blade_mutex_` for the blade-load slowdown (always subscribed; inert unless `blade_load_slowdown_enabled`) |
@@ -288,7 +296,7 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 - Never call `goal_checker->reset()` inside `computeVelocityCommands` (`ftc_controller.cpp:844-853`): `max_reached_index_` can only advance `max_idx_advance_per_call` (10) poses per call, so a per-tick reset pins progress < 95 % forever.
 - `newPathReceived` duplicates the last pose and re-orients the second-to-last (`ftc_controller.cpp:744-748`); the FSM's `size() - 2` test depends on it. Plans with < 3 poses go straight to `FINISHED` — one reason FTC is not the transit controller.
 - `newPathReceived` starts at idx 0 by default; re-adding a nearest-point snap skipped 46–99 % of closed headland rings on 2026-08-24 (`ftc_start_index.hpp` header). Resume trimming is `FollowStrip`'s job.
-- Goal-checker "new path" fingerprint = pose-count change OR front pose moved > 2 m (`path_progress_goal_checker.cpp:148-150`). Two consecutive plans of identical length starting < 2 m apart are treated as the SAME path (progress carries over).
+- Goal-checker "new path" fingerprint = pose-count change OR front pose moved > 2 m (`path_progress_goal_checker.cpp:148-150`). The active FTC path now uses controller instance/revision, not this legacy topic heuristic.
 - Paths with ≤ `short_path_poses` (10) poses complete on xy+yaw proximity only (`path_progress_goal_checker.cpp:267`), bypassing the progress gate.
 - The progress gate passes on EITHER ≥ `progress_threshold` of the poses OR the path length still ahead of the furthest monotonically-reached point ≤ `xy_goal_tolerance` (`path_progress_goal_checker.cpp:350`); xy + yaw are checked after it either way. The second rule exists because FTC parks up to `max_goal_distance_error` short and then emits zero velocity: on a sub-path shorter than ~10 m that is more than 5 % of the poses, so the pose ratio alone never passed and `progress_checker` aborted the goal after `movement_time_allowance` (field 2026-09-21, 0.6 m sub-paths, 30 s each). It is measured ALONG the path from the bounded monotonic cursor, so it stays false at the start of a looped path whose end is near its start; do not replace it with a straight-line distance. `xy_goal_tolerance` must stay ≥ FTC `max_goal_distance_error` (launch floor) or FTC parks where neither rule can pass. A path whose whole length is ≤ `xy_goal_tolerance` completes on proximity at its start. The bounded search still lets `max_reached_index_` creep up to `max_idx_advance_per_call` poses per call toward a robot that is AHEAD along the path (catch-up by design) — that is unchanged.
 - `chooseDeviationSide` scans LEFT first at each radius (`obstacle_deviation.cpp:400-412`) — equal clearance always skirts left.

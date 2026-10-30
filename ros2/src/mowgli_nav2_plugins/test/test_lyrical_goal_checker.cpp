@@ -59,6 +59,11 @@ protected:
 
   void setPath(const nav_msgs::msg::Path::SharedPtr& path)
   {
+    checker_.bindControllerPlan(this, ++plan_revision_, path->header, path->poses);
+  }
+
+  void deliverTopic(const nav_msgs::msg::Path::SharedPtr& path)
+  {
     checker_.onPath(path);
   }
 
@@ -90,7 +95,11 @@ protected:
     auto path = std::make_shared<nav_msgs::msg::Path>();
     path->header.frame_id = checker_.path_frame_;
     path->poses = checker_.path_poses_;
-    checker_.reset();
+    // Exercise the legacy empty-topic watchdog, independently of the new
+    // action reset contract (which requires the controller's plan binding).
+    checker_.controller_plan_required_ = false;
+    checker_.controller_plan_bound_ = false;
+    checker_.resetProgress();
     checker_.path_poses_.clear();
     checker_.path_arc_m_.clear();
     checker_.path_frame_.clear();
@@ -197,6 +206,7 @@ protected:
     setEpochTime(100.0);
   }
 
+  uint64_t plan_revision_{0};
   std::shared_ptr<nav2::LifecycleNode> node_;
   PathProgressGoalChecker checker_;
   geometry_msgs::msg::Pose goal_;
@@ -420,6 +430,93 @@ TEST_F(PathProgressGoalCheckerTest, MissingPlanWithPastLatestRetainsFallbackDead
   epochTransform(105.95, "odom", "base_footprint", 0.78);
   EXPECT_TRUE(checker_.isGoalReached(
       epochQuery(), epochGoal(105.95), geometry_msgs::msg::Twist{}, epochLocalPlan(105.95)));
+}
+
+TEST_F(PathProgressGoalCheckerTest, ResetRequiresControllerBindingDespitePrepublishedPlan)
+{
+  auto terminal = std::make_shared<nav_msgs::msg::Path>();
+  terminal->header.frame_id = "map";
+  terminal->poses.resize(3);
+  for (auto& pose : terminal->poses)
+  {
+    pose.pose.position.x = 110.0;
+    pose.pose.orientation.w = 1.0;
+  }
+  // Even a correct plan published before reset cannot identify the new action.
+  setPath(terminal);
+  EXPECT_TRUE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  checker_.reset();
+  EXPECT_FALSE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  EXPECT_FALSE(
+      checker_.isGoalXYReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  setPath(terminal);
+  EXPECT_TRUE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+
+  // Reset of the same active plan also needs a fresh controller handshake.
+  checker_.reset();
+  EXPECT_FALSE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  checker_.bindControllerPlan(this, plan_revision_, terminal->header, terminal->poses);
+  EXPECT_TRUE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+}
+
+TEST_F(PathProgressGoalCheckerTest, LateOldTopicCannotReplaceBoundLoop)
+{
+  auto loop = std::make_shared<nav_msgs::msg::Path>();
+  loop->header.frame_id = "map";
+  for (int i = 0; i <= 40; ++i)
+  {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = 110.0 + (i <= 20 ? 0.05 * i : 0.05 * (40 - i));
+    pose.pose.orientation.w = 1.0;
+    loop->poses.push_back(pose);
+  }
+  checker_.reset();
+  setPath(loop);
+  auto previous = std::make_shared<nav_msgs::msg::Path>(*loop);
+  previous->poses.resize(3);
+  deliverTopic(previous);
+  EXPECT_FALSE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  EXPECT_FALSE(
+      checker_.isGoalXYReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+
+  // The same revision is a no-op: controller ticks cannot erase progress.
+  advance();
+  const auto reached = maxReachedIndex();
+  checker_.bindControllerPlan(this, plan_revision_, loop->header, loop->poses);
+  EXPECT_EQ(maxReachedIndex(), reached);
+}
+
+TEST_F(PathProgressGoalCheckerTest, InvalidNewRevisionRevokesCompletionUntilValidBinding)
+{
+  auto terminal = std::make_shared<nav_msgs::msg::Path>();
+  terminal->header.frame_id = "map";
+  terminal->poses.resize(3);
+  for (auto& pose : terminal->poses)
+  {
+    pose.pose.position.x = 110.0;
+    pose.pose.orientation.w = 1.0;
+  }
+  setPath(terminal);
+  EXPECT_TRUE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  checker_.bindControllerPlan(this, ++plan_revision_, terminal->header, {});
+  EXPECT_FALSE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  deliverTopic(terminal);
+  EXPECT_FALSE(
+      checker_.isGoalXYReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  checker_.bindControllerPlan(this, plan_revision_, {}, terminal->poses);
+  EXPECT_FALSE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
+  checker_.bindControllerPlan(this, plan_revision_, terminal->header, terminal->poses);
+  EXPECT_TRUE(
+      checker_.isGoalReached(goal_, goal_, geometry_msgs::msg::Twist{}, nav_msgs::msg::Path{}));
 }
 
 }  // namespace mowgli_nav2_plugins

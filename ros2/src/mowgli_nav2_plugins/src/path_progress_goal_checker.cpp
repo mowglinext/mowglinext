@@ -198,6 +198,13 @@ void PathProgressGoalChecker::initialize(
 void PathProgressGoalChecker::reset()
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  controller_plan_required_ = true;
+  controller_plan_bound_ = false;
+  resetProgress();
+}
+
+void PathProgressGoalChecker::resetProgress()
+{
   max_reached_index_ = 0;
   pending_progress_boundary_.reset();
   pending_progress_boundary_origin_offset_m_.reset();
@@ -209,6 +216,31 @@ void PathProgressGoalChecker::reset()
   empty_path_first_call_.reset();
 }
 
+void PathProgressGoalChecker::bindControllerPlan(
+    const void* owner,
+    uint64_t revision,
+    const std_msgs::msg::Header& header,
+    const std::vector<geometry_msgs::msg::PoseStamped>& poses)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  controller_plan_required_ = true;
+  if (controller_plan_bound_ && controller_plan_owner_ == owner &&
+      controller_plan_revision_ == revision)
+    return;
+
+  controller_plan_bound_ = false;
+  if (owner == nullptr || header.frame_id.empty() || poses.empty())
+    return;
+
+  path_frame_ = header.frame_id;
+  path_poses_ = poses;
+  path_arc_m_ = cumulativeArcLength(path_poses_);
+  resetProgress();
+  controller_plan_owner_ = owner;
+  controller_plan_revision_ = revision;
+  controller_plan_bound_ = true;
+}
+
 void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
 {
   if (msg->poses.empty())
@@ -216,6 +248,11 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
     return;
   }
   std::lock_guard<std::mutex> lock(mutex_);
+
+  // A late publication can belong to an earlier action or fallback revision.
+  // Only the selected controller may replace a controller-owned plan.
+  if (controller_plan_required_)
+    return;
 
   // Path arrived — clear the watchdog so future empty-path windows
   // (e.g. between strips) get their own grace period.
@@ -320,6 +357,8 @@ bool PathProgressGoalChecker::isGoalReachedImpl(const geometry_msgs::msg::Pose& 
                                                 bool check_yaw)
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (controller_plan_required_ && !controller_plan_bound_)
+    return false;
   const bool start_empty_path_watchdog = path_poses_.empty() && !empty_path_first_call_.has_value();
   if (start_empty_path_watchdog)
     empty_path_first_call_ = clock_->now();
