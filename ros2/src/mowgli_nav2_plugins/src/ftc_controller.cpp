@@ -95,6 +95,57 @@ bool IsStraightForwardPlan(const nav_msgs::msg::Path& path)
   }
   return true;
 }
+// Strictly advancing projection rules out revisits and crossing legs. Classify
+// once per full plan; terminal control must not scan the complete plan per tick.
+bool IsForwardMonotonePlan(const nav_msgs::msg::Path& path)
+{
+  if (path.poses.size() < 3 || path.header.frame_id != "map")
+    return false;
+  const auto& first = path.poses.front().pose.position;
+  const auto& last = path.poses.back().pose.position;
+  const double ax = last.x - first.x;
+  const double ay = last.y - first.y;
+  if (!std::isfinite(std::hypot(ax, ay)) || (ax == 0.0 && ay == 0.0))
+    return false;
+  for (std::size_t i = 0; i < path.poses.size(); ++i)
+  {
+    const auto& pose = path.poses[i].pose;
+    const double yaw = tf2::getYaw(pose.orientation);
+    if (!std::isfinite(pose.position.x) || !std::isfinite(pose.position.y) ||
+        !std::isfinite(pose.position.z) || !std::isfinite(yaw) ||
+        !(std::cos(yaw) * ax + std::sin(yaw) * ay > 0.0))
+      return false;
+    if (i == 0)
+      continue;
+    const auto& previous = path.poses[i - 1].pose;
+    const double dx = pose.position.x - previous.position.x;
+    const double dy = pose.position.y - previous.position.y;
+    if (dx == 0.0 && dy == 0.0)
+      continue;
+    const double previous_yaw = tf2::getYaw(previous.orientation);
+    if (!(dx * ax + dy * ay > 0.0) ||
+        !(dx * std::cos(previous_yaw) + dy * std::sin(previous_yaw) > 0.0))
+      return false;
+  }
+  return true;
+}
+
+double RequestedGoalDistance(nav2_core::GoalChecker* checker, double configured, bool& valid)
+{
+  valid = false;
+  geometry_msgs::msg::Pose pose_tolerance;
+  geometry_msgs::msg::Twist velocity_tolerance;
+  double path_length_tolerance;
+  if (checker != nullptr &&
+      checker->getTolerances(pose_tolerance, velocity_tolerance, path_length_tolerance) &&
+      std::isfinite(pose_tolerance.position.x) && pose_tolerance.position.x > 0.0 &&
+      std::isfinite(pose_tolerance.position.y) && pose_tolerance.position.y > 0.0)
+  {
+    valid = true;
+    return std::min(configured, std::min(pose_tolerance.position.x, pose_tolerance.position.y));
+  }
+  return configured;
+}
 }  // namespace
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -106,6 +157,7 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
 {
   strict_goal_departed_ = false;
   strict_goal_straight_plan_ = false;
+  terminal_point_plan_ = false;
   node_ = parent;
   plugin_name_ = name;
   tf_buffer_ = tf;
@@ -925,6 +977,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   current_state_ = PlannerState::PRE_ROTATE;
   strict_goal_departed_ = false;
   strict_goal_straight_plan_ = IsStraightForwardPlan(path);
+  terminal_point_plan_ = IsForwardMonotonePlan(path);
   state_entered_time_ = clock_->now();
   is_crashed_ = false;
 
@@ -974,6 +1027,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
       poses.push_back({ps.pose.position.x, ps.pose.position.y, tf2::getYaw(ps.pose.orientation)});
     }
     pivot_corners_ = FindPivotCorners(poses);
+    terminal_point_plan_ = terminal_point_plan_ && pivot_corners_.empty();
   }
 
   // Start at the BEGINNING of a freshly dispatched plan.
@@ -1282,7 +1336,7 @@ void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command,
   }
   if (permitted && command.linear.x == 0 && command.angular.z != 0 &&
       (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT ||
-       current_state_ == PlannerState::POST_ROTATE))
+       current_state_ == PlannerState::POST_ROTATE || terminalPointMode()))
   {
     // Refuse to start a rotation whose later body sweep is forbidden. Include
     // the remaining intended heading, not only the first outgoing tick.
@@ -1323,6 +1377,18 @@ void FTCController::authorizeCommand(const geometry_msgs::msg::Twist& command,
                  std::hash<std::string>{}(authorization_->identity));
     throw nav2_core::ControllerException("FTCController: intended chassis sweep is unauthorized");
   }
+}
+
+bool FTCController::terminalPointMode()
+{
+  if (!terminal_point_plan_ || plan_header_.frame_id != "map" ||
+      current_state_ != PlannerState::WAITING_FOR_GOAL_APPROACH || reverse_escape_active_ ||
+      turn_fallback_.phase != TurnFallbackPhase::kIdle || is_avoiding_ || lateral_deviation_ != 0.0)
+    return false;
+  bool valid;
+  return RequestedGoalDistance(active_goal_checker_, config_.max_goal_distance_error, valid) <
+             config_.max_goal_distance_error &&
+         valid;
 }
 
 void FTCController::bindGoalCheckerPlan()
@@ -1464,6 +1530,16 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
         throw nav2_core::ControllerException("FTCController: no supported terminal goal pose");
       }
     }
+    if (terminalPointMode() && requested_goal_approach && cmd_vel.twist.linear.x > 0 && guard_epoch)
+    {
+      const auto robot = supportedPoseTransform("map", "base_link", &*guard_epoch);
+      const auto& goal = global_plan_.back().pose.position;
+      const double distance = std::hypot(goal.x - robot.transform.translation.x,
+                                         goal.y - robot.transform.translation.y);
+      const double horizon = config_.obstacle_coast_time_bound_s + 2.0 * kIntendedCommandHorizonSec;
+      cmd_vel.twist.linear.x =
+          std::min(cmd_vel.twist.linear.x, std::nextafter(distance / horizon, 0.0));
+    }
     if (check_forward_sweep && cmd_vel.twist.linear.x > 0 &&
         (!guard_epoch || forwardCommandSweepBlocked(cmd_vel.twist, velocity, &*guard_epoch)))
     {
@@ -1559,25 +1635,9 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   // (transit FollowPath) is unaffected either way. A stricter checker also needs
   // FTC to approach its final carrot instead of parking at our normal
   // coverage tolerance. Never enlarge the configured approach distance.
-  double goal_distance_error = config_.max_goal_distance_error;
-  bool valid_goal_tolerance = false;
-  if (goal_checker != nullptr)
-  {
-    geometry_msgs::msg::Pose pose_tolerance;
-    geometry_msgs::msg::Twist velocity_tolerance;
-    double path_length_tolerance;
-    if (goal_checker->getTolerances(pose_tolerance, velocity_tolerance, path_length_tolerance) &&
-        std::isfinite(pose_tolerance.position.x) && pose_tolerance.position.x > 0.0 &&
-        std::isfinite(pose_tolerance.position.y) && pose_tolerance.position.y > 0.0)
-    {
-      valid_goal_tolerance = true;
-      // The API reports the independent X/Y maxima. The smaller one respects
-      // both axes when a checker supplies unequal tolerances.
-      goal_distance_error =
-          std::min(goal_distance_error,
-                   std::min(pose_tolerance.position.x, pose_tolerance.position.y));
-    }
-  }
+  bool valid_goal_tolerance;
+  const double goal_distance_error =
+      RequestedGoalDistance(goal_checker, config_.max_goal_distance_error, valid_goal_tolerance);
 
   strict_goal = valid_goal_tolerance && goal_distance_error < config_.max_goal_distance_error;
   strict_goal_tolerance = goal_distance_error;
@@ -1611,6 +1671,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       new_state == PlannerState::PIVOT && current_state_ != PlannerState::PIVOT;
   const bool entering_goal_approach = new_state == PlannerState::WAITING_FOR_GOAL_APPROACH &&
                                       current_state_ != PlannerState::WAITING_FOR_GOAL_APPROACH;
+  const bool leaving_point_approach = new_state == PlannerState::POST_ROTATE && terminalPointMode();
   if (new_state != current_state_)
   {
     RCLCPP_INFO(logger_,
@@ -1632,6 +1693,12 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   }
   // Keep the existing goal-approach state's timeout, including when a strict
   // goal is unreachable or has been overshot with forward_only enabled.
+  if (leaving_point_approach)
+  {
+    tf2::fromMsg(global_plan_.back().pose, current_control_point_);
+    angle_error_raw_prev_ = std::numeric_limits<double>::quiet_NaN();
+    update_local_control_point(true);
+  }
   if (entering_goal_approach)
     update_local_control_point(true);
   const auto& terminal_position = local_control_point_.translation();
@@ -1655,6 +1722,42 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   if (entering_pivot)
   {
     return bounded_command();  // zero velocity
+  }
+
+  if (terminalPointMode() && requested_goal_approach &&
+      std::abs(WrapPivotAngle(angle_error_)) * (180.0 / M_PI) >= config_.max_goal_angle_error)
+  {
+    if (!(std::abs(velocity.linear.x) <= 0.01))
+      return bounded_command();
+    if (currentBodyInLethal())
+    {
+      waitOrThrowForObstacle("chassis footprint overlaps a lethal obstacle cell");
+      return bounded_command();
+    }
+    if (!pivotSweepGate(safe_dt))
+      return bounded_command();
+    // The sweep can select a newer supported TF epoch and retarget the
+    // bearing. Recheck alignment against that checked arc before using PID
+    // history, including when the new bearing is already zero.
+    const double checked_angle = WrapPivotAngle(angle_error_);
+    if (!(std::abs(checked_angle) * (180.0 / M_PI) >= config_.max_goal_angle_error))
+      return bounded_command();
+    calculate_velocity_commands(safe_dt, cmd_vel, false);
+    cmd_vel.twist.linear.x = 0.0;
+    // Local lethal cells certified the short rotation above. Retained I/D
+    // history must not send the robot around the unchecked opposite side.
+    if (!(cmd_vel.twist.angular.z * checked_angle > 0.0))
+      cmd_vel.twist = geometry_msgs::msg::Twist{};
+    else
+    {
+      // Even a same-sign saturated I/D request must fit within the local
+      // sweep checked above over the existing intended command interval.
+      const double checked_rate =
+          std::nextafter(std::abs(checked_angle) / kIntendedCommandHorizonSec, 0.0);
+      cmd_vel.twist.angular.z =
+          std::copysign(std::min(std::abs(cmd_vel.twist.angular.z), checked_rate), checked_angle);
+    }
+    return bounded_command();
   }
 
   // 3. Collision check + lateral-deviation update.
@@ -2278,6 +2381,9 @@ void FTCController::update_control_point(double dt, bool approach_goal, bool sup
 
 void FTCController::update_local_control_point(bool supported_epoch)
 {
+  const bool point_approach = terminalPointMode();
+  if (point_approach)
+    tf2::fromMsg(global_plan_.back().pose, current_control_point_);
   // Transform carrot from map into base_link to get the PID errors.
   try
   {
@@ -2301,7 +2407,8 @@ void FTCController::update_local_control_point(bool supported_epoch)
   // Extract yaw from rotation matrix using atan2 (reliable for 2D, unlike
   // Eigen::eulerAngles which can give ambiguous results near singularities).
   const Eigen::Matrix3d& rot = local_control_point_.rotation();
-  const double angle_error_raw = std::atan2(rot(1, 0), rot(0, 0));
+  const double angle_error_raw =
+      point_approach ? std::atan2(lat_error_, lon_error_) : std::atan2(rot(1, 0), rot(0, 0));
 
   // Unwrap angle_error_ across the ±π discontinuity (issue #200).
   //
@@ -2604,17 +2711,47 @@ void FTCController::leavePivot()
 
 bool FTCController::pivotSweepBlocked()
 {
+  const bool point_approach = terminalPointMode();
   if (costmap_map_ == nullptr || costmap_ros_ == nullptr)
   {
-    return false;
+    return point_approach;
   }
   const ObstacleDeviation::Footprint footprint = costmap_ros_->getRobotFootprint();
   if (footprint.size() < 3)
   {
-    return false;  // no polygon: cannot assert (currentBodyInLethal has the same posture)
+    return point_approach;
   }
   geometry_msgs::msg::PoseStamped robot_pose;
-  if (!costmap_ros_->getRobotPose(robot_pose))
+  if (point_approach)
+  {
+    try
+    {
+      // A forecast yaw cannot certify the current body or initial turn arc.
+      // Recover both robot and final point at one supported epoch <= ROS now.
+      const auto epoch = supportedPoseEpoch();
+      const auto robot = supportedPoseTransform(costmap_ros_->getGlobalFrameID(),
+                                                costmap_ros_->getBaseFrameID(),
+                                                &epoch);
+      robot_pose.header = robot.header;
+      robot_pose.pose.position.x = robot.transform.translation.x;
+      robot_pose.pose.position.y = robot.transform.translation.y;
+      robot_pose.pose.position.z = robot.transform.translation.z;
+      robot_pose.pose.orientation = robot.transform.rotation;
+      geometry_msgs::msg::PoseStamped goal;
+      const auto map_to_costmap =
+          supportedPoseTransform(costmap_ros_->getGlobalFrameID(), plan_header_.frame_id, &epoch);
+      tf2::doTransform(global_plan_.back(), goal, map_to_costmap);
+      const double bearing = std::atan2(goal.pose.position.y - robot_pose.pose.position.y,
+                                        goal.pose.position.x - robot_pose.pose.position.x);
+      angle_error_ = WrapPivotAngle(bearing - tf2::getYaw(robot_pose.pose.orientation));
+      angle_error_raw_prev_ = angle_error_;
+    }
+    catch (const tf2::TransformException&)
+    {
+      return true;
+    }
+  }
+  else if (!costmap_ros_->getRobotPose(robot_pose))
   {
     return false;
   }

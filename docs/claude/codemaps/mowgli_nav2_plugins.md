@@ -29,6 +29,18 @@ plans retain prior behavior. Measured speed, final authorization, coast bounds
 and timeout remain authoritative. `test_ftc_speed_limit.cpp` contains the
 boundary RED/GREEN, stale-pose latch and crossing-eligibility controls.
 
+Strict terminal point alignment additionally applies to globally forward-monotone
+map-frame plans without pivot corners. It uses final-point bearing during the
+existing timed WAITING state, then restores final goal yaw in POST_ROTATE.
+Alignment requires stopped measured translation, checks the full local pivot
+sweep and raw remaining rotation, and restricts angular PID output to the checked
+direction and arc over the intended 0.1 s interval. A newer supported sweep pose
+rechecks the angular threshold. Radial distance caps forward response; default
+goal requests, reverse/crossing paths, deviation and fallback retain their prior
+control. A fallback splice invalidates point eligibility. Captured curved-end,
+adverse PID/local-obstacle and mid-call TF-epoch tests are in
+`test_ftc_speed_limit.cpp`.
+
 When the goal checker's query TF is future-dated, it recovers the supplied goal
 at the transformed local-plan header epoch and evaluates progress/completion in
 the full-plan frame. This relies on the selected Lyrical FeasiblePathHandler

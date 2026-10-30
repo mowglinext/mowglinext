@@ -351,6 +351,7 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
   bindGoalCheckerPlan();
   // A fallback splice replaces the original path with new turn geometry.
   strict_goal_straight_plan_ = false;
+  terminal_point_plan_ = false;
   {
     std::vector<PlanPose2D> poses;
     poses.reserve(global_plan_.size());

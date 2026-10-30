@@ -898,6 +898,8 @@ private:
   double base_max_cmd_vel_speed_{2.0};
   bool strict_goal_departed_{false};
   bool strict_goal_straight_plan_{false};
+  bool terminal_point_plan_{false};
+  bool terminalPointMode();
 };
 
 }  // namespace mowgli_nav2_plugins

@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -50,6 +51,42 @@ struct FTCSpeedLimitTestAccess
     const bool result = controller.spliceTurnFallback(plan, 0);
     controller.active_goal_checker_ = nullptr;
     return result;
+  }
+  static void SetFreeBoundary(FTCController& controller, double origin_x, double origin_y)
+  {
+    controller.boundary_costmap_ = std::make_unique<nav2_costmap_2d::Costmap2D>(
+        400, 400, 0.05, origin_x, origin_y, nav2_costmap_2d::FREE_SPACE);
+    controller.boundary_frame_ = "map";
+  }
+  static bool CurrentBodyBlocked(FTCController& controller)
+  {
+    return controller.currentBodyInLethal();
+  }
+  static bool TerminalPointEligible(const FTCController& controller)
+  {
+    return controller.terminal_point_plan_;
+  }
+  static void AngularHistory(FTCController& controller, double integral, double previous)
+  {
+    controller.i_angle_error_ = integral;
+    controller.last_angle_error_ = previous;
+    controller.d_angle_filt_ = 0.0;
+  }
+  static double AngleError(const FTCController& controller)
+  {
+    return controller.angle_error_;
+  }
+  static bool RotationBlocked(FTCController& controller, double angle)
+  {
+    const double saved = controller.angle_error_;
+    const bool eligibility = controller.terminal_point_plan_;
+    // Inspect each geometric direction independently of terminal retargeting.
+    controller.terminal_point_plan_ = false;
+    controller.angle_error_ = angle;
+    const bool blocked = controller.pivotSweepBlocked();
+    controller.angle_error_ = saved;
+    controller.terminal_point_plan_ = eligibility;
+    return blocked;
   }
   static bool GeometryReady(FTCController& controller)
   {
@@ -412,6 +449,7 @@ public:
   double y{0.03};
   bool available{true};
   unsigned int queries{0};
+  std::function<void(unsigned int)> on_query;
 
   void initialize(const nav2::LifecycleNode::WeakPtr&,
                   const std::string&,
@@ -438,6 +476,8 @@ public:
   bool getTolerances(geometry_msgs::msg::Pose& pose, geometry_msgs::msg::Twist&, double&) override
   {
     ++queries;
+    if (on_query)
+      on_query(queries);
     pose.position.x = x;
     pose.position.y = y;
     return available;
@@ -447,6 +487,35 @@ public:
 class FtcRequestedGoalTolerance : public FtcSpeedLimit
 {
 protected:
+  geometry_msgs::msg::Twist StepAt(double x,
+                                   double y,
+                                   double yaw,
+                                   const geometry_msgs::msg::Twist& measured,
+                                   RequestedGoalTolerance& checker,
+                                   double dt = 0.1,
+                                   double forecast_yaw = std::numeric_limits<double>::quiet_NaN())
+  {
+    time_ns_ += static_cast<int64_t>(std::llround(dt * 1e9));
+    SetTime();
+    geometry_msgs::msg::TransformStamped transform;
+    transform.header.stamp = rclcpp::Time(time_ns_, RCL_ROS_TIME);
+    transform.header.frame_id = "odom";
+    transform.child_frame_id = "base_footprint";
+    transform.transform.translation.x = x;
+    transform.transform.translation.y = y;
+    transform.transform.rotation.z = std::sin(yaw / 2.0);
+    transform.transform.rotation.w = std::cos(yaw / 2.0);
+    EXPECT_TRUE(tf_->setTransform(transform, "terminal_2d", false));
+    if (std::isfinite(forecast_yaw))
+    {
+      transform.header.stamp = rclcpp::Time(time_ns_ + 100000000, RCL_ROS_TIME);
+      transform.transform.rotation.z = std::sin(forecast_yaw / 2.0);
+      transform.transform.rotation.w = std::cos(forecast_yaw / 2.0);
+      EXPECT_TRUE(tf_->setTransform(transform, "terminal_forecast", false));
+    }
+    return controller_.computeVelocityCommands(Pose{}, measured, &checker, {}, Pose{}).twist;
+  }
+
   void WaitAtFinalCarrot(double robot_x, RequestedGoalTolerance& checker)
   {
     robot_x_ = robot_x;
@@ -463,6 +532,74 @@ protected:
         return;
     }
     FAIL() << "Controller did not enter its timed terminal approach";
+  }
+
+  void CheckTerminalEpochChange(double checked_remaining)
+  {
+    using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+    RequestedGoalTolerance checker;
+    SetParameter("max_goal_distance_error", 0.5);
+    SetParameter("max_goal_angle_error", 1.0);
+    WaitAtFinalCarrot(0.76, checker);
+    constexpr double x = 0.775, y = -0.03;
+    const double initial_bearing = std::atan2(0.03, 0.025);
+    // An exactly aligned translated pose avoids an accidental tiny negative
+    // bearing making the old sign check stop only through roundoff.
+    const double updated_y = checked_remaining == 0.0 ? 0.0 : y;
+    const double updated_yaw = checked_remaining == 0.0 ? 0.0 : initial_bearing - checked_remaining;
+    auto* map = costmap_->getCostmap();
+    // A finer test raster resolves an obstacle outside the checked small
+    // arc but inside the unbounded PID's 0.08-rad intended rotation.
+    map->resizeMap(2000, 2000, 0.005, -5.0, -5.0);
+    geometry_msgs::msg::Twist stopped;
+    StepAt(x, y, 0.0, stopped, checker);
+    unsigned int mx, my;
+    ASSERT_TRUE(
+        map->worldToMap(x + std::cos(updated_yaw) * 0.5525 + std::sin(updated_yaw) * 0.25,
+                        updated_y + std::sin(updated_yaw) * 0.5525 - std::cos(updated_yaw) * 0.25,
+                        mx,
+                        my));
+    map->setCost(mx, my, nav2_costmap_2d::LETHAL_OBSTACLE);
+    ASSERT_FALSE(Access::CurrentBodyBlocked(controller_));
+    SetParameter("ki_ang", 1.0);
+    SetParameter("kd_ang", 0.0);
+    Access::AngularHistory(controller_, 10.0, initial_bearing);
+    checker.queries = 0;
+    bool updated = false;
+    checker.on_query = [&](unsigned int query)
+    {
+      // Common tolerance, point projection, alignment decision, then sweep.
+      // Advance TF only after the old bearing selected terminal alignment.
+      if (query != 4)
+        return;
+      EXPECT_NEAR(Access::AngleError(controller_), initial_bearing, 1e-12);
+      ++time_ns_;
+      SetTime();
+      geometry_msgs::msg::TransformStamped transform;
+      transform.header.stamp = rclcpp::Time(time_ns_, RCL_ROS_TIME);
+      transform.header.frame_id = "odom";
+      transform.child_frame_id = "base_footprint";
+      transform.transform.translation.x = x;
+      transform.transform.translation.y = updated_y;
+      transform.transform.rotation.z = std::sin(updated_yaw / 2.0);
+      transform.transform.rotation.w = std::cos(updated_yaw / 2.0);
+      EXPECT_TRUE(tf_->setTransform(transform, "supported_epoch_update", false));
+      updated = true;
+    };
+    const auto command = StepAt(x, y, 0.0, stopped, checker);
+    ASSERT_TRUE(updated);
+    EXPECT_NEAR(Access::AngleError(controller_), checked_remaining, 1e-12);
+    ASSERT_FALSE(Access::CurrentBodyBlocked(controller_));
+    ASSERT_FALSE(Access::RotationBlocked(controller_, checked_remaining));
+    ASSERT_TRUE(Access::RotationBlocked(controller_, 0.08));
+    EXPECT_DOUBLE_EQ(command.linear.x, 0.0);
+    if (checked_remaining == 0.0)
+      EXPECT_DOUBLE_EQ(command.angular.z, 0.0);
+    else
+    {
+      EXPECT_GT(command.angular.z, 0.0);
+      EXPECT_LE(command.angular.z * 0.1, checked_remaining);
+    }
   }
 
   double FollowShortPath(nav2_core::GoalChecker* goal_checker,
@@ -490,6 +627,238 @@ protected:
     return robot_x_;
   }
 };
+
+TEST_F(FtcRequestedGoalTolerance, CapturedTerminalCurveReachesStrictPointAndFinishes)
+{
+  // Original old266..268 and retained initial pose. Translate everything,
+  // including the float32-derived raw mowing union/hole, into this test grid.
+  constexpr double initial_x = -4.385790475580301;
+  constexpr double initial_y = 0.9773281974209458;
+  constexpr double initial_yaw = 2.39348777754403;
+  for (const double rotation : {0.0, M_PI / 2.0})
+  {
+    for (const auto& [name, value] :
+         std::vector<std::pair<std::string, double>>{{"speed_angular", 45.0},
+                                                     {"speed_fast_threshold_angle", 10.0},
+                                                     {"acceleration", 0.2},
+                                                     {"derivative_filter_tau", 0.2},
+                                                     {"goal_timeout", 10.0},
+                                                     {"kd_ang", 0.0},
+                                                     {"kd_lat", 0.5},
+                                                     {"kd_lon", 0.0},
+                                                     {"ki_ang", 0.0},
+                                                     {"ki_lat", 0.0},
+                                                     {"ki_lon", 0.0},
+                                                     {"kp_ang", 1.5},
+                                                     {"kp_ang_following", 1.0},
+                                                     {"kp_lat", 0.8},
+                                                     {"kp_lon", 1.0},
+                                                     {"max_goal_distance_error", 0.5},
+                                                     {"max_goal_angle_error", 30.0},
+                                                     {"stall_grace_s", 0.6},
+                                                     {"obstacle_lookahead", 30.0},
+                                                     {"obstacle_body_half_width", 0.12},
+                                                     {"obstacle_clearance_margin", 0.05},
+                                                     {"obstacle_reverse_speed_mps", 0.1},
+                                                     {"obstacle_wait_timeout_s", 2.5}})
+    {
+      // obstacle_lookahead is an integer parameter and is already irrelevant
+      // to this empty local grid; retain its declaration type.
+      if (name == "obstacle_lookahead")
+        ASSERT_TRUE(node_->set_parameter({std::string(kPlugin) + "." + name, 30}).successful);
+      else
+        SetParameter(name, value);
+    }
+    SetParameter("check_obstacles", true);
+    SetParameter("enable_obstacle_deviation", true);
+    SetParameter("confine_deviation_to_zone", true);
+    SetParameter("turn_fallback_enabled", true);
+    ASSERT_TRUE(costmap_->set_parameter({"footprint_padding", 0.0}).successful);
+    const auto relocate = [rotation](double x, double y)
+    {
+      x -= initial_x;
+      y -= initial_y;
+      return std::pair{x * std::cos(rotation) - y * std::sin(rotation),
+                       x * std::sin(rotation) + y * std::cos(rotation)};
+    };
+    double boundary_x = std::numeric_limits<double>::infinity();
+    double boundary_y = std::numeric_limits<double>::infinity();
+    for (const auto& [bx, by] :
+         std::vector<std::pair<double, double>>{{-5, -5}, {15, -5}, {15, 15}, {-5, 15}})
+    {
+      const auto [xx, yy] = relocate(bx, by);
+      boundary_x = std::min(boundary_x, xx);
+      boundary_y = std::min(boundary_y, yy);
+    }
+    mowgli_nav2_plugins::FTCSpeedLimitTestAccess::SetFreeBoundary(controller_,
+                                                                  boundary_x,
+                                                                  boundary_y);
+    visualization_msgs::msg::MarkerArray geometry;
+    const auto ring =
+        [&](const std::string& kind, const std::vector<std::pair<double, double>>& points)
+    {
+      visualization_msgs::msg::Marker marker;
+      marker.header.frame_id = "map";
+      marker.ns = kind;
+      marker.text = kind == "area" ? "mowing" : "";
+      marker.type = marker.LINE_STRIP;
+      marker.action = marker.ADD;
+      marker.pose.orientation.w = 1.0;
+      for (const auto& [x, y] : points)
+      {
+        const auto [xx, yy] = relocate(x, y);
+        geometry_msgs::msg::Point point;
+        point.x = xx;
+        point.y = yy;
+        marker.points.push_back(point);
+      }
+      geometry.markers.push_back(marker);
+    };
+    ring("area",
+         {{-4.5, double(float(0.8))},
+          {4.5, double(float(0.8))},
+          {4.5, double(float(6.8))},
+          {-4.5, double(float(6.8))}});
+    ring("obstacle",
+         {{double(float(2.7)), double(float(1.2))},
+          {double(float(3.3)), double(float(1.2))},
+          {double(float(3.3)), double(float(1.8))},
+          {double(float(2.7)), double(float(1.8))}});
+    mowgli_nav2_plugins::FTCSpeedLimitTestAccess::SetAuthorization(controller_, geometry);
+    nav_msgs::msg::Path plan;
+    plan.header.frame_id = "map";
+    for (const auto& [x, y, yaw] : std::vector<std::tuple<double, double, double>>{
+             {-4.3751058093707016, 0.91013697398898796, 2.3553524305651767},
+             {-4.3957156970559916, 0.93078160044328406, 2.2805366314624038},
+             {-4.4147248269874906, 0.95290898282541625, 2.2057208323595971}})
+    {
+      const auto [xx, yy] = relocate(x, y);
+      plan.poses.push_back(MakePose(xx, yy, yaw + rotation));
+    }
+    controller_.newPathReceived(plan);
+    RequestedGoalTolerance checker;
+    double x = 0.0, y = 0.0, yaw = initial_yaw + rotation;
+    geometry_msgs::msg::Twist measured, command;
+    bool finished = false, entered_band = false;
+    for (int tick = 0; tick < 200; ++tick)
+    {
+      command = StepAt(x, y, yaw, measured, checker);
+      const auto& goal = plan.poses.back().pose.position;
+      entered_band = entered_band || std::hypot(x - goal.x, y - goal.y) <= checker.x;
+      if (mowgli_nav2_plugins::FTCSpeedLimitTestAccess::Finished(controller_))
+      {
+        finished = true;
+        break;
+      }
+      // Unclipped ideal 2D Euler integration, with the actual command fed back
+      // as measured v/w on the next compute. No private FSM/PID state seeding.
+      x += command.linear.x * 0.1 * std::cos(yaw);
+      y += command.linear.x * 0.1 * std::sin(yaw);
+      yaw += command.angular.z * 0.1;
+      measured = command;
+    }
+    const auto& goal = plan.poses.back().pose.position;
+    RecordProperty(rotation == 0.0 ? "final_distance_m" : "rotated_final_distance_m",
+                   std::to_string(std::hypot(x - goal.x, y - goal.y)));
+    EXPECT_TRUE(finished) << "rotation=" << rotation;
+    EXPECT_TRUE(entered_band);
+    EXPECT_LE(std::hypot(x - goal.x, y - goal.y), checker.x);
+    EXPECT_DOUBLE_EQ(command.linear.x, 0.0);
+    EXPECT_DOUBLE_EQ(command.angular.z, 0.0);
+  }
+}
+
+TEST_F(FtcRequestedGoalTolerance, TerminalAlignmentRejectsOppositePidRotationWithLocalObstacle)
+{
+  RequestedGoalTolerance checker;
+  SetParameter("max_goal_distance_error", 0.5);
+  WaitAtFinalCarrot(0.76, checker);
+  auto* map = costmap_->getCostmap();
+  const double x = 0.775, y = -0.03;
+  const double bearing = std::atan2(0.03, 0.025);
+  const auto mark = [&](double dy)
+  {
+    unsigned int mx, my;
+    ASSERT_TRUE(map->worldToMap(x + 0.4, y + dy, mx, my));
+    map->setCost(mx, my, nav2_costmap_2d::LETHAL_OBSTACLE);
+  };
+  geometry_msgs::msg::Twist stopped;
+  // Update actual 2D TF, then verify the asymmetry with the real local sweep.
+  StepAt(x, y, 0.0, stopped, checker);
+  mark(-0.4);
+  EXPECT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::RotationBlocked(controller_, bearing));
+  EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::RotationBlocked(controller_, -bearing));
+  SetParameter("ki_ang", 1.0);
+  SetParameter("kd_ang", 1.0);
+  mowgli_nav2_plugins::FTCSpeedLimitTestAccess::AngularHistory(controller_, -10.0, 10.0);
+  const auto rejected = StepAt(x, y, 0.0, stopped, checker);
+  EXPECT_DOUBLE_EQ(rejected.linear.x, 0.0);
+  EXPECT_DOUBLE_EQ(rejected.angular.z, 0.0);
+  mowgli_nav2_plugins::FTCSpeedLimitTestAccess::AngularHistory(controller_, 0.0, bearing);
+  const auto ccw = StepAt(x, y, 0.0, stopped, checker);
+  EXPECT_DOUBLE_EQ(ccw.linear.x, 0.0);
+  EXPECT_GT(ccw.angular.z, 0.0);
+  map->resetMap(0, 0, map->getSizeInCellsX(), map->getSizeInCellsY());
+  mark(0.4);
+  EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::RotationBlocked(controller_, bearing));
+  const auto blocked = StepAt(x, y, 0.0, stopped, checker);
+  EXPECT_DOUBLE_EQ(blocked.linear.x, 0.0);
+  EXPECT_DOUBLE_EQ(blocked.angular.z, 0.0);
+}
+
+TEST_F(FtcRequestedGoalTolerance, TerminalAlignmentFutureYawCannotHideCurrentLethalBody)
+{
+  RequestedGoalTolerance checker;
+  SetParameter("max_goal_distance_error", 0.5);
+  WaitAtFinalCarrot(0.76, checker);
+  constexpr double x = 0.775, y = -0.03;
+  geometry_msgs::msg::Twist stopped;
+  StepAt(x, y, 0.0, stopped, checker);
+  unsigned int mx, my;
+  auto* map = costmap_->getCostmap();
+  ASSERT_TRUE(map->worldToMap(x + 0.5, y, mx, my));
+  map->setCost(mx, my, nav2_costmap_2d::LETHAL_OBSTACLE);
+  EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::CurrentBodyBlocked(controller_));
+  const auto command = StepAt(x, y, 0.0, stopped, checker, 0.1, M_PI / 2.0);
+  // Latest TF has rotated the chassis away from the cell. The supported
+  // current pose still contains it, before the requested CCW turn begins.
+  EXPECT_FALSE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::CurrentBodyBlocked(controller_));
+  EXPECT_DOUBLE_EQ(command.linear.x, 0.0);
+  EXPECT_DOUBLE_EQ(command.angular.z, 0.0);
+}
+
+TEST_F(FtcRequestedGoalTolerance, TerminalAlignmentStopsWhenSweepEpochIsAlreadyAligned)
+{
+  CheckTerminalEpochChange(0.0);
+}
+
+TEST_F(FtcRequestedGoalTolerance, TerminalAlignmentCommandStaysInsideNewSweepEpochArc)
+{
+  CheckTerminalEpochChange(0.02);
+}
+
+TEST_F(FtcRequestedGoalTolerance, TerminalPointEligibilityRejectsReturnPivotAndNonMapPlans)
+{
+  using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+  auto plan = StraightPlan();
+  controller_.newPathReceived(plan);
+  EXPECT_TRUE(Access::TerminalPointEligible(controller_));
+  plan.poses.push_back(MakePose(0.0));
+  controller_.newPathReceived(plan);
+  EXPECT_FALSE(Access::TerminalPointEligible(controller_));
+  plan = StraightPlan();
+  plan.poses.insert(plan.poses.begin() + 1, MakePose(0.0, 0.0, M_PI / 2));
+  controller_.newPathReceived(plan);
+  EXPECT_FALSE(Access::TerminalPointEligible(controller_));
+  plan = StraightPlan();
+  plan.header.frame_id = "odom";
+  controller_.newPathReceived(plan);
+  EXPECT_FALSE(Access::TerminalPointEligible(controller_));
+  plan = StraightPlan();
+  plan.poses[1].pose.position.x = std::numeric_limits<double>::quiet_NaN();
+  controller_.newPathReceived(plan);
+  EXPECT_FALSE(Access::TerminalPointEligible(controller_));
+}
 
 TEST_F(FtcRequestedGoalTolerance, StricterCheckerKeepsFollowingUntilRequestedPosition)
 {
