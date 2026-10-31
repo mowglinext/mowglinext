@@ -28,9 +28,12 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <regex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -42,6 +45,7 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
+#include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/docking_nodes.hpp"
 #include "nav2_msgs/action/dock_robot.hpp"
 #include <gtest/gtest.h>
@@ -52,6 +56,8 @@ using mowgli_behavior::cancelGoalQuietly;
 using mowgli_behavior::cancelWhenAbandoned;
 using mowgli_behavior::DockRobot;
 using mowgli_behavior::GoalAbandonment;
+using mowgli_behavior::IsCommand;
+using mowgli_behavior::IsDocking;
 using mowgli_behavior::UndockRobot;
 using Dock = nav2_msgs::action::DockRobot;
 using Undock = nav2_msgs::action::UndockRobot;
@@ -462,6 +468,84 @@ TEST_F(CancelOnHaltTest, DockRobotStillWantedAfterDelayedAcceptanceIsNotCanceled
       5.0));
   EXPECT_TRUE(ctx->last_dock_succeeded);
   EXPECT_FALSE(ctx->docking_active);
+}
+
+// BoundaryGuard's GOTO dock-transit exemption, as shipped in main_tree.xml,
+// follows the real DockRobot lifecycle: it holds only while a dock goal runs
+// under COMMAND_GOTO (9), and never again once that DockRobot is halted
+// (docking_active is cleared in onHalted). Outside the area, the stand-in
+// boundary handler then engages and halts the dock, as the guard would.
+TEST_F(CancelOnHaltTest, GotoDockTransitExemptionFollowsDockRobotLifecycle)
+{
+  std::ifstream input(MOWGLI_MAIN_TREE_PATH);
+  std::ostringstream contents;
+  contents << input.rdbuf();
+  const std::string xml = std::regex_replace(contents.str(), std::regex("<!--[\\s\\S]*?-->"), "");
+  const auto begin = xml.find("<Sequence name=\"GotoDockTransitExempt\">");
+  ASSERT_NE(begin, std::string::npos);
+  const std::string close = "</Sequence>";
+  const std::string exempt = xml.substr(begin, xml.find(close, begin) + close.size() - begin);
+
+  bool inside_area = true;
+  int handler_ticks = 0;
+  factory.registerNodeType<IsCommand>("IsCommand");
+  factory.registerNodeType<IsDocking>("IsDocking");
+  factory.registerSimpleCondition("InsideArea",
+                                  [&](BT::TreeNode&)
+                                  {
+                                    return inside_area ? BT::NodeStatus::SUCCESS
+                                                       : BT::NodeStatus::FAILURE;
+                                  });
+  factory.registerSimpleAction("BoundaryHandler",
+                               [&](BT::TreeNode&)
+                               {
+                                 ++handler_ticks;
+                                 return BT::NodeStatus::FAILURE;
+                               });
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><ReactiveSequence>"
+      "<ReactiveFallback>" +
+          exempt +
+          "<InsideArea/><BoundaryHandler/></ReactiveFallback>"
+          "<DockRobot/></ReactiveSequence></BehaviorTree></root>",
+      blackboard));
+
+  ctx->current_command = 9;
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_TRUE(ctx->docking_active);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 1;
+      },
+      5.0));
+
+  // The dock approach leaves the area: exempt while the dock goal runs.
+  inside_area = false;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(handler_ticks, 0);
+  EXPECT_FALSE(dock->isCanceling(0));
+
+  // Another command: the exemption fails, the handler engages, DockRobot is
+  // halted and its goal canceled.
+  ctx->current_command = 0;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(handler_ticks, 1);
+  EXPECT_FALSE(ctx->docking_active);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->isCanceling(0);
+      },
+      5.0));
+  dock->canceled(0);
+
+  // Command 9 again, no dock running: no exemption is left behind.
+  ctx->current_command = 9;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(handler_ticks, 2);
+  EXPECT_FALSE(ctx->docking_active);
+  EXPECT_EQ(dock->goalCount(), 1u) << "the halted dock must not restart behind the guard";
 }
 
 template <typename Action>

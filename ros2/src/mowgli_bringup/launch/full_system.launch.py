@@ -506,6 +506,9 @@ def generate_launch_description() -> LaunchDescription:
             {"battery_low_percent": float(robot_params.get("battery_low_percent", 20.0))},
             {"battery_critical_percent": float(robot_params.get("battery_critical_percent", 10.0))},
             {"battery_full_percent": float(robot_params.get("battery_full_percent", 95.0))},
+            # COMMAND_GOTO: a NavigateToPose run longer than this is cancelled
+            # and the GOTO ends on GOTO_FAILED (0 = no limit).
+            {"goto_timeout_sec": float(robot_params.get("goto_timeout_sec", 300.0))},
             {
                 "battery_critical_recovery_percent": float(
                     robot_params.get("battery_critical_recovery_percent", 30.0)

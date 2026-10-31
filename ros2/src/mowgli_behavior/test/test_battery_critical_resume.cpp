@@ -1409,3 +1409,177 @@ TEST_F(OperatorControlRecoveryTest, FailedLowBatteryDockIsNotRetriedByPendingBra
   critical.tickOnce();
   EXPECT_EQ(dock_count, 3);
 }
+
+// ---------------------------------------------------------------------------
+// COMMAND_GOTO (9) through the production MainLogic battery branches:
+// CriticalBatteryDock ahead of GotoSequence, both cut out of main_tree.xml.
+// ---------------------------------------------------------------------------
+
+class GotoNavProbe : public BatteryProbeAction
+{
+public:
+  using BatteryProbeAction::BatteryProbeAction;
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<double>("timeout_sec")};
+  }
+};
+
+class GotoBatteryRecoveryTest : public ProductionBatteryRecoveryTest
+{
+protected:
+  int nav_starts = 0;
+  int nav_halts = 0;
+
+  void SetUp() override
+  {
+    ProductionBatteryRecoveryTest::SetUp();
+    blackboard->set("goto_timeout_sec", 300.0);
+    factory.registerBuilder<GotoNavProbe>("NavigateToPose",
+                                          [this](const std::string& name,
+                                                 const BT::NodeConfig& config)
+                                          {
+                                            return std::make_unique<GotoNavProbe>(
+                                                name,
+                                                config,
+                                                [this](bool start)
+                                                {
+                                                  if (start)
+                                                    ++nav_starts;
+                                                  return BT::NodeStatus::RUNNING;
+                                                },
+                                                [this]()
+                                                {
+                                                  ++nav_halts;
+                                                });
+                                          });
+    ctx->current_command = 9;
+    ctx->battery_percent = 80.0f;
+    ctx->latest_power.charger_enabled = false;
+  }
+
+  /// MainLogic's order for these two branches: CriticalBatteryDock first.
+  BT::Tree gotoMainLogic()
+  {
+    return factory.createTreeFromText(
+        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Main\"><Fallback>" +
+            productionBranchXml("CriticalBatteryDock", "Sequence") +
+            productionBranchXml("GotoSequence", "ReactiveSequence") +
+            "</Fallback></BehaviorTree></root>",
+        blackboard);
+  }
+
+  /// Ticks until the charge hold publishes CRITICAL_BATTERY_CHARGING.
+  void reachCriticalChargeHold(BT::Tree& tree)
+  {
+    ctx->battery_percent = 5.0f;
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+    EXPECT_EQ(last_state, "CRITICAL_BATTERY_CHARGING");
+    EXPECT_TRUE(ctx->battery_charge_pending);
+  }
+
+  void finishCharge()
+  {
+    ctx->battery_percent = 100.0f;
+    ctx->latest_power.charge_current = 0.0f;
+    wait_complete = true;
+  }
+};
+
+// A critical pack during the transit: GotoLowBatteryGuard halts the transit
+// and docks once, the GOTO ends, then the critical branch holds the charge
+// with command 0 and leaves the robot docked. No undock, no new transit.
+TEST_F(GotoBatteryRecoveryTest, CriticalDuringTransitDocksOnceThenStaysDocked)
+{
+  auto tree = gotoMainLogic();
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(nav_starts, 1);
+  EXPECT_EQ(last_state, "GOTO_ACTIVE");
+
+  ctx->battery_percent = 5.0f;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(nav_halts, 1);
+  EXPECT_EQ(dock_count, 1);
+  EXPECT_EQ(last_state, "GOTO_LOW_BATTERY_DOCKED");
+  EXPECT_EQ(ctx->current_command, 0);
+
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(last_state, "CRITICAL_BATTERY_CHARGING");
+  EXPECT_EQ(dock_count, 1) << "already on the charger: ConfirmChargingDock, no second dock";
+
+  finishCharge();
+  for (int i = 0; i < 20; ++i)
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_FALSE(ctx->battery_charge_pending);
+  EXPECT_EQ(ctx->current_command, 0);
+  EXPECT_EQ(undock_count, 0);
+  EXPECT_EQ(nav_starts, 1);
+}
+
+// CriticalBatteryDock entered while command 9 is still set (MainLogic restarted
+// mid-GOTO, e.g. after a root-guard halt): dock, charge, then the GOTO exit
+// ends it docked. Without that exit GotoSequence would start a transit from
+// the charger on the next tick.
+TEST_F(GotoBatteryRecoveryTest, CriticalDockEnteredDuringGotoEndsDockedWithoutTransit)
+{
+  auto tree = gotoMainLogic();
+  reachCriticalChargeHold(tree);
+  EXPECT_EQ(dock_count, 1);
+  EXPECT_EQ(nav_starts, 0);
+
+  finishCharge();
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(last_state, "GOTO_CRITICAL_BATTERY_DOCKED");
+  EXPECT_EQ(ctx->current_command, 0);
+  EXPECT_FALSE(ctx->battery_charge_pending);
+
+  for (int i = 0; i < 20; ++i)
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(undock_count, 0);
+  EXPECT_EQ(nav_starts, 0);
+  EXPECT_EQ(dock_count, 1);
+}
+
+// STOP during that charge hold: the critical charge STOP hold latches, the
+// robot stays docked, and neither the undock tail nor GotoSequence runs.
+TEST_F(GotoBatteryRecoveryTest, StopDuringGotoCriticalChargeStaysDocked)
+{
+  auto tree = gotoMainLogic();
+  reachCriticalChargeHold(tree);
+
+  ctx->current_command = 8;
+  EXPECT_TRUE(mowgli_behavior::applyCommandToBatteryRecovery(*ctx, 8));
+  EXPECT_FALSE(ctx->battery_charge_pending);
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_TRUE(ctx->critical_charge_stop_latched);
+
+  finishCharge();
+  for (int i = 0; i < 20; ++i)
+    EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(ctx->current_command, 8);
+  EXPECT_EQ(undock_count, 0);
+  EXPECT_EQ(nav_starts, 0);
+  EXPECT_EQ(dock_count, 1);
+}
+
+// A restart during that charge hold restores command 9 as IDLE and drops the
+// pending charge: no GOTO resumes after a reboot.
+TEST_F(GotoBatteryRecoveryTest, RestartDuringGotoCriticalChargeRestoresIdle)
+{
+  auto tree = gotoMainLogic();
+  reachCriticalChargeHold(tree);
+  tree.haltTree();
+
+  restartFromSnapshot();
+  EXPECT_EQ(ctx->current_command, 0);
+  EXPECT_FALSE(ctx->battery_charge_pending);
+
+  ctx->battery_percent = 75.0f;
+  ctx->latest_power.charger_enabled = true;
+  auto restarted = gotoMainLogic();
+  for (int i = 0; i < 20; ++i)
+    EXPECT_EQ(restarted.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(undock_count, 0);
+  EXPECT_EQ(nav_starts, 0);
+  EXPECT_EQ(dock_count, 1);
+}

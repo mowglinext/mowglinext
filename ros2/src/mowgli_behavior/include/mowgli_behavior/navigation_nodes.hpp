@@ -27,6 +27,7 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
+#include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_interfaces/srv/get_recovery_point.hpp"
 #include "nav2_msgs/action/back_up.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
@@ -179,9 +180,23 @@ public:
   {
   }
 
+  /// `goal` is optional: when absent, onStart() reads ctx->goto_target_pose
+  /// (set by ~/goto_pose for COMMAND_GOTO), the same way other dynamic poses
+  /// are read off BTContext rather than the blackboard (see current_transit_goal).
+  ///
+  /// `timeout_sec` (optional, 0 = none) bounds one run of the node: past it the
+  /// goal is cancelled and the node FAILS, so a goal bt_navigator keeps
+  /// recovering forever cannot hold the caller RUNNING indefinitely. Real
+  /// elapsed time (steady clock, not the ROS/sim clock), checked on the tick
+  /// thread like SeedYawFromMotion's — not BT.CPP's <Timeout> decorator, which
+  /// halts its child from a timer thread. A negative or non-finite value fails
+  /// the node before any goal is sent.
   static BT::PortsList providedPorts()
   {
-    return {BT::InputPort<std::string>("goal", "Target pose as 'x;y;yaw'")};
+    return {
+        BT::InputPort<std::string>(
+            "goal", "Target pose as 'x;y;yaw' (optional — falls back to ctx->goto_target_pose)"),
+        BT::InputPort<double>("timeout_sec", 0.0, "Give up after this many seconds (0 = never)")};
   }
 
   BT::NodeStatus onStart() override;
@@ -189,6 +204,8 @@ public:
   void onHalted() override;
 
 private:
+  std::chrono::steady_clock::time_point start_time_;
+  double timeout_sec_{0.0};
   rclcpp_action::Client<Nav2Goal>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
@@ -197,6 +214,11 @@ private:
   /// pose the robot already occupies finishes instantly and its status
   /// message can be lost (action_outcome.hpp).
   std::shared_ptr<ActionOutcomeSlot> outcome_ = std::make_shared<ActionOutcomeSlot>();
+
+  /// Cancels a goal that gets halted before the action server has answered it
+  /// (goal_handle_future_ still pending), so bt_navigator never keeps an
+  /// orphaned goal — see cancel_goal.hpp's GoalAbandonment and PR #972.
+  std::shared_ptr<GoalAbandonment> abandonment_ = std::make_shared<GoalAbandonment>();
 
   /// Lazily creates the action client once and reuses it across ticks.
   void ensureActionClient(const rclcpp::Node::SharedPtr& node);
