@@ -10,15 +10,16 @@ import (
 )
 
 type RunningComponent struct {
-	Image       string `json:"image"`
-	Name        string `json:"name,omitempty"`
-	Family      string `json:"family,omitempty"`
-	Reference   string `json:"reference,omitempty"`
-	Version     string `json:"version,omitempty"`
-	Revision    string `json:"revision,omitempty"`
-	BuiltAt     string `json:"built_at,omitempty"`
-	Healthy     bool   `json:"healthy"`
-	Healthcheck bool   `json:"healthcheck"`
+	Image        string `json:"image"`
+	Name         string `json:"name,omitempty"`
+	Family       string `json:"family,omitempty"`
+	Reference    string `json:"reference,omitempty"`
+	Version      string `json:"version,omitempty"`
+	Revision     string `json:"revision,omitempty"`
+	BuiltAt      string `json:"built_at,omitempty"`
+	Healthy      bool   `json:"healthy"`
+	Healthcheck  bool   `json:"healthcheck"`
+	HealthStatus string `json:"health_status"`
 }
 type RuntimeStatus struct {
 	Selection        map[string]string           `json:"selection,omitempty"`
@@ -46,11 +47,25 @@ func (b DockerBackend) Observe(ctx context.Context) (map[string]RunningComponent
 			return nil, e
 		}
 		result[name] = RunningComponent{Image: ci.Image, Name: c.Services[name].ContainerName, Family: contract.Image, Reference: ci.Config.Image, Version: ci.Config.Labels["org.opencontainers.image.version"], Revision: ci.Config.Labels["org.opencontainers.image.revision"],
-			BuiltAt:     ci.Config.Labels["org.opencontainers.image.created"],
-			Healthy:     ci.Config.Labels["com.docker.compose.project"] == b.Config.Project && ci.State.Running && (ci.State.Health == nil || ci.State.Health.Status == "healthy"),
-			Healthcheck: ci.State.Health != nil}
+			BuiltAt:      ci.Config.Labels["org.opencontainers.image.created"],
+			Healthy:      ci.Config.Labels["com.docker.compose.project"] == b.Config.Project && ci.State.Running && (ci.State.Health == nil || ci.State.Health.Status == "healthy"),
+			Healthcheck:  ci.State.Health != nil,
+			HealthStatus: observedHealthStatus(ci)}
 	}
 	return result, nil
+}
+
+// A running legacy container with no check is not application-liveness
+// evidence. Keep the existing Healthy compatibility verdict and expose its
+// evidence separately so callers can distinguish it from an HTTP probe.
+func observedHealthStatus(ci containerInfo) string {
+	if !ci.State.Running {
+		return "stopped"
+	}
+	if ci.State.Health == nil {
+		return "not_configured"
+	}
+	return ci.State.Health.Status
 }
 
 func reconcile(s State, components map[string]RunningComponent) RuntimeStatus {

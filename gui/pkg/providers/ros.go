@@ -220,6 +220,17 @@ type rosClient interface {
 	SetParameters(context.Context, []foxglove.Parameter) ([]foxglove.Parameter, error)
 }
 
+// TransportHealth exposes local heartbeat evidence independently of ROS topic
+// freshness. Kept optional on rosClient so test/alternate clients fail closed.
+func (r *RosProvider) TransportHealth() foxglove.TransportHealth {
+	if client, ok := r.client.(interface {
+		Health() foxglove.TransportHealth
+	}); ok {
+		return client.Health()
+	}
+	return foxglove.TransportHealth{}
+}
+
 type foxgloveSubscription struct {
 	// Serializes reconciliation for one key, never while holding RosProvider.mtx.
 	mtx        sync.Mutex

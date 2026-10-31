@@ -297,6 +297,7 @@ func TestDisconnectCompletesOldCallsBeforeAllowingReconnect(t *testing.T) {
 	}))
 	defer server.Close()
 	client := NewClient("ws" + strings.TrimPrefix(server.URL, "http"))
+	client.reconnectDelay = 10 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, client.Connect(ctx))

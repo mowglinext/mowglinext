@@ -669,6 +669,13 @@
     "baseHeadingUncertaintyTooltip": "Écart-type (rad) du cap de la base utilisé pour amorcer le graphe de fusion au contact de charge. Plus faible = on fait davantage confiance au cap calibré."
   },
   "diagnosticsPage": {
+    "guiHttp": "HTTP de l’interface",
+    "guiResponding": "Répond",
+    "rosTransport": "Connexion ROS",
+    "transportHealthy": "Signal de vie vérifié",
+    "transportChecking": "En attente du signal de vie",
+    "transportDisconnected": "Déconnectée",
+    "transportHint": "L’interface peut répondre lorsque ROS est indisponible. Une connexion saine ne confirme ni la fraîcheur des capteurs ni la disponibilité de la tondeuse.",
     "verdictEmergency": "Urgence",
     "verdictAttention": "Attention requise",
     "verdictAllGood": "Tout va bien",

@@ -28,6 +28,7 @@ type DiagnosticsSnapshot struct {
 	ContainersAvailable bool               `json:"containers_available"`
 	Containers          []ContainerHealth  `json:"containers"`
 	System              SystemHealth       `json:"system"`
+	ROS                 ROSHealth          `json:"ros"`
 	Coverage            []AreaCoverageInfo `json:"coverage"`
 	CrossChecks         CrossChecks        `json:"cross_checks"`
 }
@@ -221,6 +222,8 @@ func getDiagnosticsSnapshot(dockerProvider types.IDockerProvider, rosProvider ty
 
 		// --- Cross-checks ---
 		snapshot.CrossChecks = buildCrossChecks(dbProvider)
+		// Sample transport evidence after the potentially slow Docker read.
+		snapshot.ROS = readROSHealth(rosProvider)
 
 		c.Header("Cache-Control", "no-store")
 		c.JSON(http.StatusOK, snapshot)

@@ -45,6 +45,12 @@ export interface DiagnosticsSnapshot {
     system: { cpu_temperature_available?: boolean; cpu_temperature?: number; cpu_usage?: number | null };
     coverage: AreaCoverageInfo[];
     cross_checks: CrossChecks;
+    ros?: ROSHealth;
+}
+
+export interface ROSHealth {
+    ready: boolean;
+    transport: {connected: boolean; heartbeat_ok: boolean; last_pong_at?: string} | null;
 }
 
 export const SNAPSHOT_STALE_MS = 30_000;
@@ -83,7 +89,23 @@ export function decodeDiagnosticsSnapshot(raw: unknown): DiagnosticsSnapshot {
         || typeof dock.datum_lat !== 'number' || typeof dock.datum_lon !== 'number'
         || ![dock.configured_x,dock.configured_y,dock.configured_yaw,dock.datum_lat,dock.datum_lon].every(Number.isFinite)
         || 'source' in dock && typeof dock.source !== 'string') throw new Error('Invalid diagnostics cross-checks');
-    return {timestamp: raw.timestamp, containers, coverage, system: {
+    let ros: ROSHealth | undefined;
+    if ('ros' in raw) {
+        if (!isJsonObject(raw.ros) || typeof raw.ros.ready !== 'boolean') throw new Error('Invalid ROS transport health');
+        const transport = raw.ros.transport;
+        if (transport !== null && (!isJsonObject(transport) || typeof transport.connected !== 'boolean'
+            || typeof transport.heartbeat_ok !== 'boolean' || 'last_pong_at' in transport
+            && (typeof transport.last_pong_at !== 'string' || !Number.isFinite(Date.parse(transport.last_pong_at))))) throw new Error('Invalid ROS transport health');
+        if (transport === null) {
+            if (raw.ros.ready) throw new Error('Invalid ROS transport health');
+            ros = {ready: false, transport: null};
+        } else if (isJsonObject(transport) && typeof transport.connected === 'boolean' && typeof transport.heartbeat_ok === 'boolean') {
+            if (raw.ros.ready !== (transport.connected && transport.heartbeat_ok)) throw new Error('Invalid ROS transport health');
+            ros = {ready: raw.ros.ready, transport: {connected: transport.connected, heartbeat_ok: transport.heartbeat_ok,
+                ...(typeof transport.last_pong_at === 'string' ? {last_pong_at: transport.last_pong_at} : {})}};
+        }
+    }
+    return {timestamp: raw.timestamp, containers, coverage, ...(ros ? {ros} : {}), system: {
         ...(typeof system.cpu_temperature === 'number' ? {cpu_temperature: system.cpu_temperature} : {}),
         ...(typeof system.cpu_temperature_available === 'boolean' ? {cpu_temperature_available: system.cpu_temperature_available} : {}),
         ...(system.cpu_usage === null || typeof system.cpu_usage === 'number' ? {cpu_usage: system.cpu_usage} : {})},

@@ -364,6 +364,13 @@ definitions:
       ok:
         type: string
     type: object
+  api.ROSHealth:
+    properties:
+      ready:
+        type: boolean
+      transport:
+        $ref: '#/definitions/foxglove.TransportHealth'
+    type: object
   api.RemoteAccessSettingsResponse:
     properties:
       authKeyMasked:
@@ -628,6 +635,15 @@ definitions:
       revision:
         type: string
       version:
+        type: string
+    type: object
+  foxglove.TransportHealth:
+    properties:
+      connected:
+        type: boolean
+      heartbeat_ok:
+        type: boolean
+      last_pong_at:
         type: string
     type: object
   geometry.Point:
@@ -1522,6 +1538,38 @@ paths:
       summary: send a command to a fleet robot
       tags:
       - fleet
+  /health/live:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Check GUI HTTP liveness
+      tags:
+      - health
+  /health/ros:
+    get:
+      description: A healthy transport does not establish sensor freshness or mower
+        safety readiness.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.ROSHealth'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/api.ROSHealth'
+      summary: Check the GUI to ROS transport
+      tags:
+      - health
   /import/openmower:
     post:
       consumes:
