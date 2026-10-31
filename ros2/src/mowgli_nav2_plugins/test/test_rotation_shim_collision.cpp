@@ -70,10 +70,17 @@ protected:
     rclcpp::shutdown();
   }
 
+  virtual bool alternateEnabled() const
+  {
+    return false;
+  }
+
   void SetUp() override
   {
     node_ = std::make_shared<nav2::LifecycleNode>("rotation_shim_collision");
     node_->declare_parameter("controller_frequency", 10.0);
+    node_->declare_parameter("FollowPath.allow_alternate_initial_rotation", alternateEnabled());
+    node_->declare_parameter("FollowPath.rotate_to_heading_once", alternateEnabled());
     node_->declare_parameter("FollowPath.primary_controller.plugin",
                              std::string("nav2_regulated_pure_pursuit_controller::"
                                          "RegulatedPurePursuitController"));
@@ -261,4 +268,270 @@ TEST_F(RotationShimCollision, OppositeSignCommandHistoryChecksTheActualArc)
     expectHoldOrRefusal(sign * 0.4);
   }
 }
+
+class AlternateInitialRotation : public RotationShimCollision
+{
+protected:
+  bool owned_ = false;
+  double measured_translation_ = 0.0;
+  void clear()
+  {
+    RotationShimCollision::clear();
+    owned_ = false;
+  }
+  bool alternateEnabled() const override
+  {
+    return true;
+  }
+  geometry_msgs::msg::Twist initial(double target,
+                                    double yaw = 0.0,
+                                    double measured = 0.0,
+                                    bool support = true,
+                                    size_t path_size = 3,
+                                    double goal_x = 1.0)
+  {
+    if (support)
+    {
+      geometry_msgs::msg::TransformStamped transform;
+      transform.header.frame_id = "odom";
+      transform.child_frame_id = "base_link";
+      transform.header.stamp = node_->now();
+      transform.transform.rotation.z = std::sin(yaw / 2.0);
+      transform.transform.rotation.w = std::cos(yaw / 2.0);
+      EXPECT_TRUE(costmap_->getTfBuffer()->setTransform(transform, "initial_rotation_test", false));
+    }
+    pose_.pose.orientation.z = std::sin(yaw / 2.0);
+    pose_.pose.orientation.w = std::cos(yaw / 2.0);
+    auto sample = pose_;
+    sample.pose.orientation.z = std::sin(target / 2.0);
+    sample.pose.orientation.w = std::cos(target / 2.0);
+    nav_msgs::msg::Path path;
+    path.header.frame_id = "odom";
+    path.poses.resize(path_size, sample);
+    auto goal = pose_;
+    goal.pose.position.x = goal_x;
+    goal.pose.orientation.z = 0.0;
+    goal.pose.orientation.w = 1.0;
+    path.poses.front().pose.position.x = 0.0;
+    if (path.poses.size() > 1)
+    {
+      path.poses[1].pose.position.x = 0.6;
+    }
+    if (path.poses.size() > 2)
+    {
+      path.poses.back() = goal;
+    }
+    goal.header.stamp = node_->now();
+    if (!owned_)
+    {
+      auto raw = path;
+      raw.poses.resize(3, sample);
+      raw.poses[0].pose.position.x = 0.0;
+      raw.poses[1].pose.position.x = 0.6;
+      raw.poses[2] = goal;
+      shim_.newPathReceived(raw);
+      owned_ = true;
+    }
+    geometry_msgs::msg::Twist velocity;
+    velocity.angular.z = measured;
+    velocity.linear.x = measured_translation_;
+    checker_.xy_reached = false;
+    return shim_.computeVelocityCommands(pose_, velocity, &checker_, path, goal).twist;
+  }
+};
+
+TEST_F(AlternateInitialRotation, ChoosesVerifiedOppositeArcAndFreeShortestControl)
+{
+  for (int sign : {-1, 1})
+  {
+    SCOPED_TRACE(sign);
+    clear();
+    EXPECT_GT(sign * initial(sign * 2.9).angular.z, 0.0);
+    clear();
+    // Near the forward corner at +pi/2; the opposite route to 2.9 avoids it.
+    mark(-0.20, sign * 0.55);
+    EXPECT_LT(sign * initial(sign * 2.9).angular.z, 0.0);
+  }
+}
+
+TEST_F(AlternateInitialRotation, BothBlockedAndInteriorCurrentCellRefuse)
+{
+  clear();
+  mark(-0.20, 0.55);
+  mark(-0.20, -0.55);
+  EXPECT_THROW(initial(2.9), nav2_core::NoValidControl);
+  clear();
+  mark(0.0, 0.0);
+  ASSERT_EQ(footprintCost(0.0), 0.0);  // Perimeter-only checker misses this cell.
+  EXPECT_THROW(initial(2.9), nav2_core::NoValidControl);
+}
+
+TEST_F(AlternateInitialRotation, DirectionSurvivesWrappingJitterAndMapChangeRevokes)
+{
+  clear();
+  mark(-0.20, 0.55);
+  EXPECT_LT(initial(2.9).angular.z, 0.0);
+  // The live shortest-angle branch flips after a small clockwise motion.
+  EXPECT_LT(initial(2.9001, -0.30).angular.z, 0.0);
+  EXPECT_LT(initial(2.8999, -0.40).angular.z, 0.0);
+  mark(-0.20, -0.55);
+  EXPECT_THROW(initial(2.9, -0.40), nav2_core::NoValidControl);
+}
+
+TEST_F(AlternateInitialRotation, ResetAndNewPathClearDirectionOwnership)
+{
+  clear();
+  mark(-0.20, 0.55);
+  EXPECT_LT(initial(2.9).angular.z, 0.0);
+  clear();
+  EXPECT_GT(initial(2.9).angular.z, 0.0);
+  mark(-0.20, 0.55);
+  owned_ = false;
+  shim_.previousCommand(0.0);
+  EXPECT_LT(initial(2.9).angular.z, 0.0);
+}
+
+TEST_F(AlternateInitialRotation, OppositeHistoryAndMeasuredMotionCannotHideCollision)
+{
+  clear();
+  mark(-0.20, 0.55);
+  mark(0.49, 0.33);
+  shim_.previousCommand(0.75);
+  // The long arc is safe, but the still-positive command reaches the obstacle.
+  EXPECT_THROW(initial(2.9, 0.0, 0.75), nav2_core::NoValidControl);
+}
+
+TEST_F(AlternateInitialRotation, MissingPoseAndMaterialTargetChangeRefuse)
+{
+  clear();
+  EXPECT_THROW(initial(2.9, 0.0, 0.0, false), nav2_core::NoValidControl);
+  mark(-0.20, 0.55);
+  EXPECT_LT(initial(2.9).angular.z, 0.0);
+  EXPECT_THROW(initial(1.9, 0.0, 0.0, true, 3, 2.0), nav2_core::NoValidControl);
+}
+
+TEST_F(AlternateInitialRotation, RawPathRetainsOwnershipAcrossLocalPruningAndRequiresNewGoalPath)
+{
+  clear();
+  mark(-0.20, 0.55);
+  EXPECT_LT(initial(2.9).angular.z, 0.0);
+  EXPECT_LT(initial(2.9, 0.0, 0.0, true, 1).angular.z, 0.0);
+  costmap_->getCostmap()->resetMap(0, 0, 2000, 2000);
+  shim_.previousCommand(0.0);
+  EXPECT_THROW(initial(2.9, 0.0, 0.0, true, 3, 2.0), nav2_core::NoValidControl);
+  owned_ = false;
+  EXPECT_GT(initial(2.9, 0.0, 0.0, true, 3, 2.0).angular.z, 0.0);
+}
+
+TEST_F(AlternateInitialRotation, FutureOnlyTransformRefuses)
+{
+  geometry_msgs::msg::TransformStamped transform;
+  transform.header.frame_id = "odom";
+  transform.child_frame_id = "base_link";
+  transform.transform.rotation.w = 1.0;
+  transform.header.stamp = node_->now() + rclcpp::Duration::from_seconds(0.5);
+  ASSERT_TRUE(costmap_->getTfBuffer()->setTransform(transform, "forecast_only", false));
+  EXPECT_THROW(initial(2.9, 0.0, 0.0, false), nav2_core::NoValidControl);
+}
+
+TEST_F(AlternateInitialRotation, ForecastInputCannotHideSupportedCurrentBodyCollision)
+{
+  clear();
+  mark(0.0, 0.0);
+  pose_.pose.position.x = 1.2;
+  pose_.header.stamp = node_->now() + rclcpp::Duration::from_seconds(0.5);
+  EXPECT_THROW(initial(2.9), nav2_core::NoValidControl);
+}
+
+TEST_F(AlternateInitialRotation, CapabilityCannotChangeDuringAnActiveEpisode)
+{
+  clear();
+  mark(-0.20, 0.55);
+  EXPECT_LT(initial(2.9).angular.z, 0.0);
+  const auto update =
+      node_->set_parameter(rclcpp::Parameter("FollowPath.allow_alternate_initial_rotation", false));
+  EXPECT_FALSE(update.successful);
+  EXPECT_LT(initial(2.9, -0.30).angular.z, 0.0);
+}
+
+TEST_F(AlternateInitialRotation, MovingStraightPathRetainsPrimaryFlowButRotationRefuses)
+{
+  clear();
+  measured_translation_ = 0.1;
+  EXPECT_GT(initial(0.0).linear.x, 0.0);
+  clear();
+  EXPECT_THROW(initial(2.9), nav2_core::NoValidControl);
+  measured_translation_ = 0.0;
+  EXPECT_GT(initial(2.9).angular.z, 0.0);
+}
+
+TEST_F(AlternateInitialRotation, TerminalRefusalRemainsShortestArcOnly)
+{
+  checker_.xy_reached = true;
+  nav_msgs::msg::Path raw;
+  raw.header.frame_id = "odom";
+  auto goal = pose_;
+  goal.pose.orientation.z = std::sin(0.2);
+  goal.pose.orientation.w = std::cos(0.2);
+  raw.poses = {pose_, goal};
+  clear();
+  shim_.newPathReceived(raw);
+  EXPECT_GT(command(0.4).angular.z, 0.0);
+  clear();
+  shim_.newPathReceived(raw);
+  mark(0.55, -0.20);
+  expectHoldOrRefusal(0.4);
+}
+
+TEST_F(AlternateInitialRotation, CompleteArcEndpointMustBeClear)
+{
+  clear();
+  mark(0.0, 0.50);
+  ASSERT_EQ(footprintCost(0.0), 0.0);
+  EXPECT_THROW(initial(M_PI / 2.0), nav2_core::NoValidControl);
+}
+
 }  // namespace
+
+TEST_F(AlternateInitialRotation, FreshShortestAngleCannotReleaseAnUnfinishedDirectedTurn)
+{
+  clear();
+  mark(-0.20, 0.55);
+  EXPECT_LT(initial(2.9).angular.z, 0.0);
+  // Counter-direction external/estimated motion makes the fresh shortest
+  // angle small while the selected clockwise arc is almost a full turn.
+  ASSERT_EQ(footprintCost(2.7), 0.0);
+  EXPECT_THROW(initial(2.9, 2.7), nav2_core::NoValidControl);
+
+  clear();
+  mark(-0.20, 0.55);
+  EXPECT_LT(initial(2.9).angular.z, 0.0);
+  // With the obstacle removed, the long remaining arc is free. This control
+  // distinguishes owned pure rotation from a vacuous primary-controller
+  // collision refusal after an incorrect shortest-angle handoff.
+  auto* map = costmap_->getCostmap();
+  map->resetMap(0, 0, map->getSizeInCellsX(), map->getSizeInCellsY());
+  const auto still_rotating = initial(2.9, 2.7);
+  EXPECT_DOUBLE_EQ(still_rotating.linear.x, 0.0);
+  EXPECT_LT(still_rotating.angular.z, 0.0);
+}
+
+TEST_F(AlternateInitialRotation, GoalOwnershipPersistsAfterPrimaryHandoff)
+{
+  clear();
+  EXPECT_GT(initial(0.0).linear.x, 0.0);
+  EXPECT_THROW(initial(0.0, 0.0, 0.0, true, 3, 2.0), nav2_core::NoValidControl);
+  // Restoring the old goal alone cannot revive revoked path ownership.
+  EXPECT_THROW(initial(0.0), nav2_core::NoValidControl);
+  owned_ = false;
+  EXPECT_GT(initial(0.0, 0.0, 0.0, true, 3, 2.0).linear.x, 0.0);
+}
+
+TEST_F(AlternateInitialRotation, RefusedOvershootCannotAuthorizeReverseOnLaterCallbacks)
+{
+  clear();
+  EXPECT_GT(initial(1.0).angular.z, 0.0);
+  EXPECT_THROW(initial(1.0, 2.0), nav2_core::NoValidControl);
+  EXPECT_THROW(initial(1.0, 2.0), nav2_core::NoValidControl);
+  EXPECT_THROW(initial(1.0, 2.0), nav2_core::NoValidControl);
+}

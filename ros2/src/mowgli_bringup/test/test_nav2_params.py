@@ -1520,6 +1520,10 @@ def test_local_mapped_obstacles_follow_inflation_in_both_variants() -> None:
         cfg = loader()
         local = cfg["local_costmap"]["local_costmap"]["ros__parameters"]
         global_ = cfg["global_costmap"]["global_costmap"]["ros__parameters"]
+        follow = _controller_section(cfg)["FollowPath"]
+        assert follow["allow_alternate_initial_rotation"] is True
+        assert follow["rotate_to_heading_once"] is True
+        assert follow["plugin"] == "nav2_rotation_shim_controller::RotationShimController"
         assert local["plugins"][-2:] == ["inflation_layer", "mapped_obstacles"]
         assert local["mapped_obstacles"]["plugin"] == "mowgli_nav2_plugins::MappedObstacleLayer"
         assert "mapped_obstacles" not in global_["plugins"]

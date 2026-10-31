@@ -309,6 +309,10 @@ controller_server:
       # STALE point and oscillates / runs to a wrong heading and never aligns
       # (root cause hardware-confirmed 2026-06-20; see use_rotate_to_heading below).
       rotate_to_heading_once: true
+      # Choose the longer initial arc only after checking both complete local
+      # footprint sweeps. Requires raw mapped holes in the local costmap.
+      # Startup-only vendor capability; terminal goal rotation is unchanged.
+      allow_alternate_initial_rotation: true
       # Terminal pivot. With this false, neither RotationShim (start-of-path
       # only) nor RPP (mid-path, rotate_to_heading_min_angle: 0.785 rad =
       # 45°) does anything when the navigation ends with a yaw error in the
