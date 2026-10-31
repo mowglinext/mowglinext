@@ -10,6 +10,20 @@
 
 ## Test map
 
+`mowgli_nav2_plugins/test_mapped_obstacle_layer` checks actual local costmap
+layers and shim/RPP consumption of raw mapped obstacles, including invalid
+snapshots, supported TF, rolling/removal and sensor preservation. Bringup's
+`test_nav2_params.py` pins the post-inflation layer ordering in both overlays.
+It runs through the package ROS tests; captured real-server replay evidence
+is retained separately and is not a full-image or robot test.
+
+`mowgli_nav2_plugins/test_rotation_shim_collision` exercises the real Nav2
+RotationShim and RPP fallback against local lethal cells. Run
+`colcon test --packages-select mowgli_nav2_plugins --ctest-args -R test_rotation_shim_collision`.
+It requires the patched shim from `build_lyrical_vendor.sh`; the apt-only baseline
+fails four collision controls. It is gated by the ROS build-and-test job and does
+not prove continuous swept-volume, mapped-hole visibility or hardware safety.
+
 Motion-authorization additions for #924 are `test_motion_authorization` and
 `test_motion_sweeps` in `mowgli_nav2_plugins`, `test_escape_authorization` in
 `mowgli_behavior`, and `test_motion_geometry_reload` in `mowgli_map`. They run

@@ -5,6 +5,130 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Mapped obstacle visibility repair (2026-10-31)
+
+The nearby-heading counterexample below now has a focused RED/GREEN repair.
+Commit `fb83c2cb` supplies raw mapped `obstacle` rings to local collision checking
+through `MappedObstacleLayer`, last after inflation in both overlays. It consumes
+the existing complete transient-local geometry snapshot and reuses its strict
+bounded parser. Outer-area masks, planner half-width margins, `dock_body` and
+corridor costs are not copied. Existing sensor/fleet marks and inflation remain;
+legal outer body overhang and dock handling retain their separate contracts.
+
+Missing/invalid geometry, unavailable or invalid/stale TF closes the local map.
+Only supported map-to-local epochs no later than ROS now are used; a future-only
+forecast cannot move a hole away from the current chassis. Each full rolling
+window rebuild removes obsolete marks after geometry removal, window movement
+or map/odom changes. The layer cannot be cleared by ordinary recovery; reset
+closes until the retained valid snapshot rebuilds. No provenance timeout was added.
+
+With the reviewed RotationShim repair `de09e224`, the actual captured heading
+variant returns the **identical 17 XY path** but stops and genuinely aborts
+FollowPath (status 6, error 104) before contact. Only one nonzero pivot command
+precedes zero. The raw hole is observed lethal (occupancy 100) with a free control
+cell (0). All three loaded planner/shim/layer inode/hash checks pass. The ideal
+plant never translates and has no body/hole intersection; the numerical interval
+audit computes at least 0.160939 m separation under its stated Euler model.
+This is safety refusal, **not route completion**. No blade or hardware ran.
+
+Final software checks pass: six real-layer/controller cases, all 78 bringup
+configuration tests, production package CMake configuration and clang-format 18.
+Independent Terra source review has no actionable findings; a separate raw-data
+audit confirms the action/zero/geometry evidence and two-part repair limit.
+Layer build/config/link consumes 82.896 s under 150 s, tests 6.214 s under 35 s.
+The runtime replay uses an additive validation layer DSO, the patched shim DSO
+and the unchanged cached production planner DSO; the production main library and
+complete image have not been rebuilt. Prefix-manifest and old-library-loading
+setup failures are retained; identity checks stopped them before motion. The
+verified run restores the original `map -> odom` identity TF. All three mapped
+attempts consume 3.364 s of case time under the shared 20 s phase cap.
+
+Exact source/object/library pins and tests are in
+`pr950-resume-20261031/transit-geometry/mapped-hole-repair/`. Actual old/new paths,
+commands, intervals, setup failures and independent audit are in
+`return-trial/{cases,LEAD_AUDIT.json,INDEPENDENT_RAW_AUDIT.md}` beside it.
+The original historical 13.943731 mm event remains unattributed; this newly
+reproduced body/hole failure is a separate concrete cause.
+
+Remaining availability question: the present shim insists on the shortest turn,
+so this valid plan can now fail safely instead of completing. A constant-centre
+geometric probe of the opposite -3.177415 rad turn computes 0.166215 m hole
+separation, whereas the shortest +3.105770 rad turn intersects. This is an
+unexecuted alternative, not permission to reverse or silently change the route.
+The next discriminating experiment is a bounded controller prototype that checks
+both complete local rotation arcs, retains its chosen direction until aligned,
+and refuses if neither is clear. Current-production maneuver/restart integration,
+true-flip prior recovery and physical containment remain open. PR #950 stays Draft.
+
+## Transit rotation collision checking (2026-10-31)
+
+A new actual Nav2 RotationShim/RPP component exposes a separate transit defect.
+For either sign of a 0.4 rad terminal yaw request, the current footprint is free
+and a predicted rotated footprint has local cost 254, yet the public controller
+returns nonzero rotation. The upstream loop subtracts the initial heading
+threshold even for terminal alignment and can break before its first footprint
+check; its signed progress comparison is also asymmetric. An intermediate
+arc-check repair detects the collision but falls through to RPP, which requests
+0.05 m/s forward on the retained fixture. Both failures are preserved.
+
+Commit `de09e224` patches only RotationShim in the existing pinned Nav2 vendor
+build. Terminal and initial release rules are separated, initial hysteresis is
+retained, the first and release-boundary samples are checked before release,
+and opposite-sign slew checks the actual arc. A collision refusal propagates
+instead of falling through to RPP; path-sampling/TF error fallback remains.
+Entry thresholds, cadence, acceleration and one-second horizon are unchanged.
+The builder script participates in existing Docker/CI cache invalidation; RPP
+remains apt-provided. This intentionally refuses a blocked rotation rather than
+substituting unqualified primary motion; normal Nav2 failure/recovery remains.
+
+Four collision tests fail against the original apt DSO and its fallback control
+passes. All five pass against the patched two-TU DSO; the actual repository
+CMake-registered isolated CTest also passes. Independent Terra review has no
+findings. Owned build/test totals are 78.993/2.862 s under 120/25 s caps,
+including failed attempts; the earlier lead probe adds 8.767 s build. Exact
+source/header, loaded DSO hashes, commands and reviews are in
+`pr950-resume-20261031/transit-geometry/shim-repair/`. The focused target selects
+the patched DSO explicitly: a complete vendor-prefix install or Docker build
+has not been performed. Existing discrete sampling/horizon limits remain;
+this local-costmap repair alone cannot enforce an absent raw mapped hole.
+
+## Transit return orientation discriminator (2026-10-31)
+
+Two small actual PlannerServer/ControllerServer runs distinguish route
+reachability from body authorization. Both use the existing AuthorizedTransitPlanner,
+RotationShim/RPP and production transit checker (0.30 m XY / 3.14 rad yaw), the
+captured chassis and float32 mowing/hole rings, a 0.275 m planner obstacle margin,
+and empty local obstacle evidence. Both return exactly the same 17 XY path
+samples. This reproduces the unsensed mapped-hole case; it is not a complete
+production launch, native actuator model or hardware run.
+
+The original retained G pose chooses a clockwise first command and reaches
+transit success without a body/hole hit in the ideal plant. A separate numerical
+interval audit computes 0.179446 m minimum body/hole separation after the
+rotation-remainder bound. Reference margin is 5.284 mm; maximum interval is
+63.767 ms. Ordinary float arithmetic and retained 12-significant-digit states
+are not formal interval or physical bounds. Success is still 0.291760 m from
+original S with 2.903533 rad yaw error: it does not prove exact original-unit entry.
+
+Changing only initial body yaw by **+0.05 rad** selects counterclockwise rotation.
+The real output reaches v=0, w=0.75 rad/s; at 1.368 s the chassis vertex
+(2.8259740705, 1.20039699225) is strictly inside the raw float32 hole. The reference
+never translates. The fixture freezes/cancels at that witness and reports no
+terminal FollowPath success. Independent lead SAT inspection of the retained
+plant confirms the intersection. This is a new reproducible counterexample,
+not retrospective attribution of the original historical boundary event.
+
+The cause is a consumer-domain mismatch: the planner checks centre paths and
+half-width obstacle bands, while the local rotation/pursuit collision checker
+cannot see the raw mapped hole. A valid path does not authorize its asymmetric
+chassis rotation. The original clockwise success disproves the earlier source-only
+assumption about that exact pose; the nearby-heading counterexample remains.
+Raw paths, commands, TF/odom-derived ideal intervals, lifecycle/setup failures,
+source hashes and model audit are in
+`pr950-resume-20261031/transit-geometry/return-trial/`. Initial configuration,
+wrapper-PID and geometry-republication fixture failures are retained separately;
+they are not evidence that production transit is unreachable.
+
 ## Production terminal-point repair (2026-10-31)
 
 The retained curved endpoint exposed a production cause distinct from map size:
@@ -1062,6 +1186,8 @@ than inheriting a whole-branch CI result.
 | FTC requested goal and consumer epoch | Keep the requested-distance approach, current terminal decision, goal transform provenance and final guard epoch repairs together. They depend on the selected Nav2 1.5.2 path-handler contract and existing geometry/response interfaces; extraction needs its own target-base validation. Software RED/GREEN does not establish a complete corner. |
 | Controller-owned goal plan | FTC/checker/fallback owner-and-revision handshake stays together; reset alone would hold completion. 147 completed focused cases, including both original causal cases, passed on `15c562fa`. Depends on the selected Nav2 first-query/path-handler ordering. |
 | Strict terminal point and checked angular arc | Four-file repair plus focused tests depends on requested XY/consumer epoch and existing raw response/rotation guards. Captured curved endpoint RED/GREEN and two mid-call TF arc RED/GREEN cases; final 151 component cases pass. It does not add geared maneuvers or establish full production route completion. |
+| Nav2 local rotation collision/refusal | Existing pinned vendor builder, dependency and registered test form a separate five-file family (`de09e224`): four old collision REDs plus retained fallback control, five GREEN and registered CTest. Full vendor install/image remains unvalidated. |
+| Raw mapped local obstacles | New layer, plugin registration, both overlay orderings and tests form one family (`fb83c2cb`), dependent on existing complete geometry transport and parser. Six layer/controller and 78 config cases pass. The real counterexample's safe abort validates this family together with the shim collision/refusal repair, not either isolated change or route completion. |
 | Public coverage header includes | Include-only dependency reduction has unchanged coverage/replay evidence; it is separable from the unshipped constructive-corner prototype. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |
 | FTC forward geometry response | Depends on existing raw geometry authorization and the assumed coast contract; shared envelope plus gate/tests belong together. 106 controller and 27 critic cases, plus one native containment GREEN. It stops before the cusp; route completion and calibrated physical containment remain unqualified. |

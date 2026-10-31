@@ -109,6 +109,26 @@ remain separate #924 work. Physical-clock tests retain fresh TF and geometry,
 measure actual 100 ms command holds, and inject only FTC's prior ROS timestamp
 to cover negative and positive-short deltas without changing the OS clock.
 
+Transit rotation uses the existing upstream RotationShim/RPP configuration with
+an asserted source patch in `ros2/scripts/build_lyrical_vendor.sh` at the existing
+Nav2 pin. It fixes local collision simulation release/direction and propagates
+collision refusal; ordinary path-error fallback remains. The registered
+`test_rotation_shim_collision.cpp` checks the real public output. This patch does
+not itself make a raw mapped hole visible in the local costmap. See the dated transit
+sections in `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md` for the actual G-return
+and nearby-heading counterexample.
+
+`mapped_obstacle_layer.hpp/.cpp` supplies only raw mapped obstacle polygons to
+the local costmap, last after inflation in both overlays. It reuses strict
+`motion::Snapshot::parse`, preserves sensor marks and full-window removal/rolling
+semantics, and closes on invalid geometry or unsupported/current-TF failure.
+It is not clearable; recovery reset rebuilds retained geometry. Outer masks,
+planner margins and dock-body/corridor costs are excluded. The runtime class is
+registered in `costmap_plugins.xml`; `test_mapped_obstacle_layer.cpp` covers
+actual layer/controller cases and bringup tests pin both overlay orderings.
+The captured G-yaw variant now fails safely with the paired shim repair; general
+route completion and complete transit containment remain separate.
+
 ## Where to look
 
 Normal transit planning is now `include/mowgli_nav2_plugins/authorized_transit_planner.hpp`
