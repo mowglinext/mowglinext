@@ -27,6 +27,16 @@ overshoot refusal; the five prior test bodies remain unchanged. It is gated by t
 ROS build-and-test job. Software/static-map certificates do not establish map
 completeness, moving-obstacle response or physical safety.
 
+Coverage-entry regressions run in existing behavior targets:
+`test_follow_strip_dig` (real BT nodes/fake Nav2, loose or false-success arrival,
+readiness drift, missing/stale/future-only TF and bounded long-unit recovery),
+`test_coverage_transit_gap` (also `test_coverage_entry.cpp`), and
+`test_transit_tree` (fixed strict checker, old tree invariants retained). Use the
+registered CTest environment for FollowStrip: `RCUTILS_LOGGING_USE_STDOUT=1` and
+`RCUTILS_LOGGING_BUFFERED_STREAM=0`; its checkpoint failure test captures stdout.
+The separate actual-server first-leg evidence does not exercise a whole mowing
+mission or physical blade/pose behavior.
+
 Motion-authorization additions for #924 are `test_motion_authorization` and
 `test_motion_sweeps` in `mowgli_nav2_plugins`, `test_escape_authorization` in
 `mowgli_behavior`, and `test_motion_geometry_reload` in `mowgli_map`. They run

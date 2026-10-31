@@ -140,3 +140,19 @@ TEST(TransitTree, ValidatesThePathAsAPointLikeSmac)
         << path << ": keep the default max_cost (lethal only), Jazzy's point check";
   }
 }
+
+TEST(TransitTree, CoverageEntryPinsStrictCheckerWithoutChangingRecovery)
+{
+  const std::string entry = stripHeaderComment(readFile(MOWGLI_ENTRY_TREE_PATH));
+  ASSERT_FALSE(entry.empty());
+  EXPECT_NE(entry.find("default_goal_checker=\"coverage_entry_goal_checker\""), std::string::npos);
+  EXPECT_NE(entry.find("goal_checker_id=\"coverage_entry_goal_checker\""), std::string::npos);
+  EXPECT_EQ(entry.find("goal_checker_id=\"{selected_goal_checker}\""), std::string::npos)
+      << "a latched selector must not weaken coverage entry";
+  auto normalize = [](std::string xml)
+  {
+    xml = std::regex_replace(xml, std::regex("default_goal_checker=\"[^\"]+\""), "GC");
+    return std::regex_replace(xml, std::regex("goal_checker_id=\"[^\"]+\""), "ID");
+  };
+  EXPECT_EQ(normalize(entry), normalize(stripHeaderComment(readFile(MOWGLI_TRANSIT_TREE_PATH))));
+}

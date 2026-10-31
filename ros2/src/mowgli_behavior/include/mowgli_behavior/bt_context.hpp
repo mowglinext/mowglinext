@@ -879,7 +879,8 @@ struct BTContext
   /// existed and then died (LiDAR container crash, filter-chain death).
   std::chrono::steady_clock::time_point last_scan_time{};
 
-  /// Nav2 behaviour tree handed to NavigateToPose for COVERAGE transits
+  /// Legacy blade-off detour tree; coverage entry uses its dedicated tree below.
+  /// Nav2 behaviour tree handed to NavigateToPose for legacy transits
   /// (trees/navigate_to_pose_transit.xml next to the main tree: selects
   /// transit_goal_checker, final heading ignored). Empty = Nav2 default tree
   /// (stopped_goal_checker, which opennav_docking still needs). Set once by
@@ -1060,6 +1061,9 @@ struct BTContext
   // cannot be used directly with spin_until_future_complete).
   // -----------------------------------------------------------------------
   rclcpp::Node::SharedPtr helper_node;
+
+  /// Strict entry for TransitToStrip and FollowStrip, fixed checker selection.
+  std::string coverage_entry_tree_xml;
 };
 
 /// Drop any "mow only this area" constraint, so the next GetNextUnmowedArea

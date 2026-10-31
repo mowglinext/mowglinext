@@ -517,6 +517,7 @@ protected:
     ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING)
         << "an old result must not complete the current navigation";
     ASSERT_FALSE(new_outcome->Get().has_value());
+    setRobot(2.0, 0.0);  // the current navigation actually arrives
     navigate->succeed(1);
     EXPECT_EQ(tickUntil(
                   []()
@@ -1161,6 +1162,7 @@ TEST_F(FollowStripDigTest, ScanPauseSurvivesABladeOffTransitToTheNextUnit)
     ctx->last_scan_time = std::chrono::steady_clock::now();
   }
   EXPECT_TRUE(ctx->coverage_scan_paused);
+  setRobot(10.0, 0.0);  // unit two entry reached by the fake transit
   navigate->succeed(0);
   ASSERT_EQ(tickUntil(
                 [&]()
@@ -1287,6 +1289,7 @@ TEST_F(FollowStripDigTest, StaleScanDuringTransitKeepsBladeOffUntilFreshWindowAf
 
   // The transit hand-off must sample stale scans before requesting mower-on
   // or dispatching the second FollowCoveragePath goal.
+  setRobot(10.0, 0.0);  // unit two entry reached by the fake transit
   navigate->succeed(0);
   const std::size_t statuses_before_pause = [&]()
   {
@@ -1426,6 +1429,7 @@ TEST_F(FollowStripDigTest, DigWhileMowingCancelsTheGoalWaitsForTheReverseAndResu
   EXPECT_NEAR(resume.x, dig.x + kRadius, 2 * kStep) << "skip no more than the zone";
 
   // Assert 3: after the transit, the REST of the same unit is mowed.
+  setRobot(resume.x, resume.y);
   navigate->succeed(0);
   ASSERT_EQ(tickUntil(
                 [&]()
@@ -1918,6 +1922,7 @@ TEST_F(FollowStripDigTest, RestartBetweenUnitsKeepsCompletedUnitAndResumesTheNex
             BT::NodeStatus::RUNNING);
   EXPECT_DOUBLE_EQ(navigate->goal(1)->pose.pose.position.x, 10.0);
   EXPECT_EQ(follow->goalCount(), 1u);  // completed first unit was not dispatched again
+  setRobot(10.0, 0.0);
   navigate->succeed(1);
   ASSERT_EQ(tickUntil(
                 [&]()
@@ -2234,4 +2239,233 @@ TEST_F(FollowStripDigTest, EndSessionForgetsTheDigPointsButKeepsTheEventCounter)
   // Assert: skip zones are session state; the counter is an edge detector.
   EXPECT_TRUE(ctx->session_dig_points.empty());
   EXPECT_EQ(ctx->dig_event_count, 2u);
+}
+
+// Entry regressions use the real FollowStrip and fake Nav2 actions. A result
+// callback is deliberately insufficient: TF must independently prove entry.
+TEST_F(FollowStripDigTest, LooseNearbyArrivalKeepsBladeOffAndRequiresEntryTransit)
+{
+  ctx->coverage_entry_tree_xml = "strict-coverage-entry.xml";
+  setRobot(0.28554, 0.0);
+  startFollowStrip({straightUnit(0.0, 1.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                2.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(navigate->goalCount(), 1u);
+  EXPECT_EQ(navigate->goal(0)->behavior_tree, ctx->coverage_entry_tree_xml);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_FALSE(hasBladeRequest(true, 0));
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+}
+
+TEST_F(FollowStripDigTest, SuccessfulButWrongEntryIsSkippedWithoutMowingOrRedispatch)
+{
+  setRobot(0.28554, 0.0);
+  startFollowStrip({straightUnit(0.0, 1.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                2.0),
+            BT::NodeStatus::RUNNING);
+  navigate->succeed(0);  // no translation: reproduces the loose checker failure
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                2.0),
+            BT::NodeStatus::FAILURE);
+  EXPECT_EQ(navigate->goalCount(), 1u);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_FALSE(hasBladeRequest(true, 0));
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  EXPECT_TRUE(mowgli_behavior::isKnownFailedTransit(0, 0, ctx->session_failed_transit_targets));
+}
+
+TEST_F(FollowStripDigTest, ExactEntryDispatchesWithoutTransit)
+{
+  setRobot(0.0, 0.0);
+  startFollowStrip({straightUnit(0.0, 1.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                4.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(navigate->goalCount(), 0u);
+  EXPECT_TRUE(hasBladeRequest(true, 0));
+}
+
+TEST_F(FollowStripDigTest, WrongEntrySuccessPreservesBoundedLongUnitRecovery)
+{
+  setRobot(0.28554, 0.0);
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                2.0),
+            BT::NodeStatus::RUNNING);
+  navigate->succeed(0);  // the first target was never actually reached
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 2;
+                },
+                2.0),
+            BT::NodeStatus::RUNNING);
+  const auto& resumed = navigate->goal(1)->pose.pose.position;
+  EXPECT_GT(resumed.x, 0.0);
+  EXPECT_LT(resumed.x, 10.0);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_FALSE(hasBladeRequest(true, 0));
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+  EXPECT_TRUE(ctx->completed_areas.empty());
+
+  // The retained suffix still requires its own verified blade-off arrival.
+  setRobot(resumed.x, resumed.y);
+  navigate->succeed(1);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                4.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_DOUBLE_EQ(follow->goal(0)->path.poses.front().pose.position.x, resumed.x);
+  EXPECT_TRUE(hasBladeRequest(true, 0));
+}
+
+TEST_F(FollowStripDigTest, NearbyEntryWithWrongHeadingRequiresBladeOffTransit)
+{
+  setRobot(0.0, 0.0, 0.31);
+  startFollowStrip({straightUnit(0.0, 1.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                2.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_FALSE(hasBladeRequest(true, 0));
+}
+
+TEST_F(FollowStripDigTest, EntryLostDuringBladeReadinessCannotDispatchCoverage)
+{
+  reportBlade(0.0);
+  startFollowStrip({straightUnit(0.0, 1.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return hasBladeRequest(true, 0);
+                },
+                2.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  const std::size_t before_pose_loss = bladeRequestCount();
+  setRobot(0.10, 0.0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  reportBlade(3000);
+                  return navigate->goalCount() == 1;
+                },
+                2.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_FALSE(hasBladeRequest(true, before_pose_loss));
+}
+
+TEST_F(FollowStripDigTest, MissingStaleAndUnsupportedFutureEntryPoseFailClosed)
+{
+  // Each case gets a new TF buffer; no static pose can hide the missing or
+  // dynamic-source evidence. A future-only transform has no supported now.
+  for (const double offset_sec : {0.0, -1.0, 1.0})
+  {
+    ctx->tf_buffer = std::make_shared<tf2_ros::Buffer>(ctx->node->get_clock());
+    if (offset_sec != 0.0)
+    {
+      geometry_msgs::msg::TransformStamped tf;
+      tf.header.frame_id = "map";
+      tf.child_frame_id = "base_footprint";
+      tf.header.stamp = ctx->node->now() + rclcpp::Duration::from_seconds(offset_sec);
+      tf.transform.rotation.w = 1.0;
+      ctx->tf_buffer->setTransform(tf, "test", false);
+    }
+    const std::size_t transits = navigate->goalCount();
+    const std::size_t blade_requests_before = bladeRequestCount();
+    startFollowStrip({straightUnit(0.0, 1.0)});
+    ASSERT_EQ(tickUntil(
+                  [&]()
+                  {
+                    return navigate->goalCount() == transits + 1;
+                  },
+                  2.0),
+              BT::NodeStatus::RUNNING)
+        << offset_sec;
+    EXPECT_EQ(follow->goalCount(), 0u) << offset_sec;
+    EXPECT_FALSE(hasBladeRequest(true, blade_requests_before)) << offset_sec;
+    tree->haltTree();
+    tree.reset();
+  }
+}
+
+TEST_F(FollowStripDigTest, FailedStrictFirstEntryDoesNotRepeatNearbyTransit)
+{
+  // The old 0.6 m structural-gap rule must not discard this first-attempt
+  // failure marker: strict entry can fail while the robot is only 0.28 m away.
+  setRobot(0.28554, 0.0);
+  ctx->transit_to_strip_failed_at = straightUnit(0.0, 0.4).poses.front().pose.position;
+  startFollowStrip({straightUnit(0.0, 0.4)});
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                2.0),
+            BT::NodeStatus::FAILURE);
+  EXPECT_EQ(navigate->goalCount(), 0u);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_FALSE(hasBladeRequest(true, 0));
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+}
+
+TEST_F(FollowStripDigTest, TransitToStripDoesNotTrustSuccessOutsideEntry)
+{
+  ctx->current_strip_path = straightUnit(0.0, 1.0);
+  ctx->current_transit_goal = ctx->current_strip_path.poses.front();
+  ctx->coverage_entry_tree_xml = "strict-coverage-entry.xml";
+  setRobot(0.28554, 0.0);
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><TransitToStrip/></BehaviorTree></root>",
+      blackboard));
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                2.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(navigate->goal(0)->behavior_tree, ctx->coverage_entry_tree_xml);
+  navigate->succeed(0);
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                2.0),
+            BT::NodeStatus::FAILURE);
+  ASSERT_TRUE(ctx->transit_to_strip_failed_at.has_value());
+  EXPECT_DOUBLE_EQ(ctx->transit_to_strip_failed_at->x, 0.0);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
 }

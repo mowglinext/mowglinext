@@ -409,17 +409,17 @@ private:
   DigRecoveryStep stepDigRecovery(const std::shared_ptr<BTContext>& ctx);
   /// Book the current unit as mowed (shared by the success paths).
   void markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx);
-  // Dispatch swaths_[swath_idx_]. The first unit transits when it is farther
-  // than kSegmentTransitGap; every later sub-path always transits blade-off so
-  // a planned discontinuity is reoriented safely before FollowPath starts.
-  bool sendCurrentSwath(const std::shared_ptr<BTContext>& ctx);
-  // Send the FollowPath goal for the current segment (no gap check).
+  // Reach the actual trimmed entry blade-off unless already aligned there.
+  // Later unit boundaries always transit; force_transit prevents recursive
+  // direct dispatch if entry changes during the handoff.
+  bool sendCurrentSwath(const std::shared_ptr<BTContext>& ctx, bool force_transit = false);
+  // Send the FollowPath goal only from a supported fresh entry pose.
   bool sendFollowGoal(const std::shared_ptr<BTContext>& ctx);
   /// Log the path-tracking summary of the segment that just finished, then arm
   /// a fresh episode. `outcome` names why it finished ("completed", "aborted").
   void logSegmentTracking(const std::shared_ptr<BTContext>& ctx, const char* outcome);
   // Robot distance to the current segment's first pose (TF map→base_footprint);
-  // returns a large value if TF is unavailable (forces the safe transit path).
+  // uses the bounded unknown-gap fallback if TF is unavailable.
   double distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx) const;
   // Advance path_progress_idx_ to the furthest pose of the continuous path the
   // robot has reached (monotonic, bounded forward nearest-pose search from the

@@ -5,6 +5,74 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Coverage entry must precede mowing (2026-10-31)
+
+The next production component experiment found another independent cause: the
+successful loose transit arrival was 0.285544 m from original S and almost
+reversed. On the first 14 straight forward poses, actual production FTC and
+PathProgressGoalChecker returned **FollowPath success without translation**.
+The unchanged path starting at index zero did not prove traversal of its prefix:
+FTC initially rotates toward the start heading, and geometric progress can
+select a later nearby point. This is a real 14-pose component counterexample,
+not evidence that the complete experimental 213-pose program is production code.
+
+Coverage entry now uses a separate fixed `coverage_entry_goal_checker` in
+`navigate_to_coverage_entry.xml`: XY 0.03 m, yaw 0.30 rad, `stateful: false`.
+`TransitToStrip` and FollowStrip's entry transits select this tree. The existing
+legacy transit checker/tree and docking/default tree remain unchanged. A retained
+goal-checker selector message cannot override the entry tree's actual FollowPath
+checker. The entry tree must be installed alongside the selected main tree.
+
+FollowStrip also independently verifies the actual trimmed unit's map-frame
+entry before initial blade spin-up, direct coverage dispatch and every pending
+blade-readiness retry. Navigation success is rechecked by both callers. The
+predicate requires finite normalized orientation, supported current TF no later
+than ROS now, age at most 0.30 s, and both entry bounds. Missing/stale/future-only
+pose evidence keeps the blade off. This is a software pose condition, not proof
+of physical accuracy or a downstream command lease.
+
+A failed handoff uses the existing bounded failed-transit recovery, including
+headland suffix resume and detour retry; it does not discard an entire long unit
+or repeatedly trust an instant-success navigator. The rejection remains latched
+while result/costmap handling is pending. Each replacement dispatch gets its own
+fresh outcome/result slots. Skipped ground retains existing explicit accounting.
+The old 0.6 m structural gap and all previous assertions remain unchanged.
+
+Eight new entry regressions fail on retained baseline code; the exact-entry
+positive control passes. Independent review found the initial long-unit recovery
+bypass; its separate regression fails on the retained intermediate object and
+passes after routing through the existing failure handler. Final component
+validation covers **44 FollowStrip, 10 blade-direction, 7 tree and 8 entry/gap
+cases**, plus **79 config cases**. The initial full FollowStrip run passed 43/44;
+its checkpoint-log capture needed the existing CTest stdout environment, and
+that unchanged case passed on targeted rerun. No assertion was removed. All
+changed production translation units compile, including behavior_tree_node.
+
+A continuous actual PlannerServer/ControllerServer trial uses the new named
+checker, the installed patched shim and current production FTC in the same
+plant/TF/odom process. Entry succeeds at 14.194 mm / 0.245112 rad from S, then
+FTC performs about 0.134 m of actual forward motion and returns success for the
+14-pose input. Both actions return status 4 / error 0, followed by zero. There
+is no pose reset, fixture freeze or cancellation. All four library roles have
+verified loaded hash/inode identity; a separate raw-data audit agrees.
+The numerical ideal-plant audit computes body/hole separation 0.167578 m and
+reference margin 7.073 mm, with maximum interval 90.831 ms. Ordinary floating
+point and retained Euler coordinates are not formal or physical guarantees.
+
+Artifacts are in `pr950-resume-20261031/transit-ftc-handoff/`. Aggregate build
+144.660 s includes the unsuccessful initial link and both source versions, under
+180 s; aggregate tests 89.754 s include REDs and the log-capture correction, under
+130 s. Actual component attempts total less than the 45 s replay cap, including
+two retained setup failures and the first continuous trial without the later
+explicit controller-library identity capture. This is a focused component build,
+not a full package/vendor/image build or a complete BT/mowing/native run.
+
+The 0.03 m entry condition bounds initial placement; it does not turn geometric
+progress into an exact traversal observer. The coverage endpoint's existing
+0.50 m allowance remains intentional and unchanged. Whole-unit cut accounting,
+current-production geared/atomic restart composition, true-flip prior recovery,
+native response and physical containment remain open. PR #950 stays Draft.
+
 ## Checked alternate initial rotation (2026-10-31)
 
 Commit `0b0e9243` closes the retained transit availability counterexample in a
@@ -1254,6 +1322,7 @@ than inheriting a whole-branch CI result.
 | Controller-owned goal plan | FTC/checker/fallback owner-and-revision handshake stays together; reset alone would hold completion. 147 completed focused cases, including both original causal cases, passed on `15c562fa`. Depends on the selected Nav2 first-query/path-handler ordering. |
 | Strict terminal point and checked angular arc | Four-file repair plus focused tests depends on requested XY/consumer epoch and existing raw response/rotation guards. Captured curved endpoint RED/GREEN and two mid-call TF arc RED/GREEN cases; final 151 component cases pass. It does not add geared maneuvers or establish full production route completion. |
 | Nav2 local rotation collision/refusal | Existing pinned vendor builder, dependency and registered test form a separate five-file family (`de09e224`): four old collision REDs plus retained fallback control, five GREEN and registered CTest. Full vendor install/image remains unvalidated. |
+| Qualified coverage entry | Dedicated fixed checker/tree, private path initialization and FollowStrip/TransitToStrip current-entry guards stay together; runtime constants/config/tests are paired. Depends on checked transit rotation, terminal yaw and raw obstacle visibility. Baseline and review REDs; 69 behavior +79 config cases covered and continuous actual-server first-leg success. Does not qualify the entire 213-pose maneuver, physical cutting or full-image ABI. |
 | Checked alternate initial rotation | Four-file startup capability/config/test family (`0b0e9243`) depends on the paired shim refusal and raw mapped-local-obstacle transport. Installed-package 21 controller +78 config cases pass; the retained 17-XY path succeeds, and both-blocked actual control aborts without motion. This is one ideal-plant route, not native/full-image/atomic-restart/physical qualification. |
 | Raw mapped local obstacles | New layer, plugin registration, both overlay orderings and tests form one family (`fb83c2cb`), dependent on existing complete geometry transport and parser. Six layer/controller and 78 config cases pass. The real counterexample's safe abort validates this family together with the shim collision/refusal repair, not either isolated change or route completion. |
 | Public coverage header includes | Include-only dependency reduction has unchanged coverage/replay evidence; it is separable from the unshipped constructive-corner prototype. |

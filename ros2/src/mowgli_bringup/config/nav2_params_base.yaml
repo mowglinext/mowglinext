@@ -101,7 +101,7 @@ controller_server:
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker",
-                           "coverage_axis_goal_checker"]
+                           "coverage_axis_goal_checker", "coverage_entry_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
     path_handler_plugins: ["PathHandler"]
     PathHandler:
@@ -154,6 +154,15 @@ controller_server:
       xy_goal_tolerance: 0.30
       yaw_goal_tolerance: 3.14
       stateful: true
+
+    # Unit entry only: paired with FollowStrip's independent pose predicate.
+    # Non-stateful XY prevents a terminal rotation drifting outside 3 cm from
+    # retaining an earlier XY success. Default docking/legacy transit unchanged.
+    coverage_entry_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.03
+      yaw_goal_tolerance: 0.30
+      stateful: false
 
     # Coverage strip endpoint validation.
     #

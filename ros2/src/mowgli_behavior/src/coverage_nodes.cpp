@@ -27,6 +27,7 @@
 #include "mowgli_behavior/area_coverage_lines.hpp"
 #include "mowgli_behavior/blocked_stretch.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
+#include "mowgli_behavior/coverage_entry.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/coverage_preview.hpp"
 #include "mowgli_behavior/detour_costmap_snapshot.hpp"
@@ -57,6 +58,45 @@ GoalOutcome OutcomeFromResultCode(const rclcpp_action::ResultCode code)
     case rclcpp_action::ResultCode::UNKNOWN:
     default:
       return GoalOutcome::kAborted;
+  }
+}
+
+/// Verify the actual entry pose, independently of the navigator's result. Query
+/// a complete TF epoch no later than now: a future-dated latest transform alone
+/// is not evidence that this pose is supported at the current time.
+bool atCoverageEntry(const std::shared_ptr<BTContext>& ctx,
+                     const geometry_msgs::msg::PoseStamped& entry)
+{
+  if (!ctx->tf_buffer || entry.header.frame_id != "map")
+    return false;
+  auto validQuaternion = [](const geometry_msgs::msg::Quaternion& q)
+  {
+    const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    return std::isfinite(norm) && std::abs(norm - 1.0) <= 1e-3;
+  };
+  if (!validQuaternion(entry.pose.orientation) || !std::isfinite(entry.pose.position.z))
+    return false;
+  try
+  {
+    const auto now = ctx->node->now();
+    const auto latest =
+        ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    const rclcpp::Time stamp(latest.header.stamp, now.get_clock_type());
+    const auto epoch = stamp.nanoseconds() == 0 ? now : std::min(now, stamp);
+    const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", epoch);
+    if (!validQuaternion(tf.transform.rotation) || !std::isfinite(tf.transform.translation.z))
+      return false;
+    return coverageEntryReached(tf.transform.translation.x,
+                                tf.transform.translation.y,
+                                *quaternionYaw(tf.transform.rotation),
+                                entry.pose.position.x,
+                                entry.pose.position.y,
+                                *quaternionYaw(entry.pose.orientation),
+                                (now - epoch).seconds());
+  }
+  catch (const tf2::TransformException&)
+  {
+    return false;
   }
 }
 
@@ -609,7 +649,8 @@ BT::NodeStatus FollowStrip::onStart()
   // cut it again in sendCurrentSwath cycled the blade on every retry of a
   // START_OCCUPIED pass (2026-09-10).
   const double first_gap = distanceToSegmentStart(ctx);
-  const bool start_blade = !unit_exhausted_by_dig_ && bladeSpinupBeforeFirstUnit(first_gap);
+  const bool start_blade =
+      !unit_exhausted_by_dig_ && atCoverageEntry(ctx, swaths_[swath_idx_].poses.front());
   // The coverage ATTEMPT begins here whether the blade spins up now or only
   // after a blade-off transit: the cross-hatch phase is consumed by trying, not
   // by physical rotation, so record it before the spin-up decision below.
@@ -657,6 +698,8 @@ double FollowStrip::distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx
   {
     return 0.0;
   }
+  if (!ctx->tf_buffer)
+    return kTransitToStripUnknownGapM;
   try
   {
     const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
@@ -666,7 +709,7 @@ double FollowStrip::distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx
   catch (const tf2::TransformException&)
   {
     // No pose → take the safe path (boundary-aware transit).
-    return std::numeric_limits<double>::max();
+    return kTransitToStripUnknownGapM;
   }
 }
 
@@ -799,6 +842,18 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     swath_goal_sent_ = false;
     return sendCurrentSwath(ctx);
   }
+
+  // Check again while blade readiness is pending and after transit success.
+  // Force a transit on failure so a changing pose cannot recursively alternate
+  // between this function and sendCurrentSwath's direct-dispatch branch.
+  if (swaths_[swath_idx_].poses.empty() || !atCoverageEntry(ctx, swaths_[swath_idx_].poses.front()))
+  {
+    setBladeEnabled(false);
+    swath_goal_sent_ = false;
+    return sendCurrentSwath(ctx, /*force_transit=*/true);
+  }
+  if (blade_dispatch_pending_)
+    stepScanPause(ctx);
 
   // A blade-off transit does not normally tick the scan pause. Sample it
   // synchronously at the hand-off to FollowCoveragePath: otherwise a scan
@@ -970,7 +1025,7 @@ void FollowStrip::logSegmentTracking(const std::shared_ptr<BTContext>& ctx, cons
               area_idx_);
 }
 
-bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
+bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx, bool force_transit)
 {
   blade_dispatch_pending_ = false;
   if (swath_idx_ >= swaths_.size())
@@ -985,7 +1040,7 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
     unit_exhausted_by_dig_ = true;
     return false;
   }
-  // A distant start and every boundary between planner-produced sub-paths must
+  // An unverified entry and every boundary between planner-produced sub-paths must
   // be reached with a blade-off Nav2 transit. A sub-path boundary can have a
   // near-zero positional gap while requiring a large heading change; sending it
   // directly to FTC re-enables the blade before PRE_ROTATE and can dig in place.
@@ -999,7 +1054,8 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
     failed_transit = ctx->transit_to_strip_failed_at;
     ctx->transit_to_strip_failed_at.reset();
   }
-  if (coverageTransitRequired(gap, unit_boundary))
+  if (force_transit || coverageTransitRequired(gap, unit_boundary) ||
+      !atCoverageEntry(ctx, swaths_[swath_idx_].poses.front()))
   {
     // SAFETY: force the blade OFF first, unconditionally, before any dispatch or
     // early return below — nothing may cross this gap blade-on.
@@ -1087,7 +1143,7 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
         slot->error_msg = r.result->error_msg;
       }
     };
-    nav_goal.behavior_tree = ctx->transit_tree_xml;
+    nav_goal.behavior_tree = ctx->coverage_entry_tree_xml;
     nav_future_ = nav_client_->async_send_goal(nav_goal, send_opts);
     transit_active_ = true;
     transit_abort_seen_ = false;
@@ -1101,8 +1157,7 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
                 unit_boundary ? ", sub-path boundary" : "");
     return true;
   }
-  // First/legacy unit already starts nearby; TransitToStrip positioned the robot
-  // there, so it can begin mowing directly.
+  // The first unit already satisfies the strict entry predicate.
   transit_pending_ = false;
   return sendFollowGoal(ctx);
 }
@@ -1418,7 +1473,6 @@ BT::NodeStatus FollowStrip::onRunning()
   }
   if (blade_dispatch_pending_)
   {
-    stepScanPause(ctx);
     sendFollowGoal(ctx);
     if (blade_gate_failed_)
     {
@@ -1488,7 +1542,19 @@ BT::NodeStatus FollowStrip::onRunning()
       }
       return BT::NodeStatus::RUNNING;
     }
-    const auto nav_status = ResolveGoalStatus(nav_handle_->get_status(), transit_outcome_->Get());
+    auto nav_status = ResolveGoalStatus(nav_handle_->get_status(), transit_outcome_->Get());
+    if (nav_status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED &&
+        (transit_abort_seen_ || !atCoverageEntry(ctx, swaths_[swath_idx_].poses.front())))
+    {
+      // Refuse the handoff, while retaining the same bounded detour/resume
+      // recovery as an unsuccessful transit. A stale or inaccurate arrival
+      // must not discard an entire multi-ring unit or erase its stuck point.
+      setBladeEnabled(false);
+      nav_status = action_msgs::msg::GoalStatus::STATUS_ABORTED;
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "FollowStrip: transit succeeded without a supported fresh entry pose — "
+                  "using failed-transit recovery");
+    }
     if (nav_status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
     {
       transit_active_ = false;
@@ -2743,7 +2809,7 @@ BT::NodeStatus TransitToStrip::onStart()
 
   Nav2Navigate::Goal goal;
   goal.pose = ctx->current_transit_goal;
-  goal.behavior_tree = ctx->transit_tree_xml;
+  goal.behavior_tree = ctx->coverage_entry_tree_xml;
 
   // Bound this attempt — the same bound FollowStrip gives its own transits
   // (transitDeadlineSec).
@@ -2843,6 +2909,14 @@ BT::NodeStatus TransitToStrip::onRunning()
 
   if (status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
   {
+    if (!atCoverageEntry(ctx, ctx->current_transit_goal))
+    {
+      ctx->transit_to_strip_failed_at = ctx->current_transit_goal.pose.position;
+      nav_handle_.reset();
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "TransitToStrip: success without a supported fresh entry pose; not repeating");
+      return BT::NodeStatus::FAILURE;
+    }
     RCLCPP_INFO(ctx->node->get_logger(), "TransitToStrip: arrived at strip start");
     nav_handle_.reset();
     return BT::NodeStatus::SUCCESS;

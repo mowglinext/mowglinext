@@ -203,6 +203,12 @@ TEST_F(BladeDirectionNodes, ManualCoverageAndStopRequestsShareDirection)
   expectRequest(0u, 1u);
 
   ctx->current_strip_path.poses.resize(2);
+  // A coverage entry requires a populated map pose, as the planner supplies.
+  for (auto& pose : ctx->current_strip_path.poses)
+  {
+    pose.header.frame_id = "map";
+    pose.pose.orientation.w = 1.0;
+  }
   ctx->current_strip_path.poses[1].pose.position.x = 1.0;
   auto coverage = tree("<FollowStrip/>");
   EXPECT_EQ(coverage.tickOnce(), BT::NodeStatus::RUNNING);
@@ -243,6 +249,12 @@ TEST_F(BladeDirectionNodes, MenuOverridesRandomChoiceAndOffSurvivesTicksAndCover
   expectRequest(0u, 0u);
 
   ctx->current_strip_path.poses.resize(2);
+  // A coverage entry requires a populated map pose, as the planner supplies.
+  for (auto& pose : ctx->current_strip_path.poses)
+  {
+    pose.header.frame_id = "map";
+    pose.pose.orientation.w = 1.0;
+  }
   ctx->current_strip_path.poses[1].pose.position.x = 1.0;
   auto coverage = tree("<FollowStrip/>");
   EXPECT_EQ(coverage.tickOnce(), BT::NodeStatus::RUNNING);

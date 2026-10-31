@@ -1342,6 +1342,11 @@ private:
     {
       const auto transit_xml =
           std::filesystem::path(tree_file).parent_path() / "navigate_to_pose_transit.xml";
+      const auto entry_xml =
+          std::filesystem::path(tree_file).parent_path() / "navigate_to_coverage_entry.xml";
+      if (!std::filesystem::exists(entry_xml))
+        throw std::runtime_error("Coverage entry tree not found: " + entry_xml.string());
+      context_->coverage_entry_tree_xml = entry_xml.string();
       const auto recovery_xml =
           std::filesystem::path(tree_file).parent_path() / "navigate_inside_boundary.xml";
       if (std::filesystem::exists(recovery_xml))

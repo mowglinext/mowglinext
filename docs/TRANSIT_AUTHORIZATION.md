@@ -92,6 +92,14 @@ request tolerances and the command horizon are unchanged. This is one ideal-plan
 case, not complete route/restart or physical qualification. Exact software evidence and remaining
 limits are recorded in `MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
 
+Coverage unit entry uses its own fixed `coverage_entry_goal_checker` and
+`navigate_to_coverage_entry.xml` (0.03 m / 0.30 rad, non-stateful XY). FollowStrip
+and TransitToStrip independently require fresh supported current TF at the actual
+trimmed start before enabling the blade or sending coverage. Navigation success
+alone cannot authorize entry. Failed entry retains bounded detour/suffix recovery.
+Legacy transit and docking checkers remain unchanged; precise software entry does
+not establish whole-unit cutting or physical pose accuracy.
+
 Stop the mission before editing or replacing a map. Invalidation rejects new
 plans; a controller already following a path may retain it until replanning.
 Controller deviations, autonomous backoff and bounded recovery/docking

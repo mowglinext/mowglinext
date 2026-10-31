@@ -8,6 +8,17 @@
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
+Coverage entry is qualified independently of Nav2 action success. New
+`coverage_entry.hpp` defines the paired 0.03 m / 0.30 rad / 0.30 s entry bounds;
+`coverage_nodes.cpp` checks supported current TF before blade spin-up and every
+coverage dispatch/readiness retry, and rechecks completed entry transits. Only
+TransitToStrip and FollowStrip use `navigate_to_coverage_entry.xml`, whose actual
+FollowPath checker is fixed to `coverage_entry_goal_checker`; the legacy transit
+and docking trees remain. Failed handoffs retain existing bounded detour/suffix
+recovery. `test_follow_strip_dig.cpp`, `test_coverage_entry.cpp` and the strict-tree
+pin cover this contract. Evidence/limits: the dated coverage-entry section in
+`docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
+
 ## Where to look
 | Task | Start here |
 |------|------------|

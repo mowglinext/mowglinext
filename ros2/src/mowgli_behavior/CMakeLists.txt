@@ -524,6 +524,7 @@ if(BUILD_TESTING)
     test/test_transit_tree.cpp
   )
   target_compile_definitions(test_transit_tree PRIVATE
+    MOWGLI_ENTRY_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/navigate_to_coverage_entry.xml"
     MOWGLI_TRANSIT_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/navigate_to_pose_transit.xml"
     MOWGLI_NAV_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/navigate_to_pose.xml"
   )
@@ -540,6 +541,7 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_coverage_transit_gap
     test/test_coverage_transit_gap.cpp
+    test/test_coverage_entry.cpp
   )
 
   target_include_directories(test_coverage_transit_gap PUBLIC

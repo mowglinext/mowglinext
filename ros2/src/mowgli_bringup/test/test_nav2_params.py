@@ -1832,3 +1832,18 @@ def test_fleet_peer_node_is_respawned_and_gets_the_chassis_footprint() -> None:
     assert re.search(r"fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint\(robot_params\)", src)
     for key in ("chassis_front_m", "chassis_rear_m", "chassis_half_width_m"):
         assert key in block, f"{key} must be injected into fleet_peer_obstacles"
+
+
+def test_coverage_entry_checker_requires_current_xy_and_heading() -> None:
+    """Coverage entry is independent of legacy transit and docking checks."""
+    for params in (_load_params(), _load_no_lidar_params()):
+        cfg = _controller_section(params)
+        assert "coverage_entry_goal_checker" in cfg["goal_checker_plugins"]
+        gc = cfg["coverage_entry_goal_checker"]
+        assert gc["plugin"] == "nav2_controller::SimpleGoalChecker"
+        assert gc["xy_goal_tolerance"] == 0.03
+        assert gc["yaw_goal_tolerance"] == 0.30
+        assert gc["stateful"] is False
+        assert cfg["transit_goal_checker"]["xy_goal_tolerance"] == 0.30
+        assert cfg["transit_goal_checker"]["yaw_goal_tolerance"] == 3.14
+        assert cfg["transit_goal_checker"]["stateful"] is True

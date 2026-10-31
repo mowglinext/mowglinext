@@ -487,6 +487,13 @@ like the controller's, is taken from `local_costmap.transform_tolerance` at laun
 RPP parameters are nested under `FollowPath.primary_controller`; RotationShim
 parameters remain directly under `FollowPath`.
 
+`coverage_entry_goal_checker` is separate from legacy transit and coverage
+endpoint checking: XY `0.03 m`, yaw `0.30 rad`, `stateful: false`. The dedicated
+coverage-entry tree fixes that checker on its FollowPath action. FollowStrip and
+TransitToStrip additionally enforce the same entry bounds with a supported pose
+at most `0.30 s` old. These are paired maintainer defaults in `coverage_entry.hpp`
+and the base YAML, with no template/GUI key; see the motion implementation record.
+
 `FollowPath.allow_alternate_initial_rotation` is a maintainer-only startup
 capability: vendor default `false`, shipped base `true`. It requires
 `rotate_to_heading_once: true` and raw mapped obstacles in the local costmap.
