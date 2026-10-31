@@ -47,6 +47,87 @@ assert old in s, 'grid_map patch no longer matches the pinned source'
 p.write_text(s.replace(old, new))
 PY
 
+# Keep the shim's local-costmap collision simulation on the commanded arc.
+# This patch is tied to the pinned Nav2 source above and participates in the
+# Docker/CI vendor cache key through this script. RPP remains apt-provided.
+python3 - "$work/src/navigation2/nav2_rotation_shim_controller" <<'PY_SHIM'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+source = root / 'src/nav2_rotation_shim_controller.cpp'
+header = root / 'include/nav2_rotation_shim_controller/nav2_rotation_shim_controller.hpp'
+s = source.read_text()
+h = header.read_text()
+
+def replace_once(text, old, new):
+    assert text.count(old) == 1, f'RotationShim patch no longer matches: {old!r}'
+    return text.replace(old, new)
+
+# Goal alignment has no rough-heading release allowance. Initial alignment
+# retains the existing entry/disengage hysteresis and releases at disengage.
+# The two call sites are identical; assert their context before changing only goal alignment.
+old = '''        auto cmd_vel = computeRotateToHeadingCommand(angular_distance_to_heading, pose, velocity);
+        last_angular_vel_ = cmd_vel.twist.angular.z;
+        return cmd_vel;
+      }
+    } catch'''
+new = old.replace('pose, velocity);', 'pose, velocity, true);')
+s = replace_once(s, old, new)
+for text, path in [(s, source), (h, header)]:
+    old = 'const geometry_msgs::msg::Twist & velocity)'
+    new = ('const geometry_msgs::msg::Twist & velocity, const bool rotate_to_goal)' if path == source
+           else 'const geometry_msgs::msg::Twist & velocity, const bool rotate_to_goal = false)')
+    text = replace_once(text, old, new)
+    # This suffix also belongs to other methods, so anchor the collision signature.
+    signature = '''const double & angular_distance_to_heading,
+  const geometry_msgs::msg::PoseStamped & pose)''' if path == source else '''const double & angular_distance_to_heading,
+    const geometry_msgs::msg::PoseStamped & pose)'''
+    text = replace_once(text, signature, signature[:-1] + ', const bool rotate_to_goal)')
+    if path == source:
+        s = text
+    else:
+        h = text
+s = replace_once(s, 'isCollisionFree(cmd_vel, angular_distance_to_heading, pose);',
+                 'isCollisionFree(cmd_vel, angular_distance_to_heading, pose, rotate_to_goal);')
+s = replace_once(s, '''  double remaining_rotation_before_thresh =
+    fabs(angular_distance_to_heading) - params_->angular_dist_threshold;''', '''  const double remaining_rotation_before_thresh = std::max(
+    0.0, fabs(angular_distance_to_heading) -
+    (rotate_to_goal ? 0.0 : params_->angular_disengage_threshold));
+  const double heading_sign = angular_distance_to_heading > 0.0 ? 1.0 : -1.0;''')
+s = replace_once(s, '''    // Stop simulating past the point it would be passed onto the primary controller
+    if (angles::shortest_angular_distance(yaw, initial_yaw) >= remaining_rotation_before_thresh) {
+      break;
+    }
+
+''', '')
+s = replace_once(s, '''    if (footprint_cost >= params_->max_cost_threshold) {
+      throw nav2_core::NoValidControl("RotationShimController detected collision ahead!");
+    }
+''', '''    if (footprint_cost >= params_->max_cost_threshold) {
+      throw nav2_core::NoValidControl("RotationShimController detected collision ahead!");
+    }
+
+    // Check the first command interval and the sample reaching the release
+    // boundary before stopping. Opposite-sign slew is real motion, not progress
+    // toward release, and must retain the complete simulation horizon.
+    if (heading_sign * cmd_vel.twist.angular.z * simulated_time >=
+      remaining_rotation_before_thresh)
+    {
+      break;
+    }
+''')
+# A collision refusal must reach controller_server. Falling through to RPP
+# can replace the refused rotation with an unchecked forward proposal.
+old = '    } catch (const std::runtime_error & e) {'
+assert s.count(old) == 2, 'RotationShim collision catch sites changed'
+s = s.replace(old, '''    } catch (const nav2_core::NoValidControl &) {
+      throw;
+    } catch (const std::runtime_error & e) {''')
+source.write_text(s)
+header.write_text(h)
+PY_SHIM
+
 cmake -S "$work/src/sophus" -B "$work/sophus-build" \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_INSTALL_PREFIX="$prefix" -DBUILD_SOPHUS_TESTS=OFF \
@@ -71,7 +152,8 @@ cd "$work"
 #    grid_map already gets through its SYSTEM include export.
 MAKEFLAGS="-j${BUILD_JOBS:-3}" colcon build --merge-install --install-base "$prefix" \
   --base-paths src/grid_map src/beluga/beluga src/beluga/beluga_ros src/navigation2/nav2_smac_planner \
-  --packages-up-to grid_map_ros beluga_ros nav2_smac_planner --parallel-workers 2 \
+  src/navigation2/nav2_rotation_shim_controller \
+  --packages-up-to grid_map_ros beluga_ros nav2_smac_planner nav2_rotation_shim_controller --parallel-workers 2 \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DBUILD_TESTING=OFF \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   "-DCMAKE_CXX_FLAGS=-Wno-error=array-bounds -isystem /usr/include/eigen3"

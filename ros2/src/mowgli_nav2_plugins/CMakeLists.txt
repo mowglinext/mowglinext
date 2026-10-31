@@ -136,6 +136,11 @@ if(BUILD_TESTING)
   # processes discover each other's nodes (docs/claude/testing-ci.md).
   find_package(ament_cmake_ros REQUIRED)
   find_package(nav2_smac_planner REQUIRED)
+  find_package(nav2_rotation_shim_controller REQUIRED)
+  ament_add_ros_isolated_gtest(test_rotation_shim_collision test/test_rotation_shim_collision.cpp)
+  target_link_libraries(test_rotation_shim_collision
+    nav2_rotation_shim_controller::nav2_rotation_shim_controller)
+
   ament_add_ros_isolated_gtest(test_garden_costmap test/test_garden_costmap.cpp TIMEOUT 180)
   target_link_libraries(test_garden_costmap ${PROJECT_NAME} ${nav2_smac_planner_TARGETS})
 

@@ -37,6 +37,8 @@
   <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>nav2_smac_planner</test_depend>
+  <test_depend>nav2_rotation_shim_controller</test_depend>
+  <test_depend>nav2_regulated_pure_pursuit_controller</test_depend>
   <test_depend>ament_cmake_ros</test_depend>
 
   <export>
