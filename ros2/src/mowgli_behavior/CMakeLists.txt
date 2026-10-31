@@ -284,6 +284,7 @@ if(BUILD_TESTING)
   target_link_libraries(test_cancel_on_halt
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
+    ${rcl_interfaces_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}

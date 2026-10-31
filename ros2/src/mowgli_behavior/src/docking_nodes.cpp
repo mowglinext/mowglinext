@@ -139,9 +139,35 @@ BT::NodeStatus DockRobot::onStart()
   // A halted attempt can deliver its result after this attempt starts. Keep
   // its callback's slot separate so a late CANCELED cannot fail the new goal.
   outcome_ = std::make_shared<ActionOutcomeSlot>();
-  send_goal_options.result_callback = [slot = outcome_](const GoalHandle::WrappedResult& result)
+  send_goal_options.result_callback =
+      [slot = outcome_, logger = ctx->node->get_logger(), dock_id, dock_type](
+          const GoalHandle::WrappedResult& result)
   {
     slot->Record(OutcomeFromResultCode(result.code));
+    // Log from the result callback: the BT may already be halted or following
+    // another dock goal when this result arrives. Capture this request's
+    // identity and logger by value, without extending the BT node's lifetime.
+    const char* status = result.code == rclcpp_action::ResultCode::SUCCEEDED  ? "SUCCEEDED"
+                         : result.code == rclcpp_action::ResultCode::ABORTED  ? "ABORTED"
+                         : result.code == rclcpp_action::ResultCode::CANCELED ? "CANCELED"
+                                                                              : "UNKNOWN";
+    const auto error_code =
+        result.result ? std::to_string(result.result->error_code) : "unavailable";
+    const auto error_msg = result.result ? result.result->error_msg : "result payload missing";
+    const auto severity = result.code == rclcpp_action::ResultCode::SUCCEEDED ||
+                                  result.code == rclcpp_action::ResultCode::CANCELED
+                              ? RCUTILS_LOG_SEVERITY_INFO
+                              : RCUTILS_LOG_SEVERITY_WARN;
+    RCLCPP_LOG(severity,
+               logger,
+               "DockRobot: result status=%s dock_id='%s' dock_type='%s' goal_id=%s "
+               "error_code=%s error_msg='%s'",
+               status,
+               dock_id.c_str(),
+               dock_type.c_str(),
+               rclcpp_action::to_string(result.goal_id).c_str(),
+               error_code.c_str(),
+               error_msg.c_str());
   };
   goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
   goal_handle_.reset();
