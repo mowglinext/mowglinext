@@ -473,7 +473,7 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 | Difference | LiDAR overlay | No-LiDAR overlay |
 |---|---|---|
 | Global costmap `plugins` | `[obstacle_layer, inflation_layer, keepout_filter]` | `[static_layer, inflation_layer, keepout_filter]` fed by `/no_lidar_static_map`. **Inflation BEFORE keepout in both** — the keepout mask already carries the body and must not be inflated (pinned by `test_global_costmap_inflates_before_the_keepout_filter`) |
-| Local costmap `plugins` | `[obstacle_layer, inflation_layer]` (L75) | `[static_layer, inflation_layer]` (L46) |
+| Local costmap `plugins` | `[obstacle_layer, inflation_layer, mapped_obstacles]` | `[static_layer, fleet_layer, inflation_layer, mapped_obstacles]`; raw mapped holes last after inflation in both |
 | `FollowPath.primary_controller.use_collision_detection` | `true` (L13) | `false` (L11) |
 | `FollowCoveragePath` obstacle flags | from base (`check_obstacles: true`, `enable_obstacle_deviation: true`) | `check_obstacles: false`, `enable_obstacle_deviation: false` (L20–21) |
 | `collision_monitor.polygons` | `[FootprintApproach, PolygonStopNarrow, PolygonSlow]` (L146) — all `enabled: true`; the static `PolygonStop` is kept **disabled** at L238–245 for the record | `[PolygonStop, FootprintApproach]` both `enabled: false`, `scan` source `enabled: false` (L56–80) — pass-through |
@@ -486,6 +486,14 @@ Lyrical adds `controller_server.path_handler_plugins: [PathHandler]` and
 like the controller's, is taken from `local_costmap.transform_tolerance` at launch.
 RPP parameters are nested under `FollowPath.primary_controller`; RotationShim
 parameters remain directly under `FollowPath`.
+
+`FollowPath.allow_alternate_initial_rotation` is a maintainer-only startup
+capability: vendor default `false`, shipped base `true`. It requires
+`rotate_to_heading_once: true` and raw mapped obstacles in the local costmap.
+It chooses a verified alternate initial rotation when the shortest is blocked;
+both blocked refuse. Runtime changes are rejected. No robot-template key, GUI
+control or launch-time speed injection changes this capability. Terminal rotation,
+existing thresholds and acceleration remain unchanged.
 
 | Block | Lines | Notes |
 |---|---|---|

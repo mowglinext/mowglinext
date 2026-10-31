@@ -21,8 +21,11 @@ is retained separately and is not a full-image or robot test.
 RotationShim and RPP fallback against local lethal cells. Run
 `colcon test --packages-select mowgli_nav2_plugins --ctest-args -R test_rotation_shim_collision`.
 It requires the patched shim from `build_lyrical_vendor.sh`; the apt-only baseline
-fails four collision controls. It is gated by the ROS build-and-test job and does
-not prove continuous swept-volume, mapped-hole visibility or hardware safety.
+fails four collision controls. The suite also exercises explicit alternate-initial
+mode, complete-arc refusal, raw goal/TF ownership, directed release and repeated
+overshoot refusal; the five prior test bodies remain unchanged. It is gated by the
+ROS build-and-test job. Software/static-map certificates do not establish map
+completeness, moving-obstacle response or physical safety.
 
 Motion-authorization additions for #924 are `test_motion_authorization` and
 `test_motion_sweeps` in `mowgli_nav2_plugins`, `test_escape_authorization` in

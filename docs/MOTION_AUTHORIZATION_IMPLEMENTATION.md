@@ -5,6 +5,73 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Checked alternate initial rotation (2026-10-31)
+
+Commit `0b0e9243` closes the retained transit availability counterexample in a
+small actual PlannerServer/ControllerServer run. With the same 17 XY path,
+float32 hole, chassis, speed, acceleration and goal tolerances, the controller
+chooses the verified clockwise arc and genuinely reaches FollowPath success
+(status 4, error 0), followed by zero. The case takes 6.665 s. A separate
+both-arcs-blocked control returns real abort (status 6, error 104) in 1.802 s
+without any nonzero command or pose movement. Neither run uses a fixture
+cancellation or simulated freeze to obtain its result.
+
+The startup-only `FollowPath.allow_alternate_initial_rotation` capability defaults
+false in the pinned vendor package and is enabled in the shipped transit config,
+paired with `rotate_to_heading_once` and the raw mapped-obstacle layer. All five
+previous test bodies are byte-identical and retain default-disabled behavior.
+Only initial rotation changes; terminal yaw rotation retains its prior refusal.
+The new mode checks both complete arcs against filled footprint/cell occupancy,
+including cell extent and inter-sample displacement, chooses shortest when clear,
+and chooses opposite only when shortest is blocked and opposite is clear.
+Unsupported footprint/map bounds refuse. Every tick rechecks the chosen remaining
+arc plus the separate existing actual-command horizon, including adverse angular
+history/feedback. No collision refusal becomes unchecked primary motion.
+
+An owned raw `newPathReceived` plan supplies target/source identity. Body and
+raw target use a supported TF epoch no later than ROS now; transformed future
+local plans cannot move the certificate. Directed remaining rotation is latched
+across the shortest-angle branch cut, updates only after successful validation,
+and resets on the existing path/goal/lifecycle transitions. A mismatched goal
+revokes ownership even after primary handoff until a fresh path is received.
+Measured translation must be stopped for rotation; an aligned moving straight
+path still enters ordinary RPP. Existing thresholds and deadlines remain.
+
+Final validation passes **21 registered real-controller cases and 78 config
+cases**, with independent Terra review of the production behavior and a separate
+raw-data audit. Review found and fixed premature shortest-angle release,
+post-handoff goal mismatch and a repeated-callback overshoot mutation. Retained
+pre-fix binaries fail the focused new regressions. A strengthened clear-map
+control distinguishes actual directed-rotation ownership from a primary
+controller that happens to reject after an incorrect handoff.
+
+The real pinned Nav2 package is built in Release and installed with its own
+headers, exports and plugin resource; the registered fixture and actual replay
+use that installed prefix. Source/header ABI is coherent. The asserted repository
+patch reproduces all four compiled upstream files exactly. Aggregate build time
+is 194.412 s under the explicitly extended 220 s cap, including all earlier
+prototype/review attempts; aggregate tests are recorded in `ledger.json` under
+35 s. The two actual runs total 8.466 s under the separate 45 s replay cap.
+No full vendor/image or first-party main-library rebuild is claimed. Current
+main remains `5ba9ad46`; current dev `5baff9d3` adds 11 GUI/install/docs commits
+with no ROS2 file overlap, so no base update replaces this repair.
+
+Actual loaded planner, mapped-layer and shim hashes/inodes are verified. The
+shim is `bdf53c0a59bed92d182aaee6294e4c74a89dbed5f99d46f21979bfdec79f5d66`.
+The numerical ideal-plant audit computes body/hole separation 0.167594 m and
+reference margin 6.967 mm throughout the successful run. These use ordinary
+floating-point arithmetic and retained 12-significant-digit Euler states, not
+formal interval bounds or physical evidence. Final error to S is 0.285544 m
+and yaw error 2.900113 rad, within the unchanged 0.30 m / 3.14 rad transit request;
+this is not exact original-unit entry or a complete atomic-restart workflow.
+
+Artifacts are retained in `pr950-resume-20261031/alternate-rotation/`, including
+prototype decision, retained pre-review snapshots, installed package, original-assertion
+identity proof, review regressions, independent reviews/audit and exact replay
+inputs. This closes one local route-completion question; production geared/unit
+restart integration, true-flip prior recovery, dynamic/native-actuator behavior,
+pose accuracy and physical containment remain open. PR #950 remains Draft.
+
 ## Mapped obstacle visibility repair (2026-10-31)
 
 The nearby-heading counterexample below now has a focused RED/GREEN repair.
@@ -50,14 +117,14 @@ commands, intervals, setup failures and independent audit are in
 The original historical 13.943731 mm event remains unattributed; this newly
 reproduced body/hole failure is a separate concrete cause.
 
-Remaining availability question: the present shim insists on the shortest turn,
+At this earlier safe-refusal baseline, the shim still insists on the shortest turn,
 so this valid plan can now fail safely instead of completing. A constant-centre
 geometric probe of the opposite -3.177415 rad turn computes 0.166215 m hole
 separation, whereas the shortest +3.105770 rad turn intersects. This is an
 unexecuted alternative, not permission to reverse or silently change the route.
-The next discriminating experiment is a bounded controller prototype that checks
-both complete local rotation arcs, retains its chosen direction until aligned,
-and refuses if neither is clear. Current-production maneuver/restart integration,
+The checked alternate capability above subsequently executes this experiment
+and completes the local route while retaining refusal when both arcs are blocked.
+Current-production maneuver/restart integration,
 true-flip prior recovery and physical containment remain open. PR #950 stays Draft.
 
 ## Transit rotation collision checking (2026-10-31)
@@ -1187,6 +1254,7 @@ than inheriting a whole-branch CI result.
 | Controller-owned goal plan | FTC/checker/fallback owner-and-revision handshake stays together; reset alone would hold completion. 147 completed focused cases, including both original causal cases, passed on `15c562fa`. Depends on the selected Nav2 first-query/path-handler ordering. |
 | Strict terminal point and checked angular arc | Four-file repair plus focused tests depends on requested XY/consumer epoch and existing raw response/rotation guards. Captured curved endpoint RED/GREEN and two mid-call TF arc RED/GREEN cases; final 151 component cases pass. It does not add geared maneuvers or establish full production route completion. |
 | Nav2 local rotation collision/refusal | Existing pinned vendor builder, dependency and registered test form a separate five-file family (`de09e224`): four old collision REDs plus retained fallback control, five GREEN and registered CTest. Full vendor install/image remains unvalidated. |
+| Checked alternate initial rotation | Four-file startup capability/config/test family (`0b0e9243`) depends on the paired shim refusal and raw mapped-local-obstacle transport. Installed-package 21 controller +78 config cases pass; the retained 17-XY path succeeds, and both-blocked actual control aborts without motion. This is one ideal-plant route, not native/full-image/atomic-restart/physical qualification. |
 | Raw mapped local obstacles | New layer, plugin registration, both overlay orderings and tests form one family (`fb83c2cb`), dependent on existing complete geometry transport and parser. Six layer/controller and 78 config cases pass. The real counterexample's safe abort validates this family together with the shim collision/refusal repair, not either isolated change or route completion. |
 | Public coverage header includes | Include-only dependency reduction has unchanged coverage/replay evidence; it is separable from the unshipped constructive-corner prototype. |
 | GNSS/heading/source TF and recovery | Keep coherent consumed means, conditional states, source unaries, source publication/anchor, bootstrap and recovery lifecycle together. Individual API groundwork is not an independently exercised runtime repair. Frozen first-order and physical-provenance limits remain explicit. |

@@ -83,8 +83,13 @@ masks, planner margins or dock-body costs. Missing/invalid snapshots or unsuppor
 TF close the local map; rolling updates remove obsolete marks without clearing
 sensor observations. This is distinct from path authorization and does not
 establish complete transit containment. A nearby-heading G-return counterexample
-now aborts before simulated body contact with the paired shim collision/refusal
-repair; it does not complete the route. Exact software evidence and remaining
+first aborts before simulated body contact with the paired shim collision/refusal
+repair. The enabled startup-only `FollowPath.allow_alternate_initial_rotation`
+capability now checks both complete filled-footprint rotation arcs and retains a
+clear alternative through alignment. The retained identical-path case completes;
+a both-blocked control still aborts without motion. Terminal rotation, acceleration,
+request tolerances and the command horizon are unchanged. This is one ideal-plant
+case, not complete route/restart or physical qualification. Exact software evidence and remaining
 limits are recorded in `MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
 
 Stop the mission before editing or replacing a map. Invalidation rejects new

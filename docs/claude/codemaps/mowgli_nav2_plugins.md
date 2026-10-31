@@ -126,8 +126,17 @@ It is not clearable; recovery reset rebuilds retained geometry. Outer masks,
 planner margins and dock-body/corridor costs are excluded. The runtime class is
 registered in `costmap_plugins.xml`; `test_mapped_obstacle_layer.cpp` covers
 actual layer/controller cases and bringup tests pin both overlay orderings.
-The captured G-yaw variant now fails safely with the paired shim repair; general
-route completion and complete transit containment remain separate.
+The captured G-yaw variant first fails safely with the paired shim repair;
+the checked alternate-rotation capability now completes that local route.
+General route completion and complete transit containment remain separate.
+
+The pinned shim also has startup-only `allow_alternate_initial_rotation`, default
+false upstream and true for shipped `FollowPath` alongside `rotate_to_heading_once`.
+It owns the raw source path/goal, uses supported current TF, checks complete filled
+rotation arcs, latches directed progress and rechecks the remaining arc before
+release. Both blocked arcs or invalid ownership refuse; terminal rotation and
+normal primary handoff remain. Regression/source/installed-package evidence is
+recorded in the dated alternate-rotation section of the canonical motion document.
 
 ## Where to look
 
