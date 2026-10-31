@@ -3,15 +3,31 @@
  * field of an API response. They replace `catch (e: any)` / `(res.error as any).error`.
  */
 
-/** The message of whatever was thrown: an Error, or an object carrying a `message`. */
+/** The message of whatever was thrown: an Error, a rejected API call, or an object carrying a `message`. */
 export const errorMessage = (thrown: unknown): string => {
     if (thrown instanceof Error) {
         return thrown.message;
+    }
+    if (isFetchResponse(thrown)) {
+        return httpResponseMessage(thrown);
     }
     if (typeof thrown === "object" && thrown !== null && "message" in thrown) {
         return String(thrown.message);
     }
     return String(thrown);
+};
+
+const isFetchResponse = (thrown: unknown): thrown is Response =>
+    typeof Response !== "undefined" && thrown instanceof Response;
+
+/** The generated client (`api/Api.ts`) rejects with the fetch Response itself, its parsed body on
+ * `error`. Stringified, that read "[object Response]" in every toast (a failed settings save showed
+ * nothing else); show the backend's reason, or at least the HTTP status when the body has none. */
+const httpResponseMessage = (response: Response): string => {
+    const body: unknown = "error" in response ? response.error : undefined;
+    const reason = apiErrorMessage(body);
+    if (reason !== undefined && reason !== "") return reason;
+    return `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`;
 };
 
 /** The `error` text the GUI backend puts in an API error body (`{ error: "..." }`). */

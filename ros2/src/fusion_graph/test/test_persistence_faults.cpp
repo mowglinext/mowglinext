@@ -78,14 +78,20 @@ protected:
 
   bool SaveWithFileSizeLimit(fg::GraphManager& manager)
   {
-    struct rlimit original{};
+    struct rlimit original
+    {
+    };
     if (::getrlimit(RLIMIT_FSIZE, &original) != 0)
     {
       ADD_FAILURE() << "getrlimit(RLIMIT_FSIZE) failed";
       return true;
     }
-    struct sigaction ignore{};
-    struct sigaction old_action{};
+    struct sigaction ignore
+    {
+    };
+    struct sigaction old_action
+    {
+    };
     ignore.sa_handler = SIG_IGN;
     ::sigemptyset(&ignore.sa_mask);
     if (::sigaction(SIGXFSZ, &ignore, &old_action) != 0)

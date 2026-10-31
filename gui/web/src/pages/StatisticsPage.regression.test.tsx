@@ -130,6 +130,65 @@ describe('StatisticsPage read and clear authority', () => {
         vi.restoreAllMocks();
     });
 
+    it.each(['sessions', 'stats'] as const)('distinguishes initial %s read failure from a successful empty history and retries', async endpoint => {
+        const view = await mount();
+        expect(screen.getByRole('status')).toHaveTextContent('Loading mowing history');
+        expect(screen.queryByText('No mowing yet')).not.toBeInTheDocument();
+        const read = pair(0);
+        await settle(() => {
+            read.session.resolve(response(endpoint === 'sessions' ? {error: 'unavailable'} : history(0).sessions, endpoint === 'sessions' ? 503 : 200));
+            read.stats.resolve(response(endpoint === 'stats' ? {error: 'unavailable'} : history(0).stats, endpoint === 'stats' ? 503 : 200));
+        });
+        expect(screen.getByRole('alert')).toHaveTextContent('Mowing history could not be loaded.');
+        expect(screen.queryByText('No mowing yet')).not.toBeInTheDocument();
+        expect(screen.queryByText('No mowing sessions recorded yet.')).not.toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', {name: 'Retry'}));
+        await settle();
+        await reply(2, 0);
+        expectHistory(view, 0);
+        expect(screen.getByText('No mowing yet')).toBeVisible();
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it.each([0, 1])('marks retained history (%s sessions) on refresh failure until a retry succeeds', async count => {
+        const view = await mount();
+        await reply(0, count);
+        const offset = await poll(), read = pair(offset);
+        await settle(() => { read.session.reject(new Error('offline')); read.stats.resolve(response(history(2).stats)); });
+        expectHistory(view, count);
+        expect(screen.getByRole('alert')).toHaveTextContent('Showing the last confirmed data.');
+        fireEvent.click(screen.getByRole('button', {name: 'Retry'}));
+        await settle();
+        expect(screen.getByRole('alert')).toHaveTextContent('Showing the last confirmed data.');
+        await reply(offset + 2, 2, 'retry');
+        expectHistory(view, 2, 'retry');
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('does not report retired read failures after newer success or confirmed deletion', async () => {
+        const view = await loaded();
+        const older = await poll(), newer = await poll();
+        await reply(newer, 2, 'new');
+        await settle(() => pair(older).session.reject(new Error('retired')));
+        expectHistory(view, 2, 'new');
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        const old = await poll(), deletion = await clear(view);
+        await settle(() => requests[deletion].resolve(response({ok: true})));
+        await reply(deletion + 1, 0);
+        await settle(() => pair(old).session.reject(new Error('pre-delete')));
+        expectHistory(view, 0);
+        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('labels all weekly values as focusable controls, including zero runtime', async () => {
+        await loaded();
+        const bars = screen.getAllByRole('button', {name: /^Week \d+: .* h$/});
+        expect(bars).toHaveLength(12);
+        expect(bars[0]).toHaveAccessibleName('Week 1: 0 h');
+        expect(bars[11]).toHaveAccessibleName('Week 12: 1 h');
+        for (const bar of bars) expect(bar.tabIndex).toBe(0);
+    });
+
     it.each(['sessions-first', 'stats-first'] as const)('does not restore a pre-clear poll (%s)', async order => {
         const view = await loaded();
         const old = await poll();
@@ -244,6 +303,7 @@ describe('StatisticsPage read and clear authority', () => {
             read.stats.resolve(response(history(0).stats));
         });
         expectHistory(view, 0);
+        expect(screen.getByRole('alert')).toHaveTextContent('Showing the last confirmed data.');
         expect(message.success).toHaveBeenCalledOnce();
         expect(loading(view)).toBeNull();
     });

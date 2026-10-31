@@ -1,0 +1,5 @@
+/* Defer the optional installation hint while landscape controls need the height.
+   It returns on rotation; session dismissal is unchanged. */
+@media (max-height: 500px) {
+    .ios-install-banner { display: none !important; }
+}

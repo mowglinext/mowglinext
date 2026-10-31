@@ -1,3 +1,4 @@
+import {SettingsInputsContext} from "../../hooks/useSettingsInput.ts";
 import {useExternalSettingsDraft} from "../../hooks/useExternalSettingsDraft.ts";
 import {useCallback, useEffect, useState} from "react";
 import {Alert, App, Card, Spin, Switch, Typography} from "antd";
@@ -35,7 +36,7 @@ export function RemoteAccessSection({registerSaver, unregisterSaver}: RemoteAcce
     const guiApi = useApi();
     const {notification} = App.useApp();
     const [settings, setSettings] = useState<RemoteAccessSettings | null>(null);
-    const {draft, setDraft, saveDraft} = useExternalSettingsDraft<RemoteAccessSettingsUpdate>();
+    const {draft, setDraft, saveDraft, revertDraft, dirtyCount, pending, inputs} = useExternalSettingsDraft<RemoteAccessSettingsUpdate>();
     const [loadError, setLoadError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const enabled = draft.enabled ?? settings?.enabled ?? false;
@@ -77,11 +78,12 @@ export function RemoteAccessSection({registerSaver, unregisterSaver}: RemoteAcce
 
     useEffect(() => {
         registerSaver?.(SAVER_ID, {
-            dirtyCount: Object.keys(draft).length,
+            dirtyCount,
+            pending,
             save,
-            revert: () => setDraft({}),
+            revert: revertDraft,
         });
-    }, [draft, registerSaver, save, setDraft]);
+    }, [dirtyCount, pending, registerSaver, save, revertDraft]);
     useEffect(() => () => unregisterSaver?.(SAVER_ID), [unregisterSaver]);
 
     const runAction = useCallback(async (path: string, failureKey: string) => {
@@ -104,7 +106,7 @@ export function RemoteAccessSection({registerSaver, unregisterSaver}: RemoteAcce
     }
 
     return (
-        <div>
+        <SettingsInputsContext value={inputs}><div>
             <Card size="small" style={{marginBottom: 16}}>
                 <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12}}>
                     <div>
@@ -148,6 +150,6 @@ export function RemoteAccessSection({registerSaver, unregisterSaver}: RemoteAcce
                     )}
                 </>
             )}
-        </div>
+        </div></SettingsInputsContext>
     );
 }

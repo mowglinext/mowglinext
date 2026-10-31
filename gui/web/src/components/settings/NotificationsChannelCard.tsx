@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {useSettingsInput} from "../../hooks/useSettingsInput.ts";
 import {Button, Card, Col, Form, Input, Row, Select, Space, Typography} from "antd";
 import {SendOutlined} from "@ant-design/icons";
 import {useTranslation} from "react-i18next";
@@ -20,6 +20,7 @@ interface NotificationsChannelCardProps {
 }
 
 interface SecretFieldProps {
+    inputKey: string;
     label: string;
     tooltip: string;
     placeholder: string;
@@ -35,9 +36,9 @@ interface SecretFieldProps {
  * A write-only secret: the backend only ever returns a masked prefix, so the
  * field shows "set" / "not set" and a box to paste a replacement into.
  */
-function SecretField({label, tooltip, placeholder, stored, masked, pending, cleared, onApply, onClear}: SecretFieldProps) {
+function SecretField({inputKey, label, tooltip, placeholder, stored, masked, pending, cleared, onApply, onClear}: SecretFieldProps) {
     const {t} = useTranslation();
-    const [input, setInput] = useState("");
+    const [input, setInput] = useSettingsInput(inputKey);
     const state = pending
         ? t("settingsNotifications.secretPending")
         : cleared
@@ -153,6 +154,7 @@ export function NotificationsChannelCard({settings, draft, onChange, testing, on
                             </Col>
                         </Row>
                         <SecretField
+                            inputKey="ntfyToken"
                             label={t("settingsNotifications.ntfyToken")}
                             tooltip={t("settingsNotifications.ntfyTokenTooltip")}
                             placeholder={t("settingsNotifications.secretPlaceholder")}
@@ -172,6 +174,7 @@ export function NotificationsChannelCard({settings, draft, onChange, testing, on
                             {t("settingsNotifications.telegramHelp")}
                         </Paragraph>
                         <SecretField
+                            inputKey="telegramBotToken"
                             label={t("settingsNotifications.telegramBotToken")}
                             tooltip={t("settingsNotifications.telegramBotTokenTooltip")}
                             placeholder={t("settingsNotifications.secretPlaceholder")}
@@ -199,6 +202,7 @@ export function NotificationsChannelCard({settings, draft, onChange, testing, on
                             {t("settingsNotifications.pushoverHelp")}
                         </Paragraph>
                         <SecretField
+                            inputKey="pushoverAppToken"
                             label={t("settingsNotifications.pushoverAppToken")}
                             tooltip={t("settingsNotifications.pushoverAppTokenTooltip")}
                             placeholder={t("settingsNotifications.secretPlaceholder")}

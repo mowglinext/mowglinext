@@ -36,3 +36,11 @@
 .settings-page .ant-form-vertical > .ant-row > .ant-col > .ant-form-item > .ant-form-item-row > .ant-form-item-label {
     flex: 0 0 auto;
 }
+
+/* At tablet widths the chassis preview competes with the form. Keep the
+   established section rail, then restore the preview once the form can use both. */
+@media (min-width: 768px) and (max-width: 1023px) {
+    .settings-page .settings-preview-rail {
+        display: none;
+    }
+}

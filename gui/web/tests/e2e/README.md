@@ -55,6 +55,7 @@ The other four specs are targeted regressions rather than a matrix:
 
 | Spec | Pins |
 |------|------|
+| `planning-history.spec.ts` | Exact full-day schedule starts, keyboard access to weekly runtime, and mobile More focus containment/restoration with inert background, Escape, backdrop, close and navigation. |
 | `ux-audit.spec.ts` | French desktop/phone audit regressions: STOP payload and contrast, localized search/accessibility, all settings categories, statistics, inactive schedules, wizard scroll, diagnostic provenance, and live-save failure feedback. Optional `UX_SCREENSHOT_DIR` retains screenshots outside the runner output. |
 | `log-stream.spec.ts` | 1 000 high-rate container log lines all reach the live tail; a docker RFC3339Nano stamp is shown in the timestamp column and stripped from the body. |
 | `map-console.spec.ts` | map layers mount with **no** `missing required property "source"` / `React.Fragment` console errors. |
@@ -65,6 +66,9 @@ The other four specs are targeted regressions rather than a matrix:
 | `map-rotation-lock.spec.ts` | The desktop map rotation panel and mobile More → Display menu expose the same mower-wide gesture lock; the spec checks config persistence, enabled angle controls while locked, and optionally captures both PR screenshots with `MAP_ROTATION_SCREENSHOT=1`. |
 | `diagnostics-mobile.spec.ts` | Final accordion headers clear the fixed mobile navigation and support touch expansion/collapse in portrait and landscape. |
 | `mobile-page-clearance.spec.ts` | Home and Settings scroll their final content above mobile navigation; map and logs retain their viewport height on mobile and desktop. |
+| `map-responsive.spec.ts` | iOS install hint clearance, short landscape sidebar/joystick/recording controls, rotation, and touch/keyboard access to first/middle/last entries in a 30-area menu. Uses a local empty map style and blocks upstream sockets. |
+| `shell-logs-responsive.spec.ts` | Emergency header reflow at 320/390px in EN/FR, power-menu hit targets, rotation, and scroll recovery for log controls and a useful log viewport on short screens. |
+| `forms-responsive.spec.ts` | Hardware form width through tablet/desktop breakpoints and firmware introduction actions at 320px in EN/FR, including hit targets and scroll recovery. |
 
 ## Where this fits
 

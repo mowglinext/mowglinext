@@ -85,9 +85,15 @@ local_costmap:
         subscribe_to_updates: false
         transform_tolerance: 0.5
 
-      # Second copy of the global fleet_layer above — keep them identical.
+      # Second copy of the global fleet_layer above — keep them identical,
+      # plugin included. A plain ObstacleLayer never forgets a mark here:
+      # marking-only, no raytrace and no scan to clear it, so a moving peer
+      # left a lethal trail and a docked neighbour the fleet node stops
+      # publishing (fleet_peer_obstacles.py, dock-neighbour exception) stayed
+      # in the way of the undock. RecentObstacleLayer rebuilds from the last
+      # observation_persistence of clouds every update.
       fleet_layer:
-        plugin: "nav2_costmap_2d::ObstacleLayer"
+        plugin: "mowgli_nav2_plugins::RecentObstacleLayer"
         enabled: true
         observation_sources: fleet_peers
         fleet_peers:

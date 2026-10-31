@@ -1,3 +1,4 @@
+import {SettingsInputsContext} from "../../hooks/useSettingsInput.ts";
 import {useExternalSettingsDraft} from "../../hooks/useExternalSettingsDraft.ts";
 import {useCallback, useEffect, useState} from "react";
 import {Alert, App, Button, Card, Spin, Switch, Typography} from "antd";
@@ -36,7 +37,7 @@ export function NotificationsSection({registerSaver, unregisterSaver}: Notificat
     const guiApi = useApi();
     const {notification} = App.useApp();
     const [settings, setSettings] = useState<NotificationSettings | null>(null);
-    const {draft, setDraft, saveDraft} = useExternalSettingsDraft<NotificationSettingsUpdate>();
+    const {draft, setDraft, saveDraft, revertDraft, dirtyCount, pending, inputs} = useExternalSettingsDraft<NotificationSettingsUpdate>();
     const [status, setStatus] = useState<NotificationDeliveryStatus | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [testing, setTesting] = useState(false);
@@ -83,11 +84,12 @@ export function NotificationsSection({registerSaver, unregisterSaver}: Notificat
 
     useEffect(() => {
         registerSaver?.(SAVER_ID, {
-            dirtyCount: Object.keys(draft).length,
+            dirtyCount,
+            pending,
             save,
-            revert: () => setDraft({}),
+            revert: revertDraft,
         });
-    }, [draft, registerSaver, save, setDraft]);
+    }, [dirtyCount, pending, registerSaver, save, revertDraft]);
     useEffect(() => () => unregisterSaver?.(SAVER_ID), [unregisterSaver]);
 
     const sendTest = useCallback(async () => {
@@ -115,7 +117,7 @@ export function NotificationsSection({registerSaver, unregisterSaver}: Notificat
     const enabled = draft.enabled ?? settings.enabled;
 
     return (
-        <div>
+        <SettingsInputsContext value={inputs}><div>
             <Card size="small" style={{marginBottom: 16}}>
                 <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12}}>
                     <div>
@@ -152,7 +154,7 @@ export function NotificationsSection({registerSaver, unregisterSaver}: Notificat
             >
                 {status ? <DeliveryStatusLine status={status}/> : <Text type="secondary">{t("settingsNotifications.statusUnknown")}</Text>}
             </Card>
-        </div>
+        </div></SettingsInputsContext>
     );
 }
 

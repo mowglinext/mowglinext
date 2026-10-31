@@ -1293,6 +1293,10 @@
     "readinessCtaDrawArea": "Draw area"
   },
   "settingsPage": {
+    "leaveTitle": "Leave without saving?",
+    "leaveBody": "Your unsaved settings will be discarded. Stay on this page to save them.",
+    "discardAndLeave": "Discard and leave",
+    "keepEditing": "Keep editing",
     "ros2Restarting": "Restarting ROS2…",
     "ros2Restarted": "ROS2 restarted",
     "ros2RestartFailed": "ROS2 restart failed",
@@ -1313,6 +1317,8 @@
     "technicalDetails": "Technical details"
   },
   "schedulePage": {
+    "weeklyOverview": "Weekly start times",
+    "startSpacingHint": "Blocks mark scheduled starts with a minimum spacing of 60 minutes. Mowing has no fixed duration.",
     "planning": "Planning",
     "soilWetBlocking": "Soil wet — scheduled mows suspended",
     "soilWet": "Soil wet",
@@ -1402,6 +1408,10 @@
     "noAreaHint": "Record a mowing area to see the live map."
   },
   "statisticsPage": {
+    "readFailed": "Mowing history could not be loaded. Retry to read it.",
+    "refreshFailed": "Mowing history could not be refreshed. Showing the last confirmed data.",
+    "retry": "Retry",
+    "loadingHistory": "Loading mowing history…",
     "statistics": "Statistics",
     "aYearOfMowing": "A year of mowing",
     "noMowingYet": "No mowing yet",

@@ -19,9 +19,15 @@ import (
 // other because the operator left coordination off or a fix lagged.
 
 const (
-	fleetPeersTopic   = "/fleet/peers"
-	fleetPeersMsgType = "geometry_msgs/msg/PoseArray"
-	peerFeedPeriod    = 200 * time.Millisecond
+	fleetPeersTopic = "/fleet/peers"
+	// The subset of /fleet/peers that is ON ITS CHARGER, same poses, same
+	// tick. The fleet node may treat such a peer as dock infrastructure while
+	// this robot undocks or docks beside it (two docks side by side would
+	// otherwise refuse every undock). Every peer stays on /fleet/peers, so an
+	// older ROS stack that ignores this topic keeps them all as obstacles.
+	fleetDockedPeersTopic = "/fleet/docked_peers"
+	fleetPeersMsgType     = "geometry_msgs/msg/PoseArray"
+	peerFeedPeriod        = 200 * time.Millisecond
 	// A mirrored pose older than this is not placed: the peer's socket is up
 	// but its localizer went quiet, and a stale footprint would block a lawn
 	// cell the robot has long left (the fleet node drops it after 3 s too).
@@ -41,13 +47,15 @@ type PeerFeedStatus struct {
 
 // peerMapPose is one peer placed in THIS robot's map frame (metres, x east,
 // y north). HasYaw is false when only the antenna fix was fresh: the fleet
-// node then marks a disc instead of an oriented footprint.
+// node then marks a disc instead of an oriented footprint. OnCharger comes
+// from a fresh highLevelStatus.
 type peerMapPose struct {
-	ID     string
-	X      float64
-	Y      float64
-	Yaw    float64
-	HasYaw bool
+	ID        string
+	X         float64
+	Y         float64
+	Yaw       float64
+	HasYaw    bool
+	OnCharger bool
 }
 
 type poseArrayMsg struct {
@@ -120,7 +128,34 @@ func fusedMapPose(r FleetRobot, selfDatum LatLon, maxAge time.Duration) (peerMap
 	if (peerDatum.Lat != 0 || peerDatum.Lon != 0) && !sameDatum(peerDatum, selfDatum) {
 		x, y = enuFromDatum(selfDatum, latLonFromMap(peerDatum, x, y))
 	}
-	return peerMapPose{ID: r.Identity.ID, X: x, Y: y, Yaw: pose.MotionHeading, HasYaw: true}, true
+	return peerMapPose{
+		ID: r.Identity.ID, X: x, Y: y, Yaw: pose.MotionHeading, HasYaw: true,
+		OnCharger: peerOnCharger(r, maxAge),
+	}, true
+}
+
+// peerOnCharger: a FRESH highLevelStatus says the peer is charging. A stale
+// or unreadable one is "not on its charger", which keeps it a full obstacle.
+func peerOnCharger(r FleetRobot, maxAge time.Duration) bool {
+	if !topicFresh(r, "highLevelStatus", maxAge) {
+		return false
+	}
+	var hl struct {
+		IsCharging bool `json:"is_charging"`
+	}
+	return json.Unmarshal(r.Topics["highLevelStatus"], &hl) == nil && hl.IsCharging
+}
+
+// dockedPeerPoses keeps the peers on their charger, with a heading (the
+// fleet node never treats a heading-less disc as dock infrastructure).
+func dockedPeerPoses(poses []peerMapPose) []peerMapPose {
+	out := []peerMapPose{}
+	for _, p := range poses {
+		if p.OnCharger && p.HasYaw {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func fixMapPose(r FleetRobot, selfDatum LatLon, maxAge time.Duration) (peerMapPose, bool) {
@@ -251,13 +286,21 @@ func (f *FleetProvider) publishPeerFeed(now time.Time) {
 		f.setFeed(func(s *PeerFeedStatus) { s.Active = false; s.LastError = "publish /fleet/peers: " + err.Error() })
 		return
 	}
+	// Published every tick, empty when no peer is docked, so the fleet node
+	// learns within one tick that a neighbour left its charger. A failure
+	// here only loses the dock exception: every peer is already an obstacle.
+	lastError := ""
+	docked := peerPoseArray(dockedPeerPoses(poses), now)
+	if err := f.ros.Publish(fleetDockedPeersTopic, fleetPeersMsgType, &docked); err != nil {
+		lastError = "publish /fleet/docked_peers: " + err.Error()
+	}
 	f.setFeed(func(s *PeerFeedStatus) {
 		s.Active = true
 		s.PeersPublished = len(poses)
 		s.Publishes++
 		t := now
 		s.LastPublishAt = &t
-		s.LastError = ""
+		s.LastError = lastError
 	})
 }
 

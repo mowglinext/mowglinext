@@ -172,7 +172,9 @@ goes stale. Nav2 then treats a peer like any obstacle:
   global-lethal cells as non-obstacles; that mask is gone (root CLAUDE.md
   Invariant 5). The LiDAR itself also sees the other body, so collision_monitor
   keeps its scan source only.
-- No-LiDAR overlay: a `fleet_layer` (`ObstacleLayer` under a distinct name) in
+- No-LiDAR overlay: a `fleet_layer` (`mowgli_nav2_plugins::RecentObstacleLayer`
+  under a distinct name, rebuilt from the last second of clouds every update —
+  a plain `ObstacleLayer` with no scan to raytrace never forgot a mark) in
   BOTH costmaps, and — new — the consumers are ON like in the LiDAR variant:
   FTC `check_obstacles` + `enable_obstacle_deviation`, RPP
   `use_collision_detection`, and a collision_monitor whose only source is the
@@ -183,6 +185,39 @@ goes stale. Nav2 then treats a peer like any obstacle:
 The Fleet page shows the feed state ("Peers in costmap", count, rate, last
 error) so an operator can tell whether the other mower actually reaches this
 robot's obstacle map.
+
+**Docks side by side.** The peer block is the chassis grown by the footprint
+margin (0.05 m) and `peer_margin_m` (0.15 m), and it is checked against OUR
+footprint, which carries its own 0.05 m + Nav2's 0.01 m padding. Two mowers
+parked on neighbouring docks therefore overlap in that model long before
+their bodies touch: on 2026-10-28 the docks were 0.53 m apart (7.6 cm between
+the chassis), the block reached 0.18 m into our footprint, and BackUp aborted
+every undock in its first cycle (`Collision Ahead - Exiting DriveOnHeading`)
+— collision_monitor's approach gate would have frozen it too (points already
+inside the footprint = collision at t = 0). No margin fixes it: even the bare
+chassis collides once rasterised at 0.05 m; today's model needs ≥ 0.77 m
+between dock centres. So the feed also publishes `/fleet/docked_peers`, the
+subset of `/fleet/peers` whose fresh `highLevelStatus` says `is_charging`
+(same poses, same tick), and `fleet_peer_obstacles.py` leaves such a peer out
+of the cloud — dock infrastructure, like the dock itself — only while ALL of
+these hold (`classify_docked_peer`):
+
+1. we are on our own dock rail: from the dock pose back to `undock_distance`
+   (+0.5 m either end), within 0.30 m of its axis and 30° of its heading;
+2. the peer's bare chassis is ≥ 2 cm clear of the strip our chassis sweeps
+   along that rail (a charger BEHIND our dock keeps blocking the undock);
+3. the two bare chassis are ≥ 2 cm apart right now;
+4. our grown footprint is within 0.5 m of the peer's block — so the block is
+   back for the first transit after the undock (0.54 m at 1.5 m) and before
+   an approach to the staging pose reaches it.
+
+Anything missing — an older GUI (no `/fleet/docked_peers`), our fused pose
+older than 1 s, no latched `/map_server_node/docking_pose`, a heading-less
+peer — keeps the peer a full obstacle. Each verdict change is logged once;
+cases 2/3 log a warning that the docks must be moved apart. With a LiDAR the
+scanner still sees the neighbour's real body and the LOCAL `obstacle_layer`
+keeps old fleet marks until a scan raytraces them away; both are unverified
+on hardware.
 
 **Yield rule** (the coordinator, only while coordination is ON): when a peer
 WITH PRIORITY (smaller `robot_id`) is autonomous within `yield_distance_m`
@@ -276,6 +311,6 @@ its last completed areas in the memory until the 12 h TTL or "Start fresh".
 Fleet node parameters (`fleet_peer_obstacles.py`: `peer_margin_m` 0.15,
 `fill_step_m` 0.05, `publish_rate_hz` 5, `peer_timeout_s` 3, `point_height_m`
 0.30) are node defaults only, not template keys — change them in the launch
-file if a site needs to; the chassis extents are injected from the robot
-config. Coordinator knobs live in the GUI DB (`fleet.coordination`) and on
+file if a site needs to; the chassis extents (grown `chassis_*_m` and bare
+`body_*_m`) and `undock_distance_m` are injected from the robot config. Coordinator knobs live in the GUI DB (`fleet.coordination`) and on
 the Fleet page.

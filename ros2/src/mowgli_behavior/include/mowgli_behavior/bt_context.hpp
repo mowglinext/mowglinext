@@ -114,6 +114,7 @@ struct BTContext
   /// Does NOT cover the coverage-tracking fields below (command state +
   /// swath-completion model: target_area_index, single_area_target,
   /// attempted_areas, incomplete_retired_areas, area_attempt_count, area_last_coverage,
+  /// area_last_partial_poses,
   /// area_completed_swaths,
   /// area_swath_count, area_resume_pose_index, area_path_pose_count,
   /// area_plan_fingerprint, completed_areas, session_failed_transit_targets,
@@ -325,13 +326,19 @@ struct BTContext
   /// despite advancing 0.3 → 18.6 % across the 5 dispatches. Cleared by
   /// EndSession.
   std::map<uint32_t, uint32_t> area_attempt_count;
-  /// Best coverage_percent seen for an area so far this session, used to
-  /// decide whether a dispatch made progress (and thus resets the
-  /// no-progress attempt counter). Cleared by EndSession.
+  /// High-water mark of the units booked fully mowed in an area this session
+  /// (area_completed_swaths size), used to decide whether a dispatch made
+  /// progress and thus resets the no-progress attempt counter. Cleared by
+  /// EndSession.
   std::map<uint32_t, float> area_last_coverage;
+  /// Its partner (area_progress.hpp): the high-water mark of the furthest
+  /// poses reached inside the area's UNFINISHED units (area_unit_progress), so
+  /// a pass that mowed a long stretch of a long unit is not "no progress".
+  /// Reset with area_last_coverage, everywhere.
+  std::map<uint32_t, std::size_t> area_last_partial_poses;
   static constexpr uint32_t kMaxAreaAttempts = 5;
-  /// Minimum coverage_percent gain that counts as progress (resets the
-  /// no-progress counter). Below this, a dispatch is treated as stuck.
+  /// Share of an area's plan an unfinished unit must gain to count as
+  /// progress (minPartialProgressPoses, never below ~1 m of path).
   static constexpr float kAreaProgressEpsilonPct = 0.5f;
 
   // -----------------------------------------------------------------------
@@ -1171,6 +1178,7 @@ inline void clearRecordedCoverageProgress(BTContext& ctx)
   ctx.area_plan_fingerprint.clear();
   ctx.completed_areas.clear();
   ctx.area_last_coverage.clear();
+  ctx.area_last_partial_poses.clear();
   ctx.coverage_plausibility_warning = false;
 }
 
@@ -1181,6 +1189,7 @@ inline void clearAreaCoverageProgress(BTContext& ctx, uint32_t area)
   ctx.area_resume_pose_index.erase(area);
   ctx.area_unit_progress.erase(area);
   ctx.area_last_coverage.erase(area);
+  ctx.area_last_partial_poses.erase(area);
   ctx.completed_areas.erase(area);
 }
 

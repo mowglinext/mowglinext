@@ -835,9 +835,15 @@ BT::NodeStatus BackUp::onRunning()
     return BT::NodeStatus::SUCCESS;
   }
 
+  // The result's error_code / error_msg say WHY (714 COLLISION_AHEAD names the
+  // obstacle case — on 2026-10-28 the fleet peer on the next dock); the action
+  // code alone (6 = ABORTED) left the operator guessing.
+  const auto& result = wrapped.result;
   RCLCPP_WARN(ctx->node->get_logger(),
-              "BackUp: action ended with code %d",
-              static_cast<int>(wrapped.code));
+              "BackUp: action ended with code %d (error %u: %s)",
+              static_cast<int>(wrapped.code),
+              result ? static_cast<unsigned>(result->error_code) : 0U,
+              result && !result->error_msg.empty() ? result->error_msg.c_str() : "no detail");
   return BT::NodeStatus::FAILURE;
 }
 
