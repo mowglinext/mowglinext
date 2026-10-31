@@ -32,14 +32,12 @@ interface LiveMapMiniProps {
   /** All recorded areas (outer ring + holes), normalised 0..1. Takes
    *  precedence over `polygon` when non-empty. */
   polygons?: MiniArea[];
-  /** Mow-progress overlay. When set, replaces the synthetic coverage band. */
+  /** Geographic coverage is drawn only from the real progress grid. */
   progress?: MiniProgress | null;
   /** Robot position 0..1. */
   robot?:   {x: number; y: number; heading: number};
   /** Saved dock in the same normalised space. Omitted until known. */
   dock?: {x: number; y: number};
-  /** Coverage fraction 0..1 -- synthetic band drawn only when no `progress`. */
-  coverage?: number;
   height?: number;
 }
 
@@ -63,9 +61,8 @@ export function LiveMapMini({
   polygon = DEFAULT_POLY,
   polygons,
   progress = null,
-  robot   = {x: 0.62, y: 0.46, heading: 30},
+  robot,
   dock,
-  coverage = 0.42,
   height = 200,
 }: LiveMapMiniProps) {
   const {displayMode} = useThemeMode();
@@ -138,13 +135,10 @@ export function LiveMapMini({
 
         {/* overlay clipped to the union of all areas */}
         <defs>
-          <pattern id="cov" patternUnits="userSpaceOnUse" width={8} height={8} patternTransform="rotate(35)">
-            <line x1={0} y1={0} x2={0} y2={8} stroke="rgba(124,255,178,0.18)" strokeWidth={1.4}/>
-          </pattern>
           <clipPath id="polyClip"><path d={clipPathD} clipRule="evenodd"/></clipPath>
         </defs>
         <g clipPath="url(#polyClip)">
-          {progress ? (
+          {progress && (
             // Real mowed-cell overlay (same raster MapPage draws). Non-uniform
             // scale matches the page's per-axis normalisation, so preserve none.
             <motion.image
@@ -156,19 +150,11 @@ export function LiveMapMini({
               initial={{opacity: 0}} animate={{opacity: 1}}
               transition={{duration: 0.4}}
             />
-          ) : (
-            // No grid yet -- synthetic coverage band as a lightweight proxy.
-            <motion.rect
-              x={0} y={0} width={w * coverage} height={h}
-              fill="url(#cov)"
-              initial={{opacity: 0}} animate={{opacity: 1}}
-              transition={{delay: 0.7, duration: 0.6}}
-            />
           )}
         </g>
 
         {/* robot dot */}
-        <g transform={`translate(${toX(robot.x)} ${toY(robot.y)})`}>
+        {robot && <g data-testid="mini-map-robot" transform={`translate(${toX(robot.x)} ${toY(robot.y)})`}>
           {/* outer glow */}
           <circle r={14} fill="rgba(124,255,178,0.55)" filter="url(#robotGlow)"/>
           {/* heading wedge -- ENU yaw (0=+X east, 90=+Y north). Arrow base
@@ -192,7 +178,7 @@ export function LiveMapMini({
               transition={{duration: 1.8, ease: "easeOut", repeat: Infinity}}
             />
           )}
-        </g>
+        </g>}
 
         {/* Only draw a dock supplied by the map; no decorative fallback. */}
         {dock && <g data-testid="mini-map-dock" transform={`translate(${toX(dock.x)} ${toY(dock.y)})`}>

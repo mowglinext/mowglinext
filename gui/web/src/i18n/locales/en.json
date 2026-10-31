@@ -1009,6 +1009,17 @@
     }
   },
   "mowgliNextPage": {
+    "activity": {
+      "mowing": "Mowing",
+      "returning": "Returning to dock",
+      "transit": "In transit",
+      "manual": "Manual mowing",
+      "recording": "Recording boundary",
+      "autonomous": "Autonomous activity"
+    },
+    "cuttingEstimate": "About {{value}} min of cutting",
+    "cuttingEstimateScope": "{{area}} only, at current speed. Excludes turns, transit, charging and return to dock.",
+    "activityDetail": "{{activity}} · {{area}}",
     "mowerOnDockTop": "Mower on its dock — top view",
     "mowerTop": "Mower — top view",
     "headlineUntilHomePrefix": "Just ",
@@ -1391,6 +1402,8 @@
     "unknown": "Unknown"
   },
   "liveMapMini": {
+    "positionUnknown": "Robot position unknown",
+    "coverageUnavailable": "Coverage map unavailable",
     "noAreaYet": "No area recorded yet",
     "noAreaHint": "Record a mowing area to see the live map."
   },
@@ -1613,6 +1626,7 @@
     "stats": "Stats"
   },
   "actionCluster": {
+    "pending": "Command pending…",
     "emergencyStop": "Emergency stop",
     "returnToDock": "Return to dock",
     "startMowing": "Start mowing",

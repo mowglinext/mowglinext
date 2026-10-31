@@ -43,11 +43,12 @@ From outside the home network: Settings → **Remote access** starts an optional
 
 ![Dashboard — idle on the dock](https://raw.githubusercontent.com/mowglinext/mowglinext/dev/docs/screenshots/dashboard-idle.png)
 
-The dashboard adapts to the mower's current state with a **hero card**. It always carries the active zone, a battery ring, and -- once a map is loaded -- a "coverage today" ribbon with the mowed / total area in m². The headline and the big primary button change with the state:
+The dashboard adapts to the mower's current state with a **hero card**. It carries the active zone, a battery ring, and an area-coverage ribbon with mowed / total m² when a summary for the current area is available. The headline and the big primary button change with the state:
 
 | State | Headline | Primary button |
 |-------|----------|----------------|
-| **Mowing / recording / manual** | Minutes left before the robot heads home (live ETA from the remaining un-mowed cells) | **Pause** -- stop in place (`COMMAND_STOP`); Nav2 stays up so `COMMAND_START` resumes the mission |
+| **Mowing** | Approximate cutting time for the current area, when coverage, configured tool width and forward speed are available; otherwise Mowing | **Pause** -- stop in place (`COMMAND_STOP`); Nav2 stays up so `COMMAND_START` resumes the mission |
+| **Returning / transit / recording / manual** | The reported activity, without a mowing ETA | **Pause** (`COMMAND_STOP`) |
 | **Charging with no active mowing session** | Battery percentage | **Start mowing** (`COMMAND_START`) |
 | **Mid-session battery charge hold** | Mowing paused · battery percentage | **Resume now** (`COMMAND_START`), enabled from the displayed manual-resume percentage |
 | **Leaving the dock to resume** | Resuming mowing… | **Pause** (`COMMAND_STOP`) once charging contact ends |
@@ -56,11 +57,15 @@ The dashboard adapts to the mower's current state with a **hero card**. It alway
 
 Two secondary buttons normally flank the primary: an **emergency stop** (behind a confirm dialog -- it latches the firmware emergency) and **Send home** (`COMMAND_HOME`). During a charge hold, **Cancel mowing** (`COMMAND_STOP`) replaces Send home. Battery charge holds show one explanation: mowing resumes automatically when charging is complete. The manual-resume availability hint sits below Resume now. A manually docked active session instead asks the operator to take the mower off the dock before resuming and has no Resume now control.
 
+The cutting estimate excludes turns, transit, charging, other areas and the trip home. It is not a mission-completion or dock-arrival prediction. While a normal Home command is awaiting a response, normal controls are disabled and show **Command pending…**. Emergency stop remains available through its existing confirmation dialog; service errors and warnings remain visible.
+
 Next to the hero sit a **live mini-map** (areas, obstacles, the mowed-cell overlay and the robot) and a 2x2 grid of **telemetry tiles**:
 - **GPS** -- quality percentage, RTK status (Fixed/Float/GPS)
 - **Blades** -- RPM + ESC current draw
 - **Motor** -- motor temperature + ESC temperature
-- **Rain** -- detected / dry
+- **Rain** -- detected / dry, or unknown until rain telemetry is available
+
+The mini-map leaves robot position unknown until a measured position is available. Geographic coverage comes only from the progress grid; a summary percentage never paints a guessed part of the lawn.
 
 Battery lives in the hero's ring rather than in a tile. A **Health check** card lists GPS, rain, alerts, motor temperature and firmware compatibility as status rows, with the current weather as a chip in its header; an **IrriSense** banner appears above the hero when the soil is too wet to mow.
 

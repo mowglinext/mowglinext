@@ -11,6 +11,9 @@ interface DigEscalationBannerProps {
     /** Injected for tests; the dashboard lets the hook fetch it. */
     status?: Pick<Status, "dig_escalated" | "dig_escalated_distance_m" | "dig_escalated_required_distance_m">;
     variants?: Variants;
+    /** Coordinate the entire acknowledgement → clear → START with the page. */
+    runCommand?: (command: () => Promise<void>) => Promise<unknown>;
+    commandPending?: boolean;
 }
 
 /**
@@ -26,7 +29,7 @@ interface DigEscalationBannerProps {
  * dig there holds the robot again (field report 2026-10-16: on the spot only
  * HOME used to act). Failures surface via AsyncButton's error notification.
  */
-export function DigEscalationBanner({status: injected, variants}: DigEscalationBannerProps) {
+export function DigEscalationBanner({status: injected, variants, runCommand, commandPending = false}: DigEscalationBannerProps) {
     const {t} = useTranslation();
     const polled = useStatus();
     const status = injected ?? polled;
@@ -71,7 +74,8 @@ export function DigEscalationBanner({status: injected, variants}: DigEscalationB
             <AsyncButton
                 danger
                 size="small"
-                onAsyncClick={clearAndResume}
+                disabled={commandPending}
+                onAsyncClick={runCommand ? () => runCommand(clearAndResume) : clearAndResume}
             >
                 {t("mowgliNextPage.digEscalationClear")}
             </AsyncButton>

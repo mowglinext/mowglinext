@@ -23,6 +23,7 @@ export type {ChargeHold} from "../../utils/chargeHold.ts";
 
 interface ActionClusterProps {
   phase: Phase;
+  pending?: boolean;
   onStart: () => void;
   onPause: () => void;
   onHome: () => void;
@@ -33,12 +34,14 @@ interface ActionClusterProps {
   onCancelMowing?: () => void;
 }
 
-export function ActionCluster({phase, onStart, onPause, onHome, onStop, onRearm, chargeHold, onResume, onCancelMowing}: ActionClusterProps) {
+export function ActionCluster({phase, pending = false, onStart, onPause, onHome, onStop, onRearm, chargeHold, onResume, onCancelMowing}: ActionClusterProps) {
   const {t} = useTranslation();
   const {displayMode} = useThemeMode();
-  const primaryPlaying = phase === "playing";
+  const primaryPlaying = phase === "playing" || phase === "returning";
   const primaryAlert = phase === "alert";
   const manualResumeEligible = !!chargeHold?.autoResume && chargeHold.batteryPercent >= chargeHold.manualResumePercent;
+
+  const pendingFeedback = pending ? <span role="status" style={{fontSize: 12, color: "var(--ink-2)"}}>{t("actionCluster.pending")}</span> : null;
 
   // A charge hold is an active mowing session parked by the battery guards,
   // unlike an ordinary idle mower that happens to be charging on the dock.
@@ -50,23 +53,25 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop, onRearm,
             <AlertTriangle size={20} strokeWidth={2.2}/>
           </SecondaryButton>
           {chargeHold.autoResume && <div style={{display: "flex", flexDirection: "column", alignItems: "center", gap: 5}}>
-              <PrimaryButton ariaLabel={t("actionCluster.resumeNow")} onClick={onResume ?? onStart} disabled={!manualResumeEligible} displayMode={displayMode}>
+              <PrimaryButton ariaLabel={t("actionCluster.resumeNow")} onClick={onResume ?? onStart} disabled={pending || !manualResumeEligible} displayMode={displayMode}>
                 <Play size={32} strokeWidth={2.4} fill="currentColor" style={{marginLeft: 3}}/>
               </PrimaryButton>
               <span style={{fontSize: 11, fontWeight: 600, color: "var(--ink-2)"}}>{t("actionCluster.resumeNow")}</span>
               <span style={{fontSize: 11, lineHeight: 1.3, color: "var(--ink-2)", textAlign: "center"}}>{t("actionCluster.resumeAvailable", {percent: chargeHold.manualResumePercent})}</span>
             </div>}
-          <SecondaryButton ariaLabel={t("actionCluster.cancelMowing")} onClick={onCancelMowing ?? onPause} tone="default" displayMode={displayMode}>
+          <SecondaryButton disabled={pending} ariaLabel={t("actionCluster.cancelMowing")} onClick={onCancelMowing ?? onPause} tone="default" displayMode={displayMode}>
             <Square size={18} strokeWidth={2.2} fill="currentColor"/>
           </SecondaryButton>
         </div>
+        {pendingFeedback}
       </div>
     );
   }
 
   return (
+    <div style={{display: "flex", flexDirection: "column", alignItems: "center", gap: 10}}>
     <div style={{
-      display: "flex", alignItems: "center", justifyContent: "center", gap: 14,
+      display: "flex", alignItems: "center", justifyContent: "center", gap: 14, width: "100%",
     }}>
       {/* secondary: stop */}
       <SecondaryButton
@@ -83,6 +88,7 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop, onRearm,
       <motion.button
         {...pressFeedback}
         onClick={primaryAlert ? onRearm : primaryPlaying ? onPause : onStart}
+        disabled={pending}
         aria-label={primaryAlert
           ? t('actionCluster.rearm')
           : primaryPlaying
@@ -90,6 +96,7 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop, onRearm,
             : t('actionCluster.startMowing')}
         style={{
           position: "relative",
+          opacity: pending ? 0.45 : 1, cursor: pending ? "not-allowed" : undefined,
           width: 84, height: 84, borderRadius: "50%",
           background: "var(--grad-primary)",
           color: "#02110D",
@@ -131,12 +138,15 @@ export function ActionCluster({phase, onStart, onPause, onHome, onStop, onRearm,
       {/* secondary: home */}
       <SecondaryButton
         ariaLabel={t('actionCluster.returnToBase')}
+        disabled={pending}
         onClick={onHome}
         tone={phase === "returning" ? "active" : "default"}
         displayMode={displayMode}
       >
         <Home size={20} strokeWidth={2.2}/>
       </SecondaryButton>
+    </div>
+    {pendingFeedback}
     </div>
   );
 }
@@ -178,6 +188,7 @@ function PrimaryButton({children, ariaLabel, onClick, displayMode, disabled = fa
 }
 
 interface SecondaryProps {
+  disabled?: boolean;
   children: React.ReactNode;
   ariaLabel: string;
   onClick: () => void;
@@ -185,7 +196,7 @@ interface SecondaryProps {
   displayMode: "visual" | "balanced" | "efficient";
 }
 
-function SecondaryButton({children, ariaLabel, onClick, tone = "default", displayMode}: SecondaryProps) {
+function SecondaryButton({disabled = false, children, ariaLabel, onClick, tone = "default", displayMode}: SecondaryProps) {
   const colors = {
     default: {bg: "var(--bg-elevated)",       border: "var(--border-soft)",  color: "var(--ink)"},
     active:  {bg: "rgba(69,214,232,0.14)",    border: "rgba(69,214,232,0.5)", color: "var(--aurora-cyan)"},
@@ -197,7 +208,9 @@ function SecondaryButton({children, ariaLabel, onClick, tone = "default", displa
       {...pressFeedback}
       onClick={onClick}
       aria-label={ariaLabel}
+      disabled={disabled}
       style={{
+        opacity: disabled ? 0.45 : 1, cursor: disabled ? "not-allowed" : undefined,
         width: 56, height: 56, borderRadius: "50%",
         background: colors.bg,
         border: `1px solid ${colors.border}`,
