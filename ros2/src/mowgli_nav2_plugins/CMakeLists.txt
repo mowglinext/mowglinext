@@ -55,6 +55,7 @@ add_library(${PROJECT_NAME} SHARED
   src/ftc_controller_plugin.cpp
   src/path_progress_goal_checker.cpp
   src/garden_keepout_layer.cpp
+  src/mapped_obstacle_layer.cpp
   src/authorized_transit_planner.cpp
 )
 
@@ -143,6 +144,10 @@ if(BUILD_TESTING)
 
   ament_add_ros_isolated_gtest(test_garden_costmap test/test_garden_costmap.cpp TIMEOUT 180)
   target_link_libraries(test_garden_costmap ${PROJECT_NAME} ${nav2_smac_planner_TARGETS})
+
+  ament_add_ros_isolated_gtest(test_mapped_obstacle_layer test/test_mapped_obstacle_layer.cpp)
+  target_link_libraries(test_mapped_obstacle_layer
+    ${PROJECT_NAME} nav2_rotation_shim_controller::nav2_rotation_shim_controller)
 
   ament_add_ros_isolated_gtest(test_authorized_transit test/test_authorized_transit.cpp)
   target_link_libraries(test_authorized_transit ${PROJECT_NAME})

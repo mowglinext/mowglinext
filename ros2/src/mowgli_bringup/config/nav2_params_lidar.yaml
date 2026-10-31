@@ -101,7 +101,12 @@ global_costmap:
 local_costmap:
   local_costmap:
     ros__parameters:
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "inflation_layer", "mapped_obstacles"]
+
+      # Raw holes only, after inflation: no outer boundary, dock mask or second
+      # chassis clearance. Persistent even when no scan sees the mapped hole.
+      mapped_obstacles:
+        plugin: "mowgli_nav2_plugins::MappedObstacleLayer"
 
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"

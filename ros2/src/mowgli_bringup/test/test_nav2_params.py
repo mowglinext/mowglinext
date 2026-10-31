@@ -1514,6 +1514,18 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
         assert "keepout_filter" not in lc["plugins"]  # Invariant 5
 
 
+def test_local_mapped_obstacles_follow_inflation_in_both_variants() -> None:
+    """Raw mapped holes must reach local consumers without another body margin."""
+    for loader in (_load_params, _load_no_lidar_params):
+        cfg = loader()
+        local = cfg["local_costmap"]["local_costmap"]["ros__parameters"]
+        global_ = cfg["global_costmap"]["global_costmap"]["ros__parameters"]
+        assert local["plugins"][-2:] == ["inflation_layer", "mapped_obstacles"]
+        assert local["mapped_obstacles"]["plugin"] == "mowgli_nav2_plugins::MappedObstacleLayer"
+        assert "mapped_obstacles" not in global_["plugins"]
+        assert "keepout_filter" not in local["plugins"]
+
+
 def test_global_grid_is_garden_sized_with_bounded_recent_sources() -> None:
     for loader, source in ((_load_params, "obstacle_layer"),
                            (_load_no_lidar_params, "fleet_layer")):
