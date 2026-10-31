@@ -96,7 +96,10 @@ export const useCoveragePreview = ({
     }
 
     // What the edit session holds for this area right now (the feature carries it once committed).
-    const saved = useMemo(() => choicesFromArea(area?.area), [area]);
+    // Keyed on the MapArea object, not on the feature: committing a change replaces `feature.area`
+    // on the SAME feature object, so a memo keyed on the feature would keep serving the old choices.
+    const areaData = area?.area;
+    const saved = useMemo(() => choicesFromArea(areaData), [areaData]);
     const choices: AreaChoices = useMemo(() => ({
         angleMode: draft.angleMode ?? saved.angleMode,
         angleDeg: draft.angleDeg ?? saved.angleDeg,
@@ -112,9 +115,9 @@ export const useCoveragePreview = ({
     // Do this area's lines differ from what the server has? Then a paused mow resumes on a re-planned
     // area, which the panel warns about.
     const changedFromServer = useMemo(() => {
-        const server = savedAreas?.find((a) => a.id !== undefined && a.id === area?.area?.id);
-        return !!area?.area && !sameChoices(choicesFromArea(area.area), choicesFromArea(server));
-    }, [area, savedAreas]);
+        const server = savedAreas?.find((a) => a.id !== undefined && a.id === areaData?.id);
+        return !!areaData && !sameChoices(choicesFromArea(areaData), choicesFromArea(server));
+    }, [areaData, savedAreas]);
 
     // A content signature, not array identities: the caller rebuilds both lists
     // on every render, so keying the fetch on them would refetch constantly.
