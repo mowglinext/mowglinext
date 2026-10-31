@@ -916,6 +916,13 @@ def test_coverage_is_ftc_transit_is_not() -> None:
         )
 
 
+def test_ftc_forward_coast_bound_is_preserved_in_both_overlays() -> None:
+    """Both merged configurations retain the declared forward STOP assumption."""
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        assert fcp["obstacle_coast_time_bound_s"] == 0.5
+
+
 def test_lidar_collision_monitor_has_active_hard_stop() -> None:
     """The LiDAR variant MUST carry an ACTIVE pre-contact hard-stop layer.
 
@@ -1507,6 +1514,18 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
         assert "keepout_filter" not in lc["plugins"]  # Invariant 5
 
 
+def test_local_mapped_obstacles_follow_inflation_in_both_variants() -> None:
+    """Raw mapped holes must reach local consumers without another body margin."""
+    for loader in (_load_params, _load_no_lidar_params):
+        cfg = loader()
+        local = cfg["local_costmap"]["local_costmap"]["ros__parameters"]
+        global_ = cfg["global_costmap"]["global_costmap"]["ros__parameters"]
+        assert local["plugins"][-2:] == ["inflation_layer", "mapped_obstacles"]
+        assert local["mapped_obstacles"]["plugin"] == "mowgli_nav2_plugins::MappedObstacleLayer"
+        assert "mapped_obstacles" not in global_["plugins"]
+        assert "keepout_filter" not in local["plugins"]
+
+
 def test_global_grid_is_garden_sized_with_bounded_recent_sources() -> None:
     for loader, source in ((_load_params, "obstacle_layer"),
                            (_load_no_lidar_params, "fleet_layer")):
@@ -1687,13 +1706,15 @@ def test_collision_monitor_polygons_follow_the_chassis() -> None:
     before touching. FootprintApproach is exempt: it reads
     /local_costmap/published_footprint and already follows the real geometry."""
     src = _read_text("launch/navigation.launch.py")
-    for polygon in ("PolygonStopNarrow", "PolygonStop"):
+    for polygon in ("PolygonStop",):
         assert re.search(
             rf'cm_params\["{polygon}"\]\["points"\]\s*=\s*_poly\(', src), (
             f"{polygon}.points must be DERIVED from the chassis footprint at "
             "launch, not left as a literal in the overlay yaml."
         )
-    assert re.search(r"_poly\(\s*fp_f \+ 0\.12,\s*fp_f - 0\.02,\s*fp_hw\)", src)
+    assert re.search(
+        r"narrow\.update\(collision_monitor_velocity_polygons\(\s*"
+        r'fp_f, fp_r, fp_hw, float\(local_params\["footprint_padding"\]\)\)\)', src)
     assert re.search(r"_poly\(\s*fp_f \+ 0\.05,\s*fp_r - 0\.05,\s*fp_hw\)", src)
     # The footprint triple must be bound unconditionally — reading it from the
     # injection closure when only an `if rp:` branch assigned it is the

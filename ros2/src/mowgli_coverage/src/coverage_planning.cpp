@@ -15,7 +15,12 @@
 #include <memory>
 #include <string>
 
+#include "fields2cover/headland_generator/constant_headland.h"
+#include "fields2cover/objectives/sg_obj/n_swath.h"
+#include "fields2cover/route_planning/boustrophedon_order.h"
+#include "fields2cover/swath_generator/brute_force.h"
 #include "mowgli_interfaces/coverage_geometry.hpp"
+#include "ring_corner_rounding.hpp"
 
 // GDAL/OGR (F2C's geometry backend) — bufferRingOutward grows drawn-obstacle
 // rings with OGRPolygon::Buffer. Explicit include: the transitive path via
@@ -1042,7 +1047,253 @@ std::vector<std::pair<double, double>> densifyPolyline(
   return out;
 }
 
+// Check every emitted chord, including the straight tangent connectors.
+bool continuouslyContained(const std::vector<std::pair<double, double>>& path,
+                           const std::vector<std::pair<double, double>>& boundary,
+                           const std::vector<std::vector<std::pair<double, double>>>& holes)
+{
+  OGRLineString line;
+  for (const auto& p : path)
+    line.addPoint(p.first, p.second);
+  const auto polygon = [](const std::vector<std::pair<double, double>>& points)
+  {
+    OGRLinearRing ring;
+    for (const auto& p : points)
+      ring.addPoint(p.first, p.second);
+    ring.closeRings();
+    OGRPolygon result;
+    result.addRing(&ring);
+    return result;
+  };
+  auto shell = polygon(boundary);
+  std::unique_ptr<OGRGeometry> outside(line.Difference(&shell));
+  if (!outside || !outside->IsEmpty())
+    return false;
+  for (const auto& points : holes)
+  {
+    auto hole = polygon(points);
+    if (line.Intersects(&hole))
+      return false;
+  }
+  return true;
+}
+
+// Circular bevel sampler V1. The legacy helper chooses the radius and tangent
+// endpoints; only its generic Dubins interior samples are replaced. A nearly
+// degenerate RSR/LSL solve can otherwise insert a sqrt(epsilon) straight seam.
+std::vector<std::pair<double, double>> circularBevelSamplesV1(
+    const std::vector<std::pair<double, double>>& selected,
+    std::pair<double, double> a,
+    std::pair<double, double> corner,
+    std::pair<double, double> d,
+    double step)
+{
+  using Path = std::vector<std::pair<double, double>>;
+
+  if (selected.size() < 4 || !std::isfinite(step) || step <= 0.0)
+    return {};
+  const double ix = corner.first - a.first, iy = corner.second - a.second;
+  const double ox = d.first - corner.first, oy = d.second - corner.second;
+  const double il = std::hypot(ix, iy), ol = std::hypot(ox, oy);
+  if (!std::isfinite(il) || !std::isfinite(ol) || il <= 0.0 || ol <= 0.0)
+    return {};
+  const double ux = ix / il, uy = iy / il, vx = ox / ol, vy = oy / ol;
+  const double angle = std::acos(std::clamp(ux * vx + uy * vy, -1.0, 1.0));
+  const double sign = ux * vy - uy * vx > 0.0 ? 1.0 : -1.0;
+  const auto entry = selected[1], exit = selected[selected.size() - 2];
+  const double trim = (corner.first - entry.first) * ux + (corner.second - entry.second) * uy;
+  const double radius = trim * std::tan((M_PI - angle) / 2.0);
+  if (!std::isfinite(radius) || radius <= 0.0 || angle <= 0.0 || angle >= M_PI)
+    return {};
+  // Preserve the existing sampleDubins minimum angular step, then cap heading
+  // increments at the existing supported-turn threshold. No count is clamped.
+  const double limit = std::min(std::max(1e-3, step / radius), cg::kPivotCornerMinTurnRad);
+  const double count = std::ceil(angle / limit);
+  // This bound follows from angle < pi and the inherited 1e-3 angular floor.
+  if (!std::isfinite(count) || count < 1.0 || count > std::ceil(M_PI / 1e-3))
+    return {};
+  const auto segments = static_cast<std::size_t>(count);
+  Path result{selected.front(), entry};
+  result.reserve(segments + 3);
+  for (std::size_t k = 1; k < segments; ++k)
+  {
+    const double sweep = angle * static_cast<double>(k) / static_cast<double>(segments);
+    const double forward = radius * std::sin(sweep);
+    const double lateral = sign * radius * (1.0 - std::cos(sweep));
+    result.emplace_back(entry.first + ux * forward - uy * lateral,
+                        entry.second + uy * forward + ux * lateral);
+  }
+  result.push_back(exit);
+  result.push_back(selected.back());
+  return result;
+}
+
+// Legacy-first selector V2 uses this only when the ordinary Dubins helper
+// selected no fillet. It constructs the same bounded single-circle primitive;
+// no generic Dubins or ordinary-rounding caller is changed.
+std::vector<std::pair<double, double>> fallbackCircularBevelV2(
+    std::pair<double, double> a,
+    std::pair<double, double> corner,
+    std::pair<double, double> d,
+    const std::vector<std::pair<double, double>>& boundary,
+    const std::vector<std::vector<std::pair<double, double>>>& holes,
+    double max_turn_rad,
+    double fillet_r,
+    double min_radius,
+    double step)
+{
+  double ix = corner.first - a.first, iy = corner.second - a.second;
+  double ox = d.first - corner.first, oy = d.second - corner.second;
+  const double in_len = std::hypot(ix, iy), out_len = std::hypot(ox, oy);
+  if (!std::isfinite(in_len) || !std::isfinite(out_len) || in_len <= 0.0 || out_len <= 0.0 ||
+      !std::isfinite(fillet_r) || !std::isfinite(min_radius) || min_radius <= 0.0)
+    return {};
+  ix /= in_len;
+  iy /= in_len;
+  ox /= out_len;
+  oy /= out_len;
+  const double turn = std::acos(std::clamp(ix * ox + iy * oy, -1.0, 1.0));
+  if (!std::isfinite(turn) || turn <= max_turn_rad || turn >= M_PI)
+    return {};
+  for (double r = std::max(fillet_r, min_radius); r >= min_radius - 1e-9; r -= 0.01)
+  {
+    const double trim = r / std::tan((M_PI - turn) / 2.0);
+    if (trim > 0.49 * in_len || trim > 0.49 * out_len)
+      continue;
+    const std::pair<double, double> entry{corner.first - ix * trim, corner.second - iy * trim};
+    const std::pair<double, double> exit{corner.first + ox * trim, corner.second + oy * trim};
+    auto local = circularBevelSamplesV1({a, entry, exit, d}, a, corner, d, step);
+    if (local.size() > 3 && allInside(local, boundary) && clearOfHoles(local, holes) &&
+        continuouslyContained(local, boundary, holes))
+      return local;
+  }
+  return {};
+}
+
 }  // namespace
+
+// GEOS can bevel a polygon vertex by a few millimetres. Filleting each end
+// independently cannot fit the minimum radius into that short edge. Recover
+// the intersection of the two supporting edges only when a real tangent
+// fillet fits; never emit the intersection as a replacement sharp corner.
+std::vector<std::pair<double, double>> detail::roundBeveledCorners(
+    const std::vector<std::pair<double, double>>& pts,
+    const std::vector<std::pair<double, double>>& boundary,
+    const std::vector<std::vector<std::pair<double, double>>>& holes,
+    double max_turn_rad,
+    double fillet_r,
+    double min_radius,
+    double step,
+    const std::function<bool(const std::pair<double, double>&, double)>& keep_sharp,
+    detail::BevelTrace* trace)
+{
+  constexpr double kMaxBevelM = 0.01;
+  if (trace)
+  {
+    *trace = {};
+    trace->source = pts;
+  }
+  if (!std::isfinite(step) || step <= 0.0)
+    return pts;
+  if (pts.size() < 4)
+    return roundSharpCorners(
+        pts, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
+  std::vector<std::pair<double, double>> out{pts.front()};
+  bool replaced_bevel = false;
+  for (std::size_t i = 1; i + 1 < pts.size(); ++i)
+  {
+    bool accepted = false;
+    if (i + 2 < pts.size())
+    {
+      const auto a = out.back(), b = pts[i], c = pts[i + 1], d = pts[i + 2];
+      const double ix = b.first - a.first, iy = b.second - a.second;
+      const double ox = d.first - c.first, oy = d.second - c.second;
+      const double bx = c.first - b.first, by = c.second - b.second;
+      const double in_len = std::hypot(ix, iy), out_len = std::hypot(ox, oy);
+      const double bevel = std::hypot(bx, by);
+      const double cross = ix * oy - iy * ox;
+      const double first_turn = ix * by - iy * bx;
+      const double second_turn = bx * oy - by * ox;
+      // All three edges must be ordinary motion, never an explicit pivot twin.
+      // Same-sign turns exclude a zigzag or hairpin masquerading as a bevel.
+      if (std::isfinite(in_len) && std::isfinite(out_len) && std::isfinite(bevel) &&
+          in_len >= cg::kPivotCornerMaxStepM && out_len >= cg::kPivotCornerMaxStepM &&
+          bevel >= cg::kPivotCornerMaxStepM && bevel <= kMaxBevelM &&
+          std::abs(cross) > 1e-9 * in_len * out_len && cross * first_turn > 0.0 &&
+          cross * second_turn > 0.0)
+      {
+        // Preserve pivots at the actual bevel vertices. The reconstructed
+        // supporting-edge intersection is never an emitted pivot candidate.
+        const double turn_b =
+            std::acos(std::clamp((ix * bx + iy * by) / (in_len * bevel), -1.0, 1.0));
+        const double turn_c =
+            std::acos(std::clamp((bx * ox + by * oy) / (bevel * out_len), -1.0, 1.0));
+        if (keep_sharp && (keep_sharp(b, turn_b) || keep_sharp(c, turn_c)))
+        {
+          out.push_back(b);
+          continue;
+        }
+        const double t = ((c.first - a.first) * oy - (c.second - a.second) * ox) / cross;
+        const std::pair<double, double> corner{a.first + t * ix, a.second + t * iy};
+        const double turn =
+            std::acos(std::clamp((ix * ox + iy * oy) / (in_len * out_len), -1.0, 1.0));
+        const double outgoing_projection =
+            (corner.first - c.first) * ox + (corner.second - c.second) * oy;
+        if (std::isfinite(corner.first) && std::isfinite(corner.second) && t >= 1.0 &&
+            outgoing_projection <= 0.0 && turn > max_turn_rad && turn < M_PI - 1e-6 &&
+            std::hypot(corner.first - b.first, corner.second - b.second) <= kMaxBevelM &&
+            std::hypot(corner.first - c.first, corner.second - c.second) <= kMaxBevelM)
+        {
+          auto local = roundSharpCorners(
+              {a, corner, d}, boundary, holes, max_turn_rad, fillet_r, min_radius, step);
+          // A rejected fillet is exactly the original three-point sharp path.
+          const bool legacy_selected = local.size() > 3;
+          if (legacy_selected)
+            local = circularBevelSamplesV1(local, a, corner, d, step);
+          else
+            local = fallbackCircularBevelV2(
+                a, corner, d, boundary, holes, max_turn_rad, fillet_r, min_radius, step);
+          if (local.size() > 3 && allInside(local, boundary) && clearOfHoles(local, holes))
+          {
+            if (continuouslyContained(local, boundary, holes))
+            {
+              replaced_bevel = true;
+              if (trace)
+                trace->replacements.push_back({i, out.size(), local});
+              out.insert(out.end(), local.begin() + 1, local.end() - 1);
+              ++i;  // both bevel vertices have been replaced by the accepted arc
+              accepted = true;
+            }
+          }
+        }
+      }
+    }
+    if (!accepted)
+      out.push_back(pts[i]);
+  }
+  out.push_back(pts.back());
+  auto rounded =
+      roundSharpCorners(out, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
+  // A bevel replacement shortens neighbouring support edges, so ordinary rounding
+  // can retune another fillet. Check the exact final densified proposal, rather
+  // than only the accepted local arcs. Deny an unproven change by restoring the
+  // entire legacy ring; this does not certify containment of an unchanged ring.
+  if (replaced_bevel &&
+      !continuouslyContained(densifyPolyline(rounded, kDensifyStep), boundary, holes))
+  {
+    out = pts;
+    rounded = roundSharpCorners(
+        pts, boundary, holes, max_turn_rad, fillet_r, min_radius, step, keep_sharp);
+    if (trace)
+      trace->replacements.clear();
+  }
+  if (trace)
+  {
+    trace->intermediate = out;
+    trace->rounded = rounded;
+  }
+  return rounded;
+}
 
 // True iff every cell is a valid OGR/GEOS polygon (holes inside the shell, not
 // overlapping each other). F2C's clip operations assume validity.
@@ -1665,6 +1916,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   // centimetre-scale innermost ring that isn't worth driving).
   constexpr double kMinRingPerimeter = 1.0;  // m
   double ring_strip_area = 0.0;  // Σ perimeter·op_width of KEPT rings (for the fraction)
+  std::vector<detail::BevelTrace> ring_evidence;
   // Skipped ENTIRELY when the ring stage is disabled (n_rings == 0, issue
   // #429): generateHeadlandSwaths(…, 0, dir_out2in=true) happens to return {}
   // at the pinned F2C commit, but entering ringPassToLoops/fillet/ring_strip
@@ -1682,6 +1934,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
       auto loops = ringPassToLoops(pass_lines);
       for (auto& loop : loops)
       {
+        detail::BevelTrace bevel_evidence;
         double perim = 0.0;
         for (std::size_t i = 1; i < loop.size(); ++i)
         {
@@ -1771,20 +2024,24 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
                        pivotSweepFits(corner.first, corner.second, ring_pivot_limits);
               };
             }
-            auto rounded = roundSharpCorners(sparse,
-                                             fillet_boundary,
-                                             plan.safe_holes,
-                                             kRingCornerThreshold,
-                                             std::max(2.0 * min_turn_radius, min_turn_radius),
-                                             std::max(0.02, min_turn_radius),
-                                             0.03,
-                                             keep_sharp);
+            auto rounded =
+                detail::roundBeveledCorners(sparse,
+                                            fillet_boundary,
+                                            plan.safe_holes,
+                                            kRingCornerThreshold,
+                                            std::max(2.0 * min_turn_radius, min_turn_radius),
+                                            std::max(0.02, min_turn_radius),
+                                            0.03,
+                                            keep_sharp,
+                                            trace ? &bevel_evidence : nullptr);
             loop = densifyPolyline(rounded, kDensifyStep);
           }
         }
 
         ring_strip_area += perim * op_width;
         plan.rings.push_back(std::move(loop));
+        if (trace)
+          ring_evidence.push_back(std::move(bevel_evidence));
       }
       if (first_pass)
       {
@@ -1825,6 +2082,10 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
         std::rotate(plan.rings.begin(),
                     plan.rings.begin() + static_cast<std::ptrdiff_t>(outer),
                     plan.rings.begin() + static_cast<std::ptrdiff_t>(outer) + 1);
+        if (trace)
+          std::rotate(ring_evidence.begin(),
+                      ring_evidence.begin() + static_cast<std::ptrdiff_t>(outer),
+                      ring_evidence.begin() + static_cast<std::ptrdiff_t>(outer) + 1);
       }
     }
   }
@@ -1839,7 +2100,25 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
   f2c::types::Cells mainland =
       (n_rings > 0) ? hl.generateHeadlands(safe_cells, n_rings * op_width) : safe_cells;
   if (trace)
+  {
+    for (std::size_t i = 0; i < ring_evidence.size(); ++i)
+    {
+      const auto& evidence = ring_evidence[i];
+      const auto suffix = std::to_string(i);
+      trace->stages.push_back({"bevel_source." + suffix, {evidence.source}});
+      trace->stages.push_back({"bevel_intermediate." + suffix, {evidence.intermediate}});
+      trace->stages.push_back({"bevel_rounded." + suffix, {evidence.rounded}});
+      PlanningTrace::Stage replacements{"bevel_replacements." + suffix, {}};
+      for (const auto& replacement : evidence.replacements)
+      {
+        replacements.paths.push_back(replacement.local);
+        replacements.angles.push_back(static_cast<double>(replacement.source_vertex));
+        replacements.angles.push_back(static_cast<double>(replacement.output_begin));
+      }
+      trace->stages.push_back(std::move(replacements));
+    }
     trace->stages.push_back({"rings", plan.rings});
+  }
   traceCells(trace, "mainland", mainland);
   t_mainland_ms = elapsedMs(t_mainland0);
   mainland_area_m2 = mainland.area();

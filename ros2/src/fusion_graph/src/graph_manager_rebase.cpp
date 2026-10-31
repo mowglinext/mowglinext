@@ -18,9 +18,11 @@
 #include "fusion_graph/graph_manager.hpp"
 #include <gtsam/base/GenericValue.h>
 #include <gtsam/base/serialization.h>
+#include <gtsam/linear/GaussianFactorGraph.h>
 #include <gtsam/linear/NoiseModel.h>
 #include <gtsam/linear/linearExceptions.h>
 #include <gtsam/nonlinear/ISAM2Params.h>
+#include <gtsam/nonlinear/LinearContainerFactor.h>
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/NonlinearFactorGraph.h>
 #include <gtsam/nonlinear/Values.h>
@@ -32,128 +34,161 @@ namespace fusion_graph
 {
 void GraphManager::RebaseISAM2()
 {
-  // Phase 1: snapshot under the lock. The heavy work (building the
-  // fresh iSAM2 from N PriorFactors) is then done WITHOUT the lock
-  // so per-tick Tick() can keep publishing TF — see the comment on
-  // rebase_in_progress_ in graph_manager.hpp for the 2026-05-14
-  // incident that motivated this. While we're outside the lock,
-  // Tick / ForceAnchor go through
-  // ApplyIsamUpdateLocked, which mirrors their factors+values into
-  // rebase_pending_factors_ / rebase_pending_values_ so the fresh
-  // iSAM2 catches up at phase 3.
-  gtsam::Values estimate_snapshot;
-  int relinearize_skip = 1;
-  uint64_t cutoff_index = 0;
-  {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (rebase_in_progress_)
-    {
-      // Another rebase is already running; bail rather than racing.
-      return;
-    }
-    RefreshEstimateLocked();
-    if (current_estimate_.empty())
-      return;
-    estimate_snapshot = current_estimate_;
-    relinearize_skip = params_.isam2_relinearize_skip;
-    // Sliding-window cutoff: drop pose nodes older than this index.
-    // Captured under the lock against the live next_index_ so the
-    // window is measured from the newest node at snapshot time.
-    if (params_.max_graph_nodes > 0 && next_index_ > params_.max_graph_nodes)
-      cutoff_index = next_index_ - params_.max_graph_nodes;
-    rebase_in_progress_ = true;
-    rebase_pending_factors_.resize(0);
-    rebase_pending_values_.clear();
-  }
-
-  // Phase 2: build the fresh iSAM2 with priors-from-snapshot. This is
-  // the O(N) expensive call (~1 s for 50k nodes on this robot).
-  // Runs without mu_, so Tick() is free to advance the live iSAM2.
-  gtsam::ISAM2Params p;
-  p.optimizationParams = gtsam::ISAM2GaussNewtonParams(0.001);
-  p.relinearizeThreshold = 0.05;
-  p.relinearizeSkip = std::max(1, relinearize_skip);
-  gtsam::ISAM2 fresh(p);
-
-  // Re-anchor every existing variable with a tight prior. The exact
-  // sigma is a balance: too tight and future absolute observations can't move
-  // anything; too loose and iSAM2 wanders. 5 cm / 3° matches typical
-  // RTK + COG noise floors and keeps the rebase non-destructive.
-  gtsam::NonlinearFactorGraph fg;
-  auto noise = MakeDiagonal({0.05, 0.05, 0.05});
-  gtsam::Values kept_values;
-  for (const auto& kv : estimate_snapshot)
-  {
-    // Sliding-window drop: skip pose nodes older than the cutoff.
-    // gtsam::Symbol::index() recovers the monotonic node index from
-    // the key. Non-pose keys (if any) fall through the window check
-    // unchanged. cutoff_index == 0 means "keep everything".
-    const gtsam::Symbol s(kv.key);
-    if (cutoff_index > 0 && s.chr() == 'x' && s.index() < cutoff_index)
-      continue;
-    fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, kv.value.cast<gtsam::Pose2>(), noise));
-    kept_values.insert(kv.key, kv.value);
-  }
-  // SAFETY (SAFETY_REVIEW_2026-07-23 G-H4): this update runs on the detached
-  // maintenance thread — an unguarded GTSAM throw here propagates out of the
-  // thread lambda and std::terminate()s the whole node (dead localizer
-  // mid-mow). A failed rebuild is recoverable: abandon the rebase and leave
-  // the live isam_ untouched.
+  uint64_t generation = 0;
   try
   {
-    fresh.update(fg, kept_values);
-  }
-  catch (const std::exception& e)
-  {
-    std::fprintf(stderr,
-                 "[fusion_graph] iSAM2 rebase rebuild failed (%s) — abandoning "
-                 "rebase, live graph untouched.\n",
-                 e.what());
-    std::lock_guard<std::mutex> lock(mu_);
-    rebase_pending_factors_.resize(0);
-    rebase_pending_values_.clear();
-    rebase_in_progress_ = false;
-    return;
-  }
-
-  // Phase 3: replay anything Tick / ForceAnchor
-  // added while we were rebuilding, then atomically swap isam_.
-  // The lock is held only for this replay (typically a handful of
-  // factors/values — ms-scale), so the TF publisher unblocks quickly.
-  {
-    std::lock_guard<std::mutex> lock(mu_);
-    if (!rebase_in_progress_)
+    // Phase 1: snapshot immutable factors and typed values under the lock.
+    // Updates to the live graph are mirrored until this worker commits.
+    gtsam::Values estimate_snapshot;
+    gtsam::NonlinearFactorGraph graph_snapshot;
+    int relinearize_skip = 1;
+    uint64_t cutoff_index = 0;
+    std::map<gtsam::Key, uint64_t> acquisition_owners;
     {
-      // Reset() ran between phase 1 and phase 3 — the graph we
-      // built is now stale (its priors reference a state that no
-      // longer exists). Discard fresh, leave isam_ alone.
-      return;
-    }
-    if (rebase_pending_factors_.size() > 0 || rebase_pending_values_.size() > 0)
-    {
-      // SAFETY (G-H4): same terminate risk as phase 2 — a throw during the
-      // replay abandons the rebase (fresh is discarded, live isam_ kept).
-      try
-      {
-        fresh.update(rebase_pending_factors_, rebase_pending_values_);
-      }
-      catch (const std::exception& e)
-      {
-        std::fprintf(stderr,
-                     "[fusion_graph] iSAM2 rebase replay failed (%s) — abandoning "
-                     "rebase, live graph untouched.\n",
-                     e.what());
-        rebase_pending_factors_.resize(0);
-        rebase_pending_values_.clear();
-        rebase_in_progress_ = false;
+      std::lock_guard<std::mutex> lock(mu_);
+      if (rebase_in_progress_)
         return;
+      RefreshEstimateLocked();
+      if (current_estimate_.empty())
+        return;
+      estimate_snapshot = current_estimate_;
+      graph_snapshot = isam_.getFactorsUnsafe();
+      acquisition_owners = AcquisitionOwnersLocked();
+      relinearize_skip = params_.isam2_relinearize_skip;
+      if (params_.max_graph_nodes > 0)
+      {
+        // Acquisition poses consume the same finite Pose2 budget. Retire
+        // complete old edges (including their acquisitions), preserving the
+        // boundary cadence pose as the separator. A latest edge larger than
+        // the budget retires its interior history while keeping its endpoint.
+        std::map<uint64_t, size_t> acquisition_cost;
+        size_t pose_count = 0;
+        for (const auto& [key, owner] : acquisition_owners)
+          ++acquisition_cost[owner];
+        for (const auto& value : estimate_snapshot)
+          if (gtsam::Symbol(value.key).chr() == 'x' || acquisition_owners.count(value.key))
+            ++pose_count;
+        cutoff_index = 0;
+        while (pose_count > params_.max_graph_nodes && cutoff_index + 1 < next_index_)
+        {
+          if (estimate_snapshot.exists(PoseKey(cutoff_index)))
+            --pose_count;
+          ++cutoff_index;
+          pose_count -= acquisition_cost[cutoff_index];
+        }
+      }
+      generation = ++rebase_generation_;
+      rebase_in_progress_ = true;
+      rebase_pending_factors_.resize(0);
+      rebase_pending_values_.clear();
+    }
+
+    // Phase 2: retain the original nonlinear likelihood on the live window.
+    // Marginalize ONLY factors touching removed variables. Using a posterior
+    // marginal from the full graph here would count the retained factors twice.
+    // The separator factor freezes the removed history at this linearization;
+    // all retained wheel/gyro/GNSS factors can still relinearize normally.
+    gtsam::KeyVector removed_keys;
+    gtsam::KeySet removed;
+    gtsam::Values kept_values;
+    for (const auto& kv : estimate_snapshot)
+    {
+      const gtsam::Symbol symbol(kv.key);
+      // Bias is the per-pose preintegration state. Other namespaces keep their
+      // original type and factors; never assume every variable is a Pose2.
+      const auto owner = acquisition_owners.find(kv.key);
+      const bool old_acquisition =
+          owner != acquisition_owners.end() && owner->second <= cutoff_index;
+      if (((symbol.chr() == 'x' || symbol.chr() == 'b') && symbol.index() < cutoff_index) ||
+          old_acquisition)
+      {
+        removed_keys.push_back(kv.key);
+        removed.insert(kv.key);
+      }
+      else
+        kept_values.insert(kv.key, kv.value);
+    }
+    gtsam::NonlinearFactorGraph retained, prefix;
+    for (const auto& factor : graph_snapshot)
+    {
+      if (!factor)
+        continue;
+      const bool touches_removed = std::any_of(factor->begin(),
+                                               factor->end(),
+                                               [&](gtsam::Key key)
+                                               {
+                                                 return removed.count(key);
+                                               });
+      (touches_removed ? prefix : retained).push_back(factor);
+    }
+    if (!removed_keys.empty())
+    {
+      const auto linear_prefix = prefix.linearize(estimate_snapshot);
+      const auto separator = linear_prefix->eliminatePartialSequential(removed_keys).second;
+      for (const auto& factor : *separator)
+      {
+        if (factor && !factor->empty())
+          retained.emplace_shared<gtsam::LinearContainerFactor>(factor, estimate_snapshot);
       }
     }
+
+    gtsam::ISAM2Params p;
+    p.optimizationParams = gtsam::ISAM2GaussNewtonParams(0.001);
+    p.relinearizeThreshold = 0.05;
+    p.relinearizeSkip = std::max(1, relinearize_skip);
+    gtsam::ISAM2 fresh(p);
+    fresh.update(retained, kept_values);
+
+    // Phase 3: only the worker that owns these mirrors may replay or clear them.
+    // Reset/RigidTransform cancels via the flag. A subsequent worker increments
+    // the generation, preventing an old worker from overwriting the new graph
+    // or clearing the new worker's pending updates (the cancellation ABA race).
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!rebase_in_progress_ || generation != rebase_generation_)
+      return;
+    for (const auto& factor : rebase_pending_factors_)
+    {
+      if (!factor)
+        continue;
+      for (const auto key : *factor)
+      {
+        if (!fresh.valueExists(key) && !rebase_pending_values_.exists(key))
+        {
+          // A delayed observation may have reached a soon-to-be-removed state
+          // while phase 2 ran. It is already assimilated in the live graph;
+          // abandon this rebase rather than drop or retarget the observation.
+          rebase_pending_factors_.resize(0);
+          rebase_pending_values_.clear();
+          rebase_in_progress_ = false;
+          return;
+        }
+      }
+    }
+    if (!rebase_pending_factors_.empty() || !rebase_pending_values_.empty())
+      fresh.update(rebase_pending_factors_, rebase_pending_values_);
     isam_ = std::move(fresh);
+    PruneSourceStateLocked();
     estimate_dirty_ = true;
     rebase_pending_factors_.resize(0);
     rebase_pending_values_.clear();
     rebase_in_progress_ = false;
+  }
+  catch (const std::exception& e)
+  {
+    // This is called on a detached maintenance thread: every GTSAM operation,
+    // including typed-value extraction and marginalization, must be guarded.
+    // A failed rebuild never alters the already-updated live graph.
+    std::fprintf(stderr,
+                 "[fusion_graph] iSAM2 rebase failed (%s) — abandoning "
+                 "rebase, live graph untouched.\n",
+                 e.what());
+    std::lock_guard<std::mutex> lock(mu_);
+    if (generation != 0 && generation == rebase_generation_ && rebase_in_progress_)
+    {
+      rebase_pending_factors_.resize(0);
+      rebase_pending_values_.clear();
+      rebase_in_progress_ = false;
+    }
   }
 }
 
@@ -277,6 +312,7 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
     return;
   }
   isam_ = std::move(fresh);
+  InvalidateSourceBridgesLocked();
   estimate_dirty_ = true;
 
   // Cancel any in-flight async rebase (D2 race, field 2026-06-10 dock walk).

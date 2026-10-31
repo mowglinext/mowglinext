@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -53,9 +54,16 @@
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
 #include <Eigen/Geometry>
 #include <visualization_msgs/msg/marker.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
+
+namespace mowgli_interfaces::motion
+{
+struct Snapshot;
+}
 
 namespace mowgli_nav2_plugins
 {
+class MotionRegionIndex;
 
 /**
  * @class FTCController
@@ -102,6 +110,24 @@ public:
 private:
   friend struct FTCSpeedLimitTestAccess;
 
+  rclcpp::Time supportedPoseEpoch();
+  geometry_msgs::msg::TransformStamped supportedPoseTransform(const std::string& target,
+                                                              const std::string& source,
+                                                              const rclcpp::Time* epoch = nullptr);
+  /// Final FTC output gate, after all speed floors and recovery commands.
+  void authorizeCommand(const geometry_msgs::msg::Twist& command,
+                        const geometry_msgs::msg::Twist& measured,
+                        const rclcpp::Time* epoch = nullptr);
+  bool forwardCommandSweepBlocked(const geometry_msgs::msg::Twist& command,
+                                  const geometry_msgs::msg::Twist& measured,
+                                  const rclcpp::Time* epoch = nullptr);
+  LatticeGeometryBlocked motionLatticeCritic(
+      const geometry_msgs::msg::TransformStamped* costmap_from_plan = nullptr);
+  std::mutex authorization_mutex_;
+  std::shared_ptr<const mowgli_interfaces::motion::Snapshot> authorization_;
+  std::shared_ptr<const MotionRegionIndex> authorization_index_;
+  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr authorization_sub_;
+
   // ── State machine ─────────────────────────────────────────────────────────
 
   enum class PlannerState
@@ -128,12 +154,13 @@ private:
   /// Seconds elapsed since the current state was entered.
   double time_in_current_state() const;
 
-  PlannerState update_planner_state();
+  PlannerState update_planner_state(double goal_distance_error);
 
   // ── Control point / path tracking ─────────────────────────────────────────
 
   /// Advance the virtual carrot and project it into base_link.
-  void update_control_point(double dt);
+  void update_control_point(double dt, bool approach_goal, bool supported_epoch);
+  void update_local_control_point(bool supported_epoch);
 
   /// Compute the look-ahead distance along the remaining straight path.
   double distanceLookahead() const;
@@ -165,6 +192,11 @@ private:
   bool pivotSweepGate(double dt);
 
   std::vector<geometry_msgs::msg::PoseStamped> global_plan_;
+  // Incremented only when the controller's complete working plan changes.
+  uint64_t goal_plan_revision_{0};
+  // Valid only for the duration of computeVelocityCommands (including splices).
+  nav2_core::GoalChecker* active_goal_checker_{nullptr};
+  void bindGoalCheckerPlan();
   Eigen::Affine3d current_control_point_;  ///< Carrot pose in map frame.
   Eigen::Affine3d local_control_point_;  ///< Carrot pose in base_link frame.
 
@@ -202,7 +234,9 @@ private:
 
   // ── PID state ────────────────────────────────────────────────────────────
 
-  void calculate_velocity_commands(double dt, geometry_msgs::msg::TwistStamped& cmd_vel);
+  void calculate_velocity_commands(double dt,
+                                   geometry_msgs::msg::TwistStamped& cmd_vel,
+                                   bool approach_goal = false);
 
   double lat_error_{0.0};
   double lon_error_{0.0};
@@ -231,6 +265,8 @@ private:
   double i_angle_error_{0.0};
 
   rclcpp::Time last_time_;
+  /// Physical-plant accounting is monotonic even when the ROS/system clock steps.
+  std::chrono::steady_clock::time_point last_budget_time_;
 
   // ── Collision checking ────────────────────────────────────────────────────
 
@@ -279,13 +315,13 @@ private:
   /// engaged the reverse-escape / wait fallback and the caller must return.
   bool planOffsetLattice(std::size_t carrot_idx,
                          const BoundaryGuard& guard,
-                         const std::vector<geometry_msgs::msg::Point>& footprint,
-                         double dt);
+                         const std::vector<geometry_msgs::msg::Point>& footprint);
 
   /// Plan poses [first, last) expressed in the local costmap frame.
   bool planWindowInCostmapFrame(std::size_t first,
                                 std::size_t last,
-                                std::vector<geometry_msgs::msg::PoseStamped>& out);
+                                std::vector<geometry_msgs::msg::PoseStamped>& out,
+                                geometry_msgs::msg::TransformStamped* transform_used = nullptr);
 
   /// The lattice solver parameters planOffsetLattice uses, from config_.
   LatticeSolverCfg latticeSolverCfg() const;
@@ -321,7 +357,10 @@ private:
   {
     TurnFallbackPhase phase{TurnFallbackPhase::kIdle};
     double reverse_target_m{0.0};
+    /// Conservative distance charged from measured/authorized reverse output.
     double reverse_done_m{0.0};
+    /// Previous authorized reverse speed after all output caps and tapering.
+    double last_reverse_speed_mps{0.0};
     double reverse_time_s{0.0};
     rclcpp::Time started{0, 0, RCL_ROS_TIME};
     /// Working-plan index of the rejoin pose once spliced.
@@ -406,22 +445,23 @@ private:
   /// SAFETY-CRITICAL: probes the rear footprint at the ACTUAL robot pose
   /// (costmap_ros_->getRobotPose) and never reverses when it would hit lethal or
   /// the pose is unavailable.
-  /// One tick of the escape itself: integrate the distance reversed, probe the
-  /// rear footprint, decide. No side effects on the wait/abort state.
-  ReverseEscapeAction reverseEscapeStep(const ObstacleDeviation::Footprint& footprint, double dt);
+  /// Probe the rear footprint and decide. Budget charging occurs once at the
+  /// compute boundary. No side effects on the wait/abort state.
+  ReverseEscapeAction reverseEscapeStep(const ObstacleDeviation::Footprint& footprint);
   /// Path arc length from the index where the reverse budget was first touched
   /// to the current index (0 when the robot has not advanced).
   double progressSinceReverseEngaged() const;
   bool reverseEscapeOrWait(const std::string& reason,
-                           const ObstacleDeviation::Footprint& footprint,
-                           double dt);
+                           const ObstacleDeviation::Footprint& footprint);
 
   /// True while backing straight up as an obstacle-escape maneuver. Read in
   /// computeVelocityCommands to emit the reverse command (bypassing the PID).
   bool reverse_escape_active_{false};
-  /// Odom-integrated reversed distance for the current escape (m), hard-capped
-  /// at config_.obstacle_reverse_max_dist_m. Reset when the wedge clears.
+  /// Conservatively charged measured/commanded reverse distance (m), hard-capped
+  /// at config_.obstacle_reverse_max_dist_m. Refilled only after path progress.
   double reverse_distance_done_{0.0};
+  /// Last authorized reverse-escape speed after external caps, before tapering.
+  double last_reverse_budget_speed_{0.0};
   /// Time the planner has kept a usable profile since the last infeasible tick,
   /// while a reverse-escape is engaged (ReverseEscapeShouldRelease).
   double reverse_followable_time_{0.0};
@@ -585,6 +625,8 @@ private:
     /// applies until the resumed path has remained stable for
     /// obstacle_clear_hold_s. 0 disables the limiter.
     double obstacle_restart_angular_acceleration{1.0};
+    // ASSUMED no-overshoot actuator tail integral bound, not a hardware measurement.
+    double obstacle_coast_time_bound_s{0.5};
     double min_speed_mps{0.15};
 
     // Anti-wheelspin / traction control. When the carrot commands a forward
@@ -854,6 +896,10 @@ private:
   // Configured max linear speed, captured at configure() and on every
   // max_cmd_vel_speed parameter change. External limits never overwrite it.
   double base_max_cmd_vel_speed_{2.0};
+  bool strict_goal_departed_{false};
+  bool strict_goal_straight_plan_{false};
+  bool terminal_point_plan_{false};
+  bool terminalPointMode();
 };
 
 }  // namespace mowgli_nav2_plugins

@@ -37,13 +37,22 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Preinstall ROS apt source
-        run: bash .github/scripts/install-ros-apt-source.sh ros2-apt-source
+      - name: Prefer Ubuntu archive mirror
+        run: |
+          # Azure repeatedly stalled on package downloads; the runner's archive
+          # fallback fetched the same CMake package in two seconds. Change only
+          # the mirror URI, retaining suites, architectures and signed metadata.
+          sudo sed -i \
+            's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
+            /etc/apt/apt-mirrors.txt
 
-      - name: Setup ROS Lyrical
-        uses: ros-tooling/setup-ros@v0.7
-        with:
-          required-ros-distributions: lyrical
+      - name: Preinstall ROS apt source
+        timeout-minutes: 5
+        env:
+          # Reuse the helper's authenticated lookup instead of the shared
+          # runner IP's restrictive anonymous GitHub API quota.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/install-ros-apt-source.sh ros2-apt-source
 
       - name: Resolve exact baseline revision
         id: baseline
@@ -74,13 +83,18 @@ jobs:
           printf 'BASE_SHA=%s\n' "$BASE_SHA" >> "$GITHUB_ENV"
 
       - name: Install standalone planner dependencies
+        timeout-minutes: 10
         run: |
+          # This standalone CMake build needs the OR-Tools vendor and ROS prefix
+          # setup, not ROS Desktop or setup-ros's development-tool metapackages.
+          # Those unrelated downloads exhausted the job limit before any replay.
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake git pkg-config time \
             libeigen3-dev libgdal-dev libgeos++-dev libgeos-dev libgsl-dev \
             libtinyxml2-dev libpython3-dev python3-dev libtbb-dev \
-            nlohmann-json3-dev libgtest-dev ros-lyrical-ortools-vendor
+            nlohmann-json3-dev libgtest-dev \
+            ros-lyrical-ros-workspace ros-lyrical-ortools-vendor
 
       - name: Prepare Fields2Cover install prefix
         run: |
@@ -142,7 +156,8 @@ jobs:
             | xargs -0 sha256sum > "$ROOT/environment/fields2cover-library-sha256.txt"
           for package in cmake g++ libeigen3-dev libgdal-dev libgeos++-dev \
             libgeos-dev libgsl-dev libtinyxml2-dev libtbb-dev nlohmann-json3-dev \
-            libgtest-dev ros-lyrical-ortools-vendor libc6 libstdc++6 binutils; do
+            libgtest-dev ros-lyrical-ros-workspace ros-lyrical-ortools-vendor \
+            libc6 libstdc++6 binutils; do
             dpkg-query -W -f='${binary:Package}=${Version}\n' "$package"
           done | LC_ALL=C sort > "$ROOT/environment/packages.txt"
           uname -a > "$ROOT/environment/uname.txt"
@@ -214,17 +229,14 @@ jobs:
           ROOT="$RUNNER_TEMP/coverage-replay-artifacts/$BUILD_TYPE"
           BUILD_ROOT="$RUNNER_TEMP/coverage-replay-build/$BUILD_TYPE"
           BASELINE_SOURCE="$RUNNER_TEMP/coverage-replay-baseline"
-          BASELINE_PLANNER="ros2/src/mowgli_coverage/src/coverage_planning.cpp"
-          BASELINE_HEADER="ros2/src/mowgli_coverage/include/mowgli_coverage/coverage_planning.hpp"
-          mkdir -p "$BASELINE_SOURCE/src" \
-            "$BASELINE_SOURCE/include/mowgli_coverage" "$BASELINE_SOURCE/test" \
-            "$ROOT/build-metadata"
-          git show "${BASELINE_SHA}:${BASELINE_PLANNER}" \
-            > "$BASELINE_SOURCE/src/coverage_planning.cpp"
-          git show "${BASELINE_SHA}:${BASELINE_HEADER}" \
-            > "$BASELINE_SOURCE/include/mowgli_coverage/coverage_planning.hpp"
-          # Keep relative fixture includes with the baseline's own test sources.
-          git -c core.autocrlf=false archive "$BASELINE_SHA" ros2/src/mowgli_coverage/test \
+          mkdir -p "$BASELINE_SOURCE" "$ROOT/build-metadata"
+          # Preserve private source headers as well as the public API, tests and
+          # relative fixtures from this exact revision. A planner-only export
+          # loses src/ring_corner_rounding.hpp once the bevel repair is the base.
+          git -c core.autocrlf=false archive "$BASELINE_SHA" \
+            ros2/src/mowgli_coverage/src ros2/src/mowgli_coverage/include \
+            ros2/src/mowgli_coverage/test \
+            ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp \
             | tar -x -C "$BASELINE_SOURCE" --strip-components=3
           build_variant() {
             local label="$1"
@@ -244,6 +256,7 @@ jobs:
               -DPLANNER_INCLUDE="$include" \
               -DPLANNER_TEST_ROOT="$test_root" \
               -DREPLAY_BASELINE="$baseline_mode" \
+              -DREPLAY_CERTIFIED_FILLET_REFERENCE="$baseline_mode" \
               -DREPLAY_REVISION="$revision" \
               2>&1 | tee "$metadata_dir/configure.log"
             cmake --build "$build_dir" --parallel "$(nproc)" --verbose \
@@ -263,11 +276,32 @@ jobs:
             sha256sum "$build_dir/coverage_replay" "$build_dir/libreplay_planner.a" \
               > "$metadata_dir/binary-sha256.txt"
             ldd "$build_dir/coverage_replay" > "$metadata_dir/linked-libraries.txt"
+            local shared_header="$REPO/ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp"
+            if [[ "$baseline_mode" == ON ]]; then
+              shared_header="$include/mowgli_interfaces/coverage_geometry.hpp"
+              cp "$build_dir/coverage_replay_reference" "$metadata_dir/"
+              cp "$build_dir/libreplay_reference_planner.a" "$metadata_dir/"
+              readelf -p .GCC.command.line "$build_dir/libreplay_reference_planner.a" \
+                > "$metadata_dir/reference-effective-gcc-switches.txt"
+              sha256sum "$build_dir/coverage_replay_reference" \
+                "$build_dir/libreplay_reference_planner.a" \
+                > "$metadata_dir/reference-binary-sha256.txt"
+              ldd "$build_dir/coverage_replay_reference" \
+                > "$metadata_dir/reference-linked-libraries.txt"
+            fi
+            sha256sum "$source" "$include/mowgli_coverage/coverage_planning.hpp" \
+              "$shared_header" > "$metadata_dir/planner-source-header-sha256.txt"
+            cp "$shared_header" "$metadata_dir/coverage_geometry.hpp"
           }
           build_variant baseline "$BASELINE_SOURCE/src/coverage_planning.cpp" \
             "$BASELINE_SOURCE/include" "$BASELINE_SHA" ON "$BASELINE_SOURCE/test"
           build_variant candidate "$PACKAGE/src/coverage_planning.cpp" \
             "$PACKAGE/include" "$CANDIDATE_SHA" OFF "$PACKAGE/test"
+          python3 "$REPLAY/test_certified_fillets.py" \
+            --baseline "$BUILD_ROOT/baseline/coverage_replay" \
+            --reference "$BUILD_ROOT/baseline/coverage_replay_reference" \
+            --candidate "$BUILD_ROOT/candidate/coverage_replay" \
+            2>&1 | tee "$ROOT/real-mutation-controls.log"
 
       - name: Replay identical fixtures and compare evidence
         env:
@@ -332,16 +366,32 @@ jobs:
           python3 "$REPLAY/run_replay.py" --binary "$CANDIDATE_BIN" \
             --same-process 20 --processes 5 \
             --output "$TRACE_RESULTS" "${FIXTURE_ARGS[@]}"
-          python3 "$REPLAY/compare_replay.py" \
-            --baseline-dir "$BASELINE_RESULTS" \
-            --candidate-dir "$CANDIDATE_RESULTS" \
-            --trace-dir "$TRACE_RESULTS" \
-            --environment "$ROOT/environment/environment.json" \
+          COMPARE_ARGS=(
+            --baseline-dir "$BASELINE_RESULTS"
+            --candidate-dir "$CANDIDATE_RESULTS"
+            --trace-dir "$TRACE_RESULTS"
+            --environment "$ROOT/environment/environment.json"
+            --expected-cases 26 --expected-runs 15
+            --expected-trace-runs 100 --expected-processes 3
+            --expected-trace-processes 5
+          )
+          # Retain the unchanged strict contract and every raw difference. An
+          # intentional certified fillet may differ; malformed evidence may not.
+          if python3 "$REPLAY/compare_replay.py" "${COMPARE_ARGS[@]}" \
+              --output-json "$ROOT/strict-comparison.json" \
+              --output-markdown "$ROOT/strict-comparison.md" --require-identical; then
+            strict_status=0
+          else
+            strict_status=$?
+          fi
+          if [[ "$strict_status" != 0 && "$strict_status" != 1 ]]; then
+            exit "$strict_status"
+          fi
+          python3 "$REPLAY/compare_replay.py" "${COMPARE_ARGS[@]}" \
             --output-json "$ROOT/comparison.json" \
             --output-markdown "$ROOT/comparison.md" \
-            --expected-cases 26 --expected-runs 15 \
-            --expected-trace-runs 100 --expected-processes 3 \
-            --require-identical
+            --baseline-binary "$BUILD_ROOT/baseline/coverage_replay_reference" \
+            --require-certified-fillets
 
       - name: Upload exact planner replay artifacts
         if: always()

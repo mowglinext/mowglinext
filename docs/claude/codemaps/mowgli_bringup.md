@@ -25,7 +25,7 @@
 | BT operator params (speeds, undock, LocalizationGuard, battery, start-pose escape) | `full_system.launch.py` L216–354 (every `robot_params.get(...)` there is an injection) |
 | Hardware bridge wiring (serial, final command slew, PID push, dig detector, remaps) | `mowgli.launch.py` L184–268; static `config/hardware_bridge.yaml` |
 | GUI/Foxglove bridge + manual-mow relay | `full_system.launch.py` includes `foxglove_bridge.launch.py` (foxglove :8765, shared GNSS-internal topic whitelist); `scripts/cmd_vel_ws_relay.py` (ws :8766 → `/cmd_vel_teleop`) |
-| fusion_graph launch args from this package | `navigation.launch.py`: `use_magnetometer`, LiDAR-gated `use_lidar_map_anchor` / `lidar_anchor_shadow_mode`, `primary_mode`, `tf_publish_lead_s`, `node_period_s` |
+| fusion_graph launch args from this package | `navigation.launch.py`: `use_magnetometer`, LiDAR-gated `use_lidar_map_anchor` / `lidar_anchor_shadow_mode`, `primary_mode`, `tf_publish_lead_s`, `node_period_s`; internal `simulation_geometry` carries the complete scenario datum/antenna snapshot to COG and fusion only with simulation time |
 | Simulation stack | `launch/sim_full_system.launch.py` (Webots include L141–153, sim TF/cadence overrides L182–183, injected 9×6 m test polygon L219–231, sim helper nodes L297–505) |
 | LED ring launch gate + params | `full_system.launch.py` L97–100, L147–151, L668–707; template L721–739 |
 | TF sole-ownership guard (Inv 2) | `test/test_tf_ownership.py` `EXPECTED_TF_BROADCASTER_FILES` L52–57 |

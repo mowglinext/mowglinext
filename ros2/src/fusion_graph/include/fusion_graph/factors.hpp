@@ -75,11 +75,10 @@ private:
 // Error:
 //   e = wrap( (θ_curr - θ_prev) - (Δθ_preint - bias_curr · dt_total) )
 //
-// where Δθ_preint = Σ_i (ω_z,i - b̂) · dt_i is the bias-corrected
-// integral computed at preintegration time with the bias estimate b̂
-// from the previous node, and the factor expects the optimiser to
-// settle on `bias_curr · dt_total` ≈ (true bias − b̂) · dt_total as
-// the residual correction.
+// where Δθ_preint = Σ_i ω_z,i · dt_i is the RAW gyro integral.
+// bias_curr is the absolute bias shared with the inter-node random walk;
+// prediction may use the previous estimate, but this factor subtracts it
+// exactly once rather than treating it as another residual bias increment.
 //
 // Why a single scalar bias per node instead of a continuous random-walk:
 // a random-walk needs additional BetweenFactor<double> chains plus a

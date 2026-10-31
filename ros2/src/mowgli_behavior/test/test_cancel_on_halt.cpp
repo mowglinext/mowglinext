@@ -520,16 +520,18 @@ TYPED_TEST(DockingAttemptTest, DelayedCancellationOfHaltedAttemptDoesNotFailRest
       },
       5.0));
 
-  // Restart the SAME BT node while the old server goal is still CANCELING.
-  // This orders the old result strictly after onStart resets its outcome.
+  // Restart the SAME BT node while the old goal is still CANCELING. The
+  // dispatch retains its old outcome and drains it before sending a successor.
   ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(server.goalCount(), 1u);
+  server.canceled(0);
   ASSERT_TRUE(waitFor(
       [&]()
       {
+        EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
         return server.goalCount() == 2;
       },
       5.0));
-  server.canceled(0);
   // Allow delivery of the late result while repeatedly ticking the new goal.
   // It must stay active until its OWN result arrives, then complete normally.
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);

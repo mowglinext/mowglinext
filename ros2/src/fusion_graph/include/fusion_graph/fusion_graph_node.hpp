@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -49,6 +50,7 @@
 #include "fusion_graph/lidar_occupancy_mapper.hpp"
 #include "fusion_graph/lidar_scan_history.hpp"
 #include "fusion_graph/lidar_submap_store.hpp"
+#include "fusion_graph/motion_source_history.hpp"
 #include "fusion_graph/pose_extrapolator.hpp"
 #include <Eigen/Core>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
@@ -74,6 +76,7 @@ public:
   ~FusionGraphNode() override;
 
 private:
+  friend class FusionGraphNodeInputTest;
   // ── Construction helpers ───────────────────────────────────────────
   // The constructor is split into two methods (defined in
   // fusion_graph_node_setup_params.cpp / _setup_comms.cpp) so each
@@ -84,10 +87,33 @@ private:
   void SetupCommunications(double node_period_s);
 
   // ── Callbacks ──────────────────────────────────────────────────────
+  void ObserveMotionClockEpoch();
+  void ResetMotionSourceEpoch();
+  void ResetForExplicitGraphClear();
+  gtsam::Pose2 ContinuousDrPoseLocked() const;
+  struct MotionPublishState
+  {
+    int64_t source_ns;
+    gtsam::Pose2 source_pose;
+    gtsam::Pose2 predicted_pose;
+    gtsam::Pose2 anchor;
+    bool anchor_valid;
+    double vx;
+    double gz;
+  };
+  std::optional<MotionPublishState> CaptureMotionPublishState();
+  bool FastPoseSourceIsCurrent(double now_s) const;
+  std::optional<gtsam::Pose2> DrPoseAtSource(uint64_t epoch, int64_t stamp_ns) const;
+  void RecenterDrLocked(bool reset_heading);
+  bool RecordConsumedImu(const rclcpp::Time& stamp, double raw_gz, double dt);
+  bool InitializeAtSource(const gtsam::Pose2& pose,
+                          int64_t source_ns,
+                          std::optional<double> prior_override = std::nullopt);
   void OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
   void OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
   void OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg);
+  void ProcessPendingCogFlipChecks();
   void OnMagYaw(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnScan(sensor_msgs::msg::LaserScan::ConstSharedPtr msg);
   void OnHighLevelStatus(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg);
@@ -167,6 +193,39 @@ private:
   // Most recent wheel timestamp (for accumulator dt).
   std::optional<rclcpp::Time> last_wheel_stamp_;
   std::optional<rclcpp::Time> last_imu_stamp_;
+  // Source reordering is not a clock reset. Observe ROS clock epochs separately
+  // so a late sample cannot move either integration baseline backwards.
+  std::optional<rclcpp::Time> last_motion_callback_clock_;
+
+  // Consumer bookkeeping, not proof of physical sensor acquisition identity.
+  uint64_t integration_epoch_ = 0;
+  uint64_t wheel_source_sequence_ = 0;
+  uint64_t gyro_source_sequence_ = 0;
+  MotionWheelSource held_wheel_source_;
+  double wheel_vy_ = 0.0;
+  std::optional<int64_t> integrated_source_ns_;
+  bool motion_source_fault_ = false;
+  struct DrSourceStep
+  {
+    uint64_t epoch;
+    int64_t start_ns;
+    int64_t end_ns;
+    gtsam::Pose2 start_pose;
+    double vx;
+    double gz;
+  };
+  // Bounded independently of scheduling. A retained step evaluates interior
+  // epochs with exactly the constant-control Expmap used by the integrator.
+  std::deque<DrSourceStep> dr_source_history_;
+  std::optional<int64_t> dr_source_baseline_ns_;
+  gtsam::Pose2 dr_source_baseline_pose_;
+  static constexpr size_t kDrSourceHistoryCapacity = 65536;
+  gtsam::Pose2 dr_continuous_from_raw_;
+  uint64_t last_anchored_revision_ = std::numeric_limits<uint64_t>::max();
+  std::optional<int64_t> anchored_dr_source_ns_;
+  uint64_t last_lidar_source_node_index_ = std::numeric_limits<uint64_t>::max();
+  std::optional<int64_t> seed_source_ns_;
+  std::optional<gtsam::Pose2> pending_explicit_seed_;
 
   // ── Local-frame dead reckoning ──────────────────────────────────
   // odom→base_footprint TF + /odometry/filtered. Wheel vx + gyro_z
@@ -327,7 +386,9 @@ private:
 
   // Latched seeds for initialization.
   std::optional<gtsam::Vector2> seed_xy_;  // from latest GPS
-  std::optional<double> seed_yaw_;  // from latest COG/mag
+  std::optional<double> seed_yaw_;  // absolute COG/mag yaw at its stamped source epoch
+  std::optional<int64_t> seed_yaw_source_ns_;
+  uint64_t seed_yaw_source_epoch_ = 0;
 
   // --- 180° yaw-flip recovery -----------------------------------------------
   // COG yaw is the PHYSICAL travel direction (wheels + GPS displacement) and
@@ -346,6 +407,15 @@ private:
   int cog_flip_consecutive_n_ = 3;
   int cog_flip_count_ = 0;
   uint64_t cog_flip_recoveries_ = 0;  // diagnostic counter
+  struct PendingCogFlipCheck
+  {
+    uint64_t epoch;
+    int64_t source_ns;
+    double yaw;
+  };
+  std::deque<PendingCogFlipCheck> pending_cog_flip_checks_;
+  static constexpr size_t kPendingCogFlipCapacity = 1024;
+  uint64_t cog_flip_source_rejects_ = 0;  // unavailable/overrun source checks
   // Robustness gates so the recovery is a reliable safety net, not an
   // amplifier (it fired repeatedly on garbage COG during an FTC oscillation,
   // field 2026-05-29): require RTK-Fixed fresh (COG GPS-grounded), require the
@@ -597,6 +667,8 @@ private:
   // installs aren't surprised by extra topic traffic.
   rclcpp::TimerBase::SharedPtr fast_pose_timer_;
   PoseExtrapolator pose_extrap_;
+  std::optional<int64_t> fast_pose_source_ns_;
+  uint64_t fast_pose_source_epoch_ = 0;
   double fast_pose_publish_rate_hz_ = 0.0;
 
   // Memory + compute bounding parameters.

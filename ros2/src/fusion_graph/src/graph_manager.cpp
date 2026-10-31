@@ -102,14 +102,15 @@ void GraphManager::AddWheelTwist(double vx, double vy, double wz, double dt)
   // the between-factor noise absorbs.
   accum_.dx += vx * dt;
   accum_.dy += vy * dt;
+  accum_.wheel_travel_m += std::hypot(vx, vy) * dt;
   accum_.dtheta_wheel += wz * dt;
   accum_.dt_total += dt;
 }
 
-void GraphManager::AddGyroDelta(double wz, double dt)
+double GraphManager::AddGyroDelta(double wz, double dt)
 {
   if (dt <= 0.0)
-    return;
+    return 0.0;
   std::lock_guard<std::mutex> lock(mu_);
 
   // Track the running maximum on the RAW sample for the multi-source
@@ -152,11 +153,16 @@ void GraphManager::AddGyroDelta(double wz, double dt)
   // ω itself. Independent of which bias correction is applied above.
   if (params_.use_imu_preint)
   {
-    accum_.gyro_preint_dtheta += wz_corrected * dt;
+    // The factor's bias variable is absolute, not an increment around this
+    // window's prediction bias. Keep the raw integral here so the factor
+    // subtracts that bias exactly once. Only the pose prediction above uses
+    // wz_corrected; pre-correcting this integral would subtract it twice.
+    accum_.gyro_preint_dtheta += wz * dt;
     accum_.gyro_preint_dt += dt;
     const double sigma = params_.gyro_noise_density_rad_per_s;
     accum_.gyro_preint_variance += dt * dt * sigma * sigma;
   }
+  return bias_correction;
 }
 
 bool GraphManager::QueueGnss(
@@ -202,6 +208,13 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
                               std::optional<double> sigma_xy_override)
 {
   std::lock_guard<std::mutex> lock(mu_);
+  InitializeLocked(X0, timestamp, sigma_xy_override);
+}
+
+void GraphManager::InitializeLocked(const gtsam::Pose2& X0,
+                                    double timestamp,
+                                    std::optional<double> sigma_xy_override)
+{
   if (initialized_)
     return;
 
@@ -276,7 +289,8 @@ uint64_t GraphManager::LiveNodeCount() const
   uint64_t n = 0;
   for (const auto& kv : current_estimate_)
   {
-    if (gtsam::Symbol(kv.key).chr() == 'x')
+    const char kind = gtsam::Symbol(kv.key).chr();
+    if (kind == 'x' || kind == 'a')
       ++n;
   }
   return n;
@@ -349,10 +363,14 @@ void GraphManager::ForceAnchor(uint64_t node_index,
     return;  // ill-posed reset; latest_ is now null, nothing to anchor
   }
   estimate_dirty_ = true;
-  // Update latest_ snapshot so PublishOutputs sees the new pose.
-  if (latest_ && latest_->node_index == node_index)
+  // Any live anchor can change the latest optimized state, even when the
+  // prior was attached to an older node. Refresh the published snapshot and
+  // advance its revision without changing its source or schedule timestamps.
+  if (latest_)
   {
-    latest_->pose = PoseAt(node_index);
+    latest_->pose = PoseAt(latest_->node_index);
+    latest_->covariance = isam_.marginalCovariance(PoseKey(latest_->node_index));
+    ++latest_->revision;
   }
 }
 

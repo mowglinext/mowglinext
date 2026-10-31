@@ -29,6 +29,7 @@ find_package(nav2_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -74,6 +75,7 @@ target_link_libraries(behavior_tree_node
   ${sensor_msgs_TARGETS}
   ${nav_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
+  ${visualization_msgs_TARGETS}
   ${action_msgs_TARGETS}
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
@@ -157,6 +159,7 @@ if(BUILD_TESTING)
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
+    ${visualization_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -296,6 +299,17 @@ if(BUILD_TESTING)
     ${tf2_geometry_msgs_TARGETS}
     ${action_msgs_TARGETS}
   )
+
+  ament_add_ros_isolated_gtest(test_escape_authorization
+    test/test_escape_authorization.cpp src/escape_nodes.cpp)
+  target_include_directories(test_escape_authorization PRIVATE include)
+  target_link_libraries(test_escape_authorization ${behavior_node_dependencies})
+
+  # ---- test_docking_dispatch ----
+  ament_add_ros_isolated_gtest(test_docking_dispatch
+    test/test_docking_dispatch.cpp src/docking_nodes.cpp TIMEOUT 120)
+  target_include_directories(test_docking_dispatch PRIVATE include)
+  target_link_libraries(test_docking_dispatch ${behavior_node_dependencies})
 
   # ---- test_docking_boundary_exempt ----
   # Regression for "Mowing Complete → robot stops short of the dock": exercises
@@ -673,6 +687,19 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
+
+  # ---- test_follow_strip_detour_costmap ----
+  find_package(nav2_costmap_2d REQUIRED)
+  ament_add_ros_isolated_gtest(test_follow_strip_detour_costmap
+    test/test_follow_strip_detour_costmap.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
+    TIMEOUT 120
+  )
+  target_include_directories(test_follow_strip_detour_costmap PUBLIC include)
+  target_link_libraries(test_follow_strip_detour_costmap ${behavior_node_dependencies}
+    ${nav2_costmap_2d_TARGETS})
 
   # ---- test_follow_strip_dig ----
   # Tick-level: FollowStrip against fake /follow_path + /navigate_to_pose

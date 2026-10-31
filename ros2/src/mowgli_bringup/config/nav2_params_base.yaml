@@ -463,6 +463,11 @@ controller_server:
       # freshly recomputed PID cannot jump directly from 0 to ±max_cmd_vel_ang.
       # At the 10 Hz controller rate, 1.0 rad/s² changes omega by ~0.1 per tick.
       obstacle_restart_angular_acceleration: 1.0
+      # Assumed STOP-response integral bound for FTC's forward geometry and
+      # lattice lethal-cell sweeps; geometry applies independently of obstacles.
+      # Not a measured physical stopping guarantee. Lower only with validated
+      # response evidence; accepted startup/live range [0.01, 2.0] seconds.
+      obstacle_coast_time_bound_s: 0.5
       min_speed_mps: 0.15
       # Anti-wheelspin / traction control. When the carrot commands forward speed
       # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
@@ -1045,6 +1050,9 @@ local_costmap:
       # so the publish thread stays idle and isCurrent() never flips true.
       always_send_full_costmap: true
       footprint: "[[0.50, 0.20], [0.50, -0.20], [-0.10, -0.20], [-0.10, 0.20]]"
+      # Nav2's existing default, explicit so collision-monitor subpolygons
+      # derive the SAME padded body rather than assuming an unpadded outline.
+      footprint_padding: 0.01
       resolution: 0.05
       rolling_window: true
       # 12×12 m local costmap. The 13 m headland walk plus the controller's

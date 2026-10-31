@@ -189,6 +189,7 @@ public:
   void onHalted() override;
 
 private:
+  friend struct NavigateToPoseOutcomeTestAccess;
   rclcpp_action::Client<Nav2Goal>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;

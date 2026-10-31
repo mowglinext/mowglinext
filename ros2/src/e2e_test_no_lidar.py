@@ -34,10 +34,10 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
-from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
+from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from nav_msgs.msg import Path, Odometry
 from mowgli_interfaces.srv import HighLevelControl
-from mowgli_interfaces.msg import HighLevelStatus
+from mowgli_interfaces.msg import HighLevelStatus, Status
 
 
 class TestPhase(Enum):
@@ -79,6 +79,11 @@ class NoLidarE2ETestNode(Node):
         self.current_bt_state = ""
         self.test_complete = False
         self.mowing_started = False
+        self.current_is_charging = False
+        self.target_path_count = 0
+        self.completed_paths = 0
+        self.skipped_paths = 0
+        self.coverage_incomplete = False
 
         # Phase tracking
         self.current_phase = TestPhase.WAITING
@@ -90,6 +95,11 @@ class NoLidarE2ETestNode(Node):
         # QoS profiles
         sensor_qos = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT)
         reliable_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        path_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
 
         # Subscribers
         self.create_subscription(
@@ -100,9 +110,12 @@ class NoLidarE2ETestNode(Node):
         )
         self.create_subscription(
             Path,
-            "/mowgli/coverage/path",
+            "/coverage/full_plan",
             self._on_coverage_path,
-            reliable_qos,
+            path_qos,
+        )
+        self.create_subscription(
+            Status, "/hardware_bridge/status", self._on_hardware_status, reliable_qos
         )
         self.create_subscription(
             Odometry, "/wheel_odom", self._on_odom, sensor_qos
@@ -114,7 +127,7 @@ class NoLidarE2ETestNode(Node):
             sensor_qos,
         )
         self.create_subscription(
-            Twist, "/cmd_vel", self._on_cmd_vel, sensor_qos
+            TwistStamped, "/cmd_vel", self._on_cmd_vel, reliable_qos
         )
 
         # Service client
@@ -130,6 +143,11 @@ class NoLidarE2ETestNode(Node):
     # ── Callbacks ────────────────────────────────────────────────────────
 
     def _on_bt_status(self, msg: HighLevelStatus):
+        if msg.sub_state_name == "COVERAGE_INCOMPLETE":
+            self.coverage_incomplete = True
+        self.target_path_count = max(self.target_path_count, int(msg.total_swaths))
+        self.completed_paths = int(msg.completed_swaths)
+        self.skipped_paths = int(msg.skipped_swaths)
         state_name = msg.state_name if hasattr(msg, "state_name") else str(msg.state)
         t = time.time() - self.metrics.start_time
 
@@ -137,6 +155,7 @@ class NoLidarE2ETestNode(Node):
             self.current_bt_state = state_name
             self.metrics.bt_states.append((t, state_name))
             self.get_logger().info(f"[{t:.1f}s] BT initial state: {state_name}")
+            self._track_phase_transition("", state_name, t)
         elif state_name != self.current_bt_state:
             self.get_logger().info(
                 f"[{t:.1f}s] BT state: {self.current_bt_state} -> {state_name}"
@@ -146,10 +165,17 @@ class NoLidarE2ETestNode(Node):
             self.metrics.bt_states.append((t, state_name))
             self._track_phase_transition(prev_state, state_name, t)
 
-        if state_name in ("MOWING_COMPLETE", "IDLE_DOCKED") and self.mowing_started:
-            if self.current_phase == TestPhase.DOCKING or state_name == "IDLE_DOCKED":
-                self._complete_phase(TestPhase.DOCKING, True, "Robot docked successfully")
+        if (
+            state_name == "IDLE_DOCKED"
+            and self.mowing_started
+            and self.current_is_charging
+            and self.current_phase == TestPhase.DOCKING
+        ):
+            self._complete_phase(TestPhase.DOCKING, True, "Robot docked and charging")
             self.test_complete = True
+
+    def _on_hardware_status(self, msg: Status):
+        self.current_is_charging = bool(msg.is_charging)
 
     def _track_phase_transition(self, prev: str, curr: str, t: float):
         if curr == "UNDOCKING" and self.current_phase == TestPhase.WAITING:
@@ -171,11 +197,19 @@ class NoLidarE2ETestNode(Node):
 
         elif curr in ("MOWING_COMPLETE", "RETURNING_HOME", "COVERAGE_FAILED_DOCKING"):
             if self.current_phase == TestPhase.MOWING:
-                mow_passed = curr == "MOWING_COMPLETE"
+                mow_passed = (
+                    curr == "MOWING_COMPLETE"
+                    and self.target_path_count > 0
+                    and self.completed_paths >= self.target_path_count
+                    and self.skipped_paths == 0
+                    and not self.coverage_incomplete
+                )
                 self._complete_phase(
                     TestPhase.MOWING,
                     mow_passed,
-                    f"Mowing {'completed' if mow_passed else 'failed'}",
+                    f"Mowing {'completed' if mow_passed else 'failed'}: "
+                    f"{self.completed_paths}/{self.target_path_count} paths, "
+                    f"{self.skipped_paths} skipped",
                 )
             self.current_phase = TestPhase.DOCKING
             self.phase_start_time = time.time() - self.metrics.start_time
@@ -233,12 +267,12 @@ class NoLidarE2ETestNode(Node):
             min_dist = self._min_distance_to_path(x, y)
             self.metrics.path_deviations.append((t, min_dist))
 
-    def _on_cmd_vel(self, msg: Twist):
+    def _on_cmd_vel(self, msg: TwistStamped):
         t = time.time() - self.metrics.start_time
         if not self.metrics.cmd_vels or (
             t - self.metrics.cmd_vels[-1][0] > 0.5
         ):
-            self.metrics.cmd_vels.append((t, msg.linear.x, msg.angular.z))
+            self.metrics.cmd_vels.append((t, msg.twist.linear.x, msg.twist.angular.z))
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -351,6 +385,14 @@ class NoLidarE2ETestNode(Node):
         if not self.metrics.phase_results:
             report.append("  No phase transitions recorded!")
             all_phases_pass = False
+        required_phases = {"UNDOCKING", "PLANNING", "MOWING", "DOCKING"}
+        passed_phases = {pr.name for pr in self.metrics.phase_results if pr.passed}
+        if not required_phases.issubset(passed_phases):
+            report.append(f"  Missing successful phases: {sorted(required_phases - passed_phases)}")
+            all_phases_pass = False
+        if self.coverage_incomplete:
+            report.append("  BT flagged COVERAGE_INCOMPLETE; booked paths do not prove coverage")
+            all_phases_pass = False
 
         # ── BT State History ──
         report.append("\n=== Behavior Tree State History ===")
@@ -380,6 +422,7 @@ class NoLidarE2ETestNode(Node):
                 report.append("  PASS: median deviation < 10cm (good for GPS-only)")
             elif p50 < 0.30:
                 report.append("  WARN: median deviation 10-30cm (acceptable but needs tuning)")
+                path_pass = False  # The required criterion below is median < 10 cm.
             else:
                 report.append("  FAIL: median deviation > 30cm")
                 path_pass = False
@@ -481,10 +524,10 @@ def main():
 
     def _on_signal(sig, frame):
         node.get_logger().info(f"Received signal {sig}, printing final report...")
-        node.print_final_report()
+        overall = node.print_final_report()
         node.destroy_node()
         rclpy.shutdown()
-        sys.exit(0)
+        sys.exit(0 if overall else 1)
 
     signal.signal(signal.SIGTERM, _on_signal)
 
@@ -492,7 +535,7 @@ def main():
         while rclpy.ok() and not node.test_complete:
             rclpy.spin_once(node, timeout_sec=0.1)
             if time.time() - start > timeout:
-                node.get_logger().warn(f"Test timeout after {timeout}s")
+                node.get_logger().warning(f"Test timeout after {timeout}s")
                 break
     except KeyboardInterrupt:
         node.get_logger().info("Test interrupted by user")

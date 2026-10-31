@@ -76,7 +76,11 @@ global_costmap:
 local_costmap:
   local_costmap:
     ros__parameters:
-      plugins: ["static_layer", "fleet_layer", "inflation_layer"]
+      plugins: ["static_layer", "fleet_layer", "inflation_layer", "mapped_obstacles"]
+
+      # Same raw map obstacles as the LiDAR variant; independent of sensing.
+      mapped_obstacles:
+        plugin: "mowgli_nav2_plugins::MappedObstacleLayer"
 
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"

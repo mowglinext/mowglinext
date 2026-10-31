@@ -6,10 +6,128 @@
 
 > Lyrical API: full plans enter `newPathReceived`; local processed plans do not replace FTC progress. The goal checker transforms the costmap-frame query into the full-plan frame and exposes both XY and XY+yaw checks. Regression tests: `test/test_lyrical_goal_checker.cpp`; end-approach rule (short sub-paths FTC parks short of): `test/test_path_progress_end_approach.cpp`.
 
+The goal checker revokes completion on `reset()` until the selected FTC instance
+binds its complete working plan/revision through `bindControllerPlan`. FTC binds
+at compute entry; new paths and successful fallback splices advance revision,
+and splice binding is immediate even if later processing throws. Unchanged
+bindings preserve progress without per-tick path copies. Topic publications are
+legacy input before ownership and cannot replace an active controller plan.
+Tests cover the actual reset/first-query race, late old topics and splice rebind.
+
+Terminal evaluation and the final FTC guards select supported TF epochs no later
+than ROS now (`supportedPoseEpoch` in `ftc_controller.cpp`). Both final guards
+share one selected timestamp for each nonzero output; this is not atomic TF
+revision identity. A valid goal checker can keep the timed terminal approach
+moving outside its effective distance cap. Strict XY requests use planar
+distance; the existing default 3D comparison remains.
+
+Strict XY approaches on globally straight monotone forward plans proactively
+cap the final forward request using supported planar distance / (existing
+response horizon + one intended 0.1 s interval). `newPathReceived` classifies the
+whole plan; a turn-fallback splice clears eligibility. Curved/reversing/crossing
+plans retain prior behavior. Measured speed, final authorization, coast bounds
+and timeout remain authoritative. `test_ftc_speed_limit.cpp` contains the
+boundary RED/GREEN, stale-pose latch and crossing-eligibility controls.
+
+Strict terminal point alignment additionally applies to globally forward-monotone
+map-frame plans without pivot corners. It uses final-point bearing during the
+existing timed WAITING state, then restores final goal yaw in POST_ROTATE.
+Alignment requires stopped measured translation, checks the full local pivot
+sweep and raw remaining rotation, and restricts angular PID output to the checked
+direction and arc over the intended 0.1 s interval. A newer supported sweep pose
+rechecks the angular threshold. Radial distance caps forward response; default
+goal requests, reverse/crossing paths, deviation and fallback retain their prior
+control. A fallback splice invalidates point eligibility. Captured curved-end,
+adverse PID/local-obstacle and mid-call TF-epoch tests are in
+`test_ftc_speed_limit.cpp`.
+
+When the goal checker's query TF is future-dated, it recovers the supplied goal
+at the transformed local-plan header epoch and evaluates progress/completion in
+the full-plan frame. This relies on the selected Lyrical FeasiblePathHandler
+contract. Missing transform/goal provenance holds progress. A never-received full
+plan cannot supply its fixed frame through a timeout: future-TF completion stays
+blocked with a diagnostic, while the past-latest proximity fallback remains.
+Tests are in `test_lyrical_goal_checker.cpp` and `test_ftc_speed_limit.cpp`.
+
 Global fixed-grid geometry and mandatory authorization are owned by `GardenKeepoutLayer` in
 `garden_keepout_layer.hpp/.cpp`. `RecentObstacleLayer` rebuilds global marks from
 current observation buffers. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md)
 for geometry synchronization, recovery toggles, budgets and hardware acceptance.
+
+## Forward geometry response (#950)
+
+`authorizeCommand` retains the intended 0.1 s command sweep and additionally
+checks strictly forward proposals with `ForwardResponsePermitted` in
+`ftc_forward_sweep.hpp/.cpp`. It uses the actual compute-input velocity and the
+existing `obstacle_coast_time_bound_s` assumption, independently of obstacle,
+deviation and lattice flags. The reference envelope must fit the complete mowing
+union; only raw holes constrain the chassis, retaining legal outer overhang.
+The same builder supplies the existing lethal-cell chassis sweep. Tests live in
+`test_ftc_motion_critic.cpp` and `test_motion_authorization.cpp`.
+
+STOP is unconditional. Reverse and pure-rotation guards, including the remaining
+rotation sweep, retain their existing contracts. The response envelope assumes
+bounded speed/yaw response and remaining integrals; it does not establish a
+calibrated physical stop, a downstream command lease or pose accuracy. The
+native failure and focused repair evidence belong to
+`docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
+
+## Reverse-escape budget authorization (#950)
+
+`FTCController::computeVelocityCommands` charges an active reverse attempt once
+per tick, independently of deviation-planner early returns. It uses the larger
+of measured speed and the preceding authorized request after external speed
+caps, before tapering. The outgoing reverse command fits the remaining budget
+for the existing 0.5 s maximum supported control interval. Conservative charging
+can end a short escape before its entire physical distance is used. The separate
+0.1 s geometry certificate remains unchanged; neither bound establishes an
+actuator lease, accurate physical pose or stopping response.
+
+A missing required zone guard holds an active escape or existing obstacle wait
+at zero through the existing abort deadline, retaining its spent budget across
+restoration. Real-controller controls are in `test/test_ftc_speed_limit.cpp`;
+`test/test_ftc_reverse_escape.cpp` covers conservative arithmetic. RPP/transit
+and final output authorization remain separate #924 work.
+
+Turn-fallback reverse execution has its own selected retreat budget. It charges
+the larger of measured speed and the preceding authorized output after tapering,
+once per compute tick, and caps each next reverse for the same 0.5 s supported
+interval. The existing 5 mm completion threshold ends the taper; the controller
+then replans the pivot/connector from the actual pose. Unlike ordinary escape's
+pre-taper charging, this retains the retreat needed to make the planned turn.
+`test/test_ftc_speed_limit.cpp` covers accurate, under-reported and frozen velocity
+feedback at 100/500 ms holds, including the actual-pose replan. These command
+bounds do not establish a downstream lease or physical stopping distance.
+
+Both FTC reverse ledgers and the fallback reverse-time cap use the plant's
+elapsed-time domain: monotonic steady time for physical/system-time execution,
+and the existing ROS interval while ROS simulation time is active. PID and
+geometry pose-age clocks are unchanged. The steady timestamp is updated on
+every compute call and reset on configure/new path. Clock mode stays fixed for
+an operation; simulation clock resets/delivery faults while a plant advances
+remain separate #924 work. Physical-clock tests retain fresh TF and geometry,
+measure actual 100 ms command holds, and inject only FTC's prior ROS timestamp
+to cover negative and positive-short deltas without changing the OS clock.
+
+Transit rotation uses the existing upstream RotationShim/RPP configuration with
+an asserted source patch in `ros2/scripts/build_lyrical_vendor.sh` at the existing
+Nav2 pin. It fixes local collision simulation release/direction and propagates
+collision refusal; ordinary path-error fallback remains. The registered
+`test_rotation_shim_collision.cpp` checks the real public output. This patch does
+not itself make a raw mapped hole visible in the local costmap. See the dated transit
+sections in `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md` for the actual G-return
+and nearby-heading counterexample.
+
+`mapped_obstacle_layer.hpp/.cpp` supplies only raw mapped obstacle polygons to
+the local costmap, last after inflation in both overlays. It reuses strict
+`motion::Snapshot::parse`, preserves sensor marks and full-window removal/rolling
+semantics, and closes on invalid geometry or unsupported/current-TF failure.
+It is not clearable; recovery reset rebuilds retained geometry. Outer masks,
+planner margins and dock-body/corridor costs are excluded. The runtime class is
+registered in `costmap_plugins.xml`; `test_mapped_obstacle_layer.cpp` covers
+actual layer/controller cases and bringup tests pin both overlay orderings.
+The captured G-yaw variant now fails safely with the paired shim repair; general
+route completion and complete transit containment remain separate.
 
 ## Where to look
 
@@ -31,7 +149,7 @@ See `docs/TRANSIT_AUTHORIZATION.md` for terminal exceptions and recovery. A star
 | Obstacle skirt policy: side choice, grow, min floor, clear-hold, wait-or-abort | `ftc_controller.cpp` `updateLateralDeviation()` (L1821); pure helpers `src/obstacle_deviation.cpp` |
 | Offset lattice: which (pose, offset) nodes are blocked, and why (`O` local lethal under the body / `Z` zone guard, off the line only); the degrading solve (reaction slack → none → ignore the stations under the body, over a shrinking horizon) behind "horizon cut", "fallback level N" and "WEDGED (no collision-free offset profile…)" | `include/mowgli_nav2_plugins/ftc_lattice_solver.hpp` + `src/ftc_lattice_solver.cpp` (`ResampleLatticeWindow`, `LatticeSolver::PoseBlock/SpanBlock/Solve`); the committed-side logic, preview and return debounce stay in `FTCController::planOffsetLattice()`. Tests `test/test_ftc_lattice_solver.cpp` (incl. a WEDGED recorded on 2026-09-22) |
 | Replay a field WEDGED offline on the recorded costmaps | `ros2/scripts/lattice_replay_dump.py <bag> <out> T0:T1:name` then `build/mowgli_nav2_plugins/lattice_replay [--offset M --side S --no-zone --keepout-zone -v] <out>/<name>/*` (`test/lattice_replay.cpp`, built with the tests, not installed). Reproduced the 2026-09-22 horizon cuts to the centimetre. `--fallback` (or `--fallback-all`) also runs the turn fallback from the recorded robot pose (`odom_base` in the sample) and prints verdict, reverse, rejoin, skipped arc, clearances and planning time; `--ascii` draws it |
-| **Turn fallback** (a turn the lattice cannot drive: hedge past the recorded line at a U-turn / omega / kink, field 2026-09-22 8 of 8 WEDGED) | Decision (pure): `include/mowgli_nav2_plugins/ftc_turn_fallback.hpp` + `src/ftc_turn_fallback.cpp` — `PlanTurnFallback` (first zero-offset lattice-body blockage within `avoidance_horizon_m`; turn = heading sweep over [-0.30, +0.75] m around it ≥ `turn_fallback_min_turn_deg`; rear strip reverse limit; rejoin search least-skipped-arc first, then least reverse; rotations = real footprint vs true-lethal, > 160° need the FULL turn clear; connector = lattice body; body AXIS vs the zone off the plan; 0.05 m planning margin; caller's `followable` predicate), `FallbackWindow`, `RotationSweepClear` / `FullTurnClear` / `StraightSweepClear` / `ReverseSweepClear` (`RearStrip`), `MeasureTurnFallbackClearances`. Lattice-side predicate: `LatticeFeasibleFrom` (`ftc_lattice_solver.hpp`). Controller side: `src/ftc_controller_turn_fallback.cpp` — `tryTurnFallback` (called from `planOffsetLattice` where it would go WEDGED; FOLLOWING only, never over a reverse-escape / hold, re-armed only 1 m past the last rejoin), `planTurnFallback`, `turnFallbackReverseTick` (straight reverse, rear strip probed every tick, odom-measured, time-capped, then re-plans with no further reverse), `spliceTurnFallback` (runtime pivot corners + 0.05 m connector poses into `global_plan_`, `pivot_corners_` recomputed; PIVOT via `enterPivot`), `turnFallbackProgress` (completion at the rejoin → republishes the remainder on `progress_plan_pub_`; `turn_fallback_timeout_s` deadline throws), `failTurnFallback` (charges the reverse to the reverse-escape budget, hold → abort). Tests: `test/test_ftc_turn_fallback.cpp` (pure, incl. the recorded 08:08:25 case), `test/test_ftc_turn_fallback_controller.cpp` (real FTCController + configured Costmap2DROS + kinematic robot, closed loop) |
+| **Turn fallback** (a turn the lattice cannot drive: hedge past the recorded line at a U-turn / omega / kink, field 2026-09-22 8 of 8 WEDGED) | Decision (pure): `include/mowgli_nav2_plugins/ftc_turn_fallback.hpp` + `src/ftc_turn_fallback.cpp` — `PlanTurnFallback` (first zero-offset lattice-body blockage within `avoidance_horizon_m`; turn = heading sweep over [-0.30, +0.75] m around it ≥ `turn_fallback_min_turn_deg`; rear strip reverse limit; rejoin search least-skipped-arc first, then least reverse; rotations = real footprint vs true-lethal, > 160° need the FULL turn clear; connector = lattice body; body AXIS vs the zone off the plan; 0.05 m planning margin; caller's `followable` predicate), `FallbackWindow`, `RotationSweepClear` / `FullTurnClear` / `StraightSweepClear` / `ReverseSweepClear` (`RearStrip`), `MeasureTurnFallbackClearances`. Lattice-side predicate: `LatticeFeasibleFrom` (`ftc_lattice_solver.hpp`). Controller side: `src/ftc_controller_turn_fallback.cpp` — `tryTurnFallback` (called from `planOffsetLattice` where it would go WEDGED; FOLLOWING only, never over a reverse-escape / hold, re-armed only 1 m past the last rejoin), `planTurnFallback`, `turnFallbackReverseTick` (straight reverse, rear strip probed every tick, conservatively charged from measured/authorized output, time-capped, then re-plans with no further reverse), `spliceTurnFallback` (runtime pivot corners + 0.05 m connector poses into `global_plan_`, `pivot_corners_` recomputed; PIVOT via `enterPivot`), `turnFallbackProgress` (completion at the rejoin → republishes the remainder on `progress_plan_pub_`; `turn_fallback_timeout_s` deadline throws), `failTurnFallback` (charges the reverse to the reverse-escape budget, hold → abort). Tests: `test/test_ftc_turn_fallback.cpp` (pure, incl. the recorded 08:08:25 case), `test/test_ftc_turn_fallback_controller.cpp` (real FTCController + configured Costmap2DROS + kinematic robot, closed loop) |
 | Plan handed to the progress trackers after a rejoin | `progress_plan_pub_` = `~/<plugin>/global_plan` = `/controller_server/FollowCoveragePath/global_plan` (goal checker's `plan_topic`, FollowStrip's dispatch topic). NOT `global_plan_pub_`, which resolves to `/FollowCoveragePath/global_plan` (viz only — the goal checker never saw it) |
 | Zone confine (offset must stay in-zone) / zone mask (#517, out-of-zone lethal is not an obstacle) | `BoundaryGuard` in `include/mowgli_nav2_plugins/obstacle_deviation.hpp`; built in `updateLateralDeviation()` from `boundary_costmap_` (sub `/global_costmap/costmap`, `ftc_controller.cpp:75`) |
 | Footprint vs half-width line model, front clip, lateral expand | `obstacle_deviation.cpp` `footprintBlocked` / `clipFootprintFront` / `expandFootprintLateral`; toggled by `use_footprint_clearance` |
@@ -112,7 +230,7 @@ None. Both classes are pluginlib plugins loaded by Nav2's `controller_server` (l
 |-------|------|-----|-----|-------------------|
 | `/FollowCoveragePath/global_point` | `geometry_msgs/PoseStamped` | pub | depth 1, lifecycle | Carrot pose (map frame) every tick — viz only. The relative name `<plugin>/global_point` resolves at the root namespace, NOT under `/controller_server` (the 2026-09-22 bag) |
 | `/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub | `QoS(1).transient_local()` | `global_plan_pub_`: the plan FTC drives, ONCE per `newPathReceived` (tail pose duplicated) and once per turn-fallback splice (detour included) — viz only; nothing subscribes |
-| `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub + BT pub | `QoS(1).transient_local()` | The progress trackers' plan. Published by BT `FollowStrip` at each dispatch (`coverage_nodes.cpp`) and by FTC's `progress_plan_pub_` (`~/<plugin>/global_plan`) ONLY when a turn fallback rejoins: the remainder from the rejoin pose, stamped now. Subs: `PathProgressGoalChecker` (`plan_topic`, resets progress on the new pose count) and FollowStrip (`ControllerRejoin` → cursor jump) |
+| `/controller_server/FollowCoveragePath/global_plan` | `nav_msgs/Path` | pub + BT pub | `QoS(1).transient_local()` | The progress trackers' plan. Published by BT `FollowStrip` at each dispatch (`coverage_nodes.cpp`) and by FTC's `progress_plan_pub_` (`~/<plugin>/global_plan`) ONLY when a turn fallback rejoins: the remainder from the rejoin pose, stamped now. Subs: legacy `PathProgressGoalChecker` topic input (active FTC ownership uses direct plan binding) and FollowStrip (`ControllerRejoin` → cursor jump) |
 | `/controller_server/FollowCoveragePath/costmap_marker` | `visualization_msgs/Marker` | pub | depth 10 | Only when `debug_obstacle` and deviation OFF (`debugObstacle`) |
 | `/global_costmap/costmap` | `nav_msgs/OccupancyGrid` | sub | `QoS(1).transient_local()` | Rebuilt into `boundary_costmap_` (`data >= 99 → 254`, else 0) for the zone guard/mask (`ftc_controller.cpp:75-96`) |
 | `/hardware_bridge/status` | `mowgli_interfaces/Status` | sub | `QoS(1)` | `mower_esc_status` / `mower_motor_rpm` / `blade_status_stamp` → `blade_active_` / `blade_rpm_` / `blade_status_time_` under `blade_mutex_` for the blade-load slowdown (always subscribed; inert unless `blade_load_slowdown_enabled`) |
@@ -210,7 +328,7 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 - Never call `goal_checker->reset()` inside `computeVelocityCommands` (`ftc_controller.cpp:844-853`): `max_reached_index_` can only advance `max_idx_advance_per_call` (10) poses per call, so a per-tick reset pins progress < 95 % forever.
 - `newPathReceived` duplicates the last pose and re-orients the second-to-last (`ftc_controller.cpp:744-748`); the FSM's `size() - 2` test depends on it. Plans with < 3 poses go straight to `FINISHED` — one reason FTC is not the transit controller.
 - `newPathReceived` starts at idx 0 by default; re-adding a nearest-point snap skipped 46–99 % of closed headland rings on 2026-08-24 (`ftc_start_index.hpp` header). Resume trimming is `FollowStrip`'s job.
-- Goal-checker "new path" fingerprint = pose-count change OR front pose moved > 2 m (`path_progress_goal_checker.cpp:148-150`). Two consecutive plans of identical length starting < 2 m apart are treated as the SAME path (progress carries over).
+- Goal-checker "new path" fingerprint = pose-count change OR front pose moved > 2 m (`path_progress_goal_checker.cpp:148-150`). The active FTC path now uses controller instance/revision, not this legacy topic heuristic.
 - Paths with ≤ `short_path_poses` (10) poses complete on xy+yaw proximity only (`path_progress_goal_checker.cpp:267`), bypassing the progress gate.
 - The progress gate passes on EITHER ≥ `progress_threshold` of the poses OR the path length still ahead of the furthest monotonically-reached point ≤ `xy_goal_tolerance` (`path_progress_goal_checker.cpp:350`); xy + yaw are checked after it either way. The second rule exists because FTC parks up to `max_goal_distance_error` short and then emits zero velocity: on a sub-path shorter than ~10 m that is more than 5 % of the poses, so the pose ratio alone never passed and `progress_checker` aborted the goal after `movement_time_allowance` (field 2026-09-21, 0.6 m sub-paths, 30 s each). It is measured ALONG the path from the bounded monotonic cursor, so it stays false at the start of a looped path whose end is near its start; do not replace it with a straight-line distance. `xy_goal_tolerance` must stay ≥ FTC `max_goal_distance_error` (launch floor) or FTC parks where neither rule can pass. A path whose whole length is ≤ `xy_goal_tolerance` completes on proximity at its start. The bounded search still lets `max_reached_index_` creep up to `max_idx_advance_per_call` poses per call toward a robot that is AHEAD along the path (catch-up by design) — that is unchanged.
 - `chooseDeviationSide` scans LEFT first at each radius (`obstacle_deviation.cpp:400-412`) — equal clearance always skirts left.

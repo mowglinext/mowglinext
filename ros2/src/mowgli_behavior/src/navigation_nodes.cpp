@@ -325,8 +325,8 @@ BT::NodeStatus NavigateToPose::onStart()
   goal_msg.pose = target_pose;
 
   auto send_goal_options = rclcpp_action::Client<Nav2Goal>::SendGoalOptions{};
-  // Also ask for the result — see action_outcome.hpp for the lost-status race.
-  outcome_->Reset();
+  // Keep a delayed result owned by the navigation attempt that produced it.
+  outcome_ = std::make_shared<ActionOutcomeSlot>();
   send_goal_options.result_callback = [slot = outcome_](const GoalHandle::WrappedResult& result)
   {
     slot->Record(OutcomeFromResultCode(result.code));

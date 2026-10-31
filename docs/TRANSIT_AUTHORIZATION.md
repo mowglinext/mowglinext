@@ -76,6 +76,17 @@ obstacle costs. These optimizations do not change the 8-second planning budget.
 See [planner performance evidence](TRANSIT_PLANNER_PERFORMANCE.md) for reproducible
 benchmarks and the remaining Raspberry Pi 4 validation.
 
+Local `MappedObstacleLayer` additionally carries the same snapshot's raw
+`obstacle` polygons after local inflation in both overlays. It supplies unsensed
+mapped holes to RotationShim/RPP footprint checks without copying outer boundary
+masks, planner margins or dock-body costs. Missing/invalid snapshots or unsupported
+TF close the local map; rolling updates remove obsolete marks without clearing
+sensor observations. This is distinct from path authorization and does not
+establish complete transit containment. A nearby-heading G-return counterexample
+now aborts before simulated body contact with the paired shim collision/refusal
+repair; it does not complete the route. Exact software evidence and remaining
+limits are recorded in `MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
+
 Stop the mission before editing or replacing a map. Invalidation rejects new
 plans; a controller already following a path may retain it until replanning.
 Controller deviations, autonomous backoff and bounded recovery/docking

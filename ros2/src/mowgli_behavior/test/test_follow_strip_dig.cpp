@@ -63,6 +63,7 @@
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
+#include "nav2_msgs/srv/get_costmap.hpp"
 #include "tf2_ros/buffer.hpp"
 #include <gtest/gtest.h>
 
@@ -76,6 +77,29 @@ using Navigate = FollowStrip::Nav2Navigate;
 using FollowHandle = rclcpp_action::ServerGoalHandle<Follow>;
 using NavigateHandle = rclcpp_action::ServerGoalHandle<Navigate>;
 using MowerControl = mowgli_interfaces::srv::MowerControl;
+
+namespace mowgli_behavior
+{
+struct FollowStripOutcomeTestAccess
+{
+  static std::shared_ptr<ActionOutcomeSlot> outcome(FollowStrip& node)
+  {
+    return node.follow_outcome_;
+  }
+  static std::shared_ptr<ActionOutcomeSlot> transitOutcome(FollowStrip& node)
+  {
+    return node.transit_outcome_;
+  }
+  static std::shared_ptr<ActionOutcomeSlot> outcome(TransitToStrip& node)
+  {
+    return node.nav_outcome_;
+  }
+  static std::shared_ptr<ActionOutcomeSlot> outcome(DetourAroundObstacle& node)
+  {
+    return node.nav_outcome_;
+  }
+};
+}  // namespace mowgli_behavior
 
 namespace
 {
@@ -159,9 +183,11 @@ public:
           }
           return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         },
-        [](const std::shared_ptr<Handle>)
+        [this](const std::shared_ptr<Handle>)
         {
-          return rclcpp_action::CancelResponse::ACCEPT;
+          ++cancel_requests_;
+          return reject_cancel_.load() ? rclcpp_action::CancelResponse::REJECT
+                                       : rclcpp_action::CancelResponse::ACCEPT;
         },
         [this](const std::shared_ptr<Handle> handle)
         {
@@ -180,6 +206,15 @@ public:
       hold_accept_ = hold;
     }
     accept_cv_.notify_all();
+  }
+
+  void rejectCancel(bool reject)
+  {
+    reject_cancel_.store(reject);
+  }
+  std::size_t cancelRequestCount() const
+  {
+    return cancel_requests_.load();
   }
 
   std::size_t requestCount()
@@ -258,6 +293,8 @@ private:
   std::vector<std::shared_ptr<Handle>> handles_;
   std::shared_future<void> response_gate_;
   std::atomic<std::size_t> goal_requests_{0};
+  std::atomic<std::size_t> cancel_requests_{0};
+  std::atomic<bool> reject_cancel_{false};
 };
 
 }  // namespace
@@ -278,6 +315,23 @@ protected:
     server_node = rclcpp::Node::make_shared("fake_nav2");
     follow = std::make_unique<FakeActionServer<Follow>>(server_node, "/follow_path");
     navigate = std::make_unique<FakeActionServer<Navigate>>(server_node, "/navigate_to_pose");
+    // Valid-map recovery controls need the production snapshot service. Missing
+    // service behavior is covered separately by test_follow_strip_detour_costmap.
+    costmap_service = server_node->create_service<nav2_msgs::srv::GetCostmap>(
+        "/global_costmap/get_costmap",
+        [](std::shared_ptr<nav2_msgs::srv::GetCostmap::Request>,
+           std::shared_ptr<nav2_msgs::srv::GetCostmap::Response> response)
+        {
+          auto& map = response->map;
+          map.header.frame_id = "map";
+          map.metadata.resolution = 0.1;
+          map.metadata.size_x = 120;
+          map.metadata.size_y = 40;
+          map.metadata.origin.position.x = -1.0;
+          map.metadata.origin.position.y = -2.0;
+          map.metadata.origin.orientation.w = 1.0;
+          map.data.resize(4800, 0);
+        });
     createBladeService();
 
     startExecutor();
@@ -285,6 +339,8 @@ protected:
     blackboard = BT::Blackboard::create();
     blackboard->set("context", ctx);
     factory.registerNodeType<FollowStrip>("FollowStrip");
+    factory.registerNodeType<mowgli_behavior::TransitToStrip>("TransitToStrip");
+    factory.registerNodeType<mowgli_behavior::DetourAroundObstacle>("DetourAroundObstacle");
     factory.registerNodeType<mowgli_behavior::EndSession>("EndSession");
   }
 
@@ -416,6 +472,61 @@ protected:
         blackboard));
   }
 
+  template <typename NodeT>
+  void checkLateOldNavigationResult(const std::string& node_name)
+  {
+    navigate->rejectCancel(true);
+    ctx->current_strip_path = straightUnit(2.0, 10.0);
+    ctx->current_transit_goal = ctx->current_strip_path.poses.front();
+    tree = std::make_unique<BT::Tree>(
+        factory.createTreeFromText("<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><" + node_name +
+                                       "/></BehaviorTree></root>",
+                                   blackboard));
+    ASSERT_EQ(tickUntil(
+                  [&]()
+                  {
+                    return navigate->goalCount() == 1;
+                  },
+                  10.0),
+              BT::NodeStatus::RUNNING);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);  // acquire the old handle
+    auto* node = dynamic_cast<NodeT*>(tree->rootNode());
+    ASSERT_NE(node, nullptr);
+    auto old_outcome = mowgli_behavior::FollowStripOutcomeTestAccess::outcome(*node);
+    tree->haltTree();
+    const auto cancel_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (navigate->cancelRequestCount() == 0 &&
+           std::chrono::steady_clock::now() < cancel_deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_GT(navigate->cancelRequestCount(), 0u);
+    ASSERT_EQ(tickUntil(
+                  [&]()
+                  {
+                    return navigate->goalCount() == 2;
+                  },
+                  10.0),
+              BT::NodeStatus::RUNNING);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);  // acquire the new handle
+    auto new_outcome = mowgli_behavior::FollowStripOutcomeTestAccess::outcome(*node);
+    navigate->succeed(0);
+    const auto result_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!old_outcome->Get().has_value() && std::chrono::steady_clock::now() < result_deadline)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    ASSERT_EQ(old_outcome->Get(), mowgli_behavior::GoalOutcome::kSucceeded)
+        << "the delayed old result must actually reach its callback";
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING)
+        << "an old result must not complete the current navigation";
+    ASSERT_FALSE(new_outcome->Get().has_value());
+    navigate->succeed(1);
+    EXPECT_EQ(tickUntil(
+                  []()
+                  {
+                    return false;
+                  },
+                  5.0),
+              BT::NodeStatus::SUCCESS);
+  }
+
   /// Tick at 20 Hz until `done` or the timeout. Returns the last tree status.
   BT::NodeStatus tickUntil(const std::function<bool()>& done, double timeout_s)
   {
@@ -452,6 +563,7 @@ protected:
   std::unique_ptr<FakeActionServer<Navigate>> navigate;
   rclcpp::Node::SharedPtr blade_node;
   rclcpp::Service<MowerControl>::SharedPtr blade_service;
+  rclcpp::Service<nav2_msgs::srv::GetCostmap>::SharedPtr costmap_service;
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> blade_executor;
   std::atomic<bool> blade_stopping{false};
   std::thread blade_spinner;
@@ -514,6 +626,16 @@ protected:
     ctx->blade_telemetry_seen = true;
   }
 };
+
+TEST_F(FollowStripDigTest, TransitToStripIgnoresLateOldSuccess)
+{
+  checkLateOldNavigationResult<mowgli_behavior::TransitToStrip>("TransitToStrip");
+}
+
+TEST_F(FollowStripDigTest, DetourAroundObstacleIgnoresLateOldSuccess)
+{
+  checkLateOldNavigationResult<mowgli_behavior::DetourAroundObstacle>("DetourAroundObstacle");
+}
 
 TEST_F(FollowStripDigTest, InitialCoverageWaitsForStableFreshBladeTelemetry)
 {
@@ -1598,8 +1720,120 @@ TEST_F(FollowStripDigTest, HaltBeforeAcceptanceSavesCursorAndCancelsTheLateGoal)
   EXPECT_TRUE(follow->isCanceling(0)) << "the goal accepted after the halt must be cancelled";
 }
 
-// The contrasting terminal result remains the only ordinary completion path:
-// it clears an old resume cursor, records the unit, and retires a one-unit area.
+TEST_F(FollowStripDigTest, LateOldSuccessCannotCompleteNewAttempt)
+{
+  // The first server goal remains executing after halt: a real server can
+  // reject or race cancellation and later deliver its terminal result.
+  follow->rejectCancel(true);
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);  // acquire the old handle
+  auto* node = dynamic_cast<FollowStrip*>(tree->rootNode());
+  ASSERT_NE(node, nullptr);
+  auto old_outcome = mowgli_behavior::FollowStripOutcomeTestAccess::outcome(*node);
+  tree->haltTree();
+  const auto cancel_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (follow->cancelRequestCount() == 0 && std::chrono::steady_clock::now() < cancel_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_GT(follow->cancelRequestCount(), 0u);
+
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 2;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);  // acquire the new handle
+  auto new_outcome = mowgli_behavior::FollowStripOutcomeTestAccess::outcome(*node);
+  follow->succeed(0);
+  const auto result_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!old_outcome->Get().has_value() && std::chrono::steady_clock::now() < result_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(old_outcome->Get(), mowgli_behavior::GoalOutcome::kSucceeded)
+      << "the delayed old result must actually reach its callback";
+  ASSERT_FALSE(new_outcome->Get().has_value());
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+  EXPECT_TRUE(ctx->completed_areas.empty());
+
+  follow->succeed(1);
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                5.0),
+            BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->area_completed_swaths[0], (std::set<std::size_t>{0}));
+}
+
+TEST_F(FollowStripDigTest, LateOldTransitSuccessCannotCompleteNewTransit)
+{
+  navigate->rejectCancel(true);
+  startFollowStrip({straightUnit(2.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);  // acquire the old handle
+  auto* node = dynamic_cast<FollowStrip*>(tree->rootNode());
+  ASSERT_NE(node, nullptr);
+  auto old_outcome = mowgli_behavior::FollowStripOutcomeTestAccess::transitOutcome(*node);
+  tree->haltTree();
+  const auto cancel_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (navigate->cancelRequestCount() == 0 && std::chrono::steady_clock::now() < cancel_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_GT(navigate->cancelRequestCount(), 0u);
+
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 2;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);  // acquire the new handle
+  auto new_outcome = mowgli_behavior::FollowStripOutcomeTestAccess::transitOutcome(*node);
+  navigate->succeed(0);
+  const auto result_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!old_outcome->Get().has_value() && std::chrono::steady_clock::now() < result_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(old_outcome->Get(), mowgli_behavior::GoalOutcome::kSucceeded);
+  ASSERT_FALSE(new_outcome->Get().has_value());
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u) << "the blade-on follow goal needs the new transit result";
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
+
+  setRobot(2.0, 0.0);
+  navigate->succeed(1);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  follow->succeed(0);
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                5.0),
+            BT::NodeStatus::SUCCESS);
+}
+
+// A successful coverage goal clears the cursor and completes the unit and area.
 TEST_F(FollowStripDigTest, SuccessClearsResumeAndCompletesArea)
 {
   startFollowStrip({straightUnit(0.0, 10.0)});

@@ -41,6 +41,11 @@ diffdrive_controller:
 
     publish_rate: 50.0
 
+    # Fusion Graph integrates this twist at the odometry source time. The
+    # default ten-sample mean lags the pose interval during acceleration,
+    # braking and turns; publish the velocity of that same interval.
+    velocity_rolling_window_size: 1
+
     # Don't publish odom→base TF from the controller — robot_localization's
     # ekf_odom_node owns that transform (REP-105).
     enable_odom_tf: false

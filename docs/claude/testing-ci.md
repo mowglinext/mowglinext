@@ -10,9 +10,40 @@
 
 ## Test map
 
+`mowgli_nav2_plugins/test_mapped_obstacle_layer` checks actual local costmap
+layers and shim/RPP consumption of raw mapped obstacles, including invalid
+snapshots, supported TF, rolling/removal and sensor preservation. Bringup's
+`test_nav2_params.py` pins the post-inflation layer ordering in both overlays.
+It runs through the package ROS tests; captured real-server replay evidence
+is retained separately and is not a full-image or robot test.
+
+`mowgli_nav2_plugins/test_rotation_shim_collision` exercises the real Nav2
+RotationShim and RPP fallback against local lethal cells. Run
+`colcon test --packages-select mowgli_nav2_plugins --ctest-args -R test_rotation_shim_collision`.
+It requires the patched shim from `build_lyrical_vendor.sh`; the apt-only baseline
+fails four collision controls. It is gated by the ROS build-and-test job and does
+not prove continuous swept-volume, mapped-hole visibility or hardware safety.
+
+Motion-authorization additions for #924 are `test_motion_authorization` and
+`test_motion_sweeps` in `mowgli_nav2_plugins`, `test_escape_authorization` in
+`mowgli_behavior`, and `test_motion_geometry_reload` in `mowgli_map`. They run
+through the same package `colcon test` commands and ROS CI gate below. The
+closed-loop FTC fallback fixture provides kinematic controller evidence;
+it does not run Webots or establish physical stopping distance. See
+[`MOTION_AUTHORIZATION_IMPLEMENTATION.md`](../MOTION_AUTHORIZATION_IMPLEMENTATION.md)
+for the acceptance matrix and exact validation baseline. Bringup additionally
+registers `test_motion_footprint_launch.py`, which executes both production
+launch builders with configured chassis dimensions through lightweight launch
+adapters; it does not start a simulation.
+
 | Area | Test files | Framework | Exact local command | CI workflow |
 |---|---|---|---|---|
-| `fusion_graph` (30 suites) | `ros2/src/fusion_graph/test/test_*.cpp` | GoogleTest (`ament_add_gtest`, `CMakeLists.txt:145–252`) | `cd /ros2_ws && colcon test --packages-select fusion_graph --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
+| `fusion_graph` real input callbacks | `ros2/src/fusion_graph/test/test_sensor_input_node.cpp` | GTest; actual node, controlled ROS clock, source/TF/anchor/bootstrap/clear/recovery regressions and 20 GNSS phase controls | `colcon test --packages-select fusion_graph --ctest-args -R test_sensor_input_node` | `ros2-ci.yml` → `build-and-test` |
+| `fusion_graph` source association | `ros2/src/fusion_graph/test/test_source_epoch.cpp`, `test_source_epoch_query.cpp` | GTest; consumed-time means, source unaries, shared acquisitions, finite-window/reanchor identity and read-only historical means | `colcon test --packages-select fusion_graph --ctest-args -R 'test_source_epoch'` | `ros2-ci.yml` → `build-and-test` |
+| `fusion_graph` trajectory / conditional model | `ros2/src/fusion_graph/test/test_motion_source_history.cpp`, `test_conditional_process_bridge.cpp` | GTest; immutable source/gain policy, full sensitivity covariance, insertion order, exact constrained edge elimination | `colcon test --packages-select fusion_graph --ctest-args -R 'test_(motion_source_history\|conditional_process_bridge)'` | `ros2-ci.yml` → `build-and-test` |
+| `mowgli_simulation` measured-wheel plant | `ros2/src/mowgli_simulation/test/test_kinematic_wheel_feedback.py` | Pytest; real plugin/native-device fakes, independent wheel-SE2 oracle, identity and acquisition faults | `colcon test --packages-select mowgli_simulation --ctest-args -R test_kinematic_wheel_feedback` | `ros2-ci.yml` → `build-and-test` |
+| `fusion_graph` information/bias regressions | `test_rebase_information.cpp`, `test_gyro_preint_bias.cpp` | GTest; retained joint information, asynchronous rebase ownership, absolute bias and pose-only lifecycle | `colcon test --packages-select fusion_graph --ctest-args -R 'test_(rebase_information|gyro_preint_bias)'` | `ros2-ci.yml` → `build-and-test` |
+| `fusion_graph` (39 GTest suites) | `ros2/src/fusion_graph/test/test_*.cpp` | GoogleTest (`ament_add_gtest`, `CMakeLists.txt:145–252`) | `cd /ros2_ws && colcon test --packages-select fusion_graph --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_behavior` (22 suites) | `ros2/src/mowgli_behavior/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:116–705`) | `colcon test --packages-select mowgli_behavior --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_hardware` (15) | `ros2/src/mowgli_hardware/test/test_*.cpp` — incl. dig detection/escalation (Invariant 16), protocol safety, `test_cmd_vel_validation.cpp`, `test_cmd_vel_slew.cpp`, and real node parameter descriptors | GoogleTest (`CMakeLists.txt:114–266`) | `colcon test --packages-select mowgli_hardware --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_localization` (7) | `ros2/src/mowgli_localization/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:271–342`) | `colcon test --packages-select mowgli_localization --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
@@ -22,7 +53,8 @@
 | `mowgli_leds` (2) | `ros2/src/mowgli_leds/test/test_*.cpp` | GoogleTest (`CMakeLists.txt:96–103`) | `colcon test --packages-select mowgli_leds --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_coverage` (1) | `ros2/src/mowgli_coverage/test/test_coverage_planning.cpp` | GoogleTest (`CMakeLists.txt:129`) | `colcon test --packages-select mowgli_coverage --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_monitoring` (1) | `ros2/src/mowgli_monitoring/test/test_diagnostics.cpp` | GoogleTest (`CMakeLists.txt:167`) | `colcon test --packages-select mowgli_monitoring --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
-| `mowgli_simulation` (1) | `ros2/src/mowgli_simulation/test/test_firmware_wheel_model.cpp` | GoogleTest (`CMakeLists.txt:121`) | `colcon test --packages-select mowgli_simulation --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
+| `mowgli_simulation` observation provenance | `test_ground_truth_publisher.py`, `test_sim_imu_provenance.py`, `test_sim_navsat_rtk_fix.py` | pytest; actual step/callbacks, source-time/value pairing, delayed clock, replay and rewind | `colcon test --packages-select mowgli_simulation --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
+| `mowgli_simulation` (2) | `ros2/src/mowgli_simulation/test/test_firmware_wheel_model.cpp`, `test_wheel_odom_interval.cpp` (configured upstream odometry pose/Twist interval consistency) | GoogleTest | `colcon test --packages-select mowgli_simulation --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_bringup` static config guards (6) | `ros2/src/mowgli_bringup/test/test_nav2_params.py`, `test_gnss_launch_config.py`, `test_robot_config_util.py`, `test_urdf_xacro.py`, `test_tf_ownership.py`, `test_launch_injection.py` | pytest (`ament_add_pytest_test`, `CMakeLists.txt:59–86`) | `colcon test --packages-select mowgli_bringup --return-code-on-test-failure` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_bringup` launch integration (2) | `ros2/src/mowgli_bringup/test/test_nodes_startup.launch.py` (TIMEOUT 60), `test_navsat_status_universal.launch.py` (TIMEOUT 45) | `launch_testing` (`add_launch_test`, `CMakeLists.txt:46–52`) | `colcon test --packages-select mowgli_bringup` | `ros2-ci.yml` → `build-and-test` |
 | `mowgli_tools` (drive-PID tuner sidecar) | `tools/motor/test/test_drive_pid_math.py`, `tools/motor/test/test_drive_pid_tuner.py` (both registered) | pytest (`tools/motor/CMakeLists.txt:24–32`) | `colcon test --packages-select mowgli_tools` · `python3 -m pytest tools/motor/test` | `ros2-ci.yml` → `build-and-test` (CI symlinks `tools/motor` into the workspace as `src/mowgli_tools`, `ros2-ci.yml:151–159`) |
@@ -41,6 +73,72 @@
 `ros2/scripts/e2e_test.py` is an **older, separate** harness from `ros2/src/e2e_test.py` (different file, different metrics); the Makefile targets drive the `src/` pair only.
 
 Two more piles of test files exist but **never execute**: the 62 CTest suites in the universal-gnss submodule's non-ROS libs (`gnss_core/`, `gnss_protocols/`, `gnss_driver/`, `gnss_transport/`, `gnss_ntrip/`, `gnss_tools/` — `gnss_ros2/CMakeLists.txt:31–66` forces `BUILD_TESTING OFF` around their `add_subdirectory` calls, so only `gnss_ros2`'s own 6 survive colcon), and the upstream `ros2/src/opennav_coverage/*/test/*.cpp` suites, whose packages are `COLCON_IGNORE`'d (only `opennav_coverage_msgs` is built).
+
+### Coverage planner replay contracts
+
+[`test/replay/README.md`](../../ros2/src/mowgli_coverage/test/replay/README.md)
+documents the standalone real-F2C replay. `.github/workflows/coverage-replay.yml`
+compares the synthetic merge's exact base parent with the candidate in Release,
+Debug and RelWithDebInfo. Its standalone build installs the ROS workspace setup
+and OR-Tools vendor packages directly, alongside native planner dependencies;
+it does not require ROS Desktop. APT source setup and dependency installation
+have 5- and 10-minute step limits within the unchanged 45-minute job limit.
+The runner's Ubuntu mirror list uses `archive.ubuntu.com` in place of the Azure
+mirror, which repeatedly stalled before planner builds; package suites,
+architectures and signature verification remain unchanged.
+`--require-identical` requires unchanged execution bytes,
+fingerprints and metrics, along with repeated-output stability and trace passivity.
+
+The separate opt-in `--require-certified-fillets` mode keeps exact repetitions,
+fixture identity and trace passivity mandatory. It accepts complete strict
+identity or independently certified microscopic bevel replacements, reporting
+the method per fixture. Exact identity retains traced-reference stage comparison;
+future baselines containing the repair need no pre-repair ring reconstruction.
+Extra bevel records absent from an old baseline still require the oracle.
+A directly compiled pristine baseline and a separate original-source helper
+adapter must agree exactly; only certified
+rings may be substituted before exact baseline downstream reconstruction.
+All other plan state and original trace stages remain exact. The workflow retains
+the strict comparison and raw differences, then gates on this contract, including
+the pristine baseline/reference equality and real-planner mutation controls.
+It extracts matching public/private and shared geometry headers from the exact
+baseline. Build the same baseline reference locally with
+`-DREPLAY_BASELINE=ON -DREPLAY_CERTIFIED_FILLET_REFERENCE=ON`; its CTest suite adds
+`test_ring_contract_reference` for locality, pivot, supported-radius and continuous
+chord boundary/hole rejection. Run `test_certified_fillets.py --baseline <binary>
+--reference <reference-binary> --candidate <binary>` for real-planner mutation
+controls in both the old-baseline and identical future-baseline cases;
+`--expect-method` pins the intended contrast. No negative controls are skipped.
+The README gives complete commands. Python comparator/provenance tests
+remain registered in both normal package and standalone suites. These checks
+provide planner software evidence, not chassis-sweep or physical validation.
+`test_ring_corner_smoothing` also checks exact final densified chords after bevel
+rounding: a retuned neighbour crossing a 20-micrometre hole must roll the ring
+back to exact contained legacy geometry with truthful empty replacement evidence.
+Unchanged legacy rings are not containment-certified. The native split-mainland
+fixtures expose inherited outer-ring excursions (43.504 mm of old chord length
+outside the working `safe_boundary`, versus 29.442 mm in the rejected initial
+proposal; that envelope differs from the raw recorded boundary); conservative rollback
+restores that exact legacy limit without approving the proposed change. The replay
+README records the measured witness and the distinction from global containment.
+The bounded bevel interiors use deterministic circular sampler V1 after the
+unchanged ordinary helper selects exact tangent endpoints. Legacy-first selector
+V2 uses an analytic fallback only if that helper selected no fillet, retaining the
+same radius sequence and trim budgets and requiring strict local containment at
+each radius. A valid legacy selection is never retuned after conversion or
+containment rejection. Captured southwest support tests cover default legacy
+selection, fixed 0.4 m fallback, measured circle geometry, between-sample hole
+rejection and exact pivot denial. An independently implemented reference recipe
+requires byte-identical local samples; all existing
+radius/tangent/sweep/containment predicates and exact S/T/downstream reconstruction
+remain. Hosted multi-polygon and near-degenerate source/boundary captures test
+single-circle geometry and spacing without regenerating F2C inputs; a separate
+oracle mutation stays on a supported circle but must fail exact sample identity.
+The replay README defines the inherited angular floor, supported-turn cap, point
+count, endpoint inclusion and derived finite allocation bound.
+`test_semantic_diagnostics` also runs in both suites: it excludes only the three
+elapsed values from the known mixed timing note, preserves its semantic suffix
+and all other diagnostics, and rejects malformed recognized timing schemas.
 
 ---
 
@@ -153,7 +251,7 @@ cd ros2
 make sim                 # sim-stop, then sim_full_system.launch.py headless:=true use_rviz:=false
 make sim-stop            # scripts/sim-stop.sh — kills ROS2/Webots and clears DDS shm; MUST run before a new sim
 make e2e-test            # self-contained: sim-stop -> build -> launch sim -> wait for Nav2 active -> python3 src/e2e_test.py -> sim-stop
-make e2e-test-no-lidar   # same, with use_lidar:=false simulate_gps_degradation:=false -> src/e2e_test_no_lidar.py
+make e2e-test-no-lidar   # same, with use_lidar:=false -> src/e2e_test_no_lidar.py
 ```
 
 Both `e2e-test` targets depend on `sim-stop build`, launch the sim themselves, and (since commit `09cbad2b`, "test(sim): cover Nav2 readiness gating") poll `ros2/scripts/wait_for_nav2_active.sh` for a Nav2 lifecycle-active event — rather than a fixed sleep — before running the script; the script kills the sim and exits 1 on timeout instead of proceeding blind. You do **not** need a sim already running.

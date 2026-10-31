@@ -86,7 +86,7 @@ gtsam::Vector GyroPreintFactor::evaluateError(const gtsam::Pose2& X_prev,
                                               OptMat H2,
                                               OptMat H3) const
 {
-  // Predicted Δθ using current bias estimate:
+  // Predicted Δθ from the raw integral using the absolute bias estimate:
   //   pred = preint − bias_curr · dt
   // Residual on yaw:
   //   e = wrap( (θ_curr − θ_prev) − pred )

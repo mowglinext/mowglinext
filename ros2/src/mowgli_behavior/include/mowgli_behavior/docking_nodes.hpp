@@ -15,7 +15,7 @@
 
 #pragma once
 
-#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -24,7 +24,7 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
-#include "mowgli_behavior/cancel_goal.hpp"
+#include "mowgli_behavior/docking_goal_dispatch.hpp"
 #include "nav2_msgs/action/dock_robot.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -53,6 +53,8 @@ public:
   {
   }
 
+  ~DockRobot() override;
+
   static BT::PortsList providedPorts()
   {
     return {BT::InputPort<std::string>("dock_id", "home_dock", "Named dock instance"),
@@ -78,22 +80,13 @@ private:
   /// "seated off to the side" in one line.
   ///
   /// Diagnostic only — nothing reads the result.
-  void log_contact_delta(const std::shared_ptr<BTContext>& ctx, uint16_t num_retries) const;
+  static void log_contact_delta(const std::shared_ptr<BTContext>& ctx, uint16_t num_retries);
+  BT::NodeStatus sendGoal();
 
   rclcpp_action::Client<DockAction>::SharedPtr action_client_;
-  std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
-  GoalHandle::SharedPtr goal_handle_;
-  std::shared_ptr<GoalAbandonment> goal_abandonment_;
-
-  /// Last docking feedback state seen, so the contact delta is logged once per
-  /// entry into WAIT_FOR_CHARGE rather than at the feedback rate. Written from
-  /// the action feedback callback, read from the BT tick thread.
-  std::atomic<uint16_t> last_feedback_state_{DockAction::Feedback::NONE};
-
-  /// Terminal verdict from the result callback. A goal the server finishes in
-  /// the same instant it accepts it can lose its status message, leaving the
-  /// polled handle stuck on ACCEPTED forever (action_outcome.hpp).
-  std::shared_ptr<ActionOutcomeSlot> outcome_ = std::make_shared<ActionOutcomeSlot>();
+  std::shared_ptr<DockingGoalDispatch<DockAction>> dispatch_;
+  bool waiting_for_retired_ = false;
+  std::chrono::steady_clock::time_point retirement_deadline_;
 };
 
 // ---------------------------------------------------------------------------
@@ -115,6 +108,8 @@ public:
   {
   }
 
+  ~UndockRobot() override;
+
   static BT::PortsList providedPorts()
   {
     return {BT::InputPort<std::string>("dock_type", "simple_charging_dock", "Dock plugin type")};
@@ -125,12 +120,11 @@ public:
   void onHalted() override;
 
 private:
+  BT::NodeStatus sendGoal();
   rclcpp_action::Client<UndockAction>::SharedPtr action_client_;
-  std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
-  GoalHandle::SharedPtr goal_handle_;
-
-  /// See DockRobot::outcome_ — same race, same guard (action_outcome.hpp).
-  std::shared_ptr<ActionOutcomeSlot> outcome_ = std::make_shared<ActionOutcomeSlot>();
+  std::shared_ptr<DockingGoalDispatch<UndockAction>> dispatch_;
+  bool waiting_for_retired_ = false;
+  std::chrono::steady_clock::time_point retirement_deadline_;
 };
 
 // ---------------------------------------------------------------------------
