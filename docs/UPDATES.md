@@ -247,8 +247,18 @@ stationary, blade off — everything except the bridge's compatibility bit)
 missing handshake (protocol 0), a third protocol, or a GUI predating the
 `maintenance_ready` contract still fails verification and rolls back. This is
 the only exception to "maintenance-only readiness cannot release the mower",
-and it exists because the operator acknowledged it twice; the bridge blocks
-mowing regardless until the firmware matches. The same tolerance covers a
+and it exists because the operator acknowledged it twice. It is safe because
+the board stays **inert** until it is flashed: while the handshake has not
+reported the image's protocol (including no handshake yet), `hardware_bridge`
+writes every velocity command as zero, forces the blade OFF (a blade ON is
+refused with `success=false`), holds the board in high-level mode IDLE and
+does not run the dig escape — on every lane, teleop, tuning, docking and the
+GUI blade button included, not just autonomous mowing. Telemetry, the
+heartbeat (emergency stop and release), the version handshake, parameter
+reads and the GUI's ST-Link flash keep working, and the first handshake that
+reports the matching protocol after the flash re-enables actuation by itself
+(`ros2/src/mowgli_hardware/include/mowgli_hardware/firmware_interlock.hpp`).
+The same tolerance covers a
 rollback started before the board was flashed, in which the previous images
 meet the same refusal from the other side. After a successful forced install
 the GUI shows a persistent "flash the mainboard firmware now" alert (Firmware

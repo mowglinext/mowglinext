@@ -147,6 +147,60 @@ struct HardwareBridgeBladeStatusTestPeer
   {
     node.close_serial_for_reconnect();
   }
+  // Feed a CONFIG_RSP as if the board had answered the version handshake.
+  static void handshake(HardwareBridgeNode& node, uint8_t protocol)
+  {
+    LlConfigRsp packet{};
+    packet.type = PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP;
+    packet.protocol_version = protocol;
+    packet.fw_version_major = 1;
+    node.handle_config_rsp(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+  }
+  static void rearmHandshake(HardwareBridgeNode& node)
+  {
+    node.rearm_firmware_handshake();
+  }
+  static bool actuationAllowed(const HardwareBridgeNode& node)
+  {
+    return node.actuation_allowed();
+  }
+  static bool controlResult(HardwareBridgeNode& node, uint8_t on, uint8_t direction)
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
+    req->mow_enabled = on;
+    req->mow_direction = direction;
+    auto res = std::make_shared<mowgli_interfaces::srv::MowerControl::Response>();
+    node.on_mower_control(req, res);
+    return res->success;
+  }
+  static void cmdVel(HardwareBridgeNode& node, double vx, double wz)
+  {
+    auto msg = std::make_shared<geometry_msgs::msg::TwistStamped>();
+    msg->twist.linear.x = vx;
+    msg->twist.angular.z = wz;
+    node.on_cmd_vel(msg);
+  }
+  static void setMode(HardwareBridgeNode& node, uint8_t mode)
+  {
+    node.current_mode_ = mode;
+    node.send_high_level_state();
+  }
+  static uint8_t currentMode(const HardwareBridgeNode& node)
+  {
+    return node.current_mode_;
+  }
+  static bool mowEnabled(const HardwareBridgeNode& node)
+  {
+    return node.mow_enabled_;
+  }
+  static bool emergencyActive(const HardwareBridgeNode& node)
+  {
+    return node.emergency_active_;
+  }
+  static bool digEscapeAllowed(const HardwareBridgeNode& node)
+  {
+    return node.dig_escape_allowed();
+  }
 };
 
 class HardwareBridgeParametersTest : public ::testing::Test
@@ -204,6 +258,7 @@ TEST_F(HardwareBridgeParametersTest, BladeDirectionTracksWrittenCommandsAndClear
   options.parameter_overrides({rclcpp::Parameter("serial_port", ptsname(master))});
   auto node = std::make_shared<HardwareBridgeNode>(options);
   using Peer = HardwareBridgeBladeStatusTestPeer;
+  Peer::handshake(*node, kMowgliProtocolVersion);
   EXPECT_EQ(Peer::requested(*node), "unknown");
   Peer::send(*node, 1, 1);
   EXPECT_EQ(Peer::requested(*node), "reverse");
@@ -234,6 +289,9 @@ protected:
                                  rclcpp::Parameter("lift_recovery_mode", true),
                                  rclcpp::Parameter("lift_blade_resume_delay_sec", 1.0)});
     node = std::make_shared<HardwareBridgeNode>(options);
+    // The board under test speaks this image's protocol; the firmware
+    // interlock is exercised separately (FirmwareInterlock* below).
+    Peer::handshake(*node, kMowgliProtocolVersion);
     drain();
   }
   void TearDown() override
@@ -645,6 +703,192 @@ TEST_F(HardwareBridgeParametersTest, NonPositiveCmdVelSlewLimitFailsStartup)
                                rclcpp::Parameter("cmd_vel_angular_accel_limit", 0.0)});
 
   EXPECT_THROW(std::make_shared<HardwareBridgeNode>(options), std::invalid_argument);
+}
+
+// ---------------------------------------------------------------------------
+// Firmware actuation interlock (firmware_interlock.hpp), on the real node.
+// ---------------------------------------------------------------------------
+
+class BridgeFirmwareInterlock : public BladeLiftRecovery
+{
+protected:
+  void SetUp() override
+  {
+    BladeLiftRecovery::SetUp();
+    // Start every case from an un-handshaken board, like a fresh boot.
+    Peer::rearmHandshake(*node);
+    drainPackets();
+  }
+
+  std::vector<LlCmdVel> cmdVels(const std::vector<std::vector<uint8_t>>& packets)
+  {
+    std::vector<LlCmdVel> out;
+    for (const auto& p : packets)
+    {
+      if (p.size() == sizeof(LlCmdVel) && p[0] == PACKET_ID_LL_CMD_VEL)
+      {
+        LlCmdVel v{};
+        std::memcpy(&v, p.data(), sizeof(v));
+        out.push_back(v);
+      }
+    }
+    return out;
+  }
+  std::vector<uint8_t> blades(const std::vector<std::vector<uint8_t>>& packets)
+  {
+    std::vector<uint8_t> out;
+    for (const auto& p : packets)
+      if (p.size() == sizeof(LlCmdBlade) && p[0] == PACKET_ID_LL_CMD_BLADE)
+        out.push_back(p[1]);
+    return out;
+  }
+  std::vector<uint8_t> modes(const std::vector<std::vector<uint8_t>>& packets)
+  {
+    std::vector<uint8_t> out;
+    for (const auto& p : packets)
+      if (p.size() == sizeof(LlHighLevelState) && p[0] == PACKET_ID_LL_HIGH_LEVEL_STATE)
+        out.push_back(p[1]);
+    return out;
+  }
+  std::vector<LlHeartbeat> heartbeats(const std::vector<std::vector<uint8_t>>& packets)
+  {
+    std::vector<LlHeartbeat> out;
+    for (const auto& p : packets)
+    {
+      if (p.size() == sizeof(LlHeartbeat) && p[0] == PACKET_ID_LL_HEARTBEAT)
+      {
+        LlHeartbeat h{};
+        std::memcpy(&h, p.data(), sizeof(h));
+        out.push_back(h);
+      }
+    }
+    return out;
+  }
+};
+
+TEST_F(BridgeFirmwareInterlock, NoHandshakeYetSendsZeroForEveryNonZeroCmdVel)
+{
+  ASSERT_FALSE(Peer::actuationAllowed(*node));
+  Peer::cmdVel(*node, 0.3, 0.5);
+  Peer::sendCmdVel(*node, -0.2, 0.0);  // the dig-escape / internal path
+
+  const auto sent = cmdVels(drainPackets());
+  ASSERT_EQ(sent.size(), 2u);
+  for (const auto& v : sent)
+  {
+    EXPECT_EQ(v.linear_x, 0.0f);
+    EXPECT_EQ(v.angular_z, 0.0f);
+  }
+}
+
+TEST_F(BridgeFirmwareInterlock, CmdVelCannotForceAModeChangeWhileIncompatible)
+{
+  ASSERT_EQ(Peer::currentMode(*node), HL_MODE_NULL);
+  Peer::cmdVel(*node, 0.3, 0.0);
+  EXPECT_EQ(Peer::currentMode(*node), HL_MODE_NULL);
+  EXPECT_TRUE(modes(drainPackets()).empty());
+}
+
+TEST_F(BridgeFirmwareInterlock, WrongProtocolRefusesBladeOnAndReportsFailure)
+{
+  Peer::handshake(*node, static_cast<uint8_t>(kMowgliProtocolVersion - 1u));
+  drainPackets();
+  ASSERT_FALSE(Peer::actuationAllowed(*node));
+
+  EXPECT_FALSE(Peer::controlResult(*node, 1, 0));
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+  const auto packets = drainPackets();
+  EXPECT_EQ(blades(packets), (std::vector<uint8_t>{0u}));
+  for (const auto& v : cmdVels(packets))
+    EXPECT_EQ(v.linear_x, 0.0f);
+
+  // A direct ON (re-assert / lift-resume path) is forced OFF too.
+  Peer::send(*node, 1, 0);
+  EXPECT_EQ(blades(drainPackets()), (std::vector<uint8_t>{0u}));
+  // An OFF request still succeeds.
+  EXPECT_TRUE(Peer::controlResult(*node, 0, 0));
+}
+
+TEST_F(BridgeFirmwareInterlock, NonIdleModeIsForwardedAsIdleWhileIncompatible)
+{
+  Peer::setMode(*node, HL_MODE_MANUAL_MOWING);
+  Peer::setMode(*node, HL_MODE_AUTONOMOUS);
+  EXPECT_EQ(modes(drainPackets()), (std::vector<uint8_t>{HL_MODE_IDLE, HL_MODE_IDLE}));
+}
+
+TEST_F(BridgeFirmwareInterlock, EmergencyStopAndReleaseStillReachTheFirmware)
+{
+  Peer::emergency(*node, 1);
+  Peer::emergency(*node, 0);
+  const auto beats = heartbeats(drainPackets());
+  ASSERT_EQ(beats.size(), 2u);
+  EXPECT_EQ(beats[0].emergency_requested, 1u);
+  EXPECT_EQ(beats[1].emergency_requested, 0u);
+  EXPECT_EQ(beats[1].emergency_release_requested, 1u);
+}
+
+TEST_F(BridgeFirmwareInterlock, DigEscapeIsNotAllowedWhileIncompatible)
+{
+  EXPECT_FALSE(Peer::digEscapeAllowed(*node));
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  EXPECT_TRUE(Peer::digEscapeAllowed(*node));
+}
+
+TEST_F(BridgeFirmwareInterlock, MatchingHandshakeRestoresUnchangedBehaviour)
+{
+  Peer::setMode(*node, HL_MODE_AUTONOMOUS);
+  drainPackets();
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  ASSERT_TRUE(Peer::actuationAllowed(*node));
+  // Release re-sends the BT's real mode immediately.
+  EXPECT_EQ(modes(drainPackets()), (std::vector<uint8_t>{HL_MODE_AUTONOMOUS}));
+
+  Peer::sendCmdVel(*node, 0.25, -0.5);
+  const auto sent = cmdVels(drainPackets());
+  ASSERT_EQ(sent.size(), 1u);
+  EXPECT_EQ(sent[0].linear_x, 0.25f);
+  EXPECT_EQ(sent[0].angular_z, -0.5f);
+
+  EXPECT_TRUE(Peer::controlResult(*node, 1, 1));
+  EXPECT_EQ(blades(drainPackets()), (std::vector<uint8_t>{1u}));
+}
+
+TEST_F(BridgeFirmwareInterlock, CompatibleToIncompatibleForcesBladeOffZeroAndIdle)
+{
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  Peer::setMode(*node, HL_MODE_AUTONOMOUS);
+  ASSERT_TRUE(Peer::controlResult(*node, 1, 0));
+  Peer::sendCmdVel(*node, 0.3, 0.0);
+  drainPackets();
+
+  // The board re-handshakes with a different protocol (e.g. reflashed to an
+  // older image without a USB re-enumeration being noticed).
+  Peer::handshake(*node, static_cast<uint8_t>(kMowgliProtocolVersion + 1u));
+  ASSERT_FALSE(Peer::actuationAllowed(*node));
+  const auto packets = drainPackets();
+  EXPECT_EQ(blades(packets), (std::vector<uint8_t>{0u}));
+  const auto sent = cmdVels(packets);
+  ASSERT_EQ(sent.size(), 1u);
+  EXPECT_EQ(sent[0].linear_x, 0.0f);
+  EXPECT_EQ(modes(packets), (std::vector<uint8_t>{HL_MODE_IDLE}));
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+
+  // The re-assert path cannot spin it back up on its own.
+  Peer::bladeStatus(*node, 0);
+  Peer::ageBladeCommand(*node, 1'000'000'000);
+  Peer::makeCmdVelFresh(*node);
+  Peer::reassertTick(*node);
+  EXPECT_TRUE(blades(drainPackets()).empty());
+}
+
+TEST_F(BridgeFirmwareInterlock, RearmOnReconnectEngagesTheInterlock)
+{
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  ASSERT_TRUE(Peer::actuationAllowed(*node));
+  drainPackets();
+  Peer::rearmHandshake(*node);
+  EXPECT_FALSE(Peer::actuationAllowed(*node));
+  EXPECT_EQ(blades(drainPackets()), (std::vector<uint8_t>{0u}));
 }
 
 }  // namespace mowgli_hardware
