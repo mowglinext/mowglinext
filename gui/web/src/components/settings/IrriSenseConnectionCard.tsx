@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {useSettingsInput} from "../../hooks/useSettingsInput.ts";
 import {Button, Card, Col, Form, Input, Row, Select, Space, Typography} from "antd";
 import {ApiOutlined} from "@ant-design/icons";
 import {useTranslation} from "react-i18next";
@@ -25,7 +25,7 @@ export function IrriSenseConnectionCard({
     settings, draft, onChange, gardens, testing, onTestConnection,
 }: IrriSenseConnectionCardProps) {
     const {t} = useTranslation();
-    const [tokenInput, setTokenInput] = useState("");
+    const [tokenInput, setTokenInput] = useSettingsInput("token");
 
     const baseUrl = draft.baseUrl ?? settings.baseUrl;
     const gardenId = draft.gardenId ?? settings.gardenId;

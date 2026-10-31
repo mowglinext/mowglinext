@@ -852,6 +852,10 @@ def generate_launch_description() -> LaunchDescription:
     # hardcode the robot's width"). Respawned: in the no-LiDAR variant the
     # collision monitor reads this node's cloud, so a crash must heal itself.
     fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint(robot_params)
+    # The bare chassis + undock reverse feed the docked-neighbour exception
+    # (two mowers on side-by-side docks), which asks whether the BODIES can
+    # touch — a question the margin-grown block above cannot answer.
+    fleet_body_front_m, fleet_body_rear_m, fleet_body_half_width_m = chassis_footprint(robot_params, margin=0.0)
     fleet_peer_obstacles_node = Node(
         package="mowgli_bringup",
         executable="fleet_peer_obstacles.py",
@@ -864,6 +868,10 @@ def generate_launch_description() -> LaunchDescription:
             "chassis_front_m": float(fleet_front_m),
             "chassis_rear_m": float(fleet_rear_m),
             "chassis_half_width_m": float(fleet_half_width_m),
+            "body_front_m": float(fleet_body_front_m),
+            "body_rear_m": float(fleet_body_rear_m),
+            "body_half_width_m": float(fleet_body_half_width_m),
+            "undock_distance_m": float(robot_params.get("undock_distance", 1.5)),
         }],
     )
 

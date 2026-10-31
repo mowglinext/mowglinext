@@ -19,9 +19,10 @@ Those models have not been measured; shared values do not establish shared parts
 | LUV1000RI | 89.5 mm | 190 mm | 60 mm | 90 mm | Provisional SA650-based assumption |
 | Sabo MOWiT 500F | 89.5 mm | 190 mm | 70 mm | 90 mm | Provisional SA650-based assumption |
 
-The measured YardForce 500/500B defaults remain unchanged. RM1000 and Custom
-remain unchanged. The previous rear value came from the same 0.04475 m radius
-copied across unrelated machines, as documented by commit `c0aa94fa`.
+The measured YardForce 500/500B defaults remain unchanged. Custom remains
+unchanged; the Biltema RM1000 preset was measured later (see below). The
+previous rear value came from the same 0.04475 m radius copied across
+unrelated machines, as documented by commit `c0aa94fa`.
 
 ## Application and geometry impact
 
@@ -107,3 +108,34 @@ calibration procedure before autonomous operation. The asymmetric cutting-tool c
 coverage require a supervised field test; these software tests do not establish that behaviour.
 
 The shallow WORX default puts the shell bottom 30 mm above ground and its top 170 mm above ground with the 100 mm wheel radius. These are provisional model coordinates, not physical measurements. For acceptance on the exact unit/configuration/firmware baseline above, measure shell bottom/top relative to the rear axle with power isolated and blades removed; accept only if both agree within 5 mm, otherwise use measured overrides.
+
+## Biltema RM1000 preset
+
+Owner measurements on a Biltema RM1000, 2026-10-25, metres. Radii, not diameters.
+Until then the preset carried only a provisional caster X of 0.35 m and left every
+other dimension at the user's value.
+
+| Setting | Preset value | Note |
+| --- | ---: | --- |
+| Rear-wheel radius / width / centre track | 100 / 36 / 325 mm | Measured |
+| Rear-wheel X offset | 0 | Drive axle at base_link |
+| Caster radius / track | 45 / 215 mm | Measured |
+| Caster X position | 300 mm | Measured axle; replaces the provisional 350 mm |
+| Chassis length / width / height | 570 / 400 / 220 mm | Measured shell envelope |
+| Chassis centre X / bottom Z | 130 / −60 mm | Measured |
+| Blade radius / tool width | 90 / 180 mm | Measured |
+| Blade offsets from chassis centre | X = +60 mm, Y = 0 | Blade centre 190 mm ahead of base_link |
+| Dock illustration length / width | 630 / 460 mm | GUI artwork footprint only |
+| Dock illustration X / Y offset | +20 / 0 mm | GUI artwork registration only |
+
+Battery voltages, sensor mounts (GPS, IMU, LiDAR), mass and encoder
+ticks-per-metre were not measured and are deliberately absent from the preset:
+applying it keeps the robot's existing values for them. `chassis_z_offset` is
+the one key that also reaches ROS through the generated
+`model_geometry_defaults.json` upgrade path; everything else is proposed through
+the settings form on "Apply preset" and written only on Save.
+
+Physical acceptance remains **HARDWARE_REQUIRED** for any other RM1000 unit:
+tyre variants and shell revisions differ, so verify the wheel radii, caster
+position and chassis envelope on the installed mower before trusting the
+derived footprint and URDF.

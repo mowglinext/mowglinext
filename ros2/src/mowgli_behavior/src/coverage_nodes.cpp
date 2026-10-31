@@ -25,6 +25,7 @@
 
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/area_coverage_lines.hpp"
+#include "mowgli_behavior/area_progress.hpp"
 #include "mowgli_behavior/blocked_stretch.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
@@ -1089,6 +1090,16 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
         slot->error_msg = r.result->error_msg;
       }
     };
+    // The planned route sizes the watchdog (transitDeadlineForRouteSec). A fresh
+    // slot per goal: late feedback of an earlier transit must not widen this one.
+    transit_route_ = std::make_shared<TransitRouteSlot>();
+    send_opts.feedback_callback =
+        [route = transit_route_](NavGoalHandle::SharedPtr,
+                                 const std::shared_ptr<const Nav2Navigate::Feedback> feedback)
+    {
+      if (feedback)
+        route->Record(feedback->distance_remaining);
+    };
     nav_goal.behavior_tree = ctx->transit_tree_xml;
     nav_future_ = nav_client_->async_send_goal(nav_goal, send_opts);
     transit_active_ = true;
@@ -1506,6 +1517,7 @@ BT::NodeStatus FollowStrip::onRunning()
         nav_status != action_msgs::msg::GoalStatus::STATUS_ABORTED &&
         nav_status != action_msgs::msg::GoalStatus::STATUS_CANCELED)
     {
+      widenTransitDeadline(ctx);
       const double elapsed =
           std::chrono::duration<double>(std::chrono::steady_clock::now() - transit_start_time_)
               .count();
@@ -2019,8 +2031,25 @@ bool FollowStrip::stepScanPause(const std::shared_ptr<BTContext>& ctx, bool allo
 void FollowStrip::armTransitWatchdog(double gap_m)
 {
   transit_start_time_ = std::chrono::steady_clock::now();
+  transit_gap_m_ = gap_m;
   transit_deadline_s_ = transitDeadlineSec(gap_m);
   transit_timeout_requested_ = false;
+}
+
+void FollowStrip::widenTransitDeadline(const std::shared_ptr<BTContext>& ctx)
+{
+  const double route_m = transit_route_ ? transit_route_->Longest() : 0.0;
+  const double bound = transitDeadlineForRouteSec(transit_gap_m_, route_m);
+  // Only a widening worth a log line (route replans jitter by centimetres).
+  if (bound < transit_deadline_s_ + kTransitBoundLogStepSec)
+    return;
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "FollowStrip: transit route is %.1fm for a %.1fm gap — bound %.0fs -> %.0fs",
+              route_m,
+              transit_gap_m_,
+              transit_deadline_s_,
+              bound);
+  transit_deadline_s_ = bound;
 }
 
 void FollowStrip::setBladeEnabled(bool enabled)
@@ -2659,7 +2688,9 @@ BT::NodeStatus TransitToStrip::onStart()
   }
   double timeout_s = -1.0;
   getInput<double>("timeout_sec", timeout_s);
-  deadline_s_ = timeout_s > 0.0 ? timeout_s : transitDeadlineSec(gap_m);
+  deadline_follows_route_ = timeout_s <= 0.0;
+  gap_m_ = gap_m;
+  deadline_s_ = deadline_follows_route_ ? transitDeadlineSec(gap_m) : timeout_s;
   start_time_ = std::chrono::steady_clock::now();
   timeout_requested_ = false;
   failure_seen_ = false;
@@ -2686,6 +2717,15 @@ BT::NodeStatus TransitToStrip::onStart()
       result_slot->error_code = result.result->error_code;
       result_slot->error_msg = result.result->error_msg;
     }
+  };
+  // The planned route sizes the bound, as in FollowStrip (transitDeadlineForRouteSec).
+  nav_route_ = std::make_shared<TransitRouteSlot>();
+  send_opts.feedback_callback =
+      [route = nav_route_](NavGoalHandle::SharedPtr,
+                           const std::shared_ptr<const Nav2Navigate::Feedback> feedback)
+  {
+    if (feedback)
+      route->Record(feedback->distance_remaining);
   };
   nav_future_ = nav_client_->async_send_goal(goal, send_opts);
 
@@ -2806,6 +2846,21 @@ void TransitToStrip::enforceDeadline(const std::shared_ptr<BTContext>& ctx)
   if (timeout_requested_ || deadline_s_ <= 0.0)
   {
     return;
+  }
+  if (deadline_follows_route_)
+  {
+    const double route_m = nav_route_ ? nav_route_->Longest() : 0.0;
+    const double bound = transitDeadlineForRouteSec(gap_m_, route_m);
+    if (bound >= deadline_s_ + kTransitBoundLogStepSec)
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "TransitToStrip: route is %.1fm for a %.1fm gap — bound %.0fs -> %.0fs",
+                  route_m,
+                  gap_m_,
+                  deadline_s_,
+                  bound);
+      deadline_s_ = bound;
+    }
   }
   const double elapsed =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_).count();
@@ -3107,7 +3162,9 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
       // targeted area just earned and re-mow it forever. Guarded to the
       // explicit-target path, so normal COMMAND_START iteration still honors
       // completed/attempted skipping.
-      ctx->completed_areas.erase(*ctx->single_area_target);
+      // Its swaths and cursor too: dropping only the completed flag made the re-mow find every
+      // sub-path already done and "finish" in a second (field 2026-10-26).
+      clearAreaCoverageProgress(*ctx, *ctx->single_area_target);
       ctx->attempted_areas.erase(*ctx->single_area_target);
       ctx->incomplete_retired_areas.erase(*ctx->single_area_target);
     }
@@ -3191,8 +3248,7 @@ BT::NodeStatus GetNextUnmowedArea::onStart()
                   "(%zu incomplete retirement(s))",
                   ctx->incomplete_retired_areas.size());
     }
-    ctx->coverage_all_complete = exhaustedRunIsComplete(*ctx);
-    return BT::NodeStatus::FAILURE;
+    return finishExhaustedScan(*ctx);
   }
 
   // Fire off the first async existence probe.
@@ -3268,8 +3324,7 @@ BT::NodeStatus GetNextUnmowedArea::advanceAndProbe()
                 "retirement(s))",
                 areas_complete_,
                 ctx->incomplete_retired_areas.size());
-    ctx->coverage_all_complete = exhaustedRunIsComplete(*ctx);
-    return BT::NodeStatus::FAILURE;
+    return finishExhaustedScan(*ctx);
   }
   auto request = std::make_shared<mowgli_interfaces::srv::GetMowingArea::Request>();
   request->index = current_area_idx_;
@@ -3348,7 +3403,7 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
                   "retirement(s))",
                   areas_complete_,
                   ctx->incomplete_retired_areas.size());
-      ctx->coverage_all_complete = exhaustedRunIsComplete(*ctx);
+      return finishExhaustedScan(*ctx);
     }
     return BT::NodeStatus::FAILURE;
   }
@@ -3390,6 +3445,7 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     ctx->base_orientation_areas.erase(current_area_idx_);
     ctx->area_attempt_count.erase(current_area_idx_);
     ctx->area_last_coverage.erase(current_area_idx_);
+    ctx->area_last_partial_poses.erase(current_area_idx_);
     ctx->area_start_blocked_count.erase(current_area_idx_);
     ctx->area_guard_halt_count.erase(current_area_idx_);
     // These three are per-index too, and leaving them behind outlives the
@@ -3516,6 +3572,8 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
   // the size of ctx->area_completed_swaths[area] — if it grew since the last
   // dispatch, the previous FollowStrip pass mowed at least one more swath, so
   // reset the counter. This replaces the old cell-coverage-percent high-water.
+  // A pass that got far into an UNFINISHED unit counts too (area_progress.hpp):
+  // a large area drawn with few points has only a few very long units.
   std::size_t done_swaths = 0;
   {
     auto it = ctx->area_completed_swaths.find(current_area_idx_);
@@ -3607,12 +3665,38 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
   }
 
   auto& n = ctx->area_attempt_count[current_area_idx_];
-  auto last_it = ctx->area_last_coverage.find(current_area_idx_);
-  const bool made_progress = (last_it == ctx->area_last_coverage.end()) ||
-                             (static_cast<float>(done_swaths) > last_it->second + 0.5f);
+  const auto unit_progress_it = ctx->area_unit_progress.find(current_area_idx_);
+  const AreaProgressMark now_mark{done_swaths,
+                                  partialUnitPoses(unit_progress_it != ctx->area_unit_progress.end()
+                                                       ? &unit_progress_it->second
+                                                       : nullptr)};
+  std::optional<AreaProgressMark> last_mark;
+  if (const auto last_it = ctx->area_last_coverage.find(current_area_idx_);
+      last_it != ctx->area_last_coverage.end())
+  {
+    const auto partial_it = ctx->area_last_partial_poses.find(current_area_idx_);
+    last_mark =
+        AreaProgressMark{static_cast<std::size_t>(std::lround(last_it->second)),
+                         partial_it != ctx->area_last_partial_poses.end() ? partial_it->second : 0};
+  }
+  const auto total_it = ctx->area_path_pose_count.find(current_area_idx_);
+  const std::size_t min_partial_gain =
+      minPartialProgressPoses(total_it != ctx->area_path_pose_count.end() ? total_it->second : 0,
+                              BTContext::kAreaProgressEpsilonPct);
+  const bool made_progress = areaPassMadeProgress(last_mark, now_mark, min_partial_gain);
   if (made_progress)
   {
+    if (last_mark && now_mark.done_units == last_mark->done_units)
+    {
+      RCLCPP_INFO(ctx->node->get_logger(),
+                  "GetNextUnmowedArea: area %u — no unit finished, but the last pass got %zu poses "
+                  "further into unfinished ones (>= %zu): counts as progress",
+                  current_area_idx_,
+                  now_mark.partial_poses - last_mark->partial_poses,
+                  min_partial_gain);
+    }
     ctx->area_last_coverage[current_area_idx_] = static_cast<float>(done_swaths);
+    ctx->area_last_partial_poses[current_area_idx_] = now_mark.partial_poses;
     n = 0;
   }
   n++;
@@ -3665,6 +3749,7 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
 
   setOutput("area_index", current_area_idx_);
   ctx->current_area = static_cast<int>(current_area_idx_);
+  ctx->start_awaiting_dispatch = false;
   RCLCPP_INFO(ctx->node->get_logger(),
               "GetNextUnmowedArea: area %u selected (%zu swath(s) done so far) "
               "— dispatch attempt %u/%u",
@@ -3673,6 +3758,26 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
               n,
               BTContext::kMaxAreaAttempts);
   return BT::NodeStatus::SUCCESS;
+}
+
+BT::NodeStatus GetNextUnmowedArea::finishExhaustedScan(BTContext& ctx)
+{
+  const bool complete = exhaustedRunIsComplete(ctx);
+  if (complete && ctx.start_awaiting_dispatch && hasRecordedCoverageProgress(ctx))
+  {
+    // Nothing was dispatched since the operator pressed Start, yet every area reads complete:
+    // that is the previous, finished session's progress (its EndSession never ran). Reporting
+    // MOWING_COMPLETE would undock, turn round and dock again on every Start, forever.
+    ctx.start_awaiting_dispatch = false;
+    RCLCPP_WARN(ctx.node->get_logger(),
+                "GetNextUnmowedArea: every area was already complete before this Start — that "
+                "progress is from a finished session, discarding it and mowing from the first "
+                "line");
+    clearRecordedCoverageProgress(ctx);
+    return onStart();
+  }
+  ctx.coverage_all_complete = complete;
+  return BT::NodeStatus::FAILURE;
 }
 
 void GetNextUnmowedArea::onHalted()

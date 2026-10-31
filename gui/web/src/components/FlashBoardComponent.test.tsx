@@ -322,13 +322,13 @@ describe("FlashBoardComponent flash progress", () => {
         vi.mocked(fetchEventSource).mockReset();
     });
 
-    const startFlash = async () => {
+    const startFlash = async (variant?: "page" | "modal") => {
         let handlers: SseHandlers = {};
         vi.mocked(fetchEventSource).mockImplementation((_url, init) => {
             handlers = init as SseHandlers;
             return new Promise(() => undefined);
         });
-        renderComponent("YardForce500");
+        renderComponent("YardForce500", variant);
         await waitFor(() => expect(targetSummary()).toBeInTheDocument());
         fireEvent.click(flashButton());
         fireEvent.click(await confirmFlashButton());
@@ -379,6 +379,24 @@ describe("FlashBoardComponent flash progress", () => {
         expect(document.querySelectorAll(".ant-steps-item")[1]).toHaveClass("ant-steps-item-error");
         expect(screen.getByText("------> Error fetching manifest: 404")).toBeInTheDocument();
         expect(buttonByText("Back to config")).toBeInTheDocument();
+    });
+
+    it("pins the Next button to the screen on the onboarding page", async () => {
+        const {send} = await startFlash();
+        send("end", "end");
+
+        expect(screen.getByTestId("flash-progress-actions").style.position).toBe("fixed");
+    });
+
+    it("keeps the Next button inside the dialog in the modal variant", async () => {
+        // Settings → Updates: a fixed bar floated below the dialog once the
+        // flash had finished (field report 2026-10-29).
+        const {send} = await startFlash("modal");
+        send("end", "end");
+
+        const actions = screen.getByTestId("flash-progress-actions");
+        expect(actions.style.position).not.toBe("fixed");
+        expect(actions.contains(buttonByText("Next"))).toBe(true);
     });
 
     it("ignores a malformed stage event", async () => {

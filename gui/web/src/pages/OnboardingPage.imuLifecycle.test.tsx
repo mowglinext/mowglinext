@@ -10,7 +10,7 @@ import en from '../i18n/locales/en.json';
 const mock = vi.hoisted(() => {
     const values: SettingsValues = {datum_lat: 12, datum_lon: 34, mower_model: 'YardForce500'};
     return {
-        values, fetch: vi.fn<typeof fetch>(), save: vi.fn<(values: SettingsValues) => Promise<void>>(),
+        values, fetch: vi.fn<typeof fetch>(), save: vi.fn<(values: SettingsValues) => Promise<boolean>>(),
         partial: vi.fn(), restart: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn(),
     };
 });
@@ -49,7 +49,7 @@ beforeEach(() => {
     vi.clearAllMocks();
     mock.fetch.mockReset();
     mock.values.imu_yaw = .1;
-    mock.save.mockResolvedValue(undefined);
+    mock.save.mockResolvedValue(true);
     mock.fetch.mockImplementation(() => Promise.resolve(new Response(JSON.stringify({message: '48.123456789,-1.987654321'}))));
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {configurable: true, value: vi.fn()});
 });
@@ -188,4 +188,23 @@ it('preserves Reset, Start, Discard and explicit Apply with no automatic save', 
     expect(mock.save).not.toHaveBeenCalled();
     expect(mock.partial).not.toHaveBeenCalled();
     expect(screen.getByText('14.32°', {exact: true})).toBeInTheDocument();
+});
+
+it('stays on Calibration with its applied draft after a failed save and permits retry', async () => {
+    mock.fetch.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(valid))));
+    await calibrationStep();
+    clickText(en.onboardingPage.startImuYawCalibration);
+    await screen.findByText(en.onboardingPage.applyToSettings, {exact: true});
+    clickText(en.onboardingPage.applyToSettings);
+    mock.save.mockResolvedValueOnce(false);
+    const next = clickText(en.onboardingPage.next);
+    await waitFor(() => expect(next).not.toHaveClass('ant-btn-loading'));
+    expect(screen.getByRole('region', {name: en.onboardingPage.stepCalibration})).toBeVisible();
+    expect(mock.save).toHaveBeenLastCalledWith(expect.objectContaining({imu_yaw: .25}));
+    expect(mock.restart).not.toHaveBeenCalled();
+    clickText(en.onboardingPage.next);
+    await screen.findByRole('region', {name: en.onboardingPage.stepComplete});
+    expect(mock.save).toHaveBeenCalledTimes(2);
+    expect(mock.save).toHaveBeenLastCalledWith(expect.objectContaining({imu_yaw: .25}));
+    expect(mock.restart).not.toHaveBeenCalled();
 });

@@ -295,16 +295,17 @@ export const SchedulePage = () => {
   const schedColors = [colors.accent, colors.sky, colors.amber, colors.pink];
 
   // Build grid runs from schedules for weekly view
-  const hours = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+  const hours = Array.from({length: 24}, (_, h) => h);
   const gridRuns = schedules.flatMap((sched, si) => {
-    const startH = parseInt(sched.time.split(':')[0]);
+    const startH = Number(sched.time.split(':')[0]);
     return sched.daysOfWeek
       .filter(d => d >= 0 && d <= 6)
       .map(dayIndex => ({
         area: sched.areaId ? areaLabel(sched).text : null,
         day: dayIndex === 0 ? 6 : dayIndex - 1, // convert Sun=0..Sat=6 to Mon=0..Sun=6
-        start: startH,
-        end: Math.min(startH + 1, 20),
+        id: sched.id,
+        hour: startH,
+        time: sched.time,
         color: schedColors[si % schedColors.length],
         enabled: sched.enabled,
       }));
@@ -495,7 +496,10 @@ export const SchedulePage = () => {
       {areaDialog}
       {/* Weekly grid */}
       <DashCard>
-        <div style={{display: 'grid', gridTemplateColumns: '48px repeat(7, 1fr)', gap: 6}}>
+        <div style={{fontSize: 12, color: colors.textSecondary, marginBottom: 12}}>
+          {t('schedulePage.startSpacingHint')}
+        </div>
+        <div role="region" aria-label={t('schedulePage.weeklyOverview')} style={{display: 'grid', gridTemplateColumns: '48px repeat(7, 1fr)', gap: 6}}>
           <div/>
           {DAY_KEYS.map(dKey => (
             <div key={dKey} style={{textAlign: 'center', fontSize: 11, color: colors.textDim, fontWeight: 600, padding: '2px 0 10px'}}>
@@ -508,26 +512,20 @@ export const SchedulePage = () => {
                 {h}:00
               </div>
               {DAY_KEYS.map((_, di) => {
-                const run = gridRuns.find(r => r.day === di && h >= r.start && h < r.end);
-                const isStart = run && run.start === h;
+                const runs = gridRuns.filter(r => r.day === di && r.hour === h)
+                  .sort((a, b) => a.time.localeCompare(b.time));
                 return (
-                  <div key={di} style={{
-                    minHeight: 32,
-                    background: run?.enabled ? `${run.color}22` : colors.bgSubtle,
-                    borderRadius: isStart ? '8px 8px 0 0' : (run && run.end - 1 === h ? '0 0 8px 8px' : 0),
-                    borderStyle: run && !run.enabled ? 'dashed' : 'solid',
-                    borderColor: run ? run.enabled ? run.color : colors.muted : colors.border,
-                    borderWidth: 1,
-                    borderBottomWidth: run && run.end - 1 !== h ? 0 : 1,
-                    borderTopWidth: run && !isStart ? 0 : 1,
-                    padding: isStart ? '6px 8px' : 0,
-                  }}>
-                    {isStart && (
-                      <>
+                  <div key={di} style={{minHeight: 32, background: colors.bgSubtle, border: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: 4}}>
+                    {runs.map(run => (
+                      <div key={run.id} style={{
+                        background: run.enabled ? `${run.color}22` : colors.bgSubtle,
+                        borderRadius: 8, padding: '6px 8px', overflowWrap: 'anywhere',
+                        border: `1px ${run.enabled ? 'solid' : 'dashed'} ${run.enabled ? run.color : colors.muted}`,
+                      }}>
                         <div style={{fontSize: 11, fontWeight: 700, color: run.enabled ? run.color : colors.textSecondary, lineHeight: 1.1}}>{run.enabled ? (run.area ? t('schedulePage.blockStartArea', {area: run.area}) : t('schedulePage.blockStartHint')) : t('schedulePage.inactive')}</div>
-                        <div style={{fontSize: 10, color: colors.textDim, marginTop: 2}}>{run.start}:00 -- {run.end}:00</div>
-                      </>
-                    )}
+                        <time dateTime={run.time} style={{display: 'block', fontSize: 10, color: colors.textDim, marginTop: 2}}>{run.time}</time>
+                      </div>
+                    ))}
                   </div>
                 );
               })}

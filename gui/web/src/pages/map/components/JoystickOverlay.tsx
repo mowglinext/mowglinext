@@ -1,3 +1,4 @@
+import {useSyncExternalStore} from "react";
 import {Joystick} from "react-joystick-component";
 import {IJoystickUpdateEvent} from "react-joystick-component/build/lib/Joystick";
 import {CheckOutlined, CloseOutlined, HomeOutlined} from "@ant-design/icons";
@@ -6,10 +7,19 @@ import AsyncButton from "../../../components/AsyncButton.tsx";
 import {useThemeMode} from "../../../theme/ThemeContext.tsx";
 import {limeAlpha} from "../../../theme/colors.ts";
 
+const SHORT_SCREEN_QUERY = "(max-height: 500px) and (min-width: 600px)";
+const shortScreen = () => window.matchMedia(SHORT_SCREEN_QUERY).matches;
+const subscribeShortScreen = (onChange: () => void) => {
+    const media = window.matchMedia(SHORT_SCREEN_QUERY);
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+};
+
 interface JoystickOverlayProps {
     visible: boolean;
     isRecording?: boolean;
     mobile?: boolean;
+    desktopBottom?: number;
     onStart?: () => void;
     onMove: (event: IJoystickUpdateEvent) => void;
     onStop: () => void;
@@ -19,14 +29,15 @@ interface JoystickOverlayProps {
 }
 
 export const JoystickOverlay = ({
-    visible, isRecording, mobile,
+    visible, isRecording, mobile, desktopBottom = 88,
     onStart, onMove, onStop, onFinishRecording, onCancelRecording, onHome,
 }: JoystickOverlayProps) => {
     const {colors, displayMode} = useThemeMode();
     const {t} = useTranslation();
+    const compact = useSyncExternalStore(subscribeShortScreen, shortScreen, () => false);
     if (!visible) return null;
 
-    const size = mobile ? 132 : 110;
+    const size = compact ? 82 : mobile ? 132 : 110;
 
     // The default react-joystick-component look is a flat grey puck. We dress
     // it up with a glassy base ring + a glowing brand-green stick, sized up for
@@ -37,11 +48,11 @@ export const JoystickOverlay = ({
     // Mobile: bottom-left (natural left thumb), lifted clear of the centred
     // toolbar + bottom-nav. The toolbar pins itself at safe-area + 100px and is
     // ~60px tall, so the control stack starts above that band rather than at a
-    // magic offset tuned by hand. Desktop: bottom-right corner.
+    // magic offset tuned by hand. Desktop: above its measured toolbar, left of the sidebar.
     const TOOLBAR_BAND_PX = 100 + 60 + 12; // toolbar bottom + height + gap
     const anchor: React.CSSProperties = mobile
         ? {left: 18, bottom: `calc(env(safe-area-inset-bottom, 0px) + ${TOOLBAR_BAND_PX}px)`}
-        : {right: 30, bottom: 30};
+        : {left: 16, bottom: desktopBottom};
 
     // A single flex "control stack" so the Finish/Cancel/Home buttons derive
     // their position from the joystick row instead of their own magic offsets.
@@ -49,9 +60,9 @@ export const JoystickOverlay = ({
 
     return (
         <div style={{
-            // Fixed to the viewport (not the bleeding map container) so it lands
-            // reliably above the nav on iOS Safari — same reason as the toolbar.
-            position: "fixed",
+            // Mobile controls follow the viewport above navigation. Desktop
+            // controls share the map container with its measured toolbar.
+            position: mobile ? "fixed" : "absolute",
             ...anchor,
             zIndex: 60,
             display: "flex",
@@ -74,7 +85,7 @@ export const JoystickOverlay = ({
                     size={size}
                     baseColor={baseColor}
                     stickColor={stickColor}
-                    stickSize={Math.round(size * 0.42)}
+                    stickSize={Math.max(44, Math.round(size * 0.42))}
                     start={onStart}
                     move={onMove}
                     stop={onStop}
@@ -83,7 +94,7 @@ export const JoystickOverlay = ({
             </div>
 
             {isRecording && (
-                <div style={{display: "flex", flexDirection: "column", gap: 8, marginBottom: 4}}>
+                <div style={{display: "flex", flexDirection: compact ? "row" : "column", gap: 8, marginBottom: 4}}>
                     <AsyncButton
                         type="primary"
                         icon={<CheckOutlined/>}

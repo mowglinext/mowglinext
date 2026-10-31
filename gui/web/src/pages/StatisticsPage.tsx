@@ -4,7 +4,7 @@ import {AsyncPopconfirm} from "../components/AsyncPopconfirm";
 import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
 import i18n from "../i18n";
-import {Table, Tag, Button, message} from "antd";
+import {Alert, Table, Tag, Button, message} from "antd";
 import {DeleteOutlined} from "@ant-design/icons";
 import {useApi} from "../hooks/useApi.ts";
 import {useDiagnosticsSnapshot} from "../hooks/useDiagnosticsSnapshot.ts";
@@ -84,7 +84,8 @@ export const StatisticsPage = () => {
   const {colors} = useThemeMode();
   const isMobile = useIsMobile();
 
-  const [{sessions, stats}, setHistory] = useState<{sessions: MowingSession[]; stats: SessionStats | null}>({sessions: [], stats: null});
+  const [{sessions, stats, hasHistory}, setHistory] = useState<{sessions: MowingSession[]; stats: SessionStats | null; hasHistory: boolean}>({sessions: [], stats: null, hasHistory: false});
+  const [readError, setReadError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [hoveredBar, setHoveredBar] = useState<number | null>(null);
   const lifetimeRef = useRef<object | null>(null);
@@ -118,9 +119,13 @@ export const StatisticsPage = () => {
       if (!Array.isArray(sessionsRes.data?.sessions) || !Number.isFinite(statsRes.data?.total_sessions)) {
         throw new Error('Invalid mowing statistics response');
       }
-      setHistory({sessions: sessionsRes.data.sessions, stats: statsRes.data});
+      setHistory({sessions: sessionsRes.data.sessions, stats: statsRes.data, hasHistory: true});
+      setReadError(false);
     } catch (error) {
-      if (isCurrent()) console.error('Failed to refresh mowing statistics', error);
+      if (isCurrent()) {
+        setReadError(true);
+        console.error('Failed to refresh mowing statistics', error);
+      }
     }
     finally { if (isCurrent()) setLoading(false); }
   }, [guiApi]);
@@ -143,7 +148,8 @@ export const StatisticsPage = () => {
         throw new Error('Failed to clear mowing statistics');
       }
       // Deletion is confirmed even if its subsequent read is unavailable.
-      setHistory({sessions: [], stats: null});
+      setHistory({sessions: [], stats: null, hasHistory: true});
+      setReadError(false);
       cleared = true;
       message.success(t('statisticsPage.statisticsCleared'));
     } catch {
@@ -258,6 +264,16 @@ export const StatisticsPage = () => {
         </div>
       </div>
 
+      {readError && (
+        <Alert
+          type={hasHistory ? 'warning' : 'error'}
+          showIcon
+          message={t(hasHistory ? 'statisticsPage.refreshFailed' : 'statisticsPage.readFailed')}
+          action={<Button size="small" loading={loading} onClick={() => observeAsync(fetchData())}>{t('statisticsPage.retry')}</Button>}
+        />
+      )}
+      {!hasHistory && !readError && <div role="status">{t('statisticsPage.loadingHistory')}</div>}
+      {hasHistory && <>
       {/* Hero stats -- accent watermark per metric, no border to feel lighter */}
       <div style={{display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 12}}>
         {[
@@ -348,13 +364,17 @@ export const StatisticsPage = () => {
             const isLatest = i === weeklyBars.length - 1;
             const showValue = (isLatest || hoveredBar === i) && v > 0;
             return (
-              <div
+              <button
+                type="button"
                 key={i}
+                aria-label={t('statisticsPage.weekDurationTooltip', {week: i + 1, hours: number(v, 2)})}
+                onFocus={() => setHoveredBar(i)}
+                onBlur={() => setHoveredBar(null)}
                 onMouseEnter={() => setHoveredBar(i)}
                 onMouseLeave={() => setHoveredBar(null)}
                 onClick={() => setHoveredBar(hoveredBar === i ? null : i)}
                 title={t('statisticsPage.weekDurationTooltip', {week: i + 1, hours: number(v, 2)})}
-                style={{flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', cursor: 'pointer'}}
+                style={{flex: 1, minWidth: 0, padding: 0, border: 'none', background: 'transparent', font: 'inherit', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, position: 'relative', cursor: 'pointer'}}
               >
                 <div style={{
                   width: '100%', height: Math.max(2, h),
@@ -371,7 +391,7 @@ export const StatisticsPage = () => {
                     {number(v)} h
                   </div>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
@@ -437,6 +457,7 @@ export const StatisticsPage = () => {
           />
         </DashCard>
       </div>
+      </>}
     </div>
   );
 };

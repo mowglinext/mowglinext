@@ -521,7 +521,7 @@ export const MapToolbarMobile = ({
                 />
 
                 <Dropdown
-                    menu={{items: mowingAreas, onClick: handleMowClick}}
+                    menu={{items: mowingAreas, onClick: handleMowClick, style: {maxHeight: "min(60dvh, calc(100dvh - 180px - env(safe-area-inset-bottom, 0px)))", overflowY: "auto"}}}
                     trigger={["click"]}
                     placement="topLeft"
                 >

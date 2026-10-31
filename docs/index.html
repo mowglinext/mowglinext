@@ -53,7 +53,7 @@
 
 <!-- ─── Hero ────────────────────────────────────────── -->
 <section class="wrap hero" id="top">
-  <a class="release-pill" href="https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0"><span>v1.5.0</span>Now mowing right to the edge →</a>
+  <a class="release-pill" href="https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0"><span>v1.6.0</span>See the plan, know why it stopped →</a>
   <h1 class="display h-xl">The robot mower, <em class="nowrap">re-engineered.</em></h1>
   <p class="lede">Open-source autonomy for the mower you already own. Centimetre positioning, LiDAR vision, stripes as straight as a survey line.</p>
   <div class="btn-row">
@@ -92,20 +92,20 @@
 <!-- ─── What's new ──────────────────────────────────── -->
 <section class="wrap release" id="whats-new">
   <div class="release-head">
-    <h2 class="display h-md">v1.5.0 — <em>mows to the edge.</em></h2>
-    <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0">Release notes · October 2026 →</a>
+    <h2 class="display h-md">v1.6.0 — <em>see the plan, know why it stopped.</em></h2>
+    <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0">Release notes · October 2026 →</a>
   </div>
   <div class="release-grid">
-    <div><strong>Mows to the edge</strong><p>The outer pass rides on the line you recorded, not 20 cm inside it.</p></div>
-    <div><strong>Row ends stay on the lawn</strong><p>Blade-on pivot turns where no arc fits, improvised turns around obstacles.</p></div>
-    <div><strong>Firmware settings, no custom build</strong><p>E-stop timings, charge ceiling, speed cap and tilt — clamped by the board.</p></div>
-    <div><strong>LiDAR ignore lines</strong><p>Draw a line along a hedge so soft vegetation no longer stops the mow.</p></div>
-    <div><strong>Home Assistant auto-discovery</strong><p>A native lawn-mower card, a Mow button per area, and sensors.</p></div>
-    <div><strong>Install, update, repair</strong><p>Real installer modes, GNSS in its own container, fleet mowing in beta.</p></div>
+    <div><strong>See the mowing lines</strong><p>Preview the real plan on the map; set angle, direction and start point per area.</p></div>
+    <div><strong>Know why it stopped</strong><p>The dashboard names the reason, from a blocked area to a failed dock.</p></div>
+    <div><strong>Corners actually mowed</strong><p>Sharp tips pivot instead of being rounded off; headlands are finished first.</p></div>
+    <div><strong>OpenMower &amp; Pixhawk, in beta</strong><p>Run MowgliNext on stock OpenMower v1 electronics or an ArduRover Pixhawk.</p></div>
+    <div><strong>Rain from your weather station</strong><p>Home Assistant or a roof station can tell the mower it is raining.</p></div>
+    <div><strong>Your mower, drawn to scale</strong><p>Shells, colours and model presets; fleet peers on the map; an incident blackbox.</p></div>
   </div>
   <div class="upgrade-note">
-    <p><strong>Already running MowgliNext?</strong> v1.5.0 changes the mainboard firmware protocol. In <strong>Settings → Updates</strong>: <em>Update the update service</em>, then <em>Review update</em> → <em>Install</em>, then <strong>Flash firmware</strong> when the new interface asks for it.</p>
-    <p>The mower now mows on the recorded boundary by default — if your perimeter is not drivable all the way round, read the <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.5.0">release notes</a> first. Installed before v1.4.0? Rerun the installer once: <code>curl -sSL https://mowgli.garden/install.sh | bash</code></p>
+    <p><strong>Already running MowgliNext?</strong> v1.6.0 changes the mainboard firmware protocol again (v9). In <strong>Settings → Updates</strong>: <em>Update the update service</em>, then <em>Review update</em> → <em>Install</em>, then <strong>Flash firmware</strong> when the new interface asks for it. From v1.6.0 on, the update service updates itself before each update.</p>
+    <p>Schedules now fire on the robot's local time instead of UTC — check them after the update, and read the <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0">release notes</a>. Installed before v1.4.0? Rerun the installer once: <code>curl -sSL https://mowgli.garden/install.sh | bash</code></p>
   </div>
 </section>
 
@@ -248,7 +248,7 @@
     <div><span class="eyebrow-muted">Compute</span><strong>Raspberry Pi 4 / 5</strong><span>RK3566 / RK3588, arm64 or amd64</span></div>
     <div><span class="eyebrow-muted">RTK GNSS</span><strong>u-blox ZED-F9P</strong><span>Unicore UM98x, generic NMEA</span></div>
     <div><span class="eyebrow-muted">LiDAR · obstacles + RTK backup</span><strong>LD06 / LD14 / LD19</strong><span>RPLIDAR A1–A3, STL27L</span></div>
-    <div><span class="eyebrow-muted">Other boards</span><strong>OpenMower v1 <span class="tag">soon</span></strong><span><a href="https://github.com/Pepeuch/mowglimavros">Pixhawk via MAVROS →</a></span></div>
+    <div><span class="eyebrow-muted">Other boards</span><strong>OpenMower v1 <span class="tag">beta</span></strong><span><a href="https://github.com/Pepeuch/mowglimavros">Pixhawk via MAVROS →</a> <span class="tag">beta</span></span></div>
   </div>
 </section>
 
@@ -264,22 +264,22 @@
 
       <div class="composer-group" id="backend-group">
         <h3><small>Step 1</small>Hardware backend</h3>
-        <p class="composer-hint">Mowgli is the stable backend. MAVROS is available for evaluation. OpenMower v1 is coming soon; hardware validation is still required.</p>
+        <p class="composer-hint">Mowgli is the stable backend. OpenMower v1 and Pixhawk via MAVROS are in beta: try them on the bench first, wheels off the ground.</p>
         <div class="composer-options" data-group="backend">
           <button class="composer-option active" data-value="mowgli" aria-pressed="true">
             <span class="option-head"><span class="option-label">Mowgli</span></span>
             <span class="option-desc">Default stable path — STM32 hardware bridge on the stock board</span>
           </button>
-          <button class="composer-option" data-value="openmower" aria-pressed="false" disabled>
-            <span class="option-head"><span class="option-label">OpenMower v1</span><span class="tag">Soon</span></span>
+          <button class="composer-option" data-value="openmower" aria-pressed="false">
+            <span class="option-head"><span class="option-label">OpenMower v1</span><span class="tag">Beta</span></span>
             <span class="option-desc">v1 LowLevel board + xESC, on their own firmware (v2 boards not supported)</span>
           </button>
           <button class="composer-option" data-value="mavros" aria-pressed="false" aria-describedby="mavros-backend-status">
-            <span class="option-head"><span class="option-label">MAVROS</span></span>
+            <span class="option-head"><span class="option-label">MAVROS</span><span class="tag">Beta</span></span>
             <span class="option-desc">Pixhawk via MAVROS — GPS comes from the flight controller</span>
           </button>
         </div>
-        <p class="composer-hint" id="mavros-backend-status"><a href="https://github.com/Pepeuch/mowglimavros">MAVROS documentation →</a> ARM64 validation is pending.</p>
+        <p class="composer-hint" id="mavros-backend-status"><a href="https://github.com/Pepeuch/mowglimavros">MAVROS documentation →</a></p>
       </div>
 
       <div class="composer-group" id="gnss-group">

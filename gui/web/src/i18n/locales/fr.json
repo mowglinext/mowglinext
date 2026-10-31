@@ -1286,6 +1286,10 @@
     "readinessCtaDrawArea": "Dessiner une zone"
   },
   "settingsPage": {
+    "leaveTitle": "Quitter sans enregistrer ?",
+    "leaveBody": "Vos réglages non enregistrés seront perdus. Restez sur cette page pour les enregistrer.",
+    "discardAndLeave": "Ignorer et quitter",
+    "keepEditing": "Continuer la modification",
     "ros2Restarting": "Redémarrage ROS2…",
     "ros2Restarted": "ROS2 redémarré",
     "ros2RestartFailed": "Échec du redémarrage ROS2",
@@ -1306,6 +1310,8 @@
     "technicalDetails": "Détails techniques"
   },
   "schedulePage": {
+    "weeklyOverview": "Heures de départ de la semaine",
+    "startSpacingHint": "Les blocs indiquent les départs programmés, espacés d’au moins 60 minutes. La tonte n’a pas de durée fixe.",
     "planning": "Planning",
     "soilWetBlocking": "Sol humide — tontes planifiées suspendues",
     "soilWet": "Sol humide",
@@ -1391,6 +1397,10 @@
     "unknown": "Inconnu"
   },
   "statisticsPage": {
+    "readFailed": "Impossible de charger l’historique de tonte. Réessayez pour le consulter.",
+    "refreshFailed": "Impossible d’actualiser l’historique de tonte. Les dernières données confirmées restent affichées.",
+    "retry": "Réessayer",
+    "loadingHistory": "Chargement de l’historique de tonte…",
     "statistics": "Statistiques",
     "aYearOfMowing": "Une année de tonte",
     "noMowingYet": "Aucune tonte pour l'instant",

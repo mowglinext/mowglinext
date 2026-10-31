@@ -255,6 +255,7 @@ BT::NodeStatus EndSession::tick()
   // (coverage reset / re-mow) is wrongly judged "no progress" and pushed
   // toward premature give-up at kMaxAreaAttempts.
   ctx->area_last_coverage.clear();
+  ctx->area_last_partial_poses.clear();
   // Start-pose-blocked bookkeeping (issue #487) is per-session too: the next
   // COMMAND_START must get a fresh exemption budget, and a stale
   // start_blocked_area would make the first dispatch of the new session skip
@@ -335,17 +336,10 @@ BT::NodeStatus EndSession::tick()
   // Leaking these across sessions would make the next session skip every
   // already-mowed swath (the grid used to "decay"; the swath model resets at
   // the session boundary instead).
-  ctx->area_completed_swaths.clear();
-  ctx->area_swath_count.clear();
-  ctx->area_resume_pose_index.clear();
-  ctx->area_unit_progress.clear();
-  ctx->area_path_pose_count.clear();
-  ctx->area_plan_fingerprint.clear();
-  ctx->completed_areas.clear();
-  // Issue #680: a plausibility warning belongs to the session that raised
-  // it. Leaking it into the next session would show a stale
-  // COVERAGE_INCOMPLETE for a mow that hasn't run yet.
-  ctx->coverage_plausibility_warning = false;
+  // Issue #680: the plausibility warning goes with it — it belongs to the session that raised
+  // it, and leaking it would show a stale COVERAGE_INCOMPLETE for a mow that hasn't run yet.
+  clearRecordedCoverageProgress(*ctx);
+  ctx->start_awaiting_dispatch = false;
   // Drop any "mow only area N" constraint from a targeted run (~/start_in_area)
   // at the same boundary as every other per-session set, so the next plain
   // COMMAND_START mows the whole lawn again. The clip is session state (it must

@@ -4,6 +4,7 @@ import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useStatus} from "../hooks/useStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {usePower} from "../hooks/usePower.ts";
+import {useIsMobile} from "../hooks/useIsMobile";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useSettings} from "../hooks/useSettings.ts";
 import {computeBatteryPercent} from "../utils/battery.ts";
@@ -33,6 +34,7 @@ const statusColor = (stateNum: number | undefined, isEmergency: boolean, colors:
 export const MowerStatus = () => {
     const asyncHandler = useAsyncHandler();
     const {t} = useTranslation();
+    const isMobile = useIsMobile();
     const {colors, displayMode} = useThemeMode();
     const {highLevelStatus} = useHighLevelStatus();
     const hwStatus = useStatus();
@@ -105,8 +107,8 @@ export const MowerStatus = () => {
 
     return (
         <>
-            <Space size="small" style={{flexShrink: 0}}>
-                <Space size={4}>
+            <Space size="small" wrap={isMobile} style={{minWidth: 0, maxWidth: '100%', flexShrink: isMobile ? 1 : 0}}>
+                <Space size={4} style={{maxWidth: '100%'}}>
                     <Badge
                         color={statusColor(stateNum, isEmergency, colors)}
                         style={{
@@ -116,7 +118,7 @@ export const MowerStatus = () => {
                             '--mower-status-active': colors.primary,
                         } as CSSProperties}
                     />
-                    <Typography.Text style={{fontSize: 12, color: colors.text, whiteSpace: 'nowrap'}}>
+                    <Typography.Text style={{fontSize: 12, color: colors.text, whiteSpace: isMobile ? 'normal' : 'nowrap'}}>
                         {clearanceUnverified ? t("telemetry.emergencyClearanceUnverified") : stateName ? stateRenderer(stateName) : t("telemetry.statusUnknown")}
                     </Typography.Text>
                 </Space>

@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
+#include <string>
 #include <vector>
 
 #include "mowgli_hardware/odometry_publisher.hpp"
@@ -210,4 +212,136 @@ TEST_F(OdometryPublisherTest, FirmwareClockRestartReseedsTimeAndTicksTogether)
   packet.left_ticks = packet.right_ticks = 3;
   publisher.handle_packet(packet, 277.0, 0.325, false);
   EXPECT_NEAR(publisher.tyre_travelled(), 6.0 / 277.0, 1e-12);
+}
+
+// ---------------------------------------------------------------------------
+// Previous-protocol (v8) packets through the publisher (update-first window,
+// docs/UPDATES.md). Field 2026-10-25: without this the v9 host published no
+// /wheel_odom against v8 firmware and the update rolled back.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+struct WheelOdomCapture
+{
+  std::shared_ptr<rclcpp::Node> node;
+  std::vector<nav_msgs::msg::Odometry> msgs;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub;
+  rclcpp::executors::SingleThreadedExecutor executor;
+
+  explicit WheelOdomCapture(const std::string& name)
+      : node(std::make_shared<rclcpp::Node>(name,
+                                            rclcpp::NodeOptions().use_intra_process_comms(true)))
+  {
+    sub = node->create_subscription<nav_msgs::msg::Odometry>("~/wheel_odom",
+                                                             rclcpp::QoS(100),
+                                                             [this](
+                                                                 const nav_msgs::msg::Odometry& msg)
+                                                             {
+                                                               msgs.push_back(msg);
+                                                             });
+    executor.add_node(node);
+  }
+};
+
+mowgli_hardware::LlOdometryV8 legacy_packet(uint16_t dt, int32_t left, int32_t right)
+{
+  mowgli_hardware::LlOdometryV8 p{};
+  p.type = mowgli_hardware::PACKET_ID_LL_ODOMETRY;
+  p.dt_millis = dt;
+  p.left_ticks = left;
+  p.right_ticks = right;
+  return p;
+}
+
+}  // namespace
+
+TEST_F(OdometryPublisherTest, LegacyV8StationaryStreamPublishesZeroVelocity)
+{
+  WheelOdomCapture cap("odometry_legacy_stationary_test");
+  mowgli_hardware::OdometryPublisher publisher(*cap.node);
+  for (int i = 0; i < 20; ++i)
+  {
+    publisher.handle_legacy_v8_packet(legacy_packet(20, 500, -500), 277.0, 0.325, false);
+    cap.executor.spin_some();
+  }
+  // 19 intervals of 20 ms aggregate into 60 ms windows -> 6 publications.
+  ASSERT_GE(cap.msgs.size(), 5u);
+  for (const auto& msg : cap.msgs)
+  {
+    EXPECT_EQ(msg.twist.twist.linear.x, 0.0);
+    EXPECT_EQ(msg.twist.twist.angular.z, 0.0);
+  }
+  EXPECT_TRUE(publisher.wheels_stationary());
+  EXPECT_EQ(publisher.tyre_travelled(), 0.0);
+}
+
+TEST_F(OdometryPublisherTest, LegacyV8MovingStreamUsesFirmwareDtForVelocity)
+{
+  WheelOdomCapture cap("odometry_legacy_moving_test");
+  mowgli_hardware::OdometryPublisher publisher(*cap.node);
+  int32_t left = 1000, right = 1000;
+  publisher.handle_legacy_v8_packet(legacy_packet(20, left, right), 277.0, 0.325, false);
+  for (int i = 0; i < 30; ++i)
+  {
+    left += 2;
+    right += 4;
+    publisher.handle_legacy_v8_packet(legacy_packet(20, left, right), 277.0, 0.325, false);
+    cap.executor.spin_some();
+  }
+  ASSERT_FALSE(cap.msgs.empty());
+  for (const auto& msg : cap.msgs)
+  {
+    EXPECT_NEAR(msg.twist.twist.linear.x, 3.0 / 277.0 / 0.020, 1e-9);
+    EXPECT_NEAR(msg.twist.twist.angular.z, 2.0 / 277.0 / 0.325 / 0.020, 1e-9);
+  }
+  EXPECT_FALSE(publisher.wheels_stationary());
+  EXPECT_NEAR(publisher.tyre_travelled(), 30.0 * 4.0 / 277.0, 1e-9);
+}
+
+TEST_F(OdometryPublisherTest, LegacyV8CounterWrapIsRecoveredAndSpikeDropped)
+{
+  auto node = std::make_shared<rclcpp::Node>("odometry_legacy_wrap_test");
+  mowgli_hardware::OdometryPublisher publisher(*node);
+  publisher.handle_legacy_v8_packet(legacy_packet(60, 10, 10), 277.0, 0.325, false);
+  // 60 ms per packet: each one closes a 50 ms aggregation window.
+  // 16-bit wrap carrying +3 / -3 real ticks: recovered, as the v8 host did.
+  publisher.handle_legacy_v8_packet(legacy_packet(60, 10 - 65533, 10 + 65533), 277.0, 0.325, false);
+  EXPECT_NEAR(publisher.tyre_travelled(), 3.0 / 277.0, 1e-12);
+  // A residual glitch beyond the spike limit is dropped, not integrated.
+  publisher.handle_legacy_v8_packet(legacy_packet(60, 10 - 65533 + 500, 10 + 65533),
+                                    277.0,
+                                    0.325,
+                                    false);
+  EXPECT_NEAR(publisher.tyre_travelled(), 3.0 / 277.0, 1e-12);
+  publisher.handle_legacy_v8_packet(legacy_packet(60, 10 - 65533 + 501, 10 + 65533),
+                                    277.0,
+                                    0.325,
+                                    false);
+  EXPECT_NEAR(publisher.tyre_travelled(), 4.0 / 277.0, 1e-12);
+}
+
+TEST_F(OdometryPublisherTest, SwitchingWireFormatReseedsInsteadOfInventingMotion)
+{
+  auto node = std::make_shared<rclcpp::Node>("odometry_format_switch_test");
+  mowgli_hardware::OdometryPublisher publisher(*node);
+  publisher.handle_legacy_v8_packet(legacy_packet(60, 0, 0), 277.0, 0.325, false);
+  publisher.handle_legacy_v8_packet(legacy_packet(60, 3, 3), 277.0, 0.325, false);
+  EXPECT_NEAR(publisher.tyre_travelled(), 3.0 / 277.0, 1e-12);
+  // Board reflashed to v9 without a serial reconnect: unrelated baselines.
+  mowgli_hardware::LlOdometry current{};
+  current.acquisition_millis = 5;
+  current.left_ticks = 90000;
+  current.right_ticks = -90000;
+  publisher.handle_packet(current, 277.0, 0.325, false);
+  EXPECT_NEAR(publisher.tyre_travelled(), 3.0 / 277.0, 1e-12);
+  current.acquisition_millis += 60;
+  current.left_ticks += 2;
+  current.right_ticks += 2;
+  publisher.handle_packet(current, 277.0, 0.325, false);
+  EXPECT_NEAR(publisher.tyre_travelled(), 5.0 / 277.0, 1e-12);
+  // And back (e.g. a v8 board re-attached): re-seeded again.
+  publisher.handle_legacy_v8_packet(legacy_packet(60, 7, 7), 277.0, 0.325, false);
+  EXPECT_NEAR(publisher.tyre_travelled(), 5.0 / 277.0, 1e-12);
 }

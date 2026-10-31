@@ -249,6 +249,8 @@ TEST_F(EndSessionKeepTest, TheKeptProgressIsWrittenToTheResumeFileWithoutAStartC
   EXPECT_NE(file.find("current_command 0"), std::string::npos) << file;
   EXPECT_NE(file.find("single_area_target 1"), std::string::npos) << file;
   EXPECT_NE(file.find("area 1 "), std::string::npos) << file;
+  // The time it was kept, so a restart can still age it out (field 2026-10-25).
+  EXPECT_NE(file.find("saved_at "), std::string::npos) << file;
 }
 
 TEST_F(EndSessionKeepTest, WithNothingRecordedThereIsNothingToKeep)

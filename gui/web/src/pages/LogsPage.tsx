@@ -279,7 +279,7 @@ export const LogsPage = () => {
     };
 
     return (
-        <div style={{display: 'flex', flexDirection: 'column', gap: 12, height: '100%'}}>
+        <div style={{display: 'flex', flexDirection: 'column', gap: 12, flex: 1}}>
             {/* Container picker + lifecycle controls */}
             <div style={{
                 display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 8,
@@ -351,7 +351,7 @@ export const LogsPage = () => {
                         );
                     })}
                 </div>
-                <div style={{display: 'flex', gap: 6, marginLeft: isMobile ? 0 : 'auto'}}>
+                <div style={{display: 'flex', flexWrap: 'wrap', gap: 6, marginLeft: isMobile ? 0 : 'auto'}}>
                     <button
                         onClick={() => setTimeZoneMode(timeZoneMode === 'utc' ? 'local' : 'utc')}
                         aria-label={t('logTime.toggleAria')}
@@ -393,7 +393,7 @@ export const LogsPage = () => {
                 ref={listRef}
                 onScroll={handleScroll}
                 style={{
-                    flex: 1, minHeight: 0, overflow: 'auto', borderRadius: 12,
+                    flex: '1 0 160px', minHeight: 160, overflow: 'auto', borderRadius: 12,
                     background: colors.bgCard, padding: '6px 0',
                     fontFamily: '"JetBrains Mono", "SF Mono", ui-monospace, monospace',
                     fontSize: 12, lineHeight: 1.7,

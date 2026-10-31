@@ -1,3 +1,4 @@
+import "./iosInstallBanner.css";
 import {CloseOutlined} from "@ant-design/icons";
 import {useTranslation} from "react-i18next";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
@@ -17,12 +18,9 @@ const ShareIcon = () => (
 export const IOSInstallBanner = ({onDismiss}: IOSInstallBannerProps) => {
     const {colors, displayMode} = useThemeMode();
     const {t} = useTranslation();
-    return (<div style={{
-        position: 'fixed',
-        bottom: 'calc(56px + env(safe-area-inset-bottom, 0px) + 8px)',
-        left: 12,
-        right: 12,
-        zIndex: 300,
+    return (<div className="ios-install-banner" style={{
+        margin: '8px 12px',
+        flexShrink: 0,
         background: colors.glassBackground,
         backdropFilter: displayMode === 'visual' ? 'blur(16px) saturate(180%)' : undefined,
         WebkitBackdropFilter: displayMode === 'visual' ? 'blur(16px) saturate(180%)' : undefined,

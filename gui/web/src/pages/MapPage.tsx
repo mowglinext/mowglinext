@@ -1,3 +1,4 @@
+import "./map/mapLayout.css";
 import {settingsCoordinate} from '../utils/settingsContract';
 import {visibleRobotGeometry} from "../utils/robotModel";
 import {dockVisualGeometry} from "../components/robot/dockGeometry";
@@ -111,6 +112,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const {t, i18n} = useTranslation();
     const {colors, displayMode} = useThemeMode();
     const isMobile = useIsMobile();
+    // The desktop toolbar may wrap on narrow screens or in another language.
+    // Reserve its measured height for the other overlays rather than assuming one row.
+    const [toolbarHeight, setToolbarHeight] = useState(64);
+    const measureToolbar = useCallback((node: HTMLDivElement | null) => {
+        if (!node) return;
+        const observer = new ResizeObserver(() => setToolbarHeight(node.getBoundingClientRect().height));
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, []);
     const mowerAction = useMowerAction()
     const resetMowingProgress = useResetMowingProgress()
 
@@ -1585,8 +1595,9 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         );
     }
 
+    const joystickVisible = highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode;
     return (
-        <div style={{
+        <div className="map-layout" style={{
             // Full-bleed the map across the AppShell's main padding.
             // Desktop main padding is 24px top / 32px horizontal / 48px bottom.
             // Mobile main padding includes the bottom safe area as well.
@@ -1893,9 +1904,10 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     )}
                 </Map> : <Spinner/>}
                 <JoystickOverlay
-                    visible={highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode}
+                    visible={joystickVisible}
                     isRecording={highLevelStatus.highLevelStatus.state_name === "RECORDING"}
                     mobile={isMobile}
+                    desktopBottom={toolbarHeight + 24}
                     onStart={handleJoyStart}
                     onMove={handleJoyMove}
                     onStop={handleJoyStop}
@@ -2001,7 +2013,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 )}
                 {/* Desktop: View mode — bottom glass toolbar */}
                 {!isMobile && !editMap && (
-                    <div style={{position: 'absolute', bottom: 12, left: 16, right: 16, zIndex: 10, background: colors.glassBackground, backdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, WebkitBackdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, padding: '10px 14px'}}>
+                    <div ref={measureToolbar} style={{position: 'absolute', bottom: 12, left: 16, right: 16, zIndex: 10, background: colors.glassBackground, backdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, WebkitBackdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, padding: '10px 14px'}}>
                         <MapToolbar
                             manualMode={manualMode}
                             useSatellite={useSatellite}
@@ -2031,7 +2043,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 )}
                 {/* Desktop: Right panel — collapsible sections, one open at a time */}
                 {!isMobile && (
-                    <div style={{position: 'absolute', top: 12, right: 16, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 0, width: 240, maxHeight: 'calc(100% - 32px)', background: colors.glassBackground, backdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, WebkitBackdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, overflow: 'hidden'}}>
+                    <div style={{position: 'absolute', top: 12, right: 16, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 0, width: 240, maxHeight: `calc(100% - ${toolbarHeight + 36}px${joystickVisible ? ' - var(--map-joystick-height)' : ''})`, background: colors.glassBackground, backdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, WebkitBackdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, overflowY: 'auto'}}>
                         <MapSidebarAccordion
                             openKey={sidebarOpen}
                             onOpenChange={setSidebarOpen}

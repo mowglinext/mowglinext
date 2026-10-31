@@ -114,7 +114,15 @@ func resolveHardwareBackendForDB(dbProvider types.IDBProvider) (string, error) {
 	}
 	backend := activeHardwareBackend(env)
 	if backend == "" {
-		return "", errUnsupportedHardwareBackend
+		// Every settings save is refused while this holds, so name the value
+		// and where it was read: the bare sentinel left operators guessing.
+		raw, present := env["HARDWARE_BACKEND"]
+		source := string(path)
+		if !present {
+			raw, source = os.Getenv("HARDWARE_BACKEND"), "the process environment"
+		}
+		return "", fmt.Errorf("%w: HARDWARE_BACKEND=%q in %s (expected one of %s)",
+			errUnsupportedHardwareBackend, raw, source, strings.Join(supportedHardwareBackends, ", "))
 	}
 	return backend, nil
 }
