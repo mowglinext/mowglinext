@@ -42,6 +42,7 @@ Webots driver outputs (e.g. ``/wheel_odom_raw``, ``/imu``, ``/scan``,
 Phase 2 work — until that lands the helpers below may not see live data.
 """
 
+import json
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -175,6 +176,12 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "use_sim_time": "true",
             "use_lidar": use_lidar,
+            # Share one scenario snapshot with COG and both fusion graph modes.
+            # Otherwise an absent site datum self-seeds at the first antenna fix.
+            "simulation_geometry": json.dumps({
+                "datum_lat": datum_lat, "datum_lon": datum_lon,
+                "lever_arm_x": lever_arm_x, "lever_arm_y": lever_arm_y,
+            }, allow_nan=False),
             # cog_to_imu defaults are fine in sim now that the node
             # self-gates the stationary anchor on |wheel_omega| (won't
             # republish a stale forward-motion yaw while the robot is
