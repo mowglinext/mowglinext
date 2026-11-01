@@ -98,7 +98,7 @@ def _build(filename, **overrides):
             "EnvironmentVariable": Action,
             "ParameterValue": Parameter,
             "Node": Node,
-            'Shutdown': Action,
+            'OpaqueFunction': Action,
             "get_package_share_directory": lambda package: str(
                 BRINGUP.parent / package
             ),
@@ -113,7 +113,10 @@ def _build(filename, **overrides):
         item
         for item in _parse(filename).body
         if isinstance(item, ast.FunctionDef)
-        and item.name in ("_gnss_status_pairing_window_s", "generate_launch_description")
+        and item.name in (
+            '_gnss_status_pairing_window_s', '_on_required_gnss_exit',
+            'generate_launch_description',
+        )
     ]
     assert any(item.name == "generate_launch_description" for item in functions)
     exec(  # noqa: S102

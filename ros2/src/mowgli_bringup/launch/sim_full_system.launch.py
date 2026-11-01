@@ -49,7 +49,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
-    Shutdown,
+    OpaqueFunction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -57,6 +57,12 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 import yaml
+
+
+def _on_required_gnss_exit(context):
+    """Fail unexpected relay exits; preserve successful requested teardown."""
+    if not context.is_shutdown:
+        raise RuntimeError('Required GNSS quality relay exited unexpectedly')
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -343,7 +349,7 @@ def generate_launch_description() -> LaunchDescription:
         name="sim_navsat_rtk_fix",
         output="screen",
         # A rejected scenario must not leave the rest of the sim running.
-        on_exit=[Shutdown(reason='GNSS quality relay exited')],
+        on_exit=[OpaqueFunction(function=_on_required_gnss_exit)],
         parameters=[
             {
                 "use_sim_time": True,
