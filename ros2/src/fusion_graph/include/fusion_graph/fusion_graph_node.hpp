@@ -389,6 +389,16 @@ private:
   std::optional<double> seed_yaw_;  // absolute COG/mag yaw at its stamped source epoch
   std::optional<int64_t> seed_yaw_source_ns_;
   uint64_t seed_yaw_source_epoch_ = 0;
+  /// Present only when this exact heading was admitted to the Core source queue.
+  std::optional<uint64_t> seed_yaw_observation_id_;
+  struct SeedHeadingCandidate
+  {
+    uint64_t id;
+    double sigma;
+    bool robust;
+  };
+  // Preserve the actual first payload/producer while motion support is pending.
+  std::optional<SeedHeadingCandidate> seed_yaw_candidate_;
 
   // --- 180° yaw-flip recovery -----------------------------------------------
   // COG yaw is the PHYSICAL travel direction (wheels + GPS displacement) and

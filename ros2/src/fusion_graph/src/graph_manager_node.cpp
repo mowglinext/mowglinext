@@ -399,7 +399,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     // A live reanchor keeps the current prediction estimate; a fresh load
     // starts from the configured cold-bias prior, not a prior-session sensor
     // calibration. Normal live intervals already have this key.
-    if (!isam_.valueExists(k_bias_prev) && !new_values_.exists(k_bias_prev))
+    if (!isam_->valueExists(k_bias_prev) && !new_values_.exists(k_bias_prev))
     {
       new_values_.insert(k_bias_prev, current_bias_estimate_);
       const auto prior_noise = gtsam::noiseModel::Diagonal::Sigmas(
@@ -520,7 +520,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     try
     {
       const auto k_bias = gtsam::Symbol('b', next_index_);
-      current_bias_estimate_ = isam_.calculateEstimate<double>(k_bias);
+      current_bias_estimate_ = isam_->calculateEstimate<double>(k_bias);
     }
     catch (const std::exception&)
     {
@@ -543,7 +543,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   {
     try
     {
-      cov = isam_.marginalCovariance(k_curr);
+      cov = isam_->marginalCovariance(k_curr);
     }
     catch (const std::exception&)
     {

@@ -14,7 +14,7 @@ public:
   static std::pair<gtsam::NonlinearFactorGraph, gtsam::Values> Snapshot(GraphManager& graph)
   {
     std::lock_guard<std::mutex> lock(graph.mu_);
-    return {graph.isam_.getFactorsUnsafe(), graph.isam_.calculateEstimate()};
+    return {graph.isam_->getFactorsUnsafe(), graph.isam_->calculateEstimate()};
   }
 };
 namespace

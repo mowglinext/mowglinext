@@ -40,6 +40,41 @@ namespace fusion_graph
 
 struct ConsumedMotionStep;
 struct GraphMotionState;
+struct HeadingSeedState;
+
+/// Opaque identity of one source-bound initialization. Reset/reseed invalidates it.
+using HeadingSeedToken = std::shared_ptr<const HeadingSeedState>;
+
+struct RecoveryYawObservation
+{
+  uint64_t epoch = 0;
+  int64_t source_ns = 0;
+  uint64_t id = 0;
+  double yaw = 0.0;
+  double sigma = 0.0;
+  bool robust = false;
+};
+
+enum class HeadingRecoveryResult
+{
+  Applied,
+  SeedNotInvalid,
+  SeedUnavailable,
+  UnsupportedPrefix,
+  UnsupportedFamily,
+  UnsupportedSource,
+  ObservationConflict,
+  DuplicateObservation,
+  InvalidObservation,
+  Failed
+};
+
+enum class SourceBootstrapResult
+{
+  Applied,
+  PendingProofUnavailable,
+  Failed
+};
 
 // Pose-variable key for node index i (symbol 'x'). Inline + namespace-scope so
 // every graph_manager_*.cpp translation unit shares one definition (the class
@@ -122,6 +157,10 @@ public:
                         int64_t source_ns,
                         uint64_t epoch,
                         std::optional<double> sigma_xy = std::nullopt);
+  /// Same-source accepted GNSS and heading constrain X0 once, retaining lever
+  /// covariance. Solver failure never falls back to a data-derived pose prior.
+  SourceBootstrapResult InitializeSourceObservations(
+      int64_t schedule_ns, int64_t source_ns, uint64_t epoch, uint64_t gnss_id, uint64_t yaw_id);
   std::optional<TickOutput> TickSource(int64_t schedule_ns, int64_t source_ns, uint64_t epoch);
   bool QueueGnssAtEpoch(double x,
                         double y,
@@ -146,6 +185,16 @@ public:
                        uint64_t epoch);
   uint64_t SourceYawFactorCount() const;
   bool NeedsSourceRebase() const;
+
+  HeadingSeedToken OriginalHeadingSeed() const;
+  /// Explicit invalid-seed operation, NOT an automatic COG-conflict policy.
+  /// Rebuilds complete retained source families with relative-error conditionals,
+  /// retires only this seed's yaw and applies one actual source-yaw observation.
+  /// Unsupported/failed requests leave the live graph and pending inputs intact.
+  /// Requires a committed source boundary (no partially consumed process tail).
+  HeadingRecoveryResult RecoverInvalidSeedHeading(const HeadingSeedToken& seed,
+                                                  bool seed_heading_invalid,
+                                                  const RecoveryYawObservation& observation);
 
   // GPS measurement (in map frame, datum-anchored). Cached and consumed
   // at next tick. sigma is per-axis; pass < 0 to use floor. When
@@ -293,6 +342,7 @@ public:
 private:
   friend class GraphManagerRebaseTestAccess;
   friend class GraphManagerSourceTestAccess;
+  friend class GraphManagerHeadingRecoveryTestAccess;
 
   // Reset() body without taking mu_ — for callers that already hold the lock
   // (e.g. the iSAM2 indeterminate-system catch inside ApplyIsamUpdateLocked).
@@ -364,6 +414,11 @@ private:
   };
 
   std::shared_ptr<GraphMotionState> motion_;
+  std::shared_ptr<HeadingSeedState> heading_seed_;
+  void PrepareSourceInitializationLocked(GraphMotionState& state,
+                                         Accumulator& accumulator,
+                                         int64_t schedule_ns,
+                                         int64_t source_ns) const;
   gtsam::Pose2 SourceBetweenLocked(const gtsam::Pose2& fallback, bool translation, bool rotation);
   void FreezeSourceEdgeLocked(gtsam::Key left,
                               gtsam::Key right,
@@ -381,7 +436,8 @@ private:
 
   bool initialized_ = false;
 
-  gtsam::ISAM2 isam_;
+  // Pointer ownership makes isolated rebuild publication a non-allocating swap.
+  std::unique_ptr<gtsam::ISAM2> isam_;
   gtsam::NonlinearFactorGraph new_factors_;
   gtsam::Values new_values_;
   // Cached full estimate, refreshed lazily (only by callers that need

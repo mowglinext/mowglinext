@@ -347,6 +347,43 @@ protected:
   {
     return node_->graph_->SourceYawFactorCount();
   }
+  uint64_t AppliedGnssFactors() const
+  {
+    return node_->graph_->SourceGnssFactorCount();
+  }
+  void StartSameSourceBootstrap(double lever_x = 0.0, double lever_y = 0.0)
+  {
+    node_.reset();
+    CreateNode(.1, lever_x, lever_y);
+    Clock(10.0);
+    Wheel(10.0, 0.0);
+    Imu(10.0);
+    Clock(10.02);
+    Wheel(10.02, 0.0);
+    Imu(10.02);
+    SetOffDock();
+  }
+  void ExpectSameSourceBootstrapBelief(double yaw,
+                                       double heading_sigma,
+                                       double lever_x,
+                                       double lever_y)
+  {
+    const auto snapshot = Snapshot();
+    ASSERT_TRUE(snapshot);
+    EXPECT_EQ(snapshot->node_index, 0u);
+    EXPECT_EQ(snapshot->source_stamp_ns, 10020000000);
+    EXPECT_NEAR(snapshot->pose.x(), 1.0, 1e-8);
+    EXPECT_NEAR(snapshot->pose.y(), 2.0, 1e-8);
+    EXPECT_NEAR(snapshot->pose.theta(), yaw, 1e-8);
+    const Eigen::Vector3d right_sensitivity(lever_y, -lever_x, 1.0);
+    Eigen::Matrix3d expected =
+        heading_sigma * heading_sigma * right_sensitivity * right_sensitivity.transpose();
+    expected(0, 0) += .003 * .003;
+    expected(1, 1) += .003 * .003;
+    EXPECT_LT((snapshot->covariance - expected).cwiseAbs().maxCoeff(), 1e-10);
+    EXPECT_EQ(AppliedGnssFactors(), 1u);
+    EXPECT_EQ(AppliedYawFactors(), 1u);
+  }
   void PrepareFutureCogChecks()
   {
     StartCogScenario(M_PI);
@@ -946,6 +983,190 @@ TEST_F(FusionGraphNodeInputTest, AcquisitionEpochPhaseAndReceiptDelayDoNotBiasPe
     EXPECT_NEAR(immediate.yaw, 0.0, 1e-9);
     EXPECT_NEAR(delayed.yaw, 0.0, 1e-9);
     EXPECT_NEAR(immediate.x, delayed.x, 1e-9);
+  }
+}
+
+// The same accepted GNSS and COG payloads may choose an initial guess and supply their
+// likelihood once each. There is no independent dock/explicit pose belief in these cases.
+// Different-source heading transport is deliberately outside this covariance contract.
+TEST_F(FusionGraphNodeInputTest, SameSourceBootstrapUsesOneGnssAndOneHeadingLikelihood)
+{
+  StartSameSourceBootstrap();
+  constexpr double source = 10.02, gps_sigma = .003, heading_sigma = .15;
+  Gnss(source, 1.0, gps_sigma, 2.0);
+  ASSERT_FALSE(Snapshot());
+  Heading(source, .7, true);  // variance .01 is floored to COG sigma .15.
+  ASSERT_TRUE(Snapshot());
+  Timer();  // Assimilate at the seed source without creating a process edge.
+  const auto snapshot = Snapshot();
+  ASSERT_TRUE(snapshot);
+  EXPECT_EQ(snapshot->node_index, 0u);
+  EXPECT_EQ(snapshot->source_stamp_ns, 10020000000);
+  EXPECT_NEAR(snapshot->pose.x(), 1.0, 1e-8);
+  EXPECT_NEAR(snapshot->pose.y(), 2.0, 1e-8);
+  EXPECT_NEAR(snapshot->pose.theta(), .7, 1e-8);
+  EXPECT_EQ(AppliedGnssFactors(), 1u);
+  EXPECT_EQ(AppliedYawFactors(), 1u);
+  const Eigen::Matrix3d expected =
+      Eigen::Vector3d(gps_sigma * gps_sigma, gps_sigma * gps_sigma, heading_sigma * heading_sigma)
+          .asDiagonal();
+  EXPECT_LT((snapshot->covariance - expected).cwiseAbs().maxCoeff(), 1e-10);
+
+  Gnss(source, 1.0, gps_sigma, 2.0);
+  Heading(source, .7, true);
+  Timer();
+  const auto repeated = Snapshot();
+  ASSERT_TRUE(repeated);
+  EXPECT_EQ(AppliedGnssFactors(), 1u);
+  EXPECT_EQ(AppliedYawFactors(), 1u);
+  EXPECT_EQ(repeated->revision, snapshot->revision);
+  EXPECT_EQ(repeated->source_stamp_ns, snapshot->source_stamp_ns);
+  EXPECT_LT((repeated->covariance - snapshot->covariance).cwiseAbs().maxCoeff(), 1e-15);
+  EXPECT_LT(snapshot->pose.localCoordinates(repeated->pose).norm(), 1e-15);
+}
+
+TEST_F(FusionGraphNodeInputTest, SameSourceBootstrapPreservesLeverArmHeadingCrossCovariance)
+{
+  constexpr double source = 10.02, gps_sigma = .003, heading_sigma = .15, yaw = .7;
+  constexpr double lever_x = .2, lever_y = -.1;
+  StartSameSourceBootstrap(lever_x, lever_y);
+  const double c = std::cos(yaw), sine = std::sin(yaw);
+  const double rotated_x = c * lever_x - sine * lever_y;
+  const double rotated_y = sine * lever_x + c * lever_y;
+  Gnss(source, 1.0 + rotated_x, gps_sigma, 2.0 + rotated_y);
+  Heading(source, yaw, true);
+  ASSERT_TRUE(Snapshot());
+  Timer();
+  const auto snapshot = Snapshot();
+  ASSERT_TRUE(snapshot);
+  EXPECT_EQ(snapshot->node_index, 0u);
+  EXPECT_EQ(snapshot->source_stamp_ns, 10020000000);
+  EXPECT_NEAR(snapshot->pose.x(), 1.0, 1e-8);
+  EXPECT_NEAR(snapshot->pose.y(), 2.0, 1e-8);
+  EXPECT_NEAR(snapshot->pose.theta(), yaw, 1e-8);
+  EXPECT_EQ(AppliedGnssFactors(), 1u);
+  EXPECT_EQ(AppliedYawFactors(), 1u);
+  // For p_base = p_antenna - R(theta) lever, dp_base/dtheta = (Rl_y, -Rl_x).
+  // Independent antenna XY and heading errors therefore give this full world covariance.
+  const Eigen::Vector3d sensitivity(rotated_y, -rotated_x, 1.0);
+  Eigen::Matrix3d world = heading_sigma * heading_sigma * sensitivity * sensitivity.transpose();
+  world(0, 0) += gps_sigma * gps_sigma;
+  world(1, 1) += gps_sigma * gps_sigma;
+  Eigen::Matrix3d world_to_right = Eigen::Matrix3d::Identity();
+  world_to_right.topLeftCorner<2, 2>() << c, sine, -sine, c;
+  const Eigen::Matrix3d expected = world_to_right * world * world_to_right.transpose();
+  EXPECT_LT((snapshot->covariance - expected).cwiseAbs().maxCoeff(), 1e-10);
+
+  Gnss(source, 1.0 + rotated_x, gps_sigma, 2.0 + rotated_y);
+  Heading(source, yaw, true);
+  Timer();
+  const auto repeated = Snapshot();
+  ASSERT_TRUE(repeated);
+  EXPECT_EQ(AppliedGnssFactors(), 1u);
+  EXPECT_EQ(AppliedYawFactors(), 1u);
+  EXPECT_EQ(repeated->revision, snapshot->revision);
+  EXPECT_EQ(repeated->source_stamp_ns, snapshot->source_stamp_ns);
+  EXPECT_LT((repeated->covariance - snapshot->covariance).cwiseAbs().maxCoeff(), 1e-15);
+  EXPECT_LT(snapshot->pose.localCoordinates(repeated->pose).norm(), 1e-15);
+}
+
+TEST_F(FusionGraphNodeInputTest, RejectedSameIdCogBeforePositionCannotReplaceAcceptedSeed)
+{
+  constexpr double source = 10.02, yaw = .7, lever_x = .2, lever_y = -.1;
+  StartSameSourceBootstrap(lever_x, lever_y);
+  Heading(source, yaw, true);
+  ASSERT_FALSE(Snapshot());
+  Heading(source, -1.2, true);  // Same producer and ID, different rejected payload.
+  ASSERT_FALSE(Snapshot());
+  const double antenna_x = 1.0 + std::cos(yaw) * lever_x - std::sin(yaw) * lever_y;
+  const double antenna_y = 2.0 + std::sin(yaw) * lever_x + std::cos(yaw) * lever_y;
+  Gnss(source, antenna_x, .003, antenna_y);
+  Timer();
+  ExpectSameSourceBootstrapBelief(yaw, .15, lever_x, lever_y);
+  const auto before = Snapshot();
+  ASSERT_TRUE(before);
+  Gnss(source, antenna_x, .003, antenna_y);
+  Heading(source, yaw, true);
+  Timer();
+  ExpectSameSourceBootstrapBelief(yaw, .15, lever_x, lever_y);
+  ASSERT_TRUE(Snapshot());
+  EXPECT_EQ(Snapshot()->revision, before->revision);
+  EXPECT_LT((Snapshot()->covariance - before->covariance).cwiseAbs().maxCoeff(), 1e-15);
+}
+
+TEST_F(FusionGraphNodeInputTest, SameSourceRobustMagBootstrapUsesItsMeasuredSigmaOnce)
+{
+  constexpr double source = 10.02, yaw = .7, lever_x = .2, lever_y = -.1;
+  StartSameSourceBootstrap(lever_x, lever_y);
+  const double antenna_x = 1.0 + std::cos(yaw) * lever_x - std::sin(yaw) * lever_y;
+  const double antenna_y = 2.0 + std::sin(yaw) * lever_x + std::cos(yaw) * lever_y;
+  Gnss(source, antenna_x, .003, antenna_y);
+  Heading(source, yaw, false);  // Robust magnetometer, variance .01 => sigma .1.
+  Timer();
+  ExpectSameSourceBootstrapBelief(yaw, .1, lever_x, lever_y);
+  const auto before = Snapshot();
+  ASSERT_TRUE(before);
+  Gnss(source, antenna_x, .003, antenna_y);
+  Heading(source, yaw, false);
+  Timer();
+  ExpectSameSourceBootstrapBelief(yaw, .1, lever_x, lever_y);
+  ASSERT_TRUE(Snapshot());
+  EXPECT_EQ(Snapshot()->revision, before->revision);
+  EXPECT_LT((Snapshot()->covariance - before->covariance).cwiseAbs().maxCoeff(), 1e-15);
+}
+
+TEST_F(FusionGraphNodeInputTest, MagBeforeMotionBaselineRetainsFirstPayloadAndSingleLikelihood)
+{
+  constexpr double source = 20.0, yaw = .7, lever_x = .2, lever_y = -.1;
+  for (const bool mutated_replay : {false, true})
+  {
+    SCOPED_TRACE(mutated_replay);
+    node_.reset();
+    CreateNode(.1, lever_x, lever_y);
+    Clock(source);
+    SetOffDock();
+    Heading(source, yaw, false);  // No IMU baseline: retain a candidate, not an admitted ID.
+    if (mutated_replay)
+      Heading(source, -1.2, false);  // Same producer/ID cannot replace the first payload.
+    ASSERT_FALSE(Snapshot());
+    Wheel(source, 0.0);
+    Imu(source);
+    Heading(source, yaw, false);  // Same ID after support exists, still before GNSS.
+    ASSERT_FALSE(Snapshot());
+    const double antenna_x = 1.0 + std::cos(yaw) * lever_x - std::sin(yaw) * lever_y;
+    const double antenna_y = 2.0 + std::sin(yaw) * lever_x + std::cos(yaw) * lever_y;
+    Gnss(source, antenna_x, .003, antenna_y);
+    ASSERT_TRUE(Snapshot());
+    Clock(source + .02);
+    Wheel(source + .02, 0.0);
+    Imu(source + .02);
+    Timer();
+    const auto snapshot = Snapshot();
+    ASSERT_TRUE(snapshot);
+    EXPECT_EQ(snapshot->node_index, 0u);
+    EXPECT_EQ(snapshot->source_stamp_ns, 20000000000);
+    EXPECT_NEAR(snapshot->pose.x(), 1.0, 1e-8);
+    EXPECT_NEAR(snapshot->pose.y(), 2.0, 1e-8);
+    EXPECT_NEAR(snapshot->pose.theta(), yaw, 1e-8);
+    const Eigen::Vector3d right_sensitivity(lever_y, -lever_x, 1.0);
+    Eigen::Matrix3d expected = .1 * .1 * right_sensitivity * right_sensitivity.transpose();
+    expected(0, 0) += .003 * .003;
+    expected(1, 1) += .003 * .003;
+    EXPECT_LT((snapshot->covariance - expected).cwiseAbs().maxCoeff(), 1e-10);
+    EXPECT_EQ(AppliedGnssFactors(), 1u);
+    EXPECT_EQ(AppliedYawFactors(), 1u);
+
+    Heading(source, yaw, false);
+    Gnss(source, antenna_x, .003, antenna_y);
+    Timer();
+    const auto repeated = Snapshot();
+    ASSERT_TRUE(repeated);
+    EXPECT_EQ(AppliedGnssFactors(), 1u);
+    EXPECT_EQ(AppliedYawFactors(), 1u);
+    EXPECT_EQ(repeated->source_stamp_ns, snapshot->source_stamp_ns);
+    EXPECT_EQ(repeated->revision, snapshot->revision);
+    EXPECT_LT((repeated->covariance - snapshot->covariance).cwiseAbs().maxCoeff(), 1e-15);
+    EXPECT_LT(snapshot->pose.localCoordinates(repeated->pose).norm(), 1e-15);
   }
 }
 

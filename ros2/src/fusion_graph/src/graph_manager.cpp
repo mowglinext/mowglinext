@@ -17,6 +17,7 @@
 #include <sstream>
 
 #include "fusion_graph/factors.hpp"
+#include "graph_heading_seed.hpp"
 #include <gtsam/base/GenericValue.h>
 #include <gtsam/base/serialization.h>
 #include <gtsam/linear/NoiseModel.h>
@@ -41,7 +42,7 @@ namespace fusion_graph
 bool GraphManager::HasPoseAt(uint64_t idx) const
 {
   // valueExists is O(1); avoids the cost of try/catch on a missing key.
-  return isam_.valueExists(PoseKey(idx));
+  return isam_->valueExists(PoseKey(idx));
 }
 
 gtsam::Pose2 GraphManager::PoseAt(uint64_t idx) const
@@ -50,7 +51,7 @@ gtsam::Pose2 GraphManager::PoseAt(uint64_t idx) const
   // calculateEstimate() copy that returns ALL pose values.
   try
   {
-    return isam_.calculateEstimate<gtsam::Pose2>(PoseKey(idx));
+    return isam_->calculateEstimate<gtsam::Pose2>(PoseKey(idx));
   }
   catch (const std::exception&)
   {
@@ -65,7 +66,7 @@ void GraphManager::RefreshEstimateLocked() const
   // periodic checkpoint).
   if (!estimate_dirty_)
     return;
-  current_estimate_ = isam_.calculateEstimate();
+  current_estimate_ = isam_->calculateEstimate();
   estimate_dirty_ = false;
 }
 
@@ -79,7 +80,7 @@ GraphManager::GraphManager(const GraphParams& params)
   p.optimizationParams = gtsam::ISAM2GaussNewtonParams(0.001);
   p.relinearizeThreshold = 0.05;
   p.relinearizeSkip = std::max(1, params_.isam2_relinearize_skip);
-  isam_ = gtsam::ISAM2(p);
+  isam_ = std::make_unique<gtsam::ISAM2>(p);
 }
 
 gtsam::SharedNoiseModel GraphManager::MakeDiagonal(const std::vector<double>& sigmas)
@@ -228,7 +229,8 @@ void GraphManager::InitializeLocked(const gtsam::Pose2& X0,
 
   auto k0 = PoseKey(0);
   new_values_.insert(k0, X0);
-  new_factors_.add(gtsam::PriorFactor<gtsam::Pose2>(k0, X0, prior_noise));
+  auto prior = std::make_shared<gtsam::PriorFactor<gtsam::Pose2>>(k0, X0, prior_noise);
+  new_factors_.add(prior);
 
   // When IMU preintegration is on, seed the bias state at 0 with a
   // loose prior. iSAM2 refines it from the very first preint factor.
@@ -242,7 +244,7 @@ void GraphManager::InitializeLocked(const gtsam::Pose2& X0,
     new_factors_.add(gtsam::PriorFactor<double>(k_bias0, 0.0, bias_prior_noise));
   }
 
-  isam_.update(new_factors_, new_values_);
+  isam_->update(new_factors_, new_values_);
   estimate_dirty_ = true;
   new_factors_.resize(0);
   new_values_.clear();
@@ -252,6 +254,10 @@ void GraphManager::InitializeLocked(const gtsam::Pose2& X0,
   node_time_index_.clear();
   node_time_index_.emplace_back(timestamp, 0);
   initialized_ = true;
+  heading_seed_ = std::make_shared<HeadingSeedState>();
+  heading_seed_->prior = std::move(prior);
+  heading_seed_->pose = X0;
+  heading_seed_->sigma_xy = sigma_xy;
 
   TickOutput out;
   out.pose = X0;
@@ -369,7 +375,7 @@ void GraphManager::ForceAnchor(uint64_t node_index,
   if (latest_)
   {
     latest_->pose = PoseAt(latest_->node_index);
-    latest_->covariance = isam_.marginalCovariance(PoseKey(latest_->node_index));
+    latest_->covariance = isam_->marginalCovariance(PoseKey(latest_->node_index));
     ++latest_->revision;
   }
 }

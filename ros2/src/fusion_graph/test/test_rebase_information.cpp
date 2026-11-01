@@ -20,14 +20,14 @@ public:
   static std::pair<gtsam::NonlinearFactorGraph, gtsam::Values> Snapshot(GraphManager& manager)
   {
     std::lock_guard<std::mutex> lock(manager.mu_);
-    return {manager.isam_.getFactorsUnsafe(), manager.isam_.calculateEstimate()};
+    return {manager.isam_->getFactorsUnsafe(), manager.isam_->calculateEstimate()};
   }
 
   static std::pair<gtsam::Pose2, Eigen::Matrix3d> MarginalSnapshot(GraphManager& manager,
                                                                    uint64_t node_index)
   {
     std::lock_guard<std::mutex> lock(manager.mu_);
-    return {manager.PoseAt(node_index), manager.isam_.marginalCovariance(PoseKey(node_index))};
+    return {manager.PoseAt(node_index), manager.isam_->marginalCovariance(PoseKey(node_index))};
   }
 
   static bool AddFactor(GraphManager& manager, const gtsam::NonlinearFactor::shared_ptr& factor)

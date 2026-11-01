@@ -101,11 +101,18 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   // per-fix course. covariance[8] is the message yaw variance.
   const double sigma = CogEffectiveSigma(msg->orientation_covariance[8], cog_min_sigma_rad_);
   const auto source_ns = rclcpp::Time(msg->header.stamp).nanoseconds();
+  const auto observation_id = static_cast<uint64_t>(source_ns) << 1;
+  if (!graph_->IsInitialized() && seed_yaw_candidate_ &&
+      seed_yaw_source_epoch_ == integration_epoch_ && seed_yaw_candidate_->id == observation_id)
+  {
+    TrySeedInitialPose();
+    return;
+  }
   const bool queued = graph_->QueueYawAtEpoch(yaw,
                                               sigma,
                                               /*robust=*/false,
                                               source_ns,
-                                              static_cast<uint64_t>(source_ns) << 1,
+                                              observation_id,
                                               integration_epoch_);
   if (graph_->IsInitialized() && !queued)
   {
@@ -118,9 +125,19 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
     }
     return;
   }
+  if (!queued && seed_yaw_observation_id_ && !graph_->IsInitialized())
+  {
+    // A rejected replay/payload must not replace the admitted seed merely
+    // because the graph is still waiting for its first position observation.
+    TrySeedInitialPose();
+    return;
+  }
   seed_yaw_ = yaw;
   seed_yaw_source_ns_ = rclcpp::Time(msg->header.stamp).nanoseconds();
   seed_yaw_source_epoch_ = integration_epoch_;
+  seed_yaw_candidate_ = SeedHeadingCandidate{observation_id, sigma, false};
+  seed_yaw_observation_id_ =
+      queued ? std::optional<uint64_t>(static_cast<uint64_t>(source_ns) << 1) : std::nullopt;
 
   if (cog_flip_recovery_enabled_ && graph_->IsInitialized() && queued)
   {
@@ -255,20 +272,36 @@ void FusionGraphNode::OnMagYaw(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   // active the optimizer pulls toward COG and treats mag as a soft
   // anchor that prevents free drift, not as a precise observation.
   const auto source_ns = rclcpp::Time(msg->header.stamp).nanoseconds();
+  const auto observation_id = (static_cast<uint64_t>(source_ns) << 1) | 1U;
+  if (!graph_->IsInitialized() && seed_yaw_candidate_ &&
+      seed_yaw_source_epoch_ == integration_epoch_ && seed_yaw_candidate_->id == observation_id)
+  {
+    TrySeedInitialPose();
+    return;
+  }
   const bool queued = graph_->QueueYawAtEpoch(yaw,
                                               std::sqrt(var),
                                               /*robust=*/true,
                                               source_ns,
-                                              (static_cast<uint64_t>(source_ns) << 1) | 1U,
+                                              observation_id,
                                               integration_epoch_);
   if (graph_->IsInitialized() && !queued)
     return;
+  if (!queued && seed_yaw_observation_id_ && !graph_->IsInitialized())
+  {
+    TrySeedInitialPose();
+    return;
+  }
   if (!seed_yaw_ || !seed_yaw_source_ns_ || seed_yaw_source_epoch_ != integration_epoch_ ||
       !DrPoseAtSource(integration_epoch_, *seed_yaw_source_ns_))
   {
     seed_yaw_ = yaw;
     seed_yaw_source_ns_ = rclcpp::Time(msg->header.stamp).nanoseconds();
     seed_yaw_source_epoch_ = integration_epoch_;
+    seed_yaw_candidate_ = SeedHeadingCandidate{observation_id, std::sqrt(var), true};
+    seed_yaw_observation_id_ =
+        queued ? std::optional<uint64_t>((static_cast<uint64_t>(source_ns) << 1) | 1U)
+               : std::nullopt;
   }
   TrySeedInitialPose();
 }

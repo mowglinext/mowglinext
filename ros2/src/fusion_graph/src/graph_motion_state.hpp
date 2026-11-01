@@ -29,11 +29,20 @@ struct GraphMotionState
   std::shared_ptr<MotionSourceHistory> active_history;
   struct Edge
   {
+    struct ConditionalInsertion
+    {
+      gtsam::Key key;
+      int64_t source_ns;
+      gtsam::NonlinearFactor::shared_ptr factor;
+    };
     uint64_t owner;
     std::shared_ptr<ConditionalProcessBridge> bridge;
     std::map<gtsam::Key, int64_t> acquisitions;
+    // Actual insertion order and immutable factor ownership, not timestamp order.
+    std::vector<ConditionalInsertion> conditionals;
   };
   std::deque<Edge> edges;
+  bool relative_conditionals = false;
   struct Observation
   {
     gtsam::Vector2 xy;

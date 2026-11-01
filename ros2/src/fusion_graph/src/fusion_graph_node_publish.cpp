@@ -88,6 +88,46 @@ bool FusionGraphNode::TrySeedInitialPose()
   const auto dr_at_heading = DrPoseAtSource(integration_epoch_, *seed_yaw_source_ns_);
   if (!dr_at_position || !dr_at_heading)
     return false;
+  if (*seed_source_ns_ == *seed_yaw_source_ns_ && seed_yaw_candidate_)
+  {
+    if (!seed_yaw_observation_id_ && graph_->QueueYawAtEpoch(*seed_yaw_,
+                                                             seed_yaw_candidate_->sigma,
+                                                             seed_yaw_candidate_->robust,
+                                                             *seed_yaw_source_ns_,
+                                                             seed_yaw_candidate_->id,
+                                                             integration_epoch_))
+      seed_yaw_observation_id_ = seed_yaw_candidate_->id;
+    const auto result =
+        graph_->InitializeSourceObservations(this->now().nanoseconds(),
+                                             *seed_source_ns_,
+                                             integration_epoch_,
+                                             static_cast<uint64_t>(*seed_source_ns_),
+                                             seed_yaw_candidate_->id);
+    if (result == SourceBootstrapResult::Failed)
+    {
+      RCLCPP_ERROR_THROTTLE(get_logger(),
+                            *get_clock(),
+                            5000,
+                            "fusion_graph: same-source initialization failed; admitted GNSS and "
+                            "heading observations remain pending");
+      return false;
+    }
+    if (result == SourceBootstrapResult::Applied)
+    {
+      seed_yaw_observation_id_ = seed_yaw_candidate_->id;
+      t_map_odom_anchor_valid_ = false;
+      const auto initialized = graph_->LatestSnapshot();
+      RCLCPP_INFO(get_logger(),
+                  "fusion_graph: initialized at (%.3f, %.3f, %.3f rad) from same-source GNSS "
+                  "and heading observations",
+                  initialized->pose.x(),
+                  initialized->pose.y(),
+                  initialized->pose.theta());
+      return true;
+    }
+    // Only missing queued provenance can use the existing derived-prior path.
+    // Different source epochs retain their existing retiming model below.
+  }
   // Absolute heading and antenna position can arrive from different source
   // epochs. Undo only the rotation actually consumed between those epochs;
   // later replay must not integrate that same turn a second time.

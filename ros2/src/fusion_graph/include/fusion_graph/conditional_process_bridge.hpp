@@ -6,11 +6,13 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <stdexcept>
 #include <vector>
 
 #include "fusion_graph/motion_source_history.hpp"
+#include "fusion_graph/relative_conditional_factor.hpp"
 #include <Eigen/Eigenvalues>
 #include <gtsam/linear/JacobianFactor.h>
 #include <gtsam/nonlinear/LinearContainerFactor.h>
@@ -55,6 +57,19 @@ struct FrozenProcessEdge
 class ConditionalProcessBridge
 {
 public:
+  enum class Mode
+  {
+    FrozenAffine,
+    RelativeErrors
+  };
+
+  struct RelativeInsertion
+  {
+    gtsam::Key key;
+    std::optional<gtsam::Pose2> initial_value;
+    gtsam::NonlinearFactor::shared_ptr factor;
+  };
+
   struct Insertion
   {
     gtsam::Key key;
@@ -63,7 +78,8 @@ public:
     gtsam::LinearContainerFactor::shared_ptr factor;
   };
 
-  explicit ConditionalProcessBridge(FrozenProcessEdge edge) : edge_(std::move(edge))
+  explicit ConditionalProcessBridge(FrozenProcessEdge edge, Mode mode = Mode::FrozenAffine)
+      : edge_(std::move(edge)), mode_(mode)
   {
     if (edge_.end_ns <= edge_.start_ns || edge_.left_key == edge_.right_key ||
         !edge_.trajectory_query ||
@@ -92,8 +108,8 @@ public:
                    gtsam::Key new_key,
                    const gtsam::Values* current_values = nullptr)
   {
-    if (source_ns < edge_.start_ns || source_ns > edge_.end_ns)
-      throw std::out_of_range("acquisition outside frozen process edge");
+    RequireMode(Mode::FrozenAffine);
+    CheckTime(source_ns);
     if (source_ns == edge_.start_ns)
       return {edge_.left_key, std::nullopt, nullptr};
     if (source_ns == edge_.end_ns)
@@ -104,44 +120,16 @@ public:
     if (references_.exists(new_key))
       throw std::invalid_argument("acquisition key already in frozen references");
 
-    const auto trajectory = Query(source_ns);
+    const auto recipe = Recipe(source_ns);
+    const auto& trajectory = recipe.trajectory;
+    const auto& gain = recipe.gain;
     gtsam::Values refs = references_;
     const auto canonical = refs.at<gtsam::Pose2>(edge_.left_key).compose(trajectory.mean);
     refs.insert(new_key, canonical);
     const Affine target = Coordinates(trajectory, new_key, refs);
-    const size_t count = acquisitions_.size() + 1;
-    gtsam::Matrix conditioning = gtsam::Matrix::Zero(3 * count, 3 * count);
-    gtsam::Matrix cross(3, 3 * count);
-    conditioning.topLeftCorner<3, 3>() = endpoint_kernel_;
-    cross.leftCols<3>() = Kernel(source_ns, trajectory, edge_.end_ns, endpoint_);
     std::vector<const Affine*> affines{&endpoint_affine_};
-    for (size_t i = 0; i < acquisitions_.size(); ++i)
-    {
-      const auto& a = acquisitions_[i];
-      affines.push_back(&a.affine);
-      cross.middleCols<3>(3 * (i + 1)) = Kernel(source_ns, trajectory, a.time, a.trajectory);
-      conditioning.block<3, 3>(0, 3 * (i + 1)) =
-          Kernel(edge_.end_ns, endpoint_, a.time, a.trajectory);
-      conditioning.block<3, 3>(3 * (i + 1), 0) =
-          conditioning.block<3, 3>(0, 3 * (i + 1)).transpose();
-      for (size_t j = 0; j <= i; ++j)
-      {
-        const auto& b = acquisitions_[j];
-        conditioning.block<3, 3>(3 * (i + 1), 3 * (j + 1)) =
-            Kernel(a.time, a.trajectory, b.time, b.trajectory);
-        conditioning.block<3, 3>(3 * (j + 1), 3 * (i + 1)) =
-            conditioning.block<3, 3>(3 * (i + 1), 3 * (j + 1)).transpose().eval();
-      }
-    }
-    const auto spectrum = Spectrum(conditioning);
-    const gtsam::Matrix gain = SolveRight(cross, spectrum);
-    const gtsam::Matrix3 unconditional = Kernel(source_ns, trajectory, source_ns, trajectory);
-    gtsam::Matrix3 covariance = unconditional - gain * cross.transpose();
-    covariance = (covariance + covariance.transpose()).eval() * 0.5;
-    // Cancellation of a pure shared sample produces exact constraints, not tiny fake noise.
-    // Scale each coordinate by its own unconditional variance; highly anisotropic D is safe.
-    const auto conditional_spectrum = Spectrum(covariance, unconditional.diagonal());
-
+    for (const auto& acquisition : acquisitions_)
+      affines.push_back(&acquisition.affine);
     Affine residual = target;
     for (size_t i = 0; i < affines.size(); ++i)
     {
@@ -154,9 +142,7 @@ public:
         entry->second -= block * jacobian;
       }
     }
-    const gtsam::Matrix rotation =
-        conditional_spectrum.vectors.transpose() * conditional_spectrum.inverse_scale.asDiagonal();
-    gtsam::Vector sigmas = conditional_spectrum.values.cwiseSqrt();
+    const auto& rotation = recipe.rotation;
     std::vector<std::pair<gtsam::Key, gtsam::Matrix>> terms;
     gtsam::Values factor_refs;
     for (const auto& [key, jacobian] : residual.jacobians)
@@ -164,10 +150,7 @@ public:
       terms.emplace_back(key, rotation * jacobian);
       factor_refs.insert(key, refs.at(key));
     }
-    const gtsam::SharedDiagonal noise = (sigmas.array() == 0.0).any()
-                                            ? gtsam::noiseModel::Constrained::MixedSigmas(sigmas)
-                                            : gtsam::noiseModel::Diagonal::Sigmas(sigmas);
-    const gtsam::JacobianFactor gaussian(terms, -rotation * residual.constant, noise);
+    const gtsam::JacobianFactor gaussian(terms, -rotation * residual.constant, recipe.noise);
     auto factor = std::make_shared<gtsam::LinearContainerFactor>(gaussian, factor_refs);
     gtsam::Vector3 offset = residual.constant;
     if (current_values)
@@ -181,6 +164,50 @@ public:
     acquisitions_.push_back({source_ns, new_key, trajectory, target});
     references_.insert(new_key, canonical);
     return {new_key, initial, factor};
+  }
+
+  // An edge's complete acquisition family chooses one coordinate model. Promotion must
+  // rebuild the whole family; neither insertion path can silently mix model versions.
+  RelativeInsertion InsertRelative(int64_t source_ns,
+                                   gtsam::Key new_key,
+                                   const gtsam::Values* current_values = nullptr)
+  {
+    RequireMode(Mode::RelativeErrors);
+    CheckTime(source_ns);
+    if (const auto alias = Alias(source_ns))
+      return {*alias, std::nullopt, nullptr};
+    if (references_.exists(new_key))
+      throw std::invalid_argument("acquisition key already in frozen references");
+    const auto recipe = Recipe(source_ns);
+    const auto initial = RelativeInitial(recipe, current_values ? *current_values : references_);
+    auto terms = RelativeConditioningTerms(recipe);
+    terms.insert(
+        terms.begin(),
+        {new_key, recipe.trajectory.mean, recipe.trajectory.bias_jacobian, recipe.rotation});
+    auto factor = std::make_shared<RelativeConditionalFactor>(
+        edge_.left_key, edge_.bias_key, BiasReference(), std::move(terms), recipe.noise);
+    gtsam::Values refs = references_;
+    refs.insert(new_key, initial);
+    const auto affine = Coordinates(recipe.trajectory, new_key, refs);
+    acquisitions_.push_back({source_ns, new_key, recipe.trajectory, affine});
+    references_.insert(new_key, initial);
+    return {new_key, initial, factor};
+  }
+
+  // Read-only conditional mean under the same local model. Current values must include all
+  // registered conditioning states. No new source identity or acquisition is allocated.
+  gtsam::Pose2 RelativeInitialValue(int64_t source_ns, const gtsam::Values& current_values) const
+  {
+    RequireMode(Mode::RelativeErrors);
+    CheckTime(source_ns);
+    if (const auto alias = Alias(source_ns))
+      return current_values.at<gtsam::Pose2>(*alias);
+    return RelativeInitial(Recipe(source_ns), current_values);
+  }
+
+  Mode mode() const
+  {
+    return mode_;
   }
 
   const FrozenProcessEdge& edge() const
@@ -206,6 +233,146 @@ private:
     gtsam::Vector values, inverse_scale;
     gtsam::Matrix vectors;
   };
+
+  struct ConditionalRecipe
+  {
+    MotionTrajectory trajectory;
+    gtsam::Matrix gain;
+    gtsam::Matrix3 rotation;
+    gtsam::SharedDiagonal noise;
+  };
+
+  void RequireMode(Mode mode) const
+  {
+    if (mode_ != mode)
+      throw std::logic_error("cannot mix conditional process factor families");
+  }
+
+  void CheckTime(int64_t time) const
+  {
+    if (time < edge_.start_ns || time > edge_.end_ns)
+      throw std::out_of_range("acquisition outside frozen process edge");
+  }
+
+  std::optional<gtsam::Key> Alias(int64_t time) const
+  {
+    if (time == edge_.start_ns)
+      return edge_.left_key;
+    if (time == edge_.end_ns)
+      return edge_.right_key;
+    for (const auto& acquisition : acquisitions_)
+      if (acquisition.time == time)
+        return acquisition.key;
+    return std::nullopt;
+  }
+
+  double BiasReference() const
+  {
+    return edge_.bias_key ? edge_.reference_values.at<double>(*edge_.bias_key) : 0.0;
+  }
+
+  std::vector<RelativeConditionalFactor::Term> RelativeConditioningTerms(
+      const ConditionalRecipe& recipe) const
+  {
+    std::vector<RelativeConditionalFactor::Term> terms;
+    terms.push_back({edge_.right_key,
+                     endpoint_.mean,
+                     endpoint_.bias_jacobian,
+                     -recipe.rotation * recipe.gain.leftCols<3>()});
+    for (size_t i = 0; i < acquisitions_.size(); ++i)
+    {
+      const auto& a = acquisitions_[i];
+      terms.push_back({a.key,
+                       a.trajectory.mean,
+                       a.trajectory.bias_jacobian,
+                       -recipe.rotation * recipe.gain.middleCols<3>(3 * (i + 1))});
+    }
+    return terms;
+  }
+
+  gtsam::Pose2 RelativeInitial(const ConditionalRecipe& recipe, const gtsam::Values& values) const
+  {
+    const auto& left = values.at<gtsam::Pose2>(edge_.left_key);
+    const double delta =
+        edge_.bias_key ? values.at<double>(*edge_.bias_key) - BiasReference() : 0.0;
+    gtsam::Vector3 predicted =
+        recipe.gain.leftCols<3>() *
+        RelativeConditionalFactor::Coordinate(
+            {edge_.right_key, endpoint_.mean, endpoint_.bias_jacobian, gtsam::Matrix3::Identity()},
+            left,
+            values.at<gtsam::Pose2>(edge_.right_key),
+            delta);
+    for (size_t i = 0; i < acquisitions_.size(); ++i)
+    {
+      const auto& a = acquisitions_[i];
+      predicted +=
+          recipe.gain.middleCols<3>(3 * (i + 1)) *
+          RelativeConditionalFactor::Coordinate(
+              {a.key, a.trajectory.mean, a.trajectory.bias_jacobian, gtsam::Matrix3::Identity()},
+              left,
+              values.at<gtsam::Pose2>(a.key),
+              delta);
+    }
+    // Log(Exp(e)) only inverts the declared principal error chart on this branch.
+    // Reject an unrepresentable winding; wrapping would silently change the conditional mean.
+    constexpr double margin = 128.0 * std::numeric_limits<double>::epsilon();
+    if (!predicted.allFinite() || std::abs(predicted.z()) >= std::numbers::pi - margin)
+      throw UnsupportedRelativeConditional(
+          "relative conditional mean outside principal Log branch");
+    const RelativeConditionalFactor::Term target{0,
+                                                 recipe.trajectory.mean,
+                                                 recipe.trajectory.bias_jacobian,
+                                                 gtsam::Matrix3::Identity()};
+    const auto initial = left.compose(RelativeConditionalFactor::Mean(target, delta))
+                             .compose(gtsam::Pose2::Expmap(predicted));
+    const auto recovered = RelativeConditionalFactor::Coordinate(target, left, initial, delta);
+    if (!initial.matrix().allFinite() ||
+        (recovered - predicted).norm() > 1e-10 * std::max(1.0, predicted.norm()))
+      throw UnsupportedRelativeConditional("invalid relative conditional initialization");
+    return initial;
+  }
+
+  ConditionalRecipe Recipe(int64_t source_ns) const
+  {
+    const auto trajectory = Query(source_ns);
+    const size_t count = acquisitions_.size() + 1;
+    gtsam::Matrix conditioning = gtsam::Matrix::Zero(3 * count, 3 * count);
+    gtsam::Matrix cross(3, 3 * count);
+    conditioning.topLeftCorner<3, 3>() = endpoint_kernel_;
+    cross.leftCols<3>() = Kernel(source_ns, trajectory, edge_.end_ns, endpoint_);
+    for (size_t i = 0; i < acquisitions_.size(); ++i)
+    {
+      const auto& a = acquisitions_[i];
+      cross.middleCols<3>(3 * (i + 1)) = Kernel(source_ns, trajectory, a.time, a.trajectory);
+      conditioning.block<3, 3>(0, 3 * (i + 1)) =
+          Kernel(edge_.end_ns, endpoint_, a.time, a.trajectory);
+      conditioning.block<3, 3>(3 * (i + 1), 0) =
+          conditioning.block<3, 3>(0, 3 * (i + 1)).transpose();
+      for (size_t j = 0; j <= i; ++j)
+      {
+        const auto& b = acquisitions_[j];
+        conditioning.block<3, 3>(3 * (i + 1), 3 * (j + 1)) =
+            Kernel(a.time, a.trajectory, b.time, b.trajectory);
+        conditioning.block<3, 3>(3 * (j + 1), 3 * (i + 1)) =
+            conditioning.block<3, 3>(3 * (i + 1), 3 * (j + 1)).transpose().eval();
+      }
+    }
+    const auto spectrum = Spectrum(conditioning);
+    const gtsam::Matrix gain = SolveRight(cross, spectrum);
+    const gtsam::Matrix3 unconditional = Kernel(source_ns, trajectory, source_ns, trajectory);
+    gtsam::Matrix3 covariance = unconditional - gain * cross.transpose();
+    covariance = (covariance + covariance.transpose()).eval() * 0.5;
+    // Cancellation of a pure shared sample produces exact constraints, not tiny fake noise.
+    // Scale each coordinate by its own unconditional variance; highly anisotropic D is safe.
+    const auto conditional_spectrum = Spectrum(covariance, unconditional.diagonal());
+    const gtsam::Matrix3 rotation =
+        conditional_spectrum.vectors.transpose() * conditional_spectrum.inverse_scale.asDiagonal();
+    const gtsam::Vector sigmas = conditional_spectrum.values.cwiseSqrt();
+    const gtsam::SharedDiagonal noise = (sigmas.array() == 0.0).any()
+                                            ? gtsam::noiseModel::Constrained::MixedSigmas(sigmas)
+                                            : gtsam::noiseModel::Diagonal::Sigmas(sigmas);
+    return {trajectory, gain, rotation, noise};
+  }
 
   // Work in a correlation chart before deciding numerical rank. A yaw variance of 1e-20
   // alongside metre-scale translation variance must not become a constraint just for its units.
@@ -312,6 +479,7 @@ private:
   }
 
   const FrozenProcessEdge edge_;
+  const Mode mode_;
   MotionTrajectory endpoint_;
   Affine endpoint_affine_;
   gtsam::Matrix3 endpoint_kernel_;

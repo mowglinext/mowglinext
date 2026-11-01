@@ -118,7 +118,7 @@ void GraphManager::ResetLocked()
   p.optimizationParams = gtsam::ISAM2GaussNewtonParams(0.001);
   p.relinearizeThreshold = 0.05;
   p.relinearizeSkip = std::max(1, params_.isam2_relinearize_skip);
-  isam_ = gtsam::ISAM2(p);
+  isam_ = std::make_unique<gtsam::ISAM2>(p);
 
   new_factors_ = gtsam::NonlinearFactorGraph();
   new_values_ = gtsam::Values();
@@ -132,6 +132,7 @@ void GraphManager::ResetLocked()
 
   accum_.Reset();
   motion_.reset();
+  heading_seed_.reset();
   // A new graph's absolute bias prior starts at zero. A reused instance must
   // not seed pose-only restored states from the previous graph/session bias.
   current_bias_estimate_ = 0.0;
@@ -352,9 +353,9 @@ try
                                             pin_noise));
     kept_values.insert(key_value.key, key_value.value);
   }
-  auto restored = isam_;
-  restored.update(fg, kept_values);
-  isam_ = std::move(restored);
+  auto restored = std::make_unique<gtsam::ISAM2>(*isam_);
+  restored->update(fg, kept_values);
+  isam_.swap(restored);
   estimate_dirty_ = true;
 
   next_index_ = next_idx;
@@ -388,7 +389,7 @@ try
     out.pose = PoseAt(next_index_ - 1);
     try
     {
-      out.covariance = isam_.marginalCovariance(PoseKey(next_index_ - 1));
+      out.covariance = isam_->marginalCovariance(PoseKey(next_index_ - 1));
     }
     catch (const std::exception&)
     {

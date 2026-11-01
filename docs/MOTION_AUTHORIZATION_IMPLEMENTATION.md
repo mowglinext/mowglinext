@@ -5,6 +5,79 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Same-source bootstrap identity and current-Core repair (2026-11-01)
+
+Normal undocked bootstrap used an accepted GNSS/heading tuple twice: once to
+construct a tight body-pose prior, then again as source GNSS/yaw factors. With
+zero lever, GNSS sigma 3 mm and heading sigma 0.15 rad, the extra 5 mm / 0.05 rad
+prior made the local posterior artificially tighter. The actual Node regression
+fails its full covariance assertion by 0.02025; a nonzero-lever counterpart
+fails by 0.0219778157. Both are runtime REDs; the preceding 52 Node cases pass.
+These are model/accounting results, not attribution of the original boundary
+event or a calibration of field uncertainty.
+
+For an admitted tuple at **exactly the same acquisition source**, initialization
+now uses one original antenna-position likelihood and one heading likelihood,
+with their actual effective noise and robustness. It keeps the original source
+IDs, removes only those two queued entries, retains other boundary/future
+observations and consumed motion tail, and publishes the actual marginal.
+There is no additional data-derived body-pose prior. This preserves the expected
+lever-arm position/heading cross-covariance under the existing independent
+GNSS/yaw measurement model. It does not supply missing physical cross-sensor
+noise metadata. Different-source heading transport, explicit poses/dock seeds
+and the clear-carried heading prior keep their existing paths; their general
+initialization model is not claimed repaired here.
+
+Heading candidates retain their first producer-specific ID, payload and noise
+before motion support exists. A replay cannot replace that payload. When the
+baseline arrives, the same-source initializer can admit that original candidate
+and use the Core's actual queued payload. This closes an independently found
+late-mag admission hole. Failed candidate construction leaves both inputs
+pending; it cannot fall back to a duplicated pose prior.
+
+A separate **explicit invalid-seed Core operation** now rebuilds every retained
+acquisition family using the reviewed relative-error model, retires only the
+identified heading contribution, and applies one source-yaw identity once.
+Legacy independent Pose2 seeds retain their XY cost under the tested linked
+chart; new raw-observation seeds retain the exact original GNSS factor and ID.
+Candidate construction is isolated under the existing mutex, and publication
+uses non-allocating ownership/state swaps; failure leaves the graph, queues,
+source frontier, snapshot and in-flight rebase untouched. Successful publication
+refreshes pose/covariance/bias and cancels stale rebase ownership. A normal
+unsupported relative chart leaves its observation pending rather than resetting
+the graph. This API requires explicit invalidation of that exact seed; **it is
+not wired as a blanket automatic COG-conflict policy**. Marginalized/unknown
+families and an uncommitted process tail are rejected without discarding data.
+
+The relative conditional is a new local first-order potential in shared
+relative-error coordinates, with original source kernel, gains, noise and exact
+constraints. Away from the frozen reference it changes the acquisition model.
+No global Haar-density or physical preintegration equivalence is claimed.
+Current-Core tests compare independent complete means/covariances, delayed
+recovery followed by a turn, future/old-edge insertions, IDs, actual rollback and
+stale-worker cancellation. The former additive anchor fails the same four
+moving cases at runtime; covariance comparison in that RED is not reached after
+its differing key-count assertion.
+
+Final software evidence: **16 Core CTest targets / 114 GTests pass**, plus
+**57/57 actual Node GTests** after fresh compilation of all 11 Core TUs, eight
+Node support TUs, constructor and fixture. The unchanged 69 interface sources,
+eight interface DSOs and generated-header dependency closure are pinned.
+Independent Core, bootstrap and identity follow-up reviews have no unresolved
+scoped finding. Clang-format 18 verification is retained with the final diff.
+Artifacts: external `pr950-resume-20261101/true-flip-current/`, particularly
+`logs/attempt-003-resume-001/`, `logs/counterfactual-001/` and
+`node-consumer/logs/node-green-004/`.
+
+Initial inline Eigen-heavy compilation hit the enforced 60 s per-TU caps.
+Moving unchanged factor definitions out of the header allowed the next fresh
+10-TU Core build to finish in 55 s. The final 11-TU/test build totals 171 s under
+its 240 s cap, including the retained private-include setup failure; the fresh
+Node build takes 99 s under 300 s and tests take 3.47 s. Earlier manifest/ROS
+setup failures are retained separately and are not counted as passing tests.
+No complete mission, physical containment, automatic post-prefix recovery,
+hardware operation or Ready/merge action is implied.
+
 ## Coverage execution versus recovery offsets (2026-11-01)
 
 A public real-BT/fake-Nav2 regression reproduces a retry-accounting defect on
@@ -1564,6 +1637,8 @@ than inheriting a whole-branch CI result.
 | Rebase information and absolute gyro bias | Two independently causal Core repairs, with their tests/lifecycle pieces; source acquisition retention depends on information-preserving typed rebase. 52 focused cases passed before source integration. |
 | COG producer source context | Producer/history/tests form a separate repair from GraphManager. Its pre-change producer, timing/math helpers and package CMake match latest fetched dev byte-for-byte; direct base application is plausible, but any extracted PR still needs its own validation. Retain delayed heading, completed-pivot latch and clock-epoch cases together. |
 | Wheel travel-noise accounting | Four small production edits plus source/legacy/clipped-bootstrap regressions; all three new cases RED on the old Core, 15 selected targets / 156 cases GREEN after coherent ABI rebuild. Can be separated with its bootstrap source integration dependency retained; it does not repair true-flip lineage. |
+| Same-source bootstrap observations | Runtime Node covariance REDs and five new identity/covariance cases are repaired; all 57 Node cases pass. Queue identity, actual raw likelihoods, tail bookkeeping and candidate admission stay together. This is a candidate smaller repair after target-base validation; differing-source/clear-carried initialization remains outside its claim. |
+| Explicit invalid-seed Core repair | Current Core 114 cases pass, including complete joint information and rollback/rebase tests. Keep relative model, complete-family registry, seed identity and atomic ownership together. Automatic Node invalidation policy and marginalized-prefix recovery remain dependencies; this is not an independently complete automatic flip fix. |
 | Coverage execution provenance | Separate recovery offsets from executed coverage and retain gaps through v4 checkpoints. Baseline failed-transit credit RED and checkpoint lifecycle REDs are repaired with focused tests. Keep ledger producers, completion/retry consumers, migration and plan/area reset handling together; target-base revalidation remains required. |
 | Post-anchor snapshot | Small Core/API repair with two baseline RED cases, 11 rebase and 48 Node GREEN cases; depends on existing source/revision semantics. It does not repair the invalid true-flip prior. |
 | Automatic dock seed provenance | Keep the shared charging guard, callback ordering and timer fallback together. Two old-Node RED cases, two charging controls and 52 actual-Node GREEN cases support the narrow repair; general bad authoritative seed recovery remains separate. |

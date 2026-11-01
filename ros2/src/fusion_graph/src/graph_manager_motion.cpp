@@ -6,6 +6,7 @@
 
 #include "fusion_graph/factors.hpp"
 #include "fusion_graph/graph_manager.hpp"
+#include "graph_heading_seed.hpp"
 #include "graph_motion_state.hpp"
 #include <gtsam/linear/NoiseModel.h>
 
@@ -88,40 +89,15 @@ bool GraphManager::InitializeSource(const gtsam::Pose2& pose,
   if (!initialized_)
     return false;
   auto& state = *motion_;
-  state.committed_ns = source_ns;
-  state.schedule_ns = schedule_ns;
-  // Bootstrap is the only replay of compatibility statistics. Discard motion
-  // before the absolute seed, without re-learning EMA bias or counting samples.
-  accum_.Reset();
-  while (!state.pending_steps.empty() && state.pending_steps.front().end_ns <= source_ns)
-    state.pending_steps.pop_front();
-  if (!state.pending_steps.empty())
-    state.pending_steps.front().start_ns = source_ns;
-  state.pending_gyro_ids.clear();
-  for (const auto& step : state.pending_steps)
-  {
-    state.pending_gyro_ids.insert(step.gyro.id);
-    const double dt = static_cast<double>(step.end_ns - step.start_ns) * 1e-9;
-    accum_.dx += step.wheel.vx * dt;
-    accum_.dy += step.wheel.vy * dt;
-    accum_.wheel_travel_m += std::hypot(step.wheel.vx, step.wheel.vy) * dt;
-    accum_.dtheta_wheel += step.wheel.wz * dt;
-    accum_.dt_total += dt;
-    accum_.dtheta_gyro += (step.gyro.raw_z - step.bias_linearization) * dt;
-    accum_.max_abs_gyro_rad_per_s =
-        std::max(accum_.max_abs_gyro_rad_per_s, std::abs(step.gyro.raw_z));
-    if (params_.use_imu_preint)
-    {
-      accum_.gyro_preint_dtheta += step.gyro.raw_z * dt;
-      accum_.gyro_preint_dt += dt;
-      accum_.gyro_preint_variance +=
-          dt * dt * params_.gyro_noise_density_rad_per_s * params_.gyro_noise_density_rad_per_s;
-    }
-  }
-  state.validation.PruneBefore(epoch, source_ns);
+  // Preserve the legacy explicit-pose source/tail contract. The raw-observation
+  // initializer stages this same bookkeeping before its atomic publication.
+  PrepareSourceInitializationLocked(state, accum_, schedule_ns, source_ns);
   latest_->source_stamp_ns = source_ns;
   latest_->source_epoch = epoch;
   latest_->revision = ++state.revision;
+  heading_seed_->epoch = epoch;
+  heading_seed_->source_ns = source_ns;
+  heading_seed_->source_bound = true;
   node_time_index_.clear();
   node_time_index_.emplace_back(static_cast<double>(source_ns) * 1e-9, latest_->node_index);
   return true;
@@ -235,8 +211,11 @@ void GraphManager::FreezeSourceEdgeLocked(gtsam::Key left,
     }
     edge.reference_values.insert(*edge.bias_key, bias);
   }
+  const auto mode = state.relative_conditionals ? ConditionalProcessBridge::Mode::RelativeErrors
+                                                : ConditionalProcessBridge::Mode::FrozenAffine;
   state.edges.push_back({gtsam::Symbol(right).index(),
-                         std::make_shared<ConditionalProcessBridge>(std::move(edge)),
+                         std::make_shared<ConditionalProcessBridge>(std::move(edge), mode),
+                         {},
                          {}});
 }
 
@@ -342,16 +321,37 @@ bool GraphManager::AssimilateSourceObservationsLocked()
     gtsam::Values values;
     if (edge != state.edges.end())
     {
-      const auto current = isam_.calculateEstimate();
-      const auto acquisition = edge->bridge->Insert(it->source_ns,
-                                                    gtsam::Symbol('a', state.next_acquisition++),
-                                                    &current);
+      const auto current = isam_->calculateEstimate();
+      ConditionalProcessBridge::RelativeInsertion acquisition;
+      const auto new_key = gtsam::Symbol('a', state.next_acquisition);
+      if (edge->bridge->mode() == ConditionalProcessBridge::Mode::RelativeErrors)
+      {
+        try
+        {
+          acquisition = edge->bridge->InsertRelative(it->source_ns, new_key, &current);
+        }
+        catch (const UnsupportedRelativeConditional&)
+        {
+          // Keep this admitted observation pending. Another supported update
+          // can change its conditioning state; never relabel it or reset the
+          // graph merely because its current local chart cannot represent it.
+          ++it;
+          continue;
+        }
+      }
+      else
+      {
+        const auto frozen = edge->bridge->Insert(it->source_ns, new_key, &current);
+        acquisition = {frozen.key, frozen.initial_value, frozen.factor};
+      }
+      ++state.next_acquisition;
       key = acquisition.key;
       if (acquisition.initial_value)
       {
         values.insert(key, *acquisition.initial_value);
         factors.push_back(acquisition.factor);
         edge->acquisitions.emplace(key, it->source_ns);
+        edge->conditionals.push_back({key, it->source_ns, acquisition.factor});
       }
     }
     else if (it->source_ns == state.committed_ns)
@@ -387,7 +387,7 @@ bool GraphManager::AssimilateSourceObservationsLocked()
   {
     estimate_dirty_ = true;
     latest_->pose = PoseAt(latest_->node_index);
-    latest_->covariance = isam_.marginalCovariance(PoseKey(latest_->node_index));
+    latest_->covariance = isam_->marginalCovariance(PoseKey(latest_->node_index));
     state.revision = std::max(state.revision, latest_->revision);
     latest_->revision = ++state.revision;
   }
@@ -432,28 +432,30 @@ std::optional<gtsam::Pose2> GraphManager::EstimatePoseAtSource(uint64_t epoch,
   try
   {
     if (source_ns == motion_->committed_ns)
-      return isam_.calculateEstimate<gtsam::Pose2>(PoseKey(latest_->node_index));
+      return isam_->calculateEstimate<gtsam::Pose2>(PoseKey(latest_->node_index));
     for (const auto& entry : motion_->edges)
     {
       const auto& edge = entry.bridge->edge();
       if (source_ns < edge.start_ns || source_ns > edge.end_ns)
         continue;
-      if (!isam_.valueExists(edge.left_key) || !isam_.valueExists(edge.right_key))
+      if (!isam_->valueExists(edge.left_key) || !isam_->valueExists(edge.right_key))
         return std::nullopt;
       if (source_ns == edge.start_ns)
-        return isam_.calculateEstimate<gtsam::Pose2>(edge.left_key);
+        return isam_->calculateEstimate<gtsam::Pose2>(edge.left_key);
       if (source_ns == edge.end_ns)
-        return isam_.calculateEstimate<gtsam::Pose2>(edge.right_key);
+        return isam_->calculateEstimate<gtsam::Pose2>(edge.right_key);
       for (const auto& [key, time] : entry.acquisitions)
         if (time == source_ns)
-          return isam_.calculateEstimate<gtsam::Pose2>(key);
+          return isam_->calculateEstimate<gtsam::Pose2>(key);
 
       // Conditional insertion on a COPY computes the same initialization
       // without introducing a live acquisition or consuming its identity.
       // Its references/history are immutable and current values include the
       // optimized endpoints, previous acquisitions and optional bias state.
       auto conditional = *entry.bridge;
-      const auto current = isam_.calculateEstimate();
+      const auto current = isam_->calculateEstimate();
+      if (conditional.mode() == ConditionalProcessBridge::Mode::RelativeErrors)
+        return conditional.RelativeInitialValue(source_ns, current);
       const auto query =
           conditional.Insert(source_ns, gtsam::Symbol('a', motion_->next_acquisition), &current);
       return query.initial_value;
@@ -491,7 +493,7 @@ void GraphManager::PruneSourceStateLocked()
   if (!motion_)
     return;
   auto& state = *motion_;
-  while (!state.edges.empty() && !isam_.valueExists(state.edges.front().bridge->edge().left_key))
+  while (!state.edges.empty() && !isam_->valueExists(state.edges.front().bridge->edge().left_key))
     state.edges.pop_front();
   const int64_t oldest =
       !state.edges.empty() ? state.edges.front().bridge->edge().start_ns : state.committed_ns;
@@ -514,6 +516,7 @@ void GraphManager::PruneSourceStateLocked()
 
 void GraphManager::InvalidateSourceBridgesLocked()
 {
+  heading_seed_.reset();
   if (!motion_)
     return;
   motion_->edges.clear();

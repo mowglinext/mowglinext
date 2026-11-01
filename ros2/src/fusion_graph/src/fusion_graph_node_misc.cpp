@@ -57,6 +57,8 @@ void FusionGraphNode::ResetMotionSourceEpoch()
   last_lidar_source_node_index_ = std::numeric_limits<uint64_t>::max();
   seed_source_ns_.reset();
   seed_yaw_.reset();
+  seed_yaw_observation_id_.reset();
+  seed_yaw_candidate_.reset();
   seed_yaw_source_ns_.reset();
   pending_explicit_seed_.reset();
   pending_cog_flip_checks_.clear();

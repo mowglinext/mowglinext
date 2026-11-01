@@ -52,7 +52,7 @@ void GraphManager::RebaseISAM2()
       if (current_estimate_.empty())
         return;
       estimate_snapshot = current_estimate_;
-      graph_snapshot = isam_.getFactorsUnsafe();
+      graph_snapshot = isam_->getFactorsUnsafe();
       acquisition_owners = AcquisitionOwnersLocked();
       relinearize_skip = params_.isam2_relinearize_skip;
       if (params_.max_graph_nodes > 0)
@@ -136,8 +136,8 @@ void GraphManager::RebaseISAM2()
     p.optimizationParams = gtsam::ISAM2GaussNewtonParams(0.001);
     p.relinearizeThreshold = 0.05;
     p.relinearizeSkip = std::max(1, relinearize_skip);
-    gtsam::ISAM2 fresh(p);
-    fresh.update(retained, kept_values);
+    auto fresh = std::make_unique<gtsam::ISAM2>(p);
+    fresh->update(retained, kept_values);
 
     // Phase 3: only the worker that owns these mirrors may replay or clear them.
     // Reset/RigidTransform cancels via the flag. A subsequent worker increments
@@ -152,7 +152,7 @@ void GraphManager::RebaseISAM2()
         continue;
       for (const auto key : *factor)
       {
-        if (!fresh.valueExists(key) && !rebase_pending_values_.exists(key))
+        if (!fresh->valueExists(key) && !rebase_pending_values_.exists(key))
         {
           // A delayed observation may have reached a soon-to-be-removed state
           // while phase 2 ran. It is already assimilated in the live graph;
@@ -165,8 +165,8 @@ void GraphManager::RebaseISAM2()
       }
     }
     if (!rebase_pending_factors_.empty() || !rebase_pending_values_.empty())
-      fresh.update(rebase_pending_factors_, rebase_pending_values_);
-    isam_ = std::move(fresh);
+      fresh->update(rebase_pending_factors_, rebase_pending_values_);
+    isam_.swap(fresh);
     PruneSourceStateLocked();
     estimate_dirty_ = true;
     rebase_pending_factors_.resize(0);
@@ -197,7 +197,7 @@ bool GraphManager::ApplyIsamUpdateLocked(const gtsam::NonlinearFactorGraph& fg,
 {
   try
   {
-    isam_.update(fg, values);
+    isam_->update(fg, values);
   }
   catch (const std::exception& e)
   {
@@ -269,7 +269,7 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   p.optimizationParams = gtsam::ISAM2GaussNewtonParams(0.001);
   p.relinearizeThreshold = 0.05;
   p.relinearizeSkip = std::max(1, params_.isam2_relinearize_skip);
-  gtsam::ISAM2 fresh(p);
+  auto fresh = std::make_unique<gtsam::ISAM2>(p);
 
   gtsam::NonlinearFactorGraph fg;
   auto loose_noise = MakeDiagonal({0.05, 0.05, 0.05});
@@ -298,7 +298,7 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   // clean re-seed instead (same posture as ApplyIsamUpdateLocked).
   try
   {
-    fresh.update(fg, pose_values);
+    fresh->update(fg, pose_values);
   }
   catch (const std::exception& e)
   {
@@ -311,7 +311,7 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
     ResetLocked();
     return;
   }
-  isam_ = std::move(fresh);
+  isam_.swap(fresh);
   InvalidateSourceBridgesLocked();
   estimate_dirty_ = true;
 

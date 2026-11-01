@@ -46,6 +46,9 @@ add_library(fusion_graph_core
   src/graph_manager.cpp
   src/graph_manager_node.cpp
   src/graph_manager_motion.cpp
+  src/graph_manager_bootstrap.cpp
+  src/graph_manager_heading_recovery.cpp
+  src/relative_conditional_factor.cpp
   src/graph_manager_rebase.cpp
   src/graph_manager_persistence.cpp
   src/checkpoint_file.cpp
@@ -253,6 +256,17 @@ if(BUILD_TESTING)
     TIMEOUT 60
   )
   target_link_libraries(test_conditional_process_bridge fusion_graph_core)
+
+  ament_add_gtest(test_relative_conditional test/test_relative_conditional.cpp TIMEOUT 60)
+  target_link_libraries(test_relative_conditional fusion_graph_core)
+
+  ament_add_gtest(test_heading_recovery test/test_heading_recovery.cpp TIMEOUT 60)
+  target_include_directories(test_heading_recovery PRIVATE src)
+  target_link_libraries(test_heading_recovery fusion_graph_core)
+
+  ament_add_gtest(test_source_bootstrap test/test_source_bootstrap.cpp TIMEOUT 60)
+  target_include_directories(test_source_bootstrap PRIVATE src)
+  target_link_libraries(test_source_bootstrap fusion_graph_core)
 
   ament_add_gtest(test_rebase_information
     test/test_rebase_information.cpp

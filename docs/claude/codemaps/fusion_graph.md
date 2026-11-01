@@ -2,6 +2,33 @@
 
 > `ros2/src/fusion_graph` is the GTSAM iSAM2 Pose2 factor-graph localizer — the sole owner of BOTH `map→odom` and `odom→base_footprint` (CLAUDE.md Invariants 1–2). It fuses `/wheel_odom` + `/imu/data` (between-factors), `/gps/fix` (`GnssLeverArmFactor`), `/imu/cog_heading` / `/imu/mag_yaw` (yaw unaries) and, with LiDAR, a persistent RTK-built map anchor used only after complete GNSS outages; it persists the graph and tiled map under `/ros2_ws/maps/fusion_graph*`. Scan-to-scan ICP and loop closure were removed. Index refreshed 2026-09-09; regenerate when files are added/removed. Loaded on demand from `ros2/CLAUDE.md`.
 
+## Source bootstrap and explicit heading-seed repair
+
+`graph_manager_bootstrap.cpp` initializes an exact same-source admitted GNSS/yaw
+tuple from its two original likelihoods, once each, with actual marginal and
+lever-arm cross-covariance. It stages pending-tail binding through
+`PrepareSourceInitializationLocked`, also used by legacy explicit-pose source
+initialization. `TrySeedInitialPose` selects this path only with matching source
+and producer identity; different-source retiming and explicit/dock/clear-carried
+prior paths remain. Node heading candidates retain original payload/noise across
+pre-baseline replay; admission identity is separate from candidate identity.
+
+`graph_manager_heading_recovery.cpp` provides an **explicit invalid-seed** Core
+transaction, not an automatic Node policy. Opaque seed identity and complete
+live conditional ownership are required. `relative_conditional_factor.hpp/.cpp`
+and `ConditionalProcessBridge::Mode::RelativeErrors` define the local
+relative-error model used for whole-family promotion and subsequent insertion
+and read-only queries. Default families remain frozen affine until promotion.
+Unknown/marginalized prefixes and uncommitted tails reject without mutation;
+unsupported local branch observations stay pending. Solver pointer ownership
+permits non-allocating atomic publication and stale-rebase cancellation.
+
+Tests: `test_source_bootstrap`, `test_heading_recovery`,
+`test_relative_conditional` and the real `test_sensor_input_node` cases. The
+first three link Core; source-bootstrap/heading tests include private `src`
+metadata for failure/ownership checks. Evidence and limits are in the dated
+bootstrap section of `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
+
 ## Where to look
 
 TF publication in `fusion_graph_node_publish.cpp` emits the captured source pose
