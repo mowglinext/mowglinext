@@ -98,6 +98,7 @@ def _build(filename, **overrides):
             "EnvironmentVariable": Action,
             "ParameterValue": Parameter,
             "Node": Node,
+            'Shutdown': Action,
             "get_package_share_directory": lambda package: str(
                 BRINGUP.parent / package
             ),

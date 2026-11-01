@@ -49,6 +49,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    Shutdown,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -122,6 +123,15 @@ def generate_launch_description() -> LaunchDescription:
         "mode",
         default_value="realtime",
         description="Webots execution mode: realtime | fast | pause.",
+    )
+
+    gps_quality_pattern_arg = DeclareLaunchArgument(
+        'gps_quality_pattern',
+        default_value='',
+        description=(
+            'Simulated GNSS-quality cycle, e.g. '
+            '90,RTK_FIXED;30,RTK_FLOAT;10,NO_FIX. Empty keeps RTK-Fixed.'
+        ),
     )
 
     # use_magnetometer comes from mowgli_robot.yaml via navigation.launch.py
@@ -332,6 +342,8 @@ def generate_launch_description() -> LaunchDescription:
         executable="sim_navsat_rtk_fix.py",
         name="sim_navsat_rtk_fix",
         output="screen",
+        # A rejected scenario must not leave the rest of the sim running.
+        on_exit=[Shutdown(reason='GNSS quality relay exited')],
         parameters=[
             {
                 "use_sim_time": True,
@@ -342,13 +354,10 @@ def generate_launch_description() -> LaunchDescription:
                 "datum_lon": datum_lon,
                 "lever_arm_x": lever_arm_x,
                 "lever_arm_y": lever_arm_y,
-                # Realistic mowing scenario: 90 s RTK-Fixed (open sky),
-                # 30 s RTK-Float (light tree cover), 10 s no-fix (dense
-                # canopy / multipath). Empty pattern → always RTK_FIXED
-                # (σ=3 mm, no Python noise injection). Bias disabled while
-                # debugging fusion_graph; restore the cycle pattern once
-                # the baseline is clean.
-                "quality_pattern": "",
+                # Recovery scenarios use the existing relay; empty stays Fixed.
+                'quality_pattern': ParameterValue(
+                    LaunchConfiguration('gps_quality_pattern'), value_type=str
+                ),
                 "noise_seed": 42,
             }
         ],
@@ -494,6 +503,7 @@ def generate_launch_description() -> LaunchDescription:
             headless_arg,
             use_lidar_arg,
             mode_arg,
+            gps_quality_pattern_arg,
             # Subsystem includes
             simulation_launch,
             navigation_launch,

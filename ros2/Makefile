@@ -4,6 +4,7 @@ ROS_DISTRO    ?= lyrical
 BUILD_TYPE    ?= Release
 DOCKER_IMAGE  ?= mowgli-ros2
 DOCKER_TAG    ?= latest
+GPS_QUALITY_PATTERN ?=
 ROBOT_HOST    ?= mowgli.local
 ROBOT_USER    ?= pi
 DEV_PACKAGES  ?= mowgli_interfaces mowgli_localization universal_gnss_ros2 mowgli_bringup
@@ -86,7 +87,8 @@ sim: sim-stop
 	source install/setup.bash && \
 	export DISPLAY=:99 && \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
-	  headless:=true use_rviz:=false
+	  headless:=true use_rviz:=false \
+	  'gps_quality_pattern:=$(GPS_QUALITY_PATTERN)'
 
 e2e-test: sim-stop build
 	@echo "Starting simulation + E2E test..."
@@ -99,7 +101,8 @@ e2e-test: sim-stop build
 	SIM_LOG=/tmp/mowgli-e2e-sim.log; \
 	: > "$$SIM_LOG"; \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
-	  headless:=true use_rviz:=false > >(tee "$$SIM_LOG") 2>&1 & \
+	  headless:=true use_rviz:=false \
+	  'gps_quality_pattern:=$(GPS_QUALITY_PATTERN)' > >(tee "$$SIM_LOG") 2>&1 & \
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
 	echo "Waiting for Nav2 lifecycle activation..."; \
@@ -131,7 +134,7 @@ e2e-test-no-lidar: sim-stop build
 	: > "$$SIM_LOG"; \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
 	  headless:=true use_rviz:=false use_lidar:=false \
-	  simulate_gps_degradation:=false > >(tee "$$SIM_LOG") 2>&1 & \
+	  'gps_quality_pattern:=$(GPS_QUALITY_PATTERN)' > >(tee "$$SIM_LOG") 2>&1 & \
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
 	echo "Waiting for Nav2 lifecycle activation..."; \

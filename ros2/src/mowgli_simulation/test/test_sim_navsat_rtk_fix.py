@@ -2,9 +2,13 @@ import importlib.util
 import math
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
+from geometry_msgs.msg import PoseStamped
 from mowgli_interfaces.msg import GnssStatus
 import pytest
+import rclpy
+from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Header
 
 
@@ -24,6 +28,72 @@ def _load_module():
 
 
 sim_navsat = _load_module()
+
+
+def test_empty_quality_pattern_preserves_always_fixed_default():
+    assert sim_navsat._parse_pattern('') == []
+    node = SimpleNamespace(_segments=[], _cycle_total_s=0.0, _start_t=None)
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 123.0) == 'RTK_FIXED'
+
+
+def test_valid_quality_pattern_preserves_segment_timing_and_cycle():
+    segments = sim_navsat._parse_pattern(
+        ' 1.5,rtk_fixed ; 2, RTK_FLOAT ; 3,NO_FIX '
+    )
+    node = SimpleNamespace(
+        _segments=segments,
+        _cycle_total_s=sum(segment.duration_s for segment in segments),
+        _start_t=None,
+    )
+
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 10.0) == 'RTK_FIXED'
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 11.499) == 'RTK_FIXED'
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 11.5) == 'RTK_FLOAT'
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 13.5) == 'NO_FIX'
+    assert sim_navsat.SimNavSatRtkFix._current_regime(node, 16.5) == 'RTK_FIXED'
+
+
+@pytest.mark.parametrize(
+    'pattern',
+    [
+        'RTK_FIXED',
+        ';',
+        '1,RTK_FIXED;',
+        ';1,RTK_FIXED',
+        '1,RTK_FIXED,NO_FIX',
+        ',RTK_FIXED',
+        '1e309,RTK_FIXED',
+        'bad-duration,RTK_FIXED',
+        '1,UNKNOWN',
+        '1,RTK_FIXED;;2,NO_FIX',
+        'nan,RTK_FIXED',
+        'inf,RTK_FIXED',
+        '-inf,RTK_FIXED',
+        '1e308,RTK_FIXED;1e308,NO_FIX',
+        '0,RTK_FIXED',
+        '-1,RTK_FIXED',
+    ],
+)
+def test_invalid_quality_patterns_are_rejected(pattern):
+    with pytest.raises(ValueError):
+        sim_navsat._parse_pattern(pattern)
+
+
+@pytest.mark.parametrize(
+    'pattern',
+    ['bad', 'nan,RTK_FLOAT', '0,NO_FIX',
+     '1e308,RTK_FIXED;1e308,NO_FIX'],
+)
+def test_node_constructor_rejects_invalid_quality_pattern(pattern):
+    rclpy.init(args=['--ros-args', '-p', f'quality_pattern:={pattern}'])
+    node = None
+    try:
+        with pytest.raises(ValueError, match='Invalid quality_pattern'):
+            node = sim_navsat.SimNavSatRtkFix()
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.shutdown()
 
 
 @pytest.mark.parametrize(
@@ -125,3 +195,48 @@ def test_typed_status_matches_simulated_quality_regime(
     assert status.vertical_accuracy_m == pytest.approx(sigma_z)
     assert status.capability_flags == sim_navsat.GNSS_STATUS_CAPABILITIES
     assert status.value_flags == sim_navsat.GNSS_STATUS_CAPABILITIES
+
+
+@pytest.mark.parametrize('pattern', ['', '1,RTK_FIXED;2,RTK_FLOAT;3,NO_FIX'])
+def test_relay_outputs_quality_cycle_and_fixed_control(monkeypatch, pattern):
+    rclpy.init(args=(['--ros-args', '-p', f'quality_pattern:={pattern}']
+                     if pattern else []))
+    node = sim_navsat.SimNavSatRtkFix()
+    fixes, statuses = [], []
+    try:
+        monkeypatch.setattr(node, '_pub', SimpleNamespace(publish=fixes.append))
+        monkeypatch.setattr(
+            node, '_status_pub', SimpleNamespace(publish=statuses.append)
+        )
+        truth = PoseStamped()
+        truth.pose.orientation.w = 1.0
+        node._on_ground_truth(truth)
+        regimes = (['RTK_FIXED'] * 4 if not pattern else
+                   ['RTK_FIXED', 'RTK_FLOAT', 'NO_FIX', 'RTK_FIXED'])
+        for seconds, regime in zip([10, 11, 13, 16], regimes):
+            monkeypatch.setattr(node, 'get_clock', lambda: SimpleNamespace(
+                now=lambda: SimpleNamespace(nanoseconds=seconds * 10**9)
+            ))
+            raw = NavSatFix()
+            raw.header.stamp.sec = seconds
+            node._on_fix(raw)
+            fix, status = fixes[-1], statuses[-1]
+            code, sigma_xy, sigma_z = sim_navsat.QUALITY_REGIMES[regime]
+            assert fix.header == status.header == raw.header
+            assert fix.status.status == code
+            assert status.fix_valid == (regime != 'NO_FIX')
+            assert fix.position_covariance_type == (
+                NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+            )
+            assert list(fix.position_covariance) == pytest.approx([
+                sigma_xy**2, 0, 0, 0, sigma_xy**2, 0, 0, 0, sigma_z**2,
+            ])
+            assert status.horizontal_accuracy_m == pytest.approx(sigma_xy)
+            assert status.vertical_accuracy_m == pytest.approx(sigma_z)
+            if regime == 'NO_FIX':
+                assert fix.status.status == NavSatStatus.STATUS_NO_FIX
+        # NO_FIX still produces a sample: it is a quality profile, not silence.
+        assert len(fixes) == len(statuses) == 4
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
