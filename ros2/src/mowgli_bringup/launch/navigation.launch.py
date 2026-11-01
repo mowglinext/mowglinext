@@ -1172,6 +1172,19 @@ def generate_launch_description() -> LaunchDescription:
         # The footprint half-width every collision check uses, DERIVED; the
         # node's 0.0 default keeps the recorded line as drawn.
         cov_params["footprint_half_width"] = chassis_half_width(rp)
+        # Physical extents plus the serialized Nav2 rectangle and collision padding.
+        pivot_front, pivot_rear, _pivot_half_width = chassis_footprint(rp)
+        cov_params["footprint_front"] = pivot_front
+        cov_params["footprint_rear"] = -pivot_rear  # signed rear X -> distance
+        # Consume the actual serialized execution outline, including its
+        # precision; the server also covers the unrounded physical dimensions.
+        pivot_collision = yaml.safe_load(
+            footprint_str or doc["local_costmap"]["local_costmap"]["ros__parameters"]["footprint"])
+        cov_params["collision_extents"] = [max(point[0] for point in pivot_collision),
+                                           -min(point[0] for point in pivot_collision),
+                                           max(abs(point[1]) for point in pivot_collision)]
+        cov_params["footprint_padding"] = float(
+            doc["local_costmap"]["local_costmap"]["ros__parameters"].get("footprint_padding", 0.01))
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w", prefix="mowgli_nav2_", suffix=".yaml", delete=False)

@@ -54,6 +54,7 @@ namespace
 // Existing intended-command certificate: shipped controller runs at 10 Hz.
 // This does not establish a downstream lease or a physical stopping bound.
 constexpr double kIntendedCommandHorizonSec = 0.1;
+constexpr double kStoppedTranslationMps = 0.01;
 // Existing integration ceiling; budget commands must also fit this longest
 // supported controller interval. This is not a downstream command lease.
 constexpr double kMaxControlDtSec = 0.5;
@@ -1479,6 +1480,19 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
               "FTCController: no supported pose for authorization");
       }
     }
+    if (cmd_vel.twist.linear.x > 0 && guard_epoch)
+    {
+      if (const auto corner = stopCornerTarget())
+      {
+        const auto robot = supportedPoseTransform("map", "base_link", &*guard_epoch);
+        cmd_vel.twist.linear.x =
+            std::min(cmd_vel.twist.linear.x,
+                     stopCornerSpeedLimit(*corner,
+                                          robot.transform.translation.x,
+                                          robot.transform.translation.y,
+                                          tf2::getYaw(robot.transform.rotation)));
+      }
+    }
     bool candidate_departure = false;
     if (strict_goal && strict_goal_straight_plan_ && cmd_vel.twist.linear.x > 0 && guard_epoch &&
         (current_state_ == PlannerState::FOLLOWING ||
@@ -1646,7 +1660,9 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   requested_goal_approach =
       current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH && valid_goal_tolerance;
   const bool terminal_epoch = current_state_ == PlannerState::WAITING_FOR_GOAL_APPROACH ||
-                              current_state_ == PlannerState::POST_ROTATE;
+                              current_state_ == PlannerState::POST_ROTATE ||
+                              current_state_ == PlannerState::PRE_ROTATE ||
+                              current_state_ == PlannerState::PIVOT;
   update_control_point(safe_dt, requested_goal_approach, terminal_epoch);
 
   RCLCPP_INFO_THROTTLE(logger_,
@@ -1666,7 +1682,14 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
                        local_control_point_.translation().y());
 
   // 2. Update the state machine.
-  const PlannerState new_state = update_planner_state(goal_distance_error);
+  PlannerState new_state = update_planner_state(goal_distance_error);
+  // A timeout/crash is terminal for this compute call. Obstacle recovery below
+  // can return early, so it must not issue a reverse after this failure.
+  if (is_crashed_)
+    throw nav2_core::ControllerException("FTCController: robot has crashed / collision detected.");
+  if ((current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT) &&
+      new_state == PlannerState::FOLLOWING && !rotationDeparturePermitted(velocity))
+    new_state = current_state_;
   const bool entering_pivot =
       new_state == PlannerState::PIVOT && current_state_ != PlannerState::PIVOT;
   const bool entering_goal_approach = new_state == PlannerState::WAITING_FOR_GOAL_APPROACH &&
@@ -1724,10 +1747,14 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     return bounded_command();  // zero velocity
   }
 
+  if ((current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT) &&
+      !(std::hypot(velocity.linear.x, velocity.linear.y) <= kStoppedTranslationMps))
+    return bounded_command();
+
   if (terminalPointMode() && requested_goal_approach &&
       std::abs(WrapPivotAngle(angle_error_)) * (180.0 / M_PI) >= config_.max_goal_angle_error)
   {
-    if (!(std::abs(velocity.linear.x) <= 0.01))
+    if (!(std::abs(velocity.linear.x) <= kStoppedTranslationMps))
       return bounded_command();
     if (currentBodyInLethal())
     {
@@ -1792,7 +1819,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       turnFallbackReverseTick(budget_dt, cmd_vel);
       return bounded_command();
     }
-    if (current_state_ == PlannerState::PIVOT)
+    if (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT)
     {
       // A pivot applies NO lateral offset (the offset is defined against the
       // path heading, which is discontinuous at a corner) and the deviation
@@ -1806,7 +1833,17 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       {
         return bounded_command();  // zero-velocity hold (waitOrThrow throws after timeout)
       }
+      const double checked_angle = WrapPivotAngle(angle_error_);
       calculate_velocity_commands(safe_dt, cmd_vel);
+      // A sweep may select a newer supported epoch. PID history must not
+      // send a different signed rotation or overshoot the checked target.
+      if (!(cmd_vel.twist.angular.z * checked_angle > 0.0))
+        cmd_vel.twist = geometry_msgs::msg::Twist{};
+      else
+        cmd_vel.twist.angular.z = std::copysign(
+            std::min(std::abs(cmd_vel.twist.angular.z),
+                     std::nextafter(std::abs(checked_angle) / kIntendedCommandHorizonSec, 0.0)),
+            checked_angle);
       return bounded_command();
     }
     updateLateralDeviation(safe_dt);
@@ -2379,22 +2416,29 @@ void FTCController::update_control_point(double dt, bool approach_goal, bool sup
   update_local_control_point(supported_epoch);
 }
 
-void FTCController::update_local_control_point(bool supported_epoch)
+void FTCController::update_local_control_point(bool supported_epoch, const rclcpp::Time* epoch)
 {
-  const bool point_approach = terminalPointMode();
+  bool point_approach = terminalPointMode();
   if (point_approach)
     tf2::fromMsg(global_plan_.back().pose, current_control_point_);
+  Eigen::Affine3d target = current_control_point_;
+  if (const auto corner = stopCornerTarget())
+  {
+    tf2::fromMsg(global_plan_[*corner].pose, target);
+    point_approach = true;
+    supported_epoch = true;
+  }
   // Transform carrot from map into base_link to get the PID errors.
   try
   {
     const auto map_to_base = supported_epoch
-                                 ? supportedPoseTransform("base_link", "map")
+                                 ? supportedPoseTransform("base_link", "map", epoch)
                                  : tf_buffer_->lookupTransform("base_link",
                                                                "map",
                                                                tf2::TimePointZero,
                                                                tf2::durationFromSec(1.0));
 
-    tf2::doTransform(current_control_point_, local_control_point_, map_to_base);
+    tf2::doTransform(target, local_control_point_, map_to_base);
   }
   catch (const tf2::TransformException& ex)
   {
@@ -2639,6 +2683,158 @@ std::optional<std::size_t> FTCController::nextPivotCorner() const
   return NextPivotCorner(pivot_corners_, current_index_);
 }
 
+std::optional<std::size_t> FTCController::stopCornerTarget() const
+{
+  return stopCornerApproach(false);
+}
+
+std::optional<std::size_t> FTCController::stopCornerApproach(bool starting) const
+{
+  const auto corner = nextPivotCorner();
+  const bool approach_state = current_state_ == PlannerState::FOLLOWING ||
+                              (starting && current_state_ == PlannerState::PRE_ROTATE);
+  if (!approach_state || !corner || plan_header_.frame_id != "map" || is_avoiding_ ||
+      lateral_deviation_ != 0.0 || reverse_escape_active_ || obstacle_waiting_ ||
+      turn_fallback_.phase != TurnFallbackPhase::kIdle)
+    return std::nullopt;
+  const auto& end = global_plan_[*corner].pose.position;
+  double px = current_control_point_.translation().x();
+  double py = current_control_point_.translation().y();
+  const double ax = end.x - px, ay = end.y - py;
+  if (!std::isfinite(ax) || !std::isfinite(ay))
+    return std::nullopt;
+  const double window =
+      maxLinearSpeed() * (config_.obstacle_coast_time_bound_s + 2 * kIntendedCommandHorizonSec);
+  double arc = 0.0;
+  for (std::size_t i = current_index_ + 1; i <= *corner; ++i)
+  {
+    const auto& point = global_plan_[i].pose.position;
+    const double dx = point.x - px, dy = point.y - py;
+    const double yaw = tf2::getYaw(global_plan_[i - 1].pose.orientation);
+    arc += std::hypot(dx, dy);
+    if (!std::isfinite(arc) || arc > window ||
+        !((dx == 0 && dy == 0) ||
+          (dx * ax + dy * ay > 0 && dx * std::cos(yaw) + dy * std::sin(yaw) > 0)))
+      return std::nullopt;
+    px = point.x;
+    py = point.y;
+  }
+  return corner;
+}
+
+double FTCController::stopCornerSpeedLimit(std::size_t corner, double x, double y, double yaw) const
+{
+  const auto& goal = global_plan_[corner].pose.position;
+  const double dx = goal.x - x, dy = goal.y - y;
+  const double outgoing = tf2::getYaw(global_plan_[corner + 1].pose.orientation);
+  yaw -= outgoing;
+  // Bound the same travel in the outgoing leg's tangent/normal basis for
+  // actual FOLLOWING output and PRE readiness of an interrupted approach.
+  double travel = std::hypot(dx, dy);
+  for (const auto& component :
+       {std::pair{dx * std::cos(outgoing) + dy * std::sin(outgoing), std::cos(yaw)},
+        std::pair{-dx * std::sin(outgoing) + dy * std::cos(outgoing), std::sin(yaw)}})
+    if (component.first * component.second > 0.0)
+      travel = std::min(travel, component.first / component.second);
+  const double horizon = config_.obstacle_coast_time_bound_s + 2 * kIntendedCommandHorizonSec;
+  return std::nextafter(travel / horizon, 0.0);
+}
+
+bool FTCController::rotationDeparturePermitted(const geometry_msgs::msg::Twist& measured)
+{
+  rclcpp::Time epoch;
+  geometry_msgs::msg::TransformStamped robot;
+  try
+  {
+    epoch = supportedPoseEpoch();
+    robot = supportedPoseTransform("map", costmap_ros_->getBaseFrameID(), &epoch);
+    // Recheck alignment at the same epoch that qualifies the forward restart.
+    update_local_control_point(true, &epoch);
+  }
+  catch (const tf2::TransformException&)
+  {
+    throw nav2_core::ControllerException("FTCController: no supported map pose for authorization");
+  }
+  const double age = (clock_->now() - rclcpp::Time(robot.header.stamp)).seconds();
+  const auto& q = robot.transform.rotation;
+  const auto& position = robot.transform.translation;
+  const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+  if (!std::isfinite(age) || age < 0 || age > 0.3 || age > costmap_ros_->getTransformTolerance() ||
+      !std::isfinite(norm) || std::abs(norm - 1.0) > 1e-3 || !std::isfinite(position.x) ||
+      !std::isfinite(position.y) || !std::isfinite(position.z))
+    throw nav2_core::ControllerException("FTCController: invalid/stale authorization pose");
+  std::shared_ptr<const mowgli_interfaces::motion::Snapshot> geometry;
+  {
+    std::lock_guard<std::mutex> lock(authorization_mutex_);
+    geometry = authorization_;
+  }
+  if (!geometry || !geometry->valid)
+    throw nav2_core::ControllerException("FTCController: missing/invalid motion geometry");
+  const double tolerance = current_state_ == PlannerState::PIVOT ? config_.pivot_angle_tolerance_deg
+                                                                 : config_.max_goal_angle_error;
+  if (!(std::abs(WrapPivotAngle(angle_error_)) < tolerance * M_PI / 180.0))
+    return false;
+  geometry_msgs::msg::Twist restart;
+  restart.linear.x =
+      std::min(maxLinearSpeed(), std::max(config_.min_speed_mps, config_.speed_slow));
+  mowgli_interfaces::motion::Ring body;
+  for (const auto& point : costmap_ros_->getRobotFootprint())
+    body.push_back({point.x, point.y});
+  const mowgli_interfaces::motion::Pose pose{position.x, position.y, tf2::getYaw(q)};
+  if (const auto corner = stopCornerApproach(true))
+  {
+    restart.linear.x =
+        std::min(restart.linear.x, stopCornerSpeedLimit(*corner, pose.x, pose.y, pose.yaw));
+    // At the corner the next operation is STOP/PIVOT, not a positive restart.
+    // Allow that state handoff only while measured translation is stopped;
+    // every resulting nonzero command still passes the normal full guards.
+    if (restart.linear.x == 0.0)
+      return std::isfinite(measured.linear.x) && std::abs(measured.linear.x) <= .01;
+  }
+  if (current_state_ == PlannerState::PIVOT ||
+      (current_state_ == PlannerState::PRE_ROTATE && !stopCornerApproach(true)))
+  {
+    // A single response horizon can fit while a small outward heading still
+    // spends the boundary clearance before FOLLOWING converges. Qualify the
+    // current direction over the actual straight outgoing prefix, bounded by
+    // the existing local lookahead. Raw body obstacles remain FOLLOWING's job.
+    const auto& origin = global_plan_[current_index_].pose.position;
+    const double heading = tf2::getYaw(global_plan_[current_index_].pose.orientation);
+    double straight = 0.0;
+    for (std::size_t i = current_index_ + 1; i < global_plan_.size(); ++i)
+    {
+      const auto& next = global_plan_[i].pose;
+      const double dx = next.position.x - origin.x, dy = next.position.y - origin.y;
+      const double along = dx * std::cos(heading) + dy * std::sin(heading);
+      const double lateral = -dx * std::sin(heading) + dy * std::cos(heading);
+      // The same construction-noise allowance as IsStraightForwardPlan.
+      if (!std::isfinite(along) || !std::isfinite(lateral) || std::abs(lateral) > 1e-6 ||
+          along + 1e-6 < straight ||
+          std::abs(WrapPivotAngle(tf2::getYaw(next.orientation) - heading)) > 1e-6)
+        break;
+      straight = std::min(along, config_.avoidance_horizon_m);
+      if (straight >= config_.avoidance_horizon_m)
+        break;
+    }
+    if (straight > 0.0 &&
+        !geometry->mowing.segmentAuthorized({pose.x, pose.y},
+                                            {pose.x + straight * std::cos(pose.yaw),
+                                             pose.y + straight * std::sin(pose.yaw)}))
+      return false;
+  }
+  // Readiness is not permission to move: the reference must stay in the
+  // mowing union, while FOLLOWING retains body-obstacle avoidance and reverse
+  // recovery after either rotation phase. Every actual output keeps full guards.
+  return restart.linear.x > 0 &&
+         ForwardResponseReferencePermitted(*geometry,
+                                           body,
+                                           pose,
+                                           restart,
+                                           measured,
+                                           kIntendedCommandHorizonSec,
+                                           config_.obstacle_coast_time_bound_s);
+}
+
 void FTCController::enterPivot()
 {
   const std::size_t corner = current_index_;
@@ -2712,6 +2908,8 @@ void FTCController::leavePivot()
 bool FTCController::pivotSweepBlocked()
 {
   const bool point_approach = terminalPointMode();
+  const bool planned_rotation =
+      current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT;
   if (costmap_map_ == nullptr || costmap_ros_ == nullptr)
   {
     return point_approach;
@@ -2722,7 +2920,7 @@ bool FTCController::pivotSweepBlocked()
     return point_approach;
   }
   geometry_msgs::msg::PoseStamped robot_pose;
-  if (point_approach)
+  if (point_approach || planned_rotation)
   {
     try
     {
@@ -2740,14 +2938,21 @@ bool FTCController::pivotSweepBlocked()
       geometry_msgs::msg::PoseStamped goal;
       const auto map_to_costmap =
           supportedPoseTransform(costmap_ros_->getGlobalFrameID(), plan_header_.frame_id, &epoch);
-      tf2::doTransform(global_plan_.back(), goal, map_to_costmap);
-      const double bearing = std::atan2(goal.pose.position.y - robot_pose.pose.position.y,
-                                        goal.pose.position.x - robot_pose.pose.position.x);
-      angle_error_ = WrapPivotAngle(bearing - tf2::getYaw(robot_pose.pose.orientation));
+      tf2::doTransform(point_approach ? global_plan_.back() : global_plan_[current_index_],
+                       goal,
+                       map_to_costmap);
+      const double heading = point_approach
+                                 ? std::atan2(goal.pose.position.y - robot_pose.pose.position.y,
+                                              goal.pose.position.x - robot_pose.pose.position.x)
+                                 : tf2::getYaw(goal.pose.orientation);
+      angle_error_ = WrapPivotAngle(heading - tf2::getYaw(robot_pose.pose.orientation));
       angle_error_raw_prev_ = angle_error_;
     }
     catch (const tf2::TransformException&)
     {
+      if (planned_rotation)
+        throw nav2_core::ControllerException(
+            "FTCController: no supported map pose for authorization");
       return true;
     }
   }

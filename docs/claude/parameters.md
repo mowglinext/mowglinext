@@ -239,6 +239,13 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 
 ### Coverage geometry (→ `coverage_server`, `navigation.launch.py:920–948`)
 
+The coverage server also receives internal derived `footprint_front`, positive
+`footprint_rear`, `collision_extents` (serialized Nav2 front/rear/half-width), and
+`footprint_padding` for residual signed-pivot checks. They are read per plan and
+preview, are not operator/schema keys, and default to disabled geometry. Physical
+extents keep the existing outer-band/radius bound; the separate collision outline
+covers physical and serialized dimensions, with local-costmap padding added once.
+
 | Key (L) | Default | Becomes | GUI | Life |
 |---|---|---|---|---|
 | `headland_width` | 0.18 | `coverage_server.default_headland_width` L931 — used ONLY for the AUTO ring count `ceil(headland_width / operation_width)`, i.e. only when `num_headland_passes == 0`; inert at the shipped `5` | Mowing | dynamic (read per plan) |

@@ -126,6 +126,13 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
   // Injected at launch as robot_config_util.chassis_half_width; the 0.0 default
   // plans the recorded line as drawn. Read live per plan.
   declare_double("footprint_half_width", 0.0);
+  // Derived body extents for residual signed pivots only. Missing dimensions
+  // disable that alternative; the full-disc pivot rules remain unchanged.
+  declare_double("footprint_front", 0.0);
+  declare_double("footprint_rear", 0.0);
+  declare_double("footprint_padding", 0.0);
+  if (!has_parameter("collision_extents"))
+    declare_parameter<std::vector<double>>("collision_extents", {0.0, 0.0, 0.0});
 
   // Lyrical's SimpleActionServer owns the standard ROS action options.
   // Result retention starts after completion; it is not a planning deadline.
@@ -241,7 +248,12 @@ constexpr double kSwathStep = 0.10;  // m between poses on a straight swath
 // so the ring corners the planner leaves sharp are the same in both.
 PivotJoinLimits makePivotLimits(const mowgli_interfaces::action::PlanCoverage::Goal& goal,
                                 double sweep_radius,
-                                double boundary_margin)
+                                double boundary_margin,
+                                double front,
+                                double rear,
+                                double half_width,
+                                double padding,
+                                const std::vector<double>& collision_extents)
 {
   PivotJoinLimits limits;
   limits.sweep_radius = std::max(0.0, sweep_radius);
@@ -249,6 +261,31 @@ PivotJoinLimits makePivotLimits(const mowgli_interfaces::action::PlanCoverage::G
   if (limits.sweep_radius <= 0.0)
   {
     return limits;
+  }
+  if (std::isfinite(front) && std::isfinite(rear) && std::isfinite(half_width) && front > 0 &&
+      rear > 0 && half_width > 0 && std::isfinite(padding) && padding >= 0 &&
+      collision_extents.size() == 3 &&
+      std::all_of(collision_extents.begin(),
+                  collision_extents.end(),
+                  [](double extent)
+                  {
+                    return std::isfinite(extent) && extent > 0;
+                  }))
+  {
+    limits.footprint = {{-rear, -half_width},
+                        {front, -half_width},
+                        {front, half_width},
+                        {-rear, half_width}};
+    // Nav2 pads this rear-axle rectangle on each signed body coordinate.
+    // Keep the real body separate so collision padding cannot enlarge the
+    // physical outer-overhang policy or be counted twice against raw holes.
+    const double collision_front = std::max(front, collision_extents[0]) + padding;
+    const double collision_rear = std::max(rear, collision_extents[1]) + padding;
+    const double collision_half = std::max(half_width, collision_extents[2]) + padding;
+    limits.collision_footprint = {{-collision_rear, -collision_half},
+                                  {collision_front, -collision_half},
+                                  {collision_front, collision_half},
+                                  {-collision_rear, collision_half}};
   }
   limits.recorded_boundary.reserve(goal.outer_boundary.points.size());
   for (const auto& p : goal.outer_boundary.points)
@@ -263,10 +300,9 @@ PivotJoinLimits makePivotLimits(const mowgli_interfaces::action::PlanCoverage::G
     {
       ring.emplace_back(p.x, p.y);
     }
-    if (ring.size() >= 3)
-    {
-      limits.recorded_obstacles.push_back(std::move(ring));
-    }
+    // Retain malformed rings so the optional signed certificate fails closed.
+    // The legacy full-disc helper still ignores rings with fewer than 3 points.
+    limits.recorded_obstacles.push_back(std::move(ring));
   }
   return limits;
 }
@@ -633,7 +669,12 @@ void CoverageServer::planCoverage()
     const PivotJoinLimits pivot_limits =
         makePivotLimits(*goal,
                         get_parameter("pivot_sweep_radius").as_double(),
-                        get_parameter("boundary_soft_margin").as_double());
+                        get_parameter("boundary_soft_margin").as_double(),
+                        get_parameter("footprint_front").as_double(),
+                        get_parameter("footprint_rear").as_double(),
+                        get_parameter("footprint_half_width").as_double(),
+                        get_parameter("footprint_padding").as_double(),
+                        get_parameter("collision_extents").as_double_array());
 
     const auto t_plan0 = now();
     BoustrophedonPlan plan = planBoustrophedon(cell,
@@ -1124,7 +1165,12 @@ void CoverageServer::previewCoverage(
     const PivotJoinLimits preview_pivot_limits =
         makePivotLimits(goal,
                         get_parameter("pivot_sweep_radius").as_double(),
-                        get_parameter("boundary_soft_margin").as_double());
+                        get_parameter("boundary_soft_margin").as_double(),
+                        get_parameter("footprint_front").as_double(),
+                        get_parameter("footprint_rear").as_double(),
+                        get_parameter("footprint_half_width").as_double(),
+                        get_parameter("footprint_padding").as_double(),
+                        get_parameter("collision_extents").as_double_array());
     const BoustrophedonPlan plan =
         planBoustrophedon(cell,
                           operation_width_,

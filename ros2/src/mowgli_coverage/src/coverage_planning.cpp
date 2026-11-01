@@ -20,6 +20,7 @@
 #include "fields2cover/route_planning/boustrophedon_order.h"
 #include "fields2cover/swath_generator/brute_force.h"
 #include "mowgli_interfaces/coverage_geometry.hpp"
+#include "mowgli_interfaces/motion_authorization.hpp"
 #include "ring_corner_rounding.hpp"
 
 // GDAL/OGR (F2C's geometry backend) — bufferRingOutward grows drawn-obstacle
@@ -2367,6 +2368,75 @@ std::pair<double, double> clampInsideRing(double x,
 
 }  // namespace
 
+namespace
+{
+// Build once for this residual pass. The shared predicate permits outer body
+// overhang but requires the axle inside the raw area. Bounding the footprint by
+// both existing radii keeps that overhang within the already authorized band.
+std::shared_ptr<const mowgli_interfaces::motion::Snapshot> residualPivotSnapshot(
+    const PivotJoinLimits& limits, mowgli_interfaces::motion::Ring& footprint)
+{
+  namespace motion = mowgli_interfaces::motion;
+  if (!std::isfinite(limits.sweep_radius) || !std::isfinite(limits.boundary_margin) ||
+      limits.sweep_radius <= 0 || limits.boundary_margin <= 0 || limits.footprint.size() < 3 ||
+      limits.footprint.size() > 64)
+    return nullptr;
+  double radius = 0;
+  for (const auto& [x, y] : limits.footprint)
+  {
+    if (!std::isfinite(x) || !std::isfinite(y))
+      return nullptr;
+    radius = std::max(radius, std::hypot(x, y));
+    footprint.push_back({x, y});
+  }
+  const auto body = motion::polygon(footprint);
+  if (radius > limits.sweep_radius || radius > limits.boundary_margin ||
+      !motion::bg::is_valid(body) || std::abs(motion::bg::area(body)) < 1e-10)
+    return nullptr;
+  if (!limits.collision_footprint.empty())
+  {
+    if (limits.collision_footprint.size() < 3 || limits.collision_footprint.size() > 64)
+      return nullptr;
+    motion::Ring collision;
+    for (const auto& [x, y] : limits.collision_footprint)
+    {
+      if (!std::isfinite(x) || !std::isfinite(y))
+        return nullptr;
+      collision.push_back({x, y});
+    }
+    const auto outline = motion::polygon(collision);
+    if (!motion::bg::is_valid(outline) || std::abs(motion::bg::area(outline)) < 1e-10 ||
+        !motion::bg::covered_by(body, outline))
+      return nullptr;
+    footprint = std::move(collision);
+  }
+
+  visualization_msgs::msg::MarkerArray raw;
+  const auto append = [&](const char* ns, const char* text, const auto& ring)
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = "map";
+    marker.ns = ns;
+    marker.text = text;
+    marker.type = marker.LINE_STRIP;
+    marker.action = marker.ADD;
+    for (const auto& [x, y] : ring)
+    {
+      geometry_msgs::msg::Point p;
+      p.x = x;
+      p.y = y;
+      marker.points.push_back(p);
+    }
+    raw.markers.push_back(std::move(marker));
+  };
+  append("area", "mowing", limits.recorded_boundary);
+  for (const auto& hole : limits.recorded_obstacles)
+    append("obstacle", "", hole);
+  const auto snapshot = motion::Snapshot::parse(raw);
+  return snapshot->valid ? snapshot : nullptr;
+}
+}  // namespace
+
 std::vector<std::pair<double, double>> pivotSharpCorners(
     const std::vector<std::pair<double, double>>& pts,
     double min_turn_rad,
@@ -2377,6 +2447,8 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
   {
     return pts;
   }
+  mowgli_interfaces::motion::Ring footprint;
+  const auto signed_snapshot = residualPivotSnapshot(limits, footprint);
   const bool track = is_twin != nullptr && is_twin->size() == pts.size();
   std::vector<bool> twin_out;
   if (track)
@@ -2407,8 +2479,22 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
     const double iny = pts[i].second - pts[i - 1].second;
     const double outx = pts[i + 1].first - pts[i].first;
     const double outy = pts[i + 1].second - pts[i].second;
-    const double turn = headingError(std::atan2(iny, inx), std::atan2(outy, outx));
-    if (turn > min_turn_rad && pivotSweepFits(pts[i].first, pts[i].second, limits))
+    const double incoming = std::atan2(iny, inx), outgoing = std::atan2(outy, outx);
+    const double turn = headingError(incoming, outgoing);
+    if (!(turn > min_turn_rad))
+      continue;
+    bool fits = pivotSweepFits(pts[i].first, pts[i].second, limits);
+    if (!fits && signed_snapshot)
+    {
+      const double delta = std::atan2(std::sin(outgoing - incoming), std::cos(outgoing - incoming));
+      fits = signed_snapshot->permits({pts[i].first, pts[i].second, incoming},
+                                      footprint,
+                                      0,
+                                      std::copysign(1.0, delta),
+                                      std::abs(delta),
+                                      true);
+    }
+    if (fits)
     {
       out.push_back(pts[i]);  // bit-exact twin: FTC stops here and rotates in place
       if (track)

@@ -320,3 +320,15 @@ Grounded in the workflows, in the order things fail:
 10. **Touched `docs/install.sh` or `docs/index.html`?** `bash docs/test_install.sh` / `bash docs/test_web_composer.sh` — ungated, and both already fail at this SHA (2 assertions each), so compare against the current baseline rather than expecting green.
 11. **Touched `firmware/**`?** `pio run -e Yardforce500 && pio run -e Yardforce500B` from `firmware/stm32/ros_usbnode`, plus `python3 firmware/scripts/board_defaults_parity.py`. There are no firmware unit tests.
 12. **Changed physical behaviour?** Flag it as safety-critical in the PR description (root `CLAUDE.md` § Safety), tick the right boxes in `.github/PULL_REQUEST_TEMPLATE.md`, and — if it is a motion change — run a sim E2E (`make e2e-test`) or a monitored field session before merging.
+
+### Residual cusp regressions (#950)
+
+`mowgli_coverage/test_pivot_joins.cpp` adds `ResidualSignedPivot` cases for
+exact directed-edge preservation, signed arc versus full-disc refusal, raw-hole
+rebuild, malformed context, unchanged physical band and collision padding.
+`mowgli_nav2_plugins/test_ftc_speed_limit.cpp` covers the captured cusp and a
+rotated control, coast/epoch/departure/timeout guards, plus PRE_ROTATE and completed
+PIVOT handing body-obstacle recovery back to FOLLOWING. The existing full output
+authorization assertions remain. `mowgli_bringup/test_launch_injection.py` evaluates
+the actual launch expressions and serialized footprint for default and custom
+chassis dimensions. Run the existing registered targets; no new test binary.

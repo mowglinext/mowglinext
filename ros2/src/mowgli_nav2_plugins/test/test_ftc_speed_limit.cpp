@@ -34,6 +34,7 @@
 #include "motion_fixture.hpp"
 #include "mowgli_interfaces/motion_authorization.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
+#include "mowgli_nav2_plugins/ftc_forward_sweep.hpp"
 #include "mowgli_nav2_plugins/path_progress_goal_checker.hpp"
 #include <gtest/gtest.h>
 #include <rcl/time.h>
@@ -161,6 +162,31 @@ struct FTCSpeedLimitTestAccess
                                const visualization_msgs::msg::MarkerArray& markers)
   {
     controller.authorization_ = mowgli_interfaces::motion::Snapshot::parse(markers);
+  }
+
+  static bool PreRotating(const FTCController& controller)
+  {
+    return controller.current_state_ == FTCController::PlannerState::PRE_ROTATE;
+  }
+  static bool Pivoting(const FTCController& controller)
+  {
+    return controller.current_state_ == FTCController::PlannerState::PIVOT;
+  }
+  static std::optional<std::size_t> StopCorner(const FTCController& controller)
+  {
+    return controller.stopCornerTarget();
+  }
+  static void RefreshRotation(FTCController& controller)
+  {
+    controller.update_control_point(0.0, false, true);
+  }
+  static bool RotationDeparture(FTCController& controller)
+  {
+    return controller.rotationDeparturePermitted(geometry_msgs::msg::Twist{});
+  }
+  static void LateralDeviation(FTCController& controller, double offset)
+  {
+    controller.lateral_deviation_ = offset;
   }
 
   static bool StrictGoalStraightPlan(const FTCController& controller)
@@ -627,6 +653,383 @@ protected:
     return robot_x_;
   }
 };
+
+// Exact production export of old points 180..210, with the explicit T twin.
+// The local model feeds actual returned commands back as measured velocity;
+// it does not inject a private controller state or edit the retained route.
+class FtcStopCorner : public FtcRequestedGoalTolerance
+{
+protected:
+  using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+  static constexpr double tip_x = 2.454825207353694;
+  static constexpr double tip_y = .8013791580379307;
+  static constexpr double outgoing = 3.140918321144495;
+
+  void SetUp() override
+  {
+    FtcRequestedGoalTolerance::SetUp();
+    for (const auto& [name, value] :
+         std::vector<std::pair<std::string, double>>{{"speed_angular", 45},
+                                                     {"speed_fast_threshold_angle", 10},
+                                                     {"acceleration", .2},
+                                                     {"derivative_filter_tau", .2},
+                                                     {"goal_timeout", 10},
+                                                     {"kd_ang", 0},
+                                                     {"kd_lat", .5},
+                                                     {"kd_lon", 0},
+                                                     {"ki_ang", 0},
+                                                     {"ki_lat", 0},
+                                                     {"ki_lon", 0},
+                                                     {"kp_ang", 1.5},
+                                                     {"kp_ang_following", 1},
+                                                     {"kp_lat", .8},
+                                                     {"kp_lon", 1},
+                                                     {"max_goal_angle_error", 30}})
+      SetParameter(name, value);
+    SetParameter("check_obstacles", true);
+    SetParameter("enable_obstacle_deviation", true);
+    SetParameter("confine_deviation_to_zone", true);
+    ASSERT_TRUE(costmap_->set_parameter({"footprint_padding", 0.0}).successful);
+    Access::SetFreeBoundary(controller_, -5, -5);
+  }
+
+  std::pair<double, double> Rotate(double x, double y, double rotation)
+  {
+    x -= tip_x;
+    y -= tip_y;
+    return {x * std::cos(rotation) - y * std::sin(rotation),
+            x * std::sin(rotation) + y * std::cos(rotation)};
+  }
+
+  void Geometry(double rotation, bool forbid_forward = false)
+  {
+    visualization_msgs::msg::MarkerArray geometry;
+    const auto ring =
+        [&](const std::string& kind, const std::vector<std::pair<double, double>>& points)
+    {
+      visualization_msgs::msg::Marker marker;
+      marker.header.frame_id = "map";
+      marker.ns = kind;
+      marker.text = kind == "area" ? "mowing" : "";
+      marker.type = marker.LINE_STRIP;
+      marker.action = marker.ADD;
+      marker.pose.orientation.w = 1;
+      for (const auto& [x, y] : points)
+      {
+        const auto [xx, yy] = Rotate(x, y, rotation);
+        geometry_msgs::msg::Point point;
+        point.x = xx;
+        point.y = yy;
+        marker.points.push_back(point);
+      }
+      geometry.markers.push_back(marker);
+    };
+    if (forbid_forward)
+      // Reference at T is valid; all westward restart motion is outside.
+      ring("area", {{tip_x, -5}, {15, -5}, {15, 15}, {tip_x, 15}});
+    else
+    {
+      ring("area",
+           {{-4.5, double(float(.8))},
+            {4.5, double(float(.8))},
+            {4.5, double(float(6.8))},
+            {-4.5, double(float(6.8))}});
+      ring("obstacle",
+           {{double(float(2.7)), double(float(1.2))},
+            {double(float(3.3)), double(float(1.2))},
+            {double(float(3.3)), double(float(1.8))},
+            {double(float(2.7)), double(float(1.8))}});
+    }
+    Access::SetAuthorization(controller_, geometry);
+  }
+
+  nav_msgs::msg::Path Captured(double rotation = 0, std::size_t first = 0)
+  {
+    nav_msgs::msg::Path plan;
+    plan.header.frame_id = "map";
+    for (const auto& [x, y, yaw] : std::vector<std::tuple<double, double, double>>{
+             {2.23100004768372, 1.5434185857568339, -1.5707963267948963},
+             {2.23100004768372, 1.4565814142431661, -1.5707963267948963},
+             {2.23100004768372, 1.3697442427294986, -1.5707963267948963},
+             {2.23100004768372, 1.2829070712158308, -1.5707963267948963},
+             {2.23100004768372, 1.1960698997021633, -1.4726215563702667},
+             {2.239632103129413, 1.1084271699667103, -1.2762720155207805},
+             {2.266342926297124, 1.0203733865857147, -1.0799224746715197},
+             {2.309718949441999, 0.9392225550549176, -0.8835729338221637},
+             {2.3680932563201402, 0.868093256320143, -0.6872233929727825},
+             {2.439222555054915, 0.8097189494419957, -0.49087385212338086},
+             {2.454825207353694, 0.8013791580379307, -0.49087385212338086},
+             {2.454825207353694, 0.8013791580379307, 3.140918321144495},
+             {2.3553602334489576, 0.8014462305071719, 3.140918321144495},
+             {2.2558952595442214, 0.8015133029764131, 3.140918321144495},
+             {2.1564302856394857, 0.8015803754456543, 3.140918321144495},
+             {2.0569653117347495, 0.8016474479148955, 3.140918321144495},
+             {1.9575003378300133, 0.8017145203841367, 3.140918321144495},
+             {1.8580353639252771, 0.8017815928533779, 3.140918321144495},
+             {1.758570390020541, 0.8018486653226191, 3.140918321144495},
+             {1.659105416115805, 0.8019157377918603, 3.140918321144495},
+             {1.559640442211069, 0.8019828102611015, 3.140918321144495},
+             {1.4601754683063328, 0.8020498827303427, 3.140918321144495},
+             {1.3607104944015966, 0.8021169551995839, 3.140918321144496},
+             {1.2612455204968605, 0.802184027668825, 3.140918321144495},
+             {1.1617805465921245, 0.8022511001380662, 3.140918321144495},
+             {1.0623155726873883, 0.8023181726073074, 3.140918321144495},
+             {0.9628505987826523, 0.8023852450765486, 3.140918321144495},
+             {0.8633856248779161, 0.8024523175457898, 3.140918321144495},
+             {0.76392065097318, 0.802519390015031, 3.140918321144495},
+             {0.664455677068444, 0.8025864624842722, 3.140918321144495},
+             {0.5649907031637076, 0.8026535349535134, 3.140918321144495},
+             {0.4655257292589716, 0.8027206074227546, 3.140918321144495},
+         })
+    {
+      const auto [xx, yy] = Rotate(x, y, rotation);
+      plan.poses.push_back(MakePose(xx, yy, yaw + rotation));
+    }
+    plan.poses.erase(plan.poses.begin(), plan.poses.begin() + first);
+    return plan;
+  }
+};
+
+TEST_F(FtcStopCorner, CapturedApproachStopsPivotsAndDepartsWithRotatedControl)
+{
+  for (const double rotation : {0.0, M_PI / 4})
+  {
+    Geometry(rotation);
+    const auto plan = Captured(rotation);
+    controller_.newPathReceived(plan);
+    double x = plan.poses.front().pose.position.x;
+    double y = plan.poses.front().pose.position.y;
+    double yaw = -M_PI / 2 + rotation;
+    geometry_msgs::msg::Twist measured;
+    RequestedGoalTolerance checker;
+    bool pivoted = false, departed = false, slowed = false, coast_checked = false;
+    for (int tick = 0; tick < 300; ++tick)
+    {
+      const auto command = StepAt(x, y, yaw, measured, checker);
+      pivoted = pivoted || Access::Pivoting(controller_);
+      slowed = slowed || (!pivoted && command.linear.x > 0 && command.linear.x < .15);
+      if (Access::Pivoting(controller_))
+      {
+        EXPECT_DOUBLE_EQ(command.linear.x, 0);
+        if (!coast_checked)
+        {
+          geometry_msgs::msg::Twist coasting;
+          coasting.linear.x = .02;
+          const auto hold = StepAt(x, y, yaw, coasting, checker);
+          EXPECT_DOUBLE_EQ(hold.linear.x, 0);
+          EXPECT_DOUBLE_EQ(hold.angular.z, 0);
+          coast_checked = true;
+        }
+      }
+      // The unchanged raw geometry and response guard authorize every output.
+      x += command.linear.x * .1 * std::cos(yaw);
+      y += command.linear.x * .1 * std::sin(yaw);
+      yaw += command.angular.z * .1;
+      measured = command;
+      const double westward = -(x * std::cos(rotation) + y * std::sin(rotation));
+      if (pivoted && !Access::Pivoting(controller_) && westward > .6)
+      {
+        departed = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(slowed) << rotation;
+    EXPECT_TRUE(pivoted) << rotation;
+    EXPECT_TRUE(departed) << rotation;
+    EXPECT_TRUE(coast_checked);
+  }
+}
+
+TEST_F(FtcStopCorner, RestartBothTwinHalvesUsesGeometryRatherThanSmallerAngleTolerance)
+{
+  Geometry(0);
+  RequestedGoalTolerance checker;
+  for (const std::size_t first : {10u, 11u})
+  {
+    // Incoming and outgoing halves both resume at the outgoing heading.
+    controller_.newPathReceived(Captured(0, first));
+    const auto unsafe = StepAt(0, 0, outgoing + .30, {}, checker);
+    EXPECT_TRUE(Access::PreRotating(controller_));
+    EXPECT_DOUBLE_EQ(unsafe.linear.x, 0);
+    EXPECT_LT(unsafe.angular.z, 0);
+    controller_.newPathReceived(Captured(0, first));
+    auto safe = StepAt(0, 0, outgoing - .30, {}, checker);
+    EXPECT_FALSE(Access::PreRotating(controller_));
+    EXPECT_DOUBLE_EQ(safe.linear.x, 0);
+    safe = StepAt(0, 0, outgoing - .30, {}, checker);
+    EXPECT_GT(safe.linear.x, 0);
+  }
+}
+
+TEST_F(FtcStopCorner, RetainedNearCornerCheckpointResumesThroughBrakedApproach)
+{
+  // Actual public FollowStrip halt/reload selected old189, not the T twin.
+  // Also interrupt at/just beyond T: a zero approach cap must not deadlock PRE.
+  for (const double rotation : {0.0, M_PI / 4})
+  {
+    for (const auto& initial : std::vector<std::pair<double, double>>{
+             {2.4342059812035313, .8028570068674588}, {tip_x, tip_y}, {tip_x + .002, tip_y}})
+    {
+      Geometry(rotation);
+      controller_.newPathReceived(Captured(rotation, 9));
+      auto [x, y] = Rotate(initial.first, initial.second, rotation);
+      double yaw = -.21795608461903856 + rotation;
+      geometry_msgs::msg::Twist measured;
+      RequestedGoalTolerance checker;
+      bool pivoted = false, departed = false;
+      for (int tick = 0; tick < 300; ++tick)
+      {
+        const auto command = StepAt(x, y, yaw, measured, checker);
+        pivoted = pivoted || Access::Pivoting(controller_);
+        x += command.linear.x * .1 * std::cos(yaw);
+        y += command.linear.x * .1 * std::sin(yaw);
+        yaw += command.angular.z * .1;
+        measured = command;
+        if (pivoted && !Access::Pivoting(controller_) &&
+            -(x * std::cos(rotation) + y * std::sin(rotation)) > .6)
+        {
+          departed = true;
+          break;
+        }
+      }
+      EXPECT_TRUE(pivoted) << rotation << " / " << initial.first;
+      EXPECT_TRUE(departed) << rotation << " / " << initial.first;
+    }
+  }
+}
+
+TEST_F(FtcStopCorner, OutgoingTwinRestartQualifiesStraightDepartureDirection)
+{
+  for (const double rotation : {0.0, M_PI / 4})
+  {
+    Geometry(rotation);
+    controller_.newPathReceived(Captured(rotation, 11));
+    auto [x, y] = Rotate(tip_x + .002, tip_y, rotation);
+    double yaw = outgoing + .014 + rotation;
+    geometry_msgs::msg::Twist measured;
+    RequestedGoalTolerance checker;
+    bool departed = false;
+    for (int tick = 0; tick < 300; ++tick)
+    {
+      const auto command = StepAt(x, y, yaw, measured, checker);
+      x += command.linear.x * .1 * std::cos(yaw);
+      y += command.linear.x * .1 * std::sin(yaw);
+      yaw += command.angular.z * .1;
+      measured = command;
+      if (-(x * std::cos(rotation) + y * std::sin(rotation)) > .6)
+      {
+        departed = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(departed) << rotation;
+  }
+}
+
+TEST_F(FtcStopCorner, PreRotateHoldsTranslationAndRejectsForecastAlignment)
+{
+  Geometry(0);
+  RequestedGoalTolerance checker;
+  controller_.newPathReceived(Captured(0, 11));
+  geometry_msgs::msg::Twist moving;
+  moving.linear.x = .02;
+  const auto coast = StepAt(0, 0, outgoing + .30, moving, checker);
+  EXPECT_DOUBLE_EQ(coast.linear.x, 0);
+  EXPECT_DOUBLE_EQ(coast.angular.z, 0);
+  EXPECT_TRUE(Access::PreRotating(controller_));
+  const auto current = StepAt(0, 0, outgoing + .30, {}, checker, .1, outgoing);
+  EXPECT_TRUE(Access::PreRotating(controller_));
+  EXPECT_DOUBLE_EQ(current.linear.x, 0);
+  EXPECT_LT(current.angular.z, 0);
+}
+
+TEST_F(FtcStopCorner, DepartureRechecksChangedSupportedHeading)
+{
+  Geometry(0);
+  controller_.newPathReceived(Captured(0, 11));
+  SetTransform("odom", "base_footprint", 0, false, 0, outgoing);
+  Access::RefreshRotation(controller_);
+  EXPECT_NEAR(Access::AngleError(controller_), 0, 1e-12);
+  // A new complete current epoch arrives after the initial angle decision.
+  ++time_ns_;
+  SetTime();
+  SetTransform("odom", "base_footprint", 0, false, 0, outgoing + .30);
+  EXPECT_FALSE(Access::RotationDeparture(controller_));
+  EXPECT_NEAR(Access::AngleError(controller_), -.30, 1e-12);
+}
+
+TEST_F(FtcStopCorner, InvalidOrStaleDepartureEvidenceThrows)
+{
+  Geometry(0);
+  controller_.newPathReceived(Captured(0, 11));
+  SetTransform("odom", "base_footprint", 0, false, 0, outgoing);
+  time_ns_ += 400000000;
+  SetTime();
+  EXPECT_THROW(Access::RotationDeparture(controller_), nav2_core::ControllerException);
+  SetTransform("odom", "base_footprint", 0, false, 0, outgoing);
+  Access::SetAuthorization(controller_, {});
+  EXPECT_THROW(Access::RotationDeparture(controller_), nav2_core::ControllerException);
+  Geometry(0);
+  tf_->clear();
+  EXPECT_THROW(Access::RotationDeparture(controller_), nav2_core::ControllerException);
+}
+
+TEST_F(FtcStopCorner, ValidPermanentDepartureDenialRetainsOriginalTimeout)
+{
+  Geometry(0, true);
+  controller_.newPathReceived(Captured(0, 11));
+  RequestedGoalTolerance checker;
+  bool failed = false;
+  for (int tick = 0; tick < 110; ++tick)
+  {
+    try
+    {
+      const auto command = StepAt(0, 0, outgoing, {}, checker);
+      EXPECT_DOUBLE_EQ(command.linear.x, 0);
+      EXPECT_NEAR(command.angular.z, 0, 1e-12);
+      EXPECT_TRUE(Access::PreRotating(controller_));
+    }
+    catch (const nav2_core::ControllerException&)
+    {
+      EXPECT_GE(tick, 99);
+      failed = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(failed);
+}
+
+TEST_F(FtcStopCorner, StopTargetRequiresExplicitLocalForwardMonotoneUndeviatedLeg)
+{
+  // A free lawn isolates eligibility from the captured boundary response.
+  RequestedGoalTolerance checker;
+  for (const bool backward : {false, true})
+  {
+    nav_msgs::msg::Path plan;
+    plan.header.frame_id = "map";
+    plan.poses = backward ? std::vector<Pose>{MakePose(-.1, 0, M_PI),
+                                              MakePose(-.15, 0, 0),
+                                              MakePose(0, 0, 0),
+                                              MakePose(0, 0, M_PI / 2),
+                                              MakePose(0, .5, M_PI / 2),
+                                              MakePose(0, 1, M_PI / 2)}
+                          : std::vector<Pose>{MakePose(-.15),
+                                              MakePose(-.075),
+                                              MakePose(0),
+                                              MakePose(0, 0, M_PI / 2),
+                                              MakePose(0, .5, M_PI / 2),
+                                              MakePose(0, 1, M_PI / 2)};
+    controller_.newPathReceived(plan);
+    StepAt(backward ? -.1 : -.15, 0, backward ? M_PI : 0, {}, checker);
+    EXPECT_EQ(Access::StopCorner(controller_).has_value(), !backward);
+    Access::LateralDeviation(controller_, .01);
+    EXPECT_FALSE(Access::StopCorner(controller_).has_value());
+    Access::LateralDeviation(controller_, 0);
+  }
+  controller_.newPathReceived(StraightPlan());
+  StepAt(0, 0, 0, {}, checker);
+  EXPECT_FALSE(Access::StopCorner(controller_).has_value());
+}
 
 TEST_F(FtcRequestedGoalTolerance, CapturedTerminalCurveReachesStrictPointAndFinishes)
 {
@@ -1439,6 +1842,133 @@ TEST_F(FtcSpeedLimit, ReverseEscapeObeysTheSignedExternalCap)
     reverse = std::min(reverse, command);
   }
   EXPECT_LT(reverse, 0.0);
+}
+
+TEST_F(FtcSpeedLimit, PreRotatePreservesRecoveryWhenOnlyTheBodyResponseIsBlocked)
+{
+  using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+  namespace motion = mowgli_interfaces::motion;
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  robot_x_ = 2.85;
+  measured_speed_ = 0.0;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  controller_.newPathReceived(StraightPlan(robot_x_));
+  Wall(3.45);
+  visualization_msgs::msg::MarkerArray markers;
+  const auto add =
+      [&](const std::string& kind, const std::vector<std::pair<double, double>>& points)
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = "map";
+    marker.ns = kind;
+    marker.text = kind == "area" ? "mowing" : "";
+    marker.type = marker.LINE_STRIP;
+    marker.action = marker.ADD;
+    marker.pose.orientation.w = 1;
+    for (const auto& [x, y] : points)
+    {
+      geometry_msgs::msg::Point point;
+      point.x = x;
+      point.y = y;
+      marker.points.push_back(point);
+    }
+    markers.markers.push_back(marker);
+  };
+  add("area", {{-5, -5}, {15, -5}, {15, 15}, {-5, 15}});
+  add("obstacle", {{3.45, -1.5}, {3.50, -1.5}, {3.50, 2}, {3.45, 2}});
+  Access::SetAuthorization(controller_, markers);
+  const auto geometry = motion::Snapshot::parse(markers);
+  ASSERT_TRUE(geometry->valid);
+  motion::Ring footprint;
+  for (const auto& point : costmap_->getRobotFootprint())
+    footprint.push_back({point.x, point.y});
+  geometry_msgs::msg::Twist restart;
+  restart.linear.x = .16;
+  const motion::Pose pose{robot_x_, 0, 0};
+  EXPECT_TRUE(mowgli_nav2_plugins::ForwardResponseReferencePermitted(
+      *geometry, footprint, pose, restart, {}, .1, .5));
+  EXPECT_FALSE(mowgli_nav2_plugins::ForwardResponsePermitted(
+      *geometry, footprint, pose, restart, {}, .1, .5));
+  EXPECT_THROW(Access::AuthorizeForward(controller_, .16), nav2_core::ControllerException);
+  bool reversed = false;
+  for (int tick = 0; tick < 15; ++tick)
+  {
+    const double command = Tick();
+    EXPECT_LE(command, 0);
+    if (command < 0)
+    {
+      reversed = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(reversed) << "PRE must preserve the existing FOLLOWING reverse-recovery path";
+}
+
+TEST_F(FtcRequestedGoalTolerance, CompletedPivotPreservesBlockedDepartureRecovery)
+{
+  using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+  namespace motion = mowgli_interfaces::motion;
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  plan.poses = {MakePose(-.02, -.1, M_PI / 2), MakePose(-.02, 0, M_PI / 2), MakePose(-.02, 0, 0)};
+  for (double x = .03; x < 4; x += .05)
+    plan.poses.push_back(MakePose(x));
+  controller_.newPathReceived(plan);
+  RequestedGoalTolerance checker;
+  // Enter the pivot through normal pose updates, before any obstacle exists.
+  double approach_y = -.1;
+  geometry_msgs::msg::Twist measured;
+  for (int tick = 0; tick < 100 && !Access::Pivoting(controller_); ++tick)
+  {
+    measured = StepAt(-.02, approach_y, M_PI / 2, measured, checker);
+    approach_y += measured.linear.x * .1;
+  }
+  ASSERT_TRUE(Access::Pivoting(controller_));
+  // The wall is outside the complete padded rotation disc (0.62 > 0.611 m),
+  // but inside the forward restart response. Only FOLLOWING owns its recovery.
+  Wall(.60);
+  visualization_msgs::msg::MarkerArray markers;
+  const auto add =
+      [&](const std::string& kind, const std::vector<std::pair<double, double>>& points)
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = "map";
+    marker.ns = kind;
+    marker.text = kind == "area" ? "mowing" : "";
+    marker.type = marker.LINE_STRIP;
+    marker.action = marker.ADD;
+    marker.pose.orientation.w = 1;
+    for (const auto& [x, y] : points)
+    {
+      geometry_msgs::msg::Point point;
+      point.x = x;
+      point.y = y;
+      marker.points.push_back(point);
+    }
+    markers.markers.push_back(marker);
+  };
+  add("area", {{-5, -5}, {15, -5}, {15, 15}, {-5, 15}});
+  add("obstacle", {{.60, -1.5}, {.65, -1.5}, {.65, 2}, {.60, 2}});
+  Access::SetAuthorization(controller_, markers);
+  SetTransform("odom", "base_footprint", -.02, false, 0, 0);
+  EXPECT_FALSE(Access::RotationBlocked(controller_, M_PI / 2));
+  EXPECT_THROW(Access::AuthorizeForward(controller_, .16), nav2_core::ControllerException);
+  bool reversed = false;
+  for (int tick = 0; tick < 15; ++tick)
+  {
+    const auto command = StepAt(-.02, 0, 0, {}, checker);
+    EXPECT_LE(command.linear.x, 0);
+    if (command.linear.x < 0)
+    {
+      reversed = true;
+      break;
+    }
+  }
+  EXPECT_FALSE(Access::Pivoting(controller_));
+  EXPECT_TRUE(reversed);
 }
 
 class FtcReverseBudget

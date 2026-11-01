@@ -25,6 +25,18 @@ bool ForwardSweepBlocked(const nav2_costmap_2d::Costmap2D& costmap,
                          double command_horizon,
                          double coast_time_bound);
 
+// Readiness for leaving PRE_ROTATE/PIVOT: only the reference response must fit the
+// mowing union. This is NOT motion permission. Body obstacles remain owned by
+// FOLLOWING's existing avoidance/reverse recovery and all final output guards.
+// Uses the same response envelope and bounds as ForwardResponsePermitted.
+bool ForwardResponseReferencePermitted(const mowgli_interfaces::motion::Snapshot& geometry,
+                                       const mowgli_interfaces::motion::Ring& footprint,
+                                       mowgli_interfaces::motion::Pose pose,
+                                       const geometry_msgs::msg::Twist& proposed,
+                                       const geometry_msgs::msg::Twist& measured,
+                                       double command_horizon,
+                                       double coast_time_bound);
+
 // The same assumed forward response against recorded geometry: the reference
 // stays in the mowing union, while only raw holes constrain the body. STOP and
 // non-forward proposals retain their separate authorization/rotation guards.

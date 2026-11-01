@@ -29,6 +29,26 @@ plans retain prior behavior. Measured speed, final authorization, coast bounds
 and timeout remain authoritative. `test_ftc_speed_limit.cpp` contains the
 boundary RED/GREEN, stale-pose latch and crossing-eligibility controls.
 
+Explicit internal pivot approaches also have a local forward-monotone
+`stopCornerTarget`: point-bearing steering plus radial and outgoing tangent/normal
+closing-distance caps over the existing response horizon. Deviation, obstacle
+hold, reverse and turn fallback disable this alternative. At PRE_ROTATE/PIVOT
+exit, supported current pose rechecks both angular alignment and whether a
+nominal forward reference response remains in the mowing union. This readiness
+check grants no body-motion permission: FOLLOWING retains obstacle avoidance and
+reverse recovery, and every output retains full raw-hole/local guards. Denial
+keeps the original state timer; a timeout throws before any recovery output.
+PRE readiness of an interrupted approach uses the same supported-pose speed cap
+as actual FOLLOWING, including a stopped zero-travel handoff at T. PRE without a
+pending approach and completed PIVOT also check the current direction over the
+actual straight outgoing prefix, clipped to the existing local lookahead. This
+prevents a one-horizon departure from consuming the outer margin while steering
+converges; it grants no body permission and does not certify arbitrary curved
+tracking. Measured translation above the existing stopped threshold holds
+rotation at zero.
+Tests in `test_ftc_speed_limit.cpp` include captured/rotated cusp, both trimmed
+twin halves, future/stale TF, valid-denial timeout and completed-pivot recovery.
+
 Strict terminal point alignment additionally applies to globally forward-monotone
 map-frame plans without pivot corners. It uses final-point bearing during the
 existing timed WAITING state, then restores final goal yaw in POST_ROTATE.

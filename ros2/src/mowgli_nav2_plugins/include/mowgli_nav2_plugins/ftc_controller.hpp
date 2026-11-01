@@ -160,7 +160,7 @@ private:
 
   /// Advance the virtual carrot and project it into base_link.
   void update_control_point(double dt, bool approach_goal, bool supported_epoch);
-  void update_local_control_point(bool supported_epoch);
+  void update_local_control_point(bool supported_epoch, const rclcpp::Time* epoch = nullptr);
 
   /// Compute the look-ahead distance along the remaining straight path.
   double distanceLookahead() const;
@@ -174,6 +174,14 @@ private:
 
   /// The corner the carrot must stop at (first corner at/after current_index_).
   std::optional<std::size_t> nextPivotCorner() const;
+
+  /// Final locally monotone, undeviated approach to an explicit stop corner.
+  std::optional<std::size_t> stopCornerTarget() const;
+  std::optional<std::size_t> stopCornerApproach(bool starting) const;
+  double stopCornerSpeedLimit(std::size_t corner, double x, double y, double yaw) const;
+
+  /// Qualify PRE_ROTATE/PIVOT departure against a supported pose and response.
+  bool rotationDeparturePermitted(const geometry_msgs::msg::Twist& measured);
 
   /// FOLLOWING -> PIVOT: stop at the corner, retarget the carrot to the
   /// corner's outgoing pose, drop any lateral offset, reset the PID history.

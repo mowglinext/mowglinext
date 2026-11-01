@@ -9,6 +9,26 @@
 > uses no TF. Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
+## Residual signed pivot admission (#950, 2026-11-01)
+
+`pivotSharpCorners` retains the existing full-disc decision first. If that
+refuses, an optional explicit body outline can certify the actual signed shortest
+rotation with `motion::Snapshot::permits` against the raw area and holes. This
+adds only an exact-XY incoming/outgoing twin; it preserves every original directed
+edge and does not partition or gear the unit. Missing or malformed context refuses
+the alternative. `test_pivot_joins.cpp` contains `ResidualSignedPivot` controls,
+including the retained T cusp, opposite direction, padding-only contact and the
+Isabey route bounds.
+
+`makePivotLimits` is shared by the action and preview. Launch derives the physical
+front/rear/half-width, the bounding extents of the actual serialized Nav2 footprint
+(`collision_extents`), and local `footprint_padding`. The collision rectangle
+covers both physical and execution extents and adds padding once against raw
+holes. Only the physical outline must fit the existing radius/outer soft band;
+no band or radius is enlarged. These internal derived parameters are not operator
+knobs; zero or missing dimensions disable the signed alternative. Legacy disc
+and connector decisions retain their prior contract.
+
 ## Route-ordering update (2026-10-05)
 
 Regenerated from the current planner and test registration; the older line-number map
@@ -171,6 +191,9 @@ Declared in `on_configure` (`coverage_server.cpp:53-105`). "Injected" = overwrit
 | `pivot_sweep_radius` | 0.0 (= pivot joins DISABLED) | `robot_config_util.chassis_circumscribed_radius(rp)` (0.597 m shipped) → `navigation.launch.py` `cov_params` | LIVE |
 | `boundary_soft_margin` | 0.0 | `robot_config_util.boundary_soft_margin(rp)` = `enforce_boundary_margin_m` (fallback 0.40) floored at the circumscribed radius — the same band `full_system.launch.py` gives map_server | LIVE |
 | `footprint_half_width` | 0.0 (= narrow boundary tongues KEPT) | `robot_config_util.chassis_half_width(rp)` (0.275 m shipped) → `navigation.launch.py` `cov_params`; dead-end tongues of the recorded line narrower than 2× this are not planned (`removeNarrowBoundaryTongues`, field 2026-10-10 dock wedge) | LIVE |
+| `footprint_front` / `footprint_rear` | 0.0 (signed alternative disabled) | physical front / positive rear distance from `chassis_footprint(rp)` | LIVE |
+| `collision_extents` | `[0.0, 0.0, 0.0]` (signed alternative disabled) | front / positive rear / half-width bounds of the serialized Nav2 footprint; conservatively covers physical dimensions | LIVE |
+| `footprint_padding` | 0.0 | selected local-costmap padding; applied once to collision extents | LIVE |
 | `action_server_result_timeout` | 15.0 | not injected | configure |
 | `use_sim_time` | false | `nav2_params_base.yaml:1152` | configure |
 

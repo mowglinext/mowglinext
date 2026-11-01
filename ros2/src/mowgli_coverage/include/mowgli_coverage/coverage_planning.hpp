@@ -482,6 +482,14 @@ struct PivotJoinLimits
   // must clear these by sweep_radius; the margin-grown safe_holes only bound
   // the connector centreline.
   std::vector<std::vector<std::pair<double, double>>> recorded_obstacles;
+  // Optional explicit chassis footprint about the rear axle, in body coordinates.
+  // Only residual pivotSharpCorners may use its signed swept-body certificate
+  // after the full-disc check refuses. Empty keeps every legacy decision.
+  std::vector<std::pair<double, double>> footprint;
+  // Optional conservative collision outline (Nav2 padding). It must cover the
+  // physical footprint above. Only the physical body is bounded by the existing
+  // outer soft band; the padded outline is used once against raw holes.
+  std::vector<std::pair<double, double>> collision_footprint;
 };
 
 // True iff a robot pivoting in place with base_link at (x, y) sweeps only
@@ -493,7 +501,8 @@ bool pivotSweepFits(double x, double y, const PivotJoinLimits& limits);
 
 // Turn every zero-radius corner of `pts` sharper than `min_turn_rad` into a
 // pivot corner (a bit-exact twin, see coverage_geometry.hpp) where
-// pivotSweepFits() allows it. Existing twins and every other pose are kept
+// pivotSweepFits() allows it, or an explicit footprint certifies the signed
+// shortest sweep against the raw geometry. Existing twins and every other pose are kept
 // unchanged; with pivots disabled (sweep_radius <= 0) `pts` is returned as is.
 // Used on finished sub-paths, after fillets: a corner left sharp there is one
 // FTC would otherwise drive as a curve, sweeping the chassis nose wide.

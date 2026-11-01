@@ -48,6 +48,22 @@ def _load_params() -> dict:
                        _load_yaml("nav2_params_lidar.yaml"))
 
 
+def test_residual_signed_pivot_dimensions_default_disabled_without_operator_knobs() -> None:
+    here = os.path.dirname(os.path.abspath(__file__))
+    server = os.path.join(here, "..", "..", "mowgli_coverage", "src", "coverage_server.cpp")
+    with open(server, encoding="utf-8") as fh:
+        source = fh.read()
+    template = _load_yaml("mowgli_robot.yaml")
+    with open(os.path.join(here, "..", "..", "..", "..", "gui", "asserts",
+                           "mower_config.schema.json"), encoding="utf-8") as fh:
+        schema_source = fh.read()
+    for key in ("footprint_front", "footprint_rear"):
+        assert re.search(rf'declare_double\("{key}", 0\.0\)', source)
+        assert key not in template["mowgli"]["ros__parameters"]
+        assert f'"{key}"' not in schema_source
+        assert key not in _load_yaml("nav2_params_base.yaml")["coverage_server"]["ros__parameters"]
+
+
 def _controller_section(params: dict) -> dict:
     return params["controller_server"]["ros__parameters"]
 

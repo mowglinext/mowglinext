@@ -5,6 +5,103 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Original cusp: signed pivot, braking and restart (2026-11-01)
+
+The actual current `PlanCoverage` server reproduces the retained 9,420-pose,
+378.272501 m unit exactly in XY. At old point 190, T =
+(2.454825207353694, 0.8013791580379307), the incoming heading is -0.490873852
+and the outgoing heading is 3.140918321 rad. The full chassis disc reaches a raw
+hole, but the actual clockwise -2.651393134 rad filled-body rotation clears it.
+The residual-corner pass only considered the disc, emitted no twin, and FTC tried
+the corner as moving curvature. Actual ControllerServer rejected its forward
+response. An exact twin alone still aborted on the unbraked approach.
+
+The residual pass now retains the original disc decision first, then optionally
+certifies the signed shortest rotation with the shared raw-geometry predicate.
+The added twin preserves every original directed edge in order. Physical front,
+positive rear distance and half-width retain the existing radius/outer-band
+bound; a separate collision rectangle covers the actual serialized Nav2 outline
+and physical extents, with local-costmap padding added once against raw holes.
+Missing/malformed geometry disables the alternative. Action and preview share
+these limits; no new operator or wire parameter is introduced.
+
+FTC's local forward-monotone approach steers toward the stop point and caps
+travel in radial and outgoing tangent/normal coordinates over the existing
+response horizon. Deviation, reverse, obstacle hold and turn fallback retain
+ownership. PRE_ROTATE/PIVOT departure rechecks supported current pose, angle and
+reference response. Body-obstacle readiness cannot block the existing FOLLOWING
+avoidance/reverse path; every actual output retains full raw/local guards.
+Timeout now throws before any recovery branch can return a command. All existing
+angle/distance thresholds, state deadlines and old test bodies remain unchanged.
+
+Public halt/reload found a further causal mismatch. At the first clockwise spin,
+FollowStrip legitimately saved old point 189, only 8.50 mm away; T was 20.67 mm
+away. Actual cancellation returned 5, commands stopped, and disk reload preserved
+cursor 9. The existing precise entry check permitted direct reentry, but PRE's
+nominal 0.16 m/s response query denied motion until its 10 s timeout. It was
+checking a speed that the pending corner approach would not emit. PRE readiness
+now shares the actual supported-pose approach cap; a zero cap allows a stopped
+handoff to FOLLOWING/PIVOT. Cursor, checkpoint, entry tolerance and arrival
+semantics are unchanged.
+
+An additional +2 mm past-T regression exposed a later abort: a one-horizon
+restart fitted the 1.379 mm outer reference slack, then spent that slack while
+steering converged. PRE with no pending approach and completed PIVOT now also
+qualify the current direction over the actual straight outgoing prefix, clipped
+to existing local lookahead. This is geometric departure readiness, not a global
+tracking or convergence certificate. It does not replace body-obstacle recovery
+or the final command guard. Curved-prefix availability remains a separate limit.
+
+Final action export returns 9,421 poses in one unit, 64 rings and 29 swaths,
+with unchanged 378.272501206 m length. Exact comparison retains all 9,419 old
+directed XY edges and adds only the zero-length twin edge at index 190. Every
+default output position and quaternion matches the preceding padded export;
+custom chassis-width tests also execute the real footprint serialization.
+
+Validation on the repaired source passes **101 controller cases**, **167 coverage
+cases across six registered targets**, and **121 configuration cases**. Independent
+strong review found no remaining source blocker in this repair. Before/after
+objects reproduce each causal regression; no pre-existing C++ test body changes.
+The actual uninterrupted 32-pose window reaches FollowPath status 4/error 0 in
+22.879 s, followed by zero, with no raw-hole or outer-reference oracle hit. Its
+final endpoint remains about 0.493 m short under the unchanged 0.50 m coverage
+allowance; this is not exact endpoint/cut evidence.
+
+Both public halt/reload cases also pass on the final controller library
+`7020ebd4f0e418f1ca7e5d243828932ae242f71f1371dd6f7ea05eb03dcf54b2`.
+Incoming restart retains cursor 9/old189 and succeeds directly; outgoing restart
+retains cursor 11/new191, completes real NavigateToPose entry, then coverage.
+Both observe real cancellation, at least 200 ms zero, unmodified disk reload,
+actual resumed success before normal completion bookkeeping, final zero and no
+oracle hit or reverse. Planner, controller, navigator and behavior servers are
+real; the plant and all-clear scan are synthetic, blade service accepts OFF only.
+There is no pose/phase/cursor reset. Raw commands, full quaternions and loaded
+library identities are retained. These are local windows from the original unit,
+not an executed 378 m unit.
+
+Bounded production builds total 203.562 s for coverage and 427.622 s for the
+controller, including failed attempts and review/causal iterations. Controller
+tests total 230.796 s; the public restart driver builds in 39.774 s and all public
+component attempts total 170.329 s under a 200 s cap. Compiler invocations are
+bounded; the initial 60 s coverage compile limit was corrected after contention,
+not left waiting. The first coverage CTest used an older runtime library; that
+setup failure is retained separately from causal REDs. The latest matching
+coverage run passes all six targets. Current source was built in focused
+components, not a full stack/vendor/image build.
+
+Evidence is retained under `pr950-resume-20261101/cusp-production/`: actual
+full-pose TSVs and action CDRs, loaded-library inode/hash identities, matched
+before/after tests, public action/checkpoint/plant traces, independent reviews,
+and bounded build/test ledgers. This is software component evidence. It does not
+attribute the original 13.943731 mm event or validate a complete 378 m mowing
+mission, exact cut accounting, native actuator response or physical containment.
+
+The coherent repair family is planner admission + derived collision geometry +
+FTC braking/departure/restart + focused tests. Extracting only the twin producer
+would reproduce the unbraked-approach failure. The immediate post-timeout abort is
+an independently testable smaller repair. Both require target-base validation if
+extracted; no extraction is performed. PR #950 remains Draft.
+
 ## Coverage entry must precede mowing (2026-10-31)
 
 The next production component experiment found another independent cause: the

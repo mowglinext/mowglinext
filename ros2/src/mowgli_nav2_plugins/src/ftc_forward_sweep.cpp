@@ -112,7 +112,30 @@ bool BuildResponseEnvelope(const motion::Ring& footprint,
   bg::convex_hull(vertices, envelope.chassis);
   return true;
 }
+bool ReferencePermitted(const motion::Snapshot& geometry, const ResponseEnvelope& envelope)
+{
+  return envelope.reference_is_line
+             ? geometry.mowing.segmentAuthorized(envelope.line_start, envelope.line_end)
+             : bg::covered_by(envelope.reference, geometry.mowing_union);
+}
 }  // namespace
+
+bool ForwardResponseReferencePermitted(const motion::Snapshot& geometry,
+                                       const motion::Ring& footprint,
+                                       motion::Pose pose,
+                                       const geometry_msgs::msg::Twist& proposed,
+                                       const geometry_msgs::msg::Twist& measured,
+                                       double command_horizon,
+                                       double coast_time_bound)
+{
+  if (proposed.linear.x <= 0)
+    return true;  // This readiness query only constrains forward departures.
+  ResponseEnvelope envelope;
+  return geometry.valid &&
+         BuildResponseEnvelope(
+             footprint, pose, proposed, measured, command_horizon, coast_time_bound, envelope) &&
+         ReferencePermitted(geometry, envelope);
+}
 
 bool ForwardResponsePermitted(const motion::Snapshot& geometry,
                               const motion::Ring& footprint,
@@ -131,12 +154,7 @@ bool ForwardResponsePermitted(const motion::Snapshot& geometry,
       !BuildResponseEnvelope(
           footprint, pose, proposed, measured, command_horizon, coast_time_bound, envelope))
     return false;
-  if (envelope.reference_is_line)
-  {
-    if (!geometry.mowing.segmentAuthorized(envelope.line_start, envelope.line_end))
-      return false;
-  }
-  else if (!bg::covered_by(envelope.reference, geometry.mowing_union))
+  if (!ReferencePermitted(geometry, envelope))
     return false;
   for (const auto& hole : geometry.holes)
     if (bg::intersects(envelope.chassis, hole))
