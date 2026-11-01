@@ -75,6 +75,16 @@ std::optional<TickOutput> GraphManager::PromoteSourceBootstrapLocked(int64_t sch
     auto candidate = BuildSourceBootstrapCandidate(request);
     if (!candidate.suffix_policy || candidate.frontier_key != PoseKey(1))
       return std::nullopt;
+    const auto birth = std::find_if(candidate.raw_bindings.begin(),
+                                    candidate.raw_bindings.end(),
+                                    [&](const auto& binding)
+                                    {
+                                      return binding.yaw && binding.id == request.heading.id;
+                                    });
+    if (birth == candidate.raw_bindings.end())
+      return std::nullopt;
+    phase->live_birth_heading = *birth;
+    phase->required_source_factors = candidate.isam->getFactorsUnsafe();
     const double bias = params_.use_imu_preint ? candidate.values.at<double>(gtsam::Symbol('b', 1))
                                                : current_bias_estimate_;
     phase->provisional = false;
@@ -190,6 +200,8 @@ bool GraphManager::AssimilateSourceBootstrapObservationsLocked(bool& updated)
           insertion.key, it->xy, gtsam::Vector2(params_.lever_arm_x, params_.lever_arm_y), noise);
     if (phase->provisional)
       phase->request.additional_observations.push_back(*it);
+    for (const auto& factor : factors)
+      phase->required_source_factors.push_back(factor);
     const bool allocated = insertion.initial_value.has_value();
     const bool yaw = it->yaw.has_value();
     if (!ApplyIsamUpdateLocked(factors, values))

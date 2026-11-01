@@ -293,6 +293,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_source_policy_accumulator test/test_source_policy_accumulator.cpp TIMEOUT 60)
   target_link_libraries(test_source_policy_accumulator fusion_graph_core)
 
+  ament_add_gtest(test_coupled_heading_recovery test/test_coupled_heading_recovery.cpp TIMEOUT 60)
+  target_include_directories(test_coupled_heading_recovery PRIVATE src)
+  target_link_libraries(test_coupled_heading_recovery fusion_graph_core)
+
   ament_add_gtest(test_rebase_information
     test/test_rebase_information.cpp
     TIMEOUT 60

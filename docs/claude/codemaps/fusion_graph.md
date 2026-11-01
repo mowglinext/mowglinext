@@ -38,13 +38,18 @@ Unknown/marginalized prefixes and uncommitted tails reject without mutation;
 unsupported local branch observations stay pending. Solver pointer ownership
 permits non-allocating atomic publication and stale-rebase cancellation.
 `HeadingSeedState` distinguishes independent pose, raw same-source heading,
-synthetic retimed heading and coupled-source provenance. Retimed and coupled
-families return `UnsupportedFamily` without mutation; safe invalidation requires
-a separate ownership contract.
+synthetic retimed heading and coupled-source provenance. Retimed families
+return `UnsupportedFamily` without mutation. Coupled recovery
+requires a closed family, exact current birth-yaw binding and complete nonlinear
+factor lineage in `SourceBootstrapState`; the immutable birth token alone is
+insufficient after promotion rekeys its raw yaw. It preserves all process states
+and retires only that live absolute likelihood. This remains an explicit
+invalid-seed operation, with no automatic Node invalidation policy.
 
 Tests: `test_source_bootstrap`, `test_source_bootstrap_builder`,
 `test_source_bootstrap_phase`, `test_shared_source_process_family`,
-`test_process_window_policy`, `test_heading_recovery`,
+`test_process_window_policy`, `test_source_policy_accumulator`,
+`test_heading_recovery`, `test_coupled_heading_recovery`,
 `test_relative_conditional` and the real `test_sensor_input_node` cases.
 Core bootstrap/heading tests include private `src` metadata for lifecycle,
 rollback and covariance checks. Evidence and limits are in the dated
@@ -161,6 +166,7 @@ The launch-only helper `launch/fusion_graph_simulation_geometry.py` validates th
 | `.../test_shared_source_process_family.cpp` | | Dense/conditional covariance, shared gyro IDs, exact rank support and metadata mismatch rejection |
 | `.../test_process_window_policy.cpp` | | Existing gates/EMA/counters copied without mutation, source versus schedule duration |
 | `.../test_source_policy_accumulator.cpp` | | Source-window ownership across asynchronous ordinary cadence, throttle/noise invariance, EMA and source-free compatibility |
+| `.../test_coupled_heading_recovery.cpp` | | Explicit coupled birth-yaw retirement, full-joint same-model QR control, moving flips, aliases/identity, lineage and rollback |
 | `.../test_gnss_timestamp.cpp` | 142 | Delayed GNSS constrains the node at `header.stamp`, bounded by the window |
 | `.../test_rtk_wrongfix_gate.cpp` | 167 | Wrong-fix budget math; reject-forever regression if reset only on accept |
 | `.../test_dock_gps_consistency.cpp` | 127 | #512 field numbers; Float / no-fix never yields |
@@ -252,7 +258,7 @@ All read ONCE at construction (`declare_parameter`, no dynamic reconfigure). Pre
 
 ## Build, test, run
 - Build (devcontainer, `/ros2_ws`): `cd ros2 && make build-pkg PKG=fusion_graph` (`ros2/Makefile:64` → `scripts/build.sh`); raw: `colcon build --packages-select fusion_graph --cmake-args -DCMAKE_BUILD_TYPE=Release`.
-- Unit tests: `PACKAGES="fusion_graph" ./scripts/test.sh` (`ros2/scripts/test.sh`) or `colcon test --packages-select fusion_graph && colcon test-result --verbose`. Single binary: `./build/fusion_graph/test_factors`. There are 51 GTest targets. Most exercise pure headers and `GraphManager`; `test_sensor_input_node` directly drives the real node callbacks with a controlled ROS clock, isolated domain and no input executor. Its production implementation objects are shared through `fusion_graph_node_support`. `test_perf` is Release-only meaningful, 300 s timeout.
+- Unit tests: `PACKAGES="fusion_graph" ./scripts/test.sh` (`ros2/scripts/test.sh`) or `colcon test --packages-select fusion_graph && colcon test-result --verbose`. Single binary: `./build/fusion_graph/test_factors`. There are 52 GTest targets. Most exercise pure headers and `GraphManager`; `test_sensor_input_node` directly drives the real node callbacks with a controlled ROS clock, isolated domain and no input executor. Its production implementation objects are shared through `fusion_graph_node_support`. `test_perf` is Release-only meaningful, 300 s timeout.
 - GTSAM 4.3a1 is built from source (`ros2/Dockerfile:2-23` stage `gtsam-builder`, `.devcontainer/Dockerfile:26-30`, CI `.github/workflows/ros2-ci.yml:186-226` cached under `/opt/gtsam`). `find_package(GTSAM CONFIG REQUIRED)` needs `CMAKE_PREFIX_PATH=/opt/gtsam`.
 - CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (:128) runs whole-workspace `colcon build` (:338) + `colcon test` (:347); `format-check` (:404, clang-format-18 on changed lines); `static-analysis` (:448). No launch_testing / e2e test targets fusion_graph specifically; `ros2/src/e2e_test.py:187` and `e2e_test_no_lidar.py:111` consume `/odometry/filtered_map`.
 - Run standalone: `ros2 launch fusion_graph fusion_graph.launch.py use_lidar_map_anchor:=true`; manual save: `ros2 service call /fusion_graph_node/save_graph std_srvs/srv/Trigger`.

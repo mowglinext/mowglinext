@@ -16,5 +16,9 @@ struct SourceBootstrapState
   SourceBootstrapBuildRequest request;
   std::shared_ptr<SharedSourceProcessFamily> family;
   std::map<gtsam::Key, int64_t> auxiliary_poses;
+  std::optional<SourceBootstrapRawBinding> live_birth_heading;
+  // Exact nonlinear likelihood lineage. Keys alone cannot prove that a
+  // marginal separator has not already absorbed the heading being retired.
+  gtsam::NonlinearFactorGraph required_source_factors;
 };
 }  // namespace fusion_graph

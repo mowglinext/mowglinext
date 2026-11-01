@@ -281,7 +281,8 @@ bool GraphManager::QueueYawAtEpoch(double yaw,
       !std::isfinite(sigma))
     return false;
   auto& state = *motion_;
-  if (state.yaw_observation_ids.count(observation_id))
+  if (state.yaw_observation_ids.count(observation_id) ||
+      (state.bootstrap && state.bootstrap->request.heading.id == observation_id))
     return false;
   const int64_t oldest = OldestSourceBoundaryLocked();
   if (source_ns < oldest || state.observations.size() >= 10000)

@@ -88,7 +88,10 @@ SourceBootstrapResult GraphManager::InitializeSourceObservationPair(
       if (!binding.yaw && binding.id == gnss_id)
         seed->source_position = binding.factor;
       if (binding.yaw && binding.id == yaw_id)
+      {
         seed->prior = binding.factor;
+        phase->live_birth_heading = binding;
+      }
     }
     if (!seed->source_position || !seed->prior)
       return SourceBootstrapResult::Failed;
@@ -96,6 +99,7 @@ SourceBootstrapResult GraphManager::InitializeSourceObservationPair(
     request.prefix_left_key = candidate.prefix_key;
     phase->family = std::move(candidate.family);
     phase->auxiliary_poses = std::move(candidate.auxiliary_poses);
+    phase->required_source_factors = candidate.isam->getFactorsUnsafe();
     staged->bootstrap = std::move(phase);
     staged->next_acquisition = candidate.next_acquisition;
     std::erase_if(staged->observations,

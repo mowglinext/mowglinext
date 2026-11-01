@@ -276,8 +276,8 @@ TEST(SourceBootstrapPhase, PublicSAndFirstActualCadenceVStayConsistentWithOnePol
       EXPECT_FALSE(manager.QueueGnssAtEpoch(0., 0., .1, false, s, gps, epoch));
       EXPECT_FALSE(manager.QueueYawAtEpoch(0., .1, false, earlier ? start : u, yaw, epoch));
       const auto before_recovery = Access::Capture(manager);
-      EXPECT_EQ(manager.RecoverInvalidSeedHeading(birth, true, {epoch, v, 99, 0., .1, false}),
-                fg::HeadingRecoveryResult::UnsupportedFamily);
+      EXPECT_EQ(manager.RecoverInvalidSeedHeading(birth, false, {epoch, v, 99, 0., .1, false}),
+                fg::HeadingRecoveryResult::SeedNotInvalid);
       SameState(before_recovery, Access::Capture(manager));
     }
 }

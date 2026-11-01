@@ -5,6 +5,83 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Explicit retirement of a coupled bootstrap heading (2026-11-01)
+
+The explicit invalid-seed operation now supports a closed, wholly retained
+coupled bootstrap family. Its baseline public-API reproduction refused all
+eight source-order/preintegration/recovery-time combinations with
+`UnsupportedFamily`, retaining yaw pi and one applied yaw. The same frozen
+fixture object now passes all eight. This extends an intentional refusal;
+it does not create a rule that identifies an invalid seed automatically.
+
+The immutable seed token's heading pointer belongs to birth. First-cadence
+promotion can reconstruct that raw heading at another key, so removing the
+birth pointer would not remove its live likelihood. `SourceBootstrapState` now
+records the current raw ID, acquisition time, key and factor pointer at both
+initialization and promotion. It also retains exact nonlinear factor lineage
+and extends it on delayed insertion. Recovery proves that lineage and its
+required keys remain, with the original GNSS factor exactly once. Existing
+keys alone do not prove that a marginalized separator can be unconditioned.
+
+With explicit invalidation, the isolated candidate removes only the identified
+live yaw likelihood. It preserves the original antenna-position factor, wheel/
+gyro/bias information, all other absolute observations and the old heading's
+latent acquisition/process conditional. That latent state still conditions
+later queries. The nested phase and shared family are copied before an interior
+recovery insertion; boundary aliases allocate no new coupled state. Publication
+uses the existing atomic solver/state/snapshot transaction and cancels stale
+rebase generation. Failure leaves graph, queues, source/cadence, token, nested
+family and worker buffers untouched.
+
+A pre-S birth ID can leave the public-window dedup map while its private family
+is retained. The private identity remains consumed: neither queue admission nor
+recovery can reuse it as a different physical observation. Distinct IDs with
+identical yaw payloads remain separate likelihoods; retiring the birth pointer
+preserves the other one. Retimed carried priors, provisional families, pending
+tails, retired/unknown nonlinear prefixes and unproved factor lineage still
+refuse without mutation. The older phase refusal test retains its unchanged-
+state assertions with explicit invalidation false; positive authorized support
+is covered by the new transaction tests.
+
+Six new permanent Core tests compare all typed pose/bias means, complete QR
+joint covariance and cost at 1e-9 against a separately assembled same-model
+transaction control. Its sole correct birth yaw is removed entirely before
+adding recovery; it is not an extra valid-heading prior. The 32 main subcases
+cover both acquisition orders, preintegration on/off, lever arms, latest/interior
+recovery and stationary/moving pi flips **before** retirement, then delayed GNSS
+and another turn. Other cases cover exact rank-one support, aliases, queued
+conflicts, pruned identity, unrelated equal-payload likelihoods, unsupported
+lineage and candidate failure/worker cancellation. The oracle shares the already
+validated process law; it is not a new independent raw-kernel derivation or a
+physical 180-degree recovery qualification. Existing ordinary-family promotion
+tests remain; the new control does not claim a new pre-operation ordinary-family
+promotion experiment.
+
+Final software validation passes **27 registered Core executables / 194 GTests**,
+**65 actual Node GTests**, the older unchanged Node fixture **3/3**, frozen
+physical-v2 **3/3**, and the frozen public recovery fixture **1 GTest / eight
+combinations**. Because the private phase layout changed, all eight dependent
+Core TUs and both affected test TUs were freshly compiled; the remaining eight
+archive members and unchanged Node objects retain pinned dependency provenance.
+Compilation totals 94.145 s with 60 s per-TU caps; Node runtime is 4.020 s.
+Final Core archive SHA-256:
+`299e3b65a0be5c60cb8084bbdb0ee4db31e1e5305ce2b8a49c055508b6e00225`.
+Commands, source/object/dependency hashes and original refusals are retained in
+external `cross-source-bootstrap-live-validation/out/coupled-seed-recovery-red-001/`
+and `-green-001/`. A stale reused-object path interrupted one link; only that
+path was corrected, without recompiling successful TUs or changing source/tests.
+Independent technical challenge and final code review have no open BLOCKER or
+SHOULD-FIX finding; clang-format 18 and diff checks pass. No full ROS build,
+current-head whole-stack CI or hardware result is claimed.
+
+Automatic Node invalidation remains unresolved: a current COG conflict alone
+cannot distinguish an invalid seed from valid seed plus later bad data. No Node
+caller or blanket policy was added. Missing marginalized nonlinear evidence
+cannot be recovered by this operation. The original 13.943731 mm event still
+lacks accepted graph identities and optimizer/anchor history; these repairs do
+not establish its retrospective cause. Physical acceptance remains under the
+exact-baseline procedure below, with no hardware operation authorized or run.
+
 ## Accepted source motion and ordinary policy windows (2026-11-01)
 
 A subsequent actual-Core discriminator establishes that the asynchronous
@@ -136,9 +213,8 @@ pending. Reset, epoch change and rigid pose-only reanchor clear ownership;
 provisional save/rebase defer rather than disguising S as U. After promotion,
 rebase eliminates owned auxiliary keys with their source family and preserves
 the surviving separator. Added source factors and explicit ForceAnchor priors
-survive provisional rebuilding. Explicit invalid-seed repair returns
-`UnsupportedFamily` for the coupled family: automatic seed invalidation and a
-safe coupled-family recovery contract remain separate unresolved work.
+survive provisional rebuilding. Explicit invalid-seed repair now uses the verified live binding and complete
+lineage described above; automatic seed invalidation remains unresolved.
 
 Two additional actual-Node regressions exposed fallback defects. A sensor
 heading lacking queue admission could bypass proof through the old derived
