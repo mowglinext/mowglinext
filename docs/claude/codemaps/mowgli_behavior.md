@@ -19,6 +19,14 @@ recovery. `test_follow_strip_dig.cpp`, `test_coverage_entry.cpp` and the strict-
 pin cover this contract. Evidence/limits: the dated coverage-entry section in
 `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
 
+Plan-fingerprint invalidation also clears the area's completed/partial retry
+high-water marks and attempt count. These belong to the discarded geometry just
+like its resume offsets; other areas retain their budgets. Regression:
+`ChangedPlanDiscardsRetryMarksOwnedByOldGeometry` in `test_follow_strip_dig.cpp`.
+Partial retry credit consumes resume offsets and may include skipped spans; it
+is not exact cut/traversal evidence. The route-feedback watchdog from dev remains
+paired with the precise coverage-entry tree and fresh per-goal result slots.
+
 ## Where to look
 | Task | Start here |
 |------|------------|

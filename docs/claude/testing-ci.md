@@ -332,3 +332,8 @@ PIVOT handing body-obstacle recovery back to FOLLOWING. The existing full output
 authorization assertions remain. `mowgli_bringup/test_launch_injection.py` evaluates
 the actual launch expressions and serialized footprint for default and custom
 chassis dimensions. Run the existing registered targets; no new test binary.
+
+The dev-integration regression `ChangedPlanDiscardsRetryMarksOwnedByOldGeometry`
+checks per-area retry identity when FollowStrip discards a changed plan. The
+non-blocking transit fixture supplies fresh dynamic TF at the requested goal
+before reporting a successful arrival; its outcome assertions remain unchanged.

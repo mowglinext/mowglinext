@@ -442,6 +442,11 @@ BT::NodeStatus FollowStrip::onStart()
                   plan_fingerprint,
                   total_path_poses_);
       ctx->area_resume_pose_index.erase(area_idx_);
+      // Retry credit/budget belongs to this exact plan as well. Comparing new
+      // partial progress against the discarded plan can retire real new work.
+      ctx->area_last_coverage.erase(area_idx_);
+      ctx->area_last_partial_poses.erase(area_idx_);
+      ctx->area_attempt_count.erase(area_idx_);
       ctx->area_unit_progress.erase(area_idx_);
       ctx->area_completed_swaths.erase(area_idx_);
       ctx->completed_areas.erase(area_idx_);

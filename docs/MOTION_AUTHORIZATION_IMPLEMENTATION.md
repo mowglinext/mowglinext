@@ -5,9 +5,56 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Current dev integration and plan identity (2026-11-01)
+
+After the cusp repair (`5979e582`), current `origin/dev` at `5baff9d3` was
+integrated in `8186c6d0`. Both main and dev already contain the long-route transit
+watchdog (`8c318f23`) and unfinished-unit retry-credit (`b9b2421a`) repairs. The
+FollowStrip conflict was resolved by retaining dev's fresh per-goal route-feedback
+slot together with this PR's precise `coverage_entry_tree_xml`. Source review
+also confirmed preservation of per-dispatch outcome/result ownership and failed
+strict-entry recovery. The cusp controller/planner sources are unchanged by the
+base update; their preceding focused results remain tied to their recorded hashes.
+
+Integration review found stale retry identity: a changed plan discarded its
+resume/unit progress while retaining the old geometry's completed/partial
+high-water marks and attempt count. New partial work could then be retired
+against the discarded plan. Plan-fingerprint invalidation now also clears those
+three per-area marks. A new public FollowStrip regression fails on the coherent
+pre-fix merged object and passes after the reset, while preserving another
+area's marks. This changes retry bookkeeping, not cut/traversal evidence.
+
+All context-bearing behavior objects and fixtures were rebuilt coherently after
+BTContext changed layout; earlier cached behavior objects were not reused.
+**142 focused behavior cases pass**: FollowStrip 45, GetNextUnmowedArea 57, area
+progress 7, route/entry helpers 10, non-blocking transit 6, blade direction 10 and
+tree contracts 7. An old positive-transit fixture initially reported fake Nav2
+success while its TF stayed at (0,0), five metres from its goal. Production
+correctly rejected it. The fixture now publishes fresh dynamic TF at the actual
+goal before success; all original assertions remain. Its original failure is
+retained, and all six cases pass on the fixture-only rerun.
+
+The merged launch/config/fleet suite passes **140 Python cases**. The two public
+Nav2 halt/disk-reload cases were repeated with the freshly built merged-context
+driver and the same final controller: incoming old189 resumes directly;
+outgoing new191 completes real entry navigation and coverage. Both return actual
+success before bookkeeping, finish at zero, and have no raw-hole/reference oracle
+hit. These two attempts total 57.217 s. Fresh behavior builds/linking total
+134.6 s under 240 s; behavior tests, including retained failures and RED controls,
+total 89.3 s under 240 s. Artifacts are in the external `cusp-production/`
+`dev-integration/`, `dev-public/` and `config-dev/` directories.
+
+Dev's partial retry credit still consumes resume offsets, which may include
+explicitly skipped/blade-off spans. It fixes premature no-progress retirement;
+it does not prove those poses were cut. The next software discriminator is a
+bounded real-action skip/detour replay that attributes progress separately to
+actual positive coverage commands and blade-off/failed transit spans. Full-unit
+cut acceptance and the previously recorded 180-degree prior/history recovery
+remain open. No hardware run or Ready/merge operation is implied.
+
 ## Original cusp: signed pivot, braking and restart (2026-11-01)
 
-The actual current `PlanCoverage` server reproduces the retained 9,420-pose,
+The pre-repair `PlanCoverage` server at `c3144cae` reproduces the retained 9,420-pose,
 378.272501 m unit exactly in XY. At old point 190, T =
 (2.454825207353694, 0.8013791580379307), the incoming heading is -0.490873852
 and the outgoing heading is 3.140918321 rad. The full chassis disc reaches a raw
@@ -61,7 +108,7 @@ custom chassis-width tests also execute the real footprint serialization.
 Validation on the repaired source passes **101 controller cases**, **167 coverage
 cases across six registered targets**, and **121 configuration cases**. Independent
 strong review found no remaining source blocker in this repair. Before/after
-objects reproduce each causal regression; no pre-existing C++ test body changes.
+objects reproduce each causal regression; no pre-existing FTC/planner test body changes.
 The actual uninterrupted 32-pose window reaches FollowPath status 4/error 0 in
 22.879 s, followed by zero, with no raw-hole or outer-reference oracle hit. Its
 final endpoint remains about 0.493 m short under the unchanged 0.50 m coverage

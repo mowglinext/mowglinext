@@ -2011,6 +2011,48 @@ TEST_F(FollowStripDigTest, ChangedPlanDiscardsAStateHoldingOnlyPerUnitProgress)
   tree->haltTree();
 }
 
+TEST_F(FollowStripDigTest, ChangedPlanDiscardsRetryMarksOwnedByOldGeometry)
+{
+  const std::vector<nav_msgs::msg::Path> units{straightUnit(0.0, 10.0), straightUnit(10.0, 20.0)};
+  startFollowStrip(units);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  tree->haltTree();
+  tree.reset();
+  ctx->area_resume_pose_index.clear();
+  ctx->area_completed_swaths.clear();
+  ctx->area_unit_progress[0][0] = 100;
+  ctx->area_last_coverage[0] = 2;
+  ctx->area_last_partial_poses[0] = 5000;
+  ctx->area_attempt_count[0] = 4;
+  // A different area's identity/budget must survive this local invalidation.
+  ctx->area_last_coverage[1] = 1;
+  ctx->area_last_partial_poses[1] = 123;
+  ctx->area_attempt_count[1] = 3;
+  auto changed = units;
+  changed[0].poses[10].pose.position.y = .1;
+  startFollowStrip(changed);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 2;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(ctx->area_last_coverage.count(0), 0u);
+  EXPECT_EQ(ctx->area_last_partial_poses.count(0), 0u);
+  EXPECT_EQ(ctx->area_attempt_count.count(0), 0u);
+  EXPECT_EQ(ctx->area_last_coverage.at(1), 1);
+  EXPECT_EQ(ctx->area_last_partial_poses.at(1), 123u);
+  EXPECT_EQ(ctx->area_attempt_count.at(1), 3u);
+  tree->haltTree();
+}
+
 // The cursor lands in unit 0 BEHIND that unit's own progress, and unit 1 (not the cursor's) was
 // abandoned part-way on an earlier pass. Each unit starts at the further of the two, and the
 // blade-off transit to it lands exactly where its follow goal starts.
