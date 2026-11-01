@@ -88,101 +88,60 @@ bool FusionGraphNode::TrySeedInitialPose()
   const auto dr_at_heading = DrPoseAtSource(integration_epoch_, *seed_yaw_source_ns_);
   if (!dr_at_position || !dr_at_heading)
     return false;
-  if (*seed_source_ns_ == *seed_yaw_source_ns_ && seed_yaw_candidate_)
+  // A candidate received before the motion baseline keeps its original
+  // payload/noise. Retry admission once source support becomes available.
+  if (seed_yaw_candidate_ && !seed_yaw_observation_id_ &&
+      graph_->QueueYawAtEpoch(*seed_yaw_,
+                              seed_yaw_candidate_->sigma,
+                              seed_yaw_candidate_->robust,
+                              *seed_yaw_source_ns_,
+                              seed_yaw_candidate_->id,
+                              integration_epoch_))
+    seed_yaw_observation_id_ = seed_yaw_candidate_->id;
+  if (seed_yaw_candidate_)
   {
-    if (!seed_yaw_observation_id_ && graph_->QueueYawAtEpoch(*seed_yaw_,
-                                                             seed_yaw_candidate_->sigma,
-                                                             seed_yaw_candidate_->robust,
-                                                             *seed_yaw_source_ns_,
-                                                             seed_yaw_candidate_->id,
-                                                             integration_epoch_))
-      seed_yaw_observation_id_ = seed_yaw_candidate_->id;
+    // Original likelihoods share the consumed source history. Missing proof
+    // stays pending, including for equal source stamps; a derived pose prior
+    // cannot substitute for a heading the input owner has not admitted.
     const auto result =
-        graph_->InitializeSourceObservations(this->now().nanoseconds(),
-                                             *seed_source_ns_,
-                                             integration_epoch_,
-                                             static_cast<uint64_t>(*seed_source_ns_),
-                                             seed_yaw_candidate_->id);
+        graph_->InitializeSourceObservationPair(this->now().nanoseconds(),
+                                                *seed_source_ns_,
+                                                integration_epoch_,
+                                                static_cast<uint64_t>(*seed_source_ns_),
+                                                seed_yaw_candidate_->id);
     if (result == SourceBootstrapResult::Failed)
-    {
       RCLCPP_ERROR_THROTTLE(get_logger(),
                             *get_clock(),
                             5000,
-                            "fusion_graph: same-source initialization failed; admitted GNSS and "
-                            "heading observations remain pending");
+                            "fusion_graph: source initialization failed; admitted observations "
+                            "remain pending");
+    if (result != SourceBootstrapResult::Applied)
       return false;
-    }
-    if (result == SourceBootstrapResult::Applied)
-    {
-      seed_yaw_observation_id_ = seed_yaw_candidate_->id;
-      t_map_odom_anchor_valid_ = false;
-      const auto initialized = graph_->LatestSnapshot();
-      RCLCPP_INFO(get_logger(),
-                  "fusion_graph: initialized at (%.3f, %.3f, %.3f rad) from same-source GNSS "
-                  "and heading observations",
-                  initialized->pose.x(),
-                  initialized->pose.y(),
-                  initialized->pose.theta());
-      return true;
-    }
-    // Only missing queued provenance can use the existing derived-prior path.
-    // Different source epochs retain their existing yaw retiming model below.
+    seed_yaw_observation_id_ = seed_yaw_candidate_->id;
   }
-  // Absolute heading and antenna position can arrive from different source
-  // epochs. Undo only the rotation actually consumed between those epochs;
-  // later replay must not integrate that same turn a second time.
-  const double yaw_at_position = *seed_yaw_ + dr_at_heading->between(*dr_at_position).theta();
-  if (*seed_source_ns_ != *seed_yaw_source_ns_ && seed_yaw_candidate_)
+  else
   {
-    // Keep the legacy retimed yaw prior and queued raw yaw behavior, but do
-    // not turn the admitted GNSS into an additional independent XY prior.
-    const auto result =
-        graph_->InitializeSourcePositionWithRetimedHeading(this->now().nanoseconds(),
+    // Explicit clear can carry a heading prior at a verified consumed boundary.
+    // Transport that prior through consumed rotation, retaining the new GNSS
+    // likelihood once rather than manufacturing a second position prior.
+    const double yaw_at_position = *seed_yaw_ + dr_at_heading->between(*dr_at_position).theta();
+    if (graph_->InitializeSourcePositionWithRetimedHeading(this->now().nanoseconds(),
                                                            *seed_source_ns_,
                                                            integration_epoch_,
                                                            static_cast<uint64_t>(*seed_source_ns_),
-                                                           yaw_at_position);
-    if (result == SourceBootstrapResult::Failed)
-      RCLCPP_ERROR_THROTTLE(get_logger(),
-                            *get_clock(),
-                            5000,
-                            "fusion_graph: different-source initialization failed; admitted "
-                            "observations remain pending");
-    if (result != SourceBootstrapResult::Applied)
+                                                           yaw_at_position) !=
+        SourceBootstrapResult::Applied)
       return false;
-    t_map_odom_anchor_valid_ = false;
-    const auto initialized = graph_->LatestSnapshot();
-    RCLCPP_INFO(get_logger(),
-                "fusion_graph: initialized at (%.3f, %.3f, %.3f rad) from GNSS and "
-                "retimed heading prior",
-                initialized->pose.x(),
-                initialized->pose.y(),
-                initialized->pose.theta());
-    return true;
   }
-  const double c = std::cos(yaw_at_position);
-  const double s = std::sin(yaw_at_position);
-  const gtsam::Pose2 base_seed(seed_xy_->x() - c * lever_arm_x_m_ + s * lever_arm_y_m_,
-                               seed_xy_->y() - s * lever_arm_x_m_ - c * lever_arm_y_m_,
-                               yaw_at_position);
-  // When the seed came from an RTK-Fixed fix, override the prior to
-  // match the measurement quality. 5 mm is conservative w.r.t the
-  // F9P's typical RTK-Fixed σ ~3 mm; tight enough that the wheel
-  // between-factors can't pull the first few nodes off the GPS
-  // anchor, but loose enough to absorb a few mm of antenna lever-arm
-  // residual.
-  std::optional<double> prior_override;
-  if (seed_xy_rtk_fixed_)
-    prior_override = 0.005;
-  if (!InitializeAtSource(base_seed, *seed_source_ns_, prior_override))
-    return false;
   t_map_odom_anchor_valid_ = false;
+  const auto initialized = graph_->LatestSnapshot();
   RCLCPP_INFO(get_logger(),
-              "fusion_graph: initialized at (%.3f, %.3f, %.3f rad)%s",
-              base_seed.x(),
-              base_seed.y(),
-              base_seed.theta(),
-              seed_xy_rtk_fixed_ ? " [RTK-Fixed seed, σ=5mm prior]" : " [non-Fixed seed]");
+              "fusion_graph: initialized at (%.3f, %.3f, %.3f rad) from admitted GNSS and %s%s",
+              initialized->pose.x(),
+              initialized->pose.y(),
+              initialized->pose.theta(),
+              seed_yaw_candidate_ ? "heading observations" : "a carried heading prior",
+              seed_xy_rtk_fixed_ ? " [RTK-Fixed seed]" : " [non-Fixed seed]");
   return true;
 }
 

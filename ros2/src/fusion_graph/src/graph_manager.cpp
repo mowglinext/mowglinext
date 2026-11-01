@@ -18,6 +18,7 @@
 
 #include "fusion_graph/factors.hpp"
 #include "graph_heading_seed.hpp"
+#include "source_bootstrap_state.hpp"
 #include <gtsam/base/GenericValue.h>
 #include <gtsam/base/serialization.h>
 #include <gtsam/linear/NoiseModel.h>
@@ -96,6 +97,10 @@ void GraphManager::AddWheelTwist(double vx, double vy, double wz, double dt)
   if (dt <= 0.0)
     return;
   std::lock_guard<std::mutex> lock(mu_);
+  // During bootstrap, only accepted consumed intervals own S..V motion. A
+  // wheel receipt interval can overlap S or extend past the consumed source.
+  if (motion_ && motion_->bootstrap && motion_->bootstrap->provisional)
+    return;
   // Body-frame integration. Yaw is integrated separately because gyro
   // is so much better than wheel-derived yaw on a differential drive.
   // We integrate wheel position assuming the yaw was constant over dt
@@ -113,12 +118,13 @@ double GraphManager::AddGyroDelta(double wz, double dt)
   if (dt <= 0.0)
     return 0.0;
   std::lock_guard<std::mutex> lock(mu_);
+  const bool provisional = motion_ && motion_->bootstrap && motion_->bootstrap->provisional;
 
   // Track the running maximum on the RAW sample for the multi-source
   // stationary gate (item #1). Done before bias subtraction so a
   // drifty bias can't mask a real manual rotation.
   const double abs_wz_raw = std::abs(wz);
-  if (abs_wz_raw > accum_.max_abs_gyro_rad_per_s)
+  if (!provisional && abs_wz_raw > accum_.max_abs_gyro_rad_per_s)
     accum_.max_abs_gyro_rad_per_s = abs_wz_raw;
 
   // Online gyro bias estimation (item #3, pragmatic). When the last
@@ -146,6 +152,10 @@ double GraphManager::AddGyroDelta(double wz, double dt)
   const double bias_correction = params_.use_imu_preint
                                      ? current_bias_estimate_
                                      : (params_.gyro_bias_estimation_enabled ? gyro_bias_z_ : 0.0);
+  // Keep the existing callback EMA/correction policy. The source ledger adds
+  // this sample only after its complete consumed interval is accepted.
+  if (provisional)
+    return bias_correction;
   const double wz_corrected = wz - bias_correction;
   accum_.dtheta_gyro += wz_corrected * dt;
 
@@ -364,10 +374,19 @@ void GraphManager::ForceAnchor(uint64_t node_index,
   auto noise = MakeDiagonal({sigma_xy, sigma_xy, sigma_theta});
   gtsam::NonlinearFactorGraph fg;
   fg.add(gtsam::PriorFactor<gtsam::Pose2>(PoseKey(node_index), pose, noise));
+  std::shared_ptr<SourceBootstrapState> anchored_bootstrap;
+  const bool provisional = motion_ && motion_->bootstrap && motion_->bootstrap->provisional;
+  if (provisional)
+  {
+    anchored_bootstrap = std::make_shared<SourceBootstrapState>(*motion_->bootstrap);
+    anchored_bootstrap->request.extra_factors.push_back(fg[0]);
+  }
   if (!ApplyIsamUpdateLocked(fg, gtsam::Values()))
   {
     return;  // ill-posed reset; latest_ is now null, nothing to anchor
   }
+  if (anchored_bootstrap)
+    motion_->bootstrap.swap(anchored_bootstrap);
   estimate_dirty_ = true;
   // Any live anchor can change the latest optimized state, even when the
   // prior was attached to an older node. Refresh the published snapshot and

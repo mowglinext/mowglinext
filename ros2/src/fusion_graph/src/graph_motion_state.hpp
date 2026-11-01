@@ -8,8 +8,11 @@
 
 namespace fusion_graph
 {
+struct SourceBootstrapState;
+
 struct GraphMotionState
 {
+  std::shared_ptr<SourceBootstrapState> bootstrap;
   uint64_t epoch = 0;
   bool baseline_set = false;
   int64_t baseline_ns = 0;

@@ -6,16 +6,27 @@
 
 `graph_manager_bootstrap.cpp` initializes an exact same-source admitted GNSS/yaw
 tuple from its two original likelihoods, once each, with actual marginal and
-lever-arm cross-covariance. It stages pending-tail binding through
-`PrepareSourceInitializationLocked`, also used by legacy explicit-pose source
-initialization. `TrySeedInitialPose` selects this path only with matching source
-and producer identity. For a sensor heading at another source, it uses
-`InitializeSourcePositionWithRetimedHeading`: the admitted GNSS likelihood once
-plus the unchanged legacy retimed yaw prior. That path consumes no raw yaw ID;
-its queued yaw, source timing and retained process tail remain. This removes the
-extra XY prior, not cross-time heading/tail correlation. Explicit/dock/clear-carried
-prior paths remain. Node heading candidates retain original payload/noise across
-pre-baseline replay; admission identity is separate from candidate identity.
+lever-arm cross-covariance. `TrySeedInitialPose` requires accepted identities;
+missing queue proof stays pending. A carried heading after explicit clear uses
+one GNSS likelihood plus its existing retimed prior, with no extra XY prior.
+Explicit/dock pose priors remain separate. Node heading candidates retain
+original payload/noise across pre-baseline replay; candidate and admission
+identity are distinct.
+
+`graph_manager_bootstrap_pair.cpp` and `graph_manager_bootstrap_phase.cpp` own
+raw different-source bootstrap through private `source_bootstrap_state.hpp`.
+Public x0 stays at GNSS S while a consumed U is private; the first normal cadence
+rebuilds through actual V and publishes only x1/V. No extra normal U node advances
+gates. `source_bootstrap_builder.hpp/.cpp` stages the full nonlinear joint and
+raw factors; `shared_source_process_family.hpp/.cpp` supplies correlated gyro
+endpoint factors and normalized source queries using original acquisition IDs.
+The cold bias prior is at S; prefix and normal suffix select independent copied
+policy state. Pure `process_window_policy.hpp/.cpp` is also used by ordinary
+node creation. Only the suffix advances public slip/EMA state. Shared gyro
+covariance and acquisition conditionals form a declared local model, not a
+physical calibration or a marginal of the old independent-factor product.
+Provisional persistence/rebase defer; promoted auxiliary keys retire with their
+family. Reset/epoch change and rigid pose-only reanchor clear that ownership.
 
 `graph_manager_heading_recovery.cpp` provides an **explicit invalid-seed** Core
 transaction, not an automatic Node policy. Opaque seed identity and complete
@@ -26,14 +37,17 @@ and read-only queries. Default families remain frozen affine until promotion.
 Unknown/marginalized prefixes and uncommitted tails reject without mutation;
 unsupported local branch observations stay pending. Solver pointer ownership
 permits non-allocating atomic publication and stale-rebase cancellation.
-`HeadingSeedState` distinguishes independent pose, raw same-source heading and
-synthetic retimed heading provenance. Retimed families return `UnsupportedFamily`
-without mutation; retiring their related raw yaw requires separate ownership.
+`HeadingSeedState` distinguishes independent pose, raw same-source heading,
+synthetic retimed heading and coupled-source provenance. Retimed and coupled
+families return `UnsupportedFamily` without mutation; safe invalidation requires
+a separate ownership contract.
 
-Tests: `test_source_bootstrap`, `test_heading_recovery`,
-`test_relative_conditional` and the real `test_sensor_input_node` cases. The
-first three link Core; source-bootstrap/heading tests include private `src`
-metadata for failure/ownership checks. Evidence and limits are in the dated
+Tests: `test_source_bootstrap`, `test_source_bootstrap_builder`,
+`test_source_bootstrap_phase`, `test_shared_source_process_family`,
+`test_process_window_policy`, `test_heading_recovery`,
+`test_relative_conditional` and the real `test_sensor_input_node` cases.
+Core bootstrap/heading tests include private `src` metadata for lifecycle,
+rollback and covariance checks. Evidence and limits are in the dated
 bootstrap section of `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
 
 ## Where to look
@@ -100,6 +114,7 @@ The launch-only helper `launch/fusion_graph_simulation_geometry.py` validates th
 | `.../factors.hpp` | 160 | `GnssLeverArmFactor`, `GyroPreintFactor`, `YawUnaryFactor`, `WrapAngle` |
 | `.../motion_source_history.hpp` | | Immutable consumed wheel/gyro intervals, Expmap trajectory and source/bias derivatives |
 | `.../conditional_process_bridge.hpp` | | Frozen normalized first-order conditional acquisition states shared by GNSS and heading factors |
+| `.../shared_source_process_family.hpp` | | Shared per-ID gyro endpoint covariance and normalized multi-window source acquisition queries |
 | `.../slip_window.hpp` | 125 | Pure windowed slip veto: `SlipWindowNodes`, `SlipDetectedOverWindow`, `SlipWindow` |
 | `.../dr_slip_veto.hpp` | 79 | Pure DR slip veto + wheel yaw-rate quantum; shipped thresholds 0.44 / 0.15 rad/s |
 | `.../rtk_wrongfix_gate.hpp` | 57 | Pure `GpsJumpImplausible` + `ResetRtkWrongFixAccumulators` (reset on EVERY fix) |
@@ -123,6 +138,12 @@ The launch-only helper `launch/fusion_graph_simulation_geometry.py` validates th
 | `.../graph_manager.cpp` | | Accumulators, queues, initialization, statistics and pose snapshots |
 | `.../graph_manager_motion.cpp` | | Integer schedule/source clocks, retained trajectories, queued source unaries, read-only source-pose mean and retention metadata |
 | `.../graph_motion_state.hpp` | | Private source/edge/observation state, outside public Node includes |
+| `.../graph_manager_bootstrap.cpp` | | Atomic same-source raw tuple or GNSS plus carried heading prior, source-tail preparation |
+| `.../graph_manager_bootstrap_pair.cpp`, `.../graph_manager_bootstrap_phase.cpp` | | Accepted cross-source pair, provisional source ownership, first normal frontier promotion and delayed insertion |
+| `.../source_bootstrap_state.hpp` | | Private phase owner, original builder request and auxiliary pose lineage |
+| `.../source_bootstrap_builder.hpp`, `.../source_bootstrap_builder.cpp` | | Isolated full-joint construction, original observation factors, actual marginals and candidate solver |
+| `.../shared_source_process_family.cpp` | | Shared-noise endpoint/query factor implementation and original per-ID duration validation |
+| `.../process_window_policy.hpp`, `.../process_window_policy.cpp` | | Pure copied-state selection of existing stationary/slip/pivot/adaptive wheel policy |
 | `.../graph_manager_node.cpp` | 574 | `Tick` / `CreateNodeLocked`: all per-node gates + factor construction + iSAM2 update + throttled marginal |
 | `.../graph_manager_rebase.cpp` | | Windowed iSAM2 rebase, robust update/reset, rigid whole-graph transforms |
 | `.../graph_manager_persistence.cpp` | | Graph reset, snapshot/restore, semantic validation and datum guard |
@@ -134,6 +155,11 @@ The launch-only helper `launch/fusion_graph_simulation_geometry.py` validates th
 | `.../test_save_service.py`, `.../checkpoint_test_delay.cpp` | | Real-node save result, busy failure and executor progress during held file I/O |
 | `.../test_tf_source_epoch.py` | | Real-node source/forecast TF values, paired anchor/body publication, zero-lead batches and map/base composition |
 | `.../test_factors.cpp` | | Graph factor residual and Jacobian tests |
+| `.../test_source_bootstrap.cpp`, `.../test_sensor_input_node.cpp` | | Raw seed likelihood identity/covariance, callback admission, clear-carried prior and first cadence |
+| `.../test_source_bootstrap_builder.cpp` | | Independent QR full-joint covariance oracle, both time orders, lever and bias modes |
+| `.../test_source_bootstrap_phase.cpp` | | S/U/V lifecycle, promotion rollback, auxiliary ownership, delayed factors, save/rebase/reanchor/reset |
+| `.../test_shared_source_process_family.cpp` | | Dense/conditional covariance, shared gyro IDs, exact rank support and metadata mismatch rejection |
+| `.../test_process_window_policy.cpp` | | Existing gates/EMA/counters copied without mutation, source versus schedule duration |
 | `.../test_gnss_timestamp.cpp` | 142 | Delayed GNSS constrains the node at `header.stamp`, bounded by the window |
 | `.../test_rtk_wrongfix_gate.cpp` | 167 | Wrong-fix budget math; reject-forever regression if reset only on accept |
 | `.../test_dock_gps_consistency.cpp` | 127 | #512 field numbers; Float / no-fix never yields |
@@ -225,7 +251,7 @@ All read ONCE at construction (`declare_parameter`, no dynamic reconfigure). Pre
 
 ## Build, test, run
 - Build (devcontainer, `/ros2_ws`): `cd ros2 && make build-pkg PKG=fusion_graph` (`ros2/Makefile:64` → `scripts/build.sh`); raw: `colcon build --packages-select fusion_graph --cmake-args -DCMAKE_BUILD_TYPE=Release`.
-- Unit tests: `PACKAGES="fusion_graph" ./scripts/test.sh` (`ros2/scripts/test.sh`) or `colcon test --packages-select fusion_graph && colcon test-result --verbose`. Single binary: `./build/fusion_graph/test_factors`. There are 39 GTest targets. Most exercise pure headers and `GraphManager`; `test_sensor_input_node` directly drives the real node callbacks with a controlled ROS clock, isolated domain and no input executor. Its production implementation objects are shared through `fusion_graph_node_support`. `test_perf` is Release-only meaningful, 300 s timeout.
+- Unit tests: `PACKAGES="fusion_graph" ./scripts/test.sh` (`ros2/scripts/test.sh`) or `colcon test --packages-select fusion_graph && colcon test-result --verbose`. Single binary: `./build/fusion_graph/test_factors`. There are 50 GTest targets. Most exercise pure headers and `GraphManager`; `test_sensor_input_node` directly drives the real node callbacks with a controlled ROS clock, isolated domain and no input executor. Its production implementation objects are shared through `fusion_graph_node_support`. `test_perf` is Release-only meaningful, 300 s timeout.
 - GTSAM 4.3a1 is built from source (`ros2/Dockerfile:2-23` stage `gtsam-builder`, `.devcontainer/Dockerfile:26-30`, CI `.github/workflows/ros2-ci.yml:186-226` cached under `/opt/gtsam`). `find_package(GTSAM CONFIG REQUIRED)` needs `CMAKE_PREFIX_PATH=/opt/gtsam`.
 - CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (:128) runs whole-workspace `colcon build` (:338) + `colcon test` (:347); `format-check` (:404, clang-format-18 on changed lines); `static-analysis` (:448). No launch_testing / e2e test targets fusion_graph specifically; `ros2/src/e2e_test.py:187` and `e2e_test_no_lidar.py:111` consume `/odometry/filtered_map`.
 - Run standalone: `ros2 launch fusion_graph fusion_graph.launch.py use_lidar_map_anchor:=true`; manual save: `ros2 service call /fusion_graph_node/save_graph std_srvs/srv/Trigger`.

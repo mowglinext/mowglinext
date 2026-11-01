@@ -16,6 +16,7 @@
 
 #include "fusion_graph/factors.hpp"
 #include "fusion_graph/graph_manager.hpp"
+#include "source_bootstrap_state.hpp"
 #include <gtsam/base/GenericValue.h>
 #include <gtsam/base/serialization.h>
 #include <gtsam/linear/GaussianFactorGraph.h>
@@ -46,7 +47,9 @@ void GraphManager::RebaseISAM2()
     std::map<gtsam::Key, uint64_t> acquisition_owners;
     {
       std::lock_guard<std::mutex> lock(mu_);
-      if (rebase_in_progress_)
+      // The private future endpoint cannot be retired as a public cadence
+      // separator. Its first actual S..V edge will become eligible together.
+      if (rebase_in_progress_ || (motion_ && motion_->bootstrap && motion_->bootstrap->provisional))
         return;
       RefreshEstimateLocked();
       if (current_estimate_.empty())

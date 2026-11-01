@@ -8,8 +8,12 @@
 #include <limits>
 #include <memory>
 
+#include "fusion_graph/factors.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include <gtest/gtest.h>
+#include <gtsam/linear/NoiseModel.h>
+#include <gtsam/nonlinear/Marginals.h>
+#include <gtsam/slam/BetweenFactor.h>
 #include <rcl/time.h>
 #include <unistd.h>
 
@@ -30,7 +34,8 @@ protected:
                   double lever_x = 0.0,
                   double lever_y = 0.0,
                   bool use_magnetometer = false,
-                  double stationary_period = 5.0)
+                  double stationary_period = 5.0,
+                  bool use_preintegration = false)
   {
     rclcpp::NodeOptions options;
     options.parameter_overrides(
@@ -44,6 +49,7 @@ protected:
          {"node_period_s", period},
          {"stationary_node_period_s", stationary_period},
          {"use_magnetometer", use_magnetometer},
+         {"use_imu_preint", use_preintegration},
          {"lever_arm_x", lever_x},
          {"lever_arm_y", lever_y},
          {"graph_save_prefix", "/tmp/fusion_graph_node_input_" + std::to_string(getpid())}});
@@ -357,6 +363,22 @@ protected:
   {
     return node_->graph_->SourceGnssFactorCount();
   }
+  bool HasHeadingCandidate() const
+  {
+    return node_->seed_yaw_candidate_.has_value();
+  }
+  bool HasAdmittedHeading() const
+  {
+    return node_->seed_yaw_observation_id_.has_value();
+  }
+  bool CoreInitialized() const
+  {
+    return node_->graph_->IsInitialized();
+  }
+  bool AdmitFutureYaw(int64_t source_ns, uint64_t id)
+  {
+    return node_->graph_->QueueYawAtEpoch(0.0, .1, true, source_ns, id, node_->integration_epoch_);
+  }
   void StartSameSourceBootstrap(double lever_x = 0.0, double lever_y = 0.0)
   {
     node_.reset();
@@ -426,17 +448,35 @@ protected:
     EXPECT_NEAR(node_->seed_yaw_candidate_->sigma, .1, 1e-12);
     EXPECT_TRUE(node_->seed_yaw_candidate_->robust);
 
-    // Different-source bootstrap retains the legacy 50 mrad retimed yaw
-    // prior, while the accepted Fixed GNSS position contributes its reported
-    // variance once. The candidate heading's raw factor remains independently
-    // queued at its original source epoch (and may be retired if T < S).
+    // Independent raw joint: GNSS observes S, the measured magnetometer
+    // observes T, and the selected stationary relative likelihood joins them.
+    // At these endpoint sources Var(theta_S) = sigma_mag^2 + sigma_relative^2.
+    const auto key_s = gtsam::Symbol('x', 0), key_t = gtsam::Symbol('x', 1);
+    const double relative_sigma = node_->get_parameter("stationary_sigma_theta").as_double();
+    gtsam::NonlinearFactorGraph oracle;
+    oracle.emplace_shared<GnssLeverArmFactor>(key_s,
+                                              gtsam::Vector2(lever_x, lever_y),
+                                              gtsam::Vector2(lever_x, lever_y),
+                                              gtsam::noiseModel::Isotropic::Sigma(2, .014));
+    oracle.emplace_shared<YawUnaryFactor>(key_t, 0., gtsam::noiseModel::Isotropic::Sigma(1, .1));
+    oracle.emplace_shared<gtsam::BetweenFactor<gtsam::Pose2>>(
+        position_source < heading_source ? key_s : key_t,
+        position_source < heading_source ? key_t : key_s,
+        gtsam::Pose2(),
+        gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector3(.1, .1, relative_sigma)));
+    gtsam::Values oracle_values;
+    oracle_values.insert(key_s, gtsam::Pose2());
+    oracle_values.insert(key_t, gtsam::Pose2());
+    const auto expected = gtsam::Marginals(oracle, oracle_values).marginalCovariance(key_s);
     const Eigen::Vector3d yaw_sensitivity(lever_y, -lever_x, 1.0);
-    Eigen::Matrix3d expected = .05 * .05 * yaw_sensitivity * yaw_sensitivity.transpose();
-    expected(0, 0) += .014 * .014;
-    expected(1, 1) += .014 * .014;
+    Eigen::Matrix3d analytic =
+        (.1 * .1 + relative_sigma * relative_sigma) * yaw_sensitivity * yaw_sensitivity.transpose();
+    analytic(0, 0) += .014 * .014;
+    analytic(1, 1) += .014 * .014;
+    EXPECT_LT((expected - analytic).cwiseAbs().maxCoeff(), 1e-12);
     EXPECT_LT((snapshot->covariance - expected).cwiseAbs().maxCoeff(), 1e-9);
     EXPECT_EQ(AppliedGnssFactors(), 1u);
-    EXPECT_EQ(AppliedYawFactors(), 0u);
+    EXPECT_EQ(AppliedYawFactors(), 1u);
 
     // Commit later source nodes so the queued position/heading observations
     // are exercised, without making future covariance evolution part of this
@@ -1131,12 +1171,12 @@ TEST_F(FusionGraphNodeInputTest, SameSourceMagBootstrapUsesReportedGnssAndMagCov
   EXPECT_LT((Snapshot()->covariance - expected).cwiseAbs().maxCoeff(), 1e-10);
 }
 
-TEST_F(FusionGraphNodeInputTest, DifferentSourcePositionFirstKeepsGnssAndLegacyYawCovariance)
+TEST_F(FusionGraphNodeInputTest, DifferentSourcePositionFirstUsesRawGnssAndHeadingJoint)
 {
   ExpectDifferentSourceBootstrapCovariance(20.20, 20.40);
 }
 
-TEST_F(FusionGraphNodeInputTest, DifferentSourceHeadingFirstKeepsGnssAndLegacyYawCovariance)
+TEST_F(FusionGraphNodeInputTest, DifferentSourceHeadingFirstUsesRawGnssAndHeadingJoint)
 {
   ExpectDifferentSourceBootstrapCovariance(20.40, 20.20, 0.0, 0.0, true);
 }
@@ -1393,6 +1433,107 @@ TEST_F(FusionGraphNodeInputTest, ExplicitClearRetainsSupportedHeadingForStationa
   ASSERT_TRUE(Snapshot());
   EXPECT_NEAR(Snapshot()->pose.theta(), .7, 1e-12);
   EXPECT_NEAR(Snapshot()->pose.x(), .1, 1e-8);
+}
+
+TEST_F(FusionGraphNodeInputTest, ExplicitClearUsesNewGnssLikelihoodOnceWithCarriedHeadingPrior)
+{
+  for (const bool lever : {false, true})
+  {
+    SCOPED_TRACE(lever);
+    const double lx = lever ? .2 : 0.0, ly = lever ? -.1 : 0.0;
+    constexpr double yaw = .7, sigma = .014;
+    node_.reset();
+    CreateNode(.1, lx, ly);
+    Clock(10.0);
+    Wheel(10.0, 0.0);
+    Imu(10.0);
+    Clock(10.04);
+    Wheel(10.04, 0.0);
+    Imu(10.04);
+    SeedLatest(yaw);
+    SetOffDock();
+    ASSERT_TRUE(ExplicitClear());
+    ASSERT_FALSE(HasHeadingCandidate());
+    Clock(10.06);
+    Wheel(10.06, 0.0);
+    Imu(10.06);
+    const auto antenna = gtsam::Pose2(.1, .2, yaw).transformFrom(gtsam::Point2(lx, ly));
+    Gnss(10.06, antenna.x(), sigma, antenna.y());
+    ASSERT_TRUE(Snapshot());
+    EXPECT_EQ(Snapshot()->source_stamp_ns, 10060000000);
+    EXPECT_LT(gtsam::Pose2(.1, .2, yaw).localCoordinates(Snapshot()->pose).norm(), 1e-8);
+    const double heading_sigma = node_->get_parameter("prior_sigma_theta").as_double();
+    const Eigen::Vector3d sensitivity(ly, -lx, 1);
+    Eigen::Matrix3d expected =
+        heading_sigma * heading_sigma * sensitivity * sensitivity.transpose();
+    expected(0, 0) += sigma * sigma;
+    expected(1, 1) += sigma * sigma;
+    EXPECT_LT((Snapshot()->covariance - expected).cwiseAbs().maxCoeff(), 1e-10);
+    EXPECT_EQ(AppliedGnssFactors(), 1u);
+    EXPECT_EQ(AppliedYawFactors(), 0u);
+    Timer();
+    EXPECT_EQ(AppliedGnssFactors(), 1u);
+  }
+}
+
+TEST_F(FusionGraphNodeInputTest, MissingRawHeadingAdmissionCannotFallBackToDerivedPosePrior)
+{
+  constexpr double source = 20.2;
+  StartBootstrapCovarianceScenario();
+  ConsumeStationarySourceSupport(source);
+  Clock(source);
+  Gnss(source, 0.0, .014);
+  ASSERT_FALSE(Snapshot());
+  // The GNSS is admitted. Fill the remaining bounded queue with distinct
+  // future observations while the input owner has not admitted this heading.
+  Clock(source + .2);
+  for (uint64_t id = 0; id < 9999; ++id)
+    ASSERT_TRUE(AdmitFutureYaw(20300000000 + static_cast<int64_t>(id), 1000000000000ULL + id));
+  Heading(source, 0.0);
+  ASSERT_TRUE(HasHeadingCandidate());
+  EXPECT_FALSE(HasAdmittedHeading());
+  EXPECT_FALSE(Snapshot());
+  EXPECT_FALSE(CoreInitialized());
+  EXPECT_EQ(AppliedGnssFactors(), 0u);
+  EXPECT_EQ(AppliedYawFactors(), 0u);
+}
+
+TEST_F(FusionGraphNodeInputTest, PreintegrationSharesOriginalGyroAcrossGnssSourceAndFirstCadence)
+{
+  node_.reset();
+  CreateNode(.1, 0.0, 0.0, true, .1, true);
+  Clock(20.0);
+  Wheel(20.0, 0.0);
+  Imu(20.0);
+  SetOffDock();
+  Clock(20.2);
+  Imu(20.2);
+  Heading(20.0, .3);
+  Gnss(20.1, 0.0, .014);
+  ASSERT_TRUE(Snapshot());
+  EXPECT_EQ(Snapshot()->node_index, 0u);
+  EXPECT_EQ(Snapshot()->source_stamp_ns, 20100000000);
+  EXPECT_NEAR(Snapshot()->pose.theta(), .3, 1e-12);
+  EXPECT_LT((Snapshot()->covariance.topLeftCorner<2, 2>() -
+             Eigen::Matrix2d::Identity() * .014 * .014)
+                .cwiseAbs()
+                .maxCoeff(),
+            1e-10);
+  EXPECT_EQ(AppliedGnssFactors(), 1u);
+  EXPECT_EQ(AppliedYawFactors(), 1u);
+  Timer();
+  EXPECT_EQ(Snapshot()->node_index, 0u);
+  Clock(20.3);
+  Wheel(20.3, 0.0);
+  Imu(20.3);
+  Timer();
+  ASSERT_TRUE(Snapshot());
+  EXPECT_EQ(Snapshot()->node_index, 1u);
+  EXPECT_EQ(Snapshot()->source_stamp_ns, 20300000000);
+  EXPECT_NEAR(Snapshot()->pose.theta(), .3, 1e-12);
+  EXPECT_TRUE(Snapshot()->covariance.allFinite());
+  EXPECT_EQ(AppliedGnssFactors(), 1u);
+  EXPECT_EQ(AppliedYawFactors(), 1u);
 }
 
 TEST_F(FusionGraphNodeInputTest, ExplicitClearRetimesSnapshotHeadingThroughConsumedTurn)

@@ -45,8 +45,13 @@ add_library(fusion_graph_core
   src/factors.cpp
   src/graph_manager.cpp
   src/graph_manager_node.cpp
+  src/process_window_policy.cpp
+  src/shared_source_process_family.cpp
+  src/source_bootstrap_builder.cpp
   src/graph_manager_motion.cpp
   src/graph_manager_bootstrap.cpp
+  src/graph_manager_bootstrap_pair.cpp
+  src/graph_manager_bootstrap_phase.cpp
   src/graph_manager_heading_recovery.cpp
   src/relative_conditional_factor.cpp
   src/graph_manager_rebase.cpp
@@ -267,6 +272,23 @@ if(BUILD_TESTING)
   ament_add_gtest(test_source_bootstrap test/test_source_bootstrap.cpp TIMEOUT 60)
   target_include_directories(test_source_bootstrap PRIVATE src)
   target_link_libraries(test_source_bootstrap fusion_graph_core)
+
+  ament_add_gtest(test_process_window_policy test/test_process_window_policy.cpp TIMEOUT 60)
+  target_include_directories(test_process_window_policy PRIVATE src)
+  target_link_libraries(test_process_window_policy fusion_graph_core)
+
+  ament_add_gtest(test_shared_source_process_family
+    test/test_shared_source_process_family.cpp
+    TIMEOUT 60)
+  target_link_libraries(test_shared_source_process_family fusion_graph_core)
+
+  ament_add_gtest(test_source_bootstrap_builder test/test_source_bootstrap_builder.cpp TIMEOUT 60)
+  target_include_directories(test_source_bootstrap_builder PRIVATE src)
+  target_link_libraries(test_source_bootstrap_builder fusion_graph_core)
+
+  ament_add_gtest(test_source_bootstrap_phase test/test_source_bootstrap_phase.cpp TIMEOUT 60)
+  target_include_directories(test_source_bootstrap_phase PRIVATE src)
+  target_link_libraries(test_source_bootstrap_phase fusion_graph_core)
 
   ament_add_gtest(test_rebase_information
     test/test_rebase_information.cpp

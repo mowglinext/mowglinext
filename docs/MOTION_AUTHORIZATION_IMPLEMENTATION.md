@@ -5,81 +5,128 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
-## Different-source bootstrap position information (2026-11-01)
+## Source-coupled GNSS/heading bootstrap (2026-11-01)
 
-The same-source repair below left a second reproducible position-information
-defect when GNSS and heading have different acquisition times. An actual-Node
-stationary test supplies one Fixed GNSS observation at sigma 14 mm and one mag
-heading, with zero antenna lever. In either source order, the legacy initializer
-reports 5 mm position sigma from its extra pose prior before applying the raw
-GNSS again. Its initial XY variance is 0.000025 m², versus the sole observation's
-0.000196 m². The same-source control reports the correct 14 mm. All three runs,
-exact callback order, accepted IDs, full covariances and linked artifact hashes
-are retained in external `true-flip-current/different-source-bootstrap-repro/`.
-The frozen baseline has one passing control and two runtime REDs in 132 ms.
+A different-source sensor heading now retains its original likelihood and the
+process information used to relate its acquisition T to GNSS acquisition S.
+The earlier position-only repair removed an extra 5 mm XY prior but retained
+an independent retimed heading prior. That is insufficient: a gyro acquisition
+used to transport heading can also contribute to subsequent motion. Replaying
+it independently loses the joint covariance; applying the heading again counts
+one observation twice. Exact scalar and local SE(2) counterfactuals distinguish
+these errors from a simple seed-variance adjustment.
 
-Different-source sensor bootstrap now retains the admitted GNSS likelihood
-once, using its effective sigma, Huber behavior and antenna lever. It pairs that
-factor with the **unchanged legacy retimed yaw prior**, without a derived XY
-prior. Initialization removes only the selected queued GNSS entry, retains its
-dedup identity, counts it once and publishes the actual joint marginal. Raw yaw
-observations retain their prior source/queue behavior; the synthetic prior is
-not counted as a raw yaw factor. The initial snapshot stays at GNSS source S;
-the normal schedule and consumed process tail are retained. Missing proof or
-failed candidate construction cannot fall back to the extra position prior.
-Explicit/dock/clear-carried seeds and the same-source raw tuple path remain.
+The implemented joint owns original wheel/gyro records and accepted observation
+IDs. Public x0 and its actual marginal stay at S, while any already consumed
+frontier U has explicit private ownership. At the first normal cadence, the
+joint is rebuilt through the actual frontier V, retaining nonlinear nuisance
+poses/biases and each raw likelihood once; only x1/V is published. It never
+inserts an extra normal node at U. A retained five-source-interval Core
+counterexample shows why that shortcut is wrong: an extra U boundary fills the
+unchanged slip window early and changes the endpoint by 20 mm. The initial
+two-interval slip hypothesis was refuted and its negative result is retained.
 
-Focused software validation passes: **16 Core CTest targets / 118 GTests** and
-**61/61 actual Node GTests**, after fresh compilation of all 11 Core TUs, eight
-Node support TUs, constructor and fixture. Four additional Core cases and four
-Node cases cover both source orders, the same-source control, lever covariance,
-effective noise/Huber behavior, retained IDs/tail, rollback and recovery refusal.
-The exact frozen three-case RED fixture also passes unchanged against the fresh
-objects: both different-source seed marginals now use GNSS variance 0.000196 m²
-and count GNSS/yaw as 1/0. Its runtime is 135 ms. Later traces establish no repeated
-GNSS application; their stored covariance can be held by the existing update
-throttle and is not claimed to be a freshly recomputed future marginal.
-Source/object/interface hashes and commands are retained under external
-`true-flip-current/different-source-bootstrap-repro-green/`. The fixture target's
-initial missing-constructor link failure is retained separately; no runtime test
-ran in that failed attempt. Independent review of the final seven-file code/test
-delta has no BLOCKER or SHOULD-FIX finding; clang-format 18 verification passes.
+Private prefix policy and normal S..V suffix policy are selected separately.
+The pure policy selector copies the existing slip/EMA state and preserves its
+thresholds and update order. Only the suffix policy advances visible state.
+The cold bias prior remains at S, with the normal suffix bias random walk;
+there is no additional older calibration prior. With preintegration, gyro IDs
+shared by prefix and suffix use one variance per physical acquisition. For duration
+matrix A and diagonal acquisition covariance Q, endpoint gyro covariance is
+`C = A Q Aᵀ + D`, where D supplies only the selected scalar noise-floor deficit.
+The joint replaces independent overlapping gyro factors while retaining each
+selected residual's marginal. Acquisition-query conditionals derive from the
+same joint, including shared gyro rows and exact null support; no jitter is
+substituted for a constraint. Wheel factors retain the selected endpoint laws.
 
-The seed token distinguishes this synthetic retimed heading from a raw heading
-observation; it fabricates no source-heading ID. Explicit invalid-seed recovery
-returns `UnsupportedFamily` without mutation for this family. Retiring its
-synthetic prior alone could leave a related raw heading factor behind. There is
-no production Node caller of that explicit Core API; this restriction does not
-replace the existing automatic Node policy.
+This is a declared local model with a specified interior diffusion law. It
+changes gyro dependence and acquisition conditionals; it is not a claim of
+nonlinear marginal equivalence to the old independent model, physical noise
+calibration, or GNSS/derived-COG independence. An independent latent Gaussian
+QR oracle checks means and full pose/bias covariance for both source orders,
+preintegration on/off, lever arms and provisional/promoted states. Actual
+CHOLESKY and QR insertion cover the rank-one shared-sample case. A per-ID
+metadata counterexample first failed at runtime and is now rejected: matching
+only total duration and integral cannot justify mismatched acquisition weights.
 
-This is a separate XY repair, **not a statistically complete cross-time heading
-bootstrap**. The legacy yaw prior's noise and possible later raw yaw reuse remain
-unqualified. An independent exact scalar oracle and local SE(2) GTSAM prototype
-show why merely improving the retimed seed covariance is insufficient: process
-correlation already used to relate S to heading T must survive continuation.
-The SE(2) batch and shared-conditional models agree in eight complete posterior
-comparisons (maximum covariance difference 1.39e-17); all six required independent
-replay counterfactuals fail. The heading-before-GNSS diffusion-only control
-correctly agrees when increments are independent. A shared sample is not assumed
-where none exists. Exact rank-zero conditional checks use no tiny-noise substitute.
+Candidate publication is atomic. Missing/unsupported source history stays
+pending. Reset, epoch change and rigid pose-only reanchor clear ownership;
+provisional save/rebase defer rather than disguising S as U. After promotion,
+rebase eliminates owned auxiliary keys with their source family and preserves
+the surviving separator. Added source factors and explicit ForceAnchor priors
+survive provisional rebuilding. Explicit invalid-seed repair returns
+`UnsupportedFamily` for the coupled family: automatic seed invalidation and a
+safe coupled-family recovery contract remain separate unresolved work.
 
-Those prototype results concern a declared local joint kernel with a separately
-specified endpoint law, not the production preintegration factor product or
-physical noise calibration. A full repair still needs explicit ownership of the
-joint bootstrap family through a wholly consumed boundary U, followed by one-time
-promotion at the normal cadence. Normal `committed_ns=U` with `latest_` still
-meaning S is invalid. Actual endpoint factors, bias lineage, reset/rebase and
-source-query semantics must be proved together. Reports and executables are in
-external `true-flip-current/different-source-model-review.md`,
-`different-source-joint-prototype/`, `different-source-scalar-oracle.py` and
-`different-source-critical-review.md`. This evidence neither attributes the
-original 13.943731 mm event nor establishes physical containment.
+Two additional actual-Node regressions exposed fallback defects. A sensor
+heading lacking queue admission could bypass proof through the old derived
+pose-prior fallback; it now stays pending. After explicit clear, a carried
+heading prior could still manufacture an extra 5 mm position prior. That path
+now retains the new admitted GNSS likelihood once and the existing carried
+yaw prior, without fabricating a raw heading identity. Its cross-time heading
+uncertainty remains unqualified; it is not the raw paired-observation model.
 
-For a smaller repair split, this XY change depends on admitted-GNSS identity,
-atomic source initialization and explicit seed provenance. The complete joint
-heading/tail model is a separate dependency, not an implicit acceptance claim of
-the XY change. The existing repair-family assessment below still applies; no
-extraction has been performed.
+A third unchanged callback fixture exposes asynchronous wheel bookkeeping at
+the provisional boundary: preparing S=20.1..U=20.2 contributes 0.1 s, then a
+wheel callback at 20.3 integrates since its previous sample at 20.0 and adds
+0.3 s. The resulting 0.4 s disagrees with the accepted S..V history's 0.2 s and
+prevents promotion. This is a valid asynchronous input sequence, not a reason
+to add synthetic wheel samples or relax validation. During this provisional phase, accepted source records now own wheel and gyro
+accumulation together. Receipt callbacks preserve bias estimation but cannot
+add overlapping or unconsumed motion. Rejected/duplicate records do not advance
+the integral; ordinary callback accumulation resumes when the phase ends. The
+new Core regression covers both bias modes and rejected/duplicate input. The
+unchanged actual-Node input now publishes x1 at 20.3 s with its original checks.
+
+Focused software validation passes: **25 Core CTest targets / 183 GTests**,
+**64 actual Node GTests**, and the unchanged external three-source-order fixture
+**3/3**. Fresh Core182/Node61 compilation preceded the final selective build of
+three changed Core TUs, the phase test, publisher and Node fixture. Unchanged
+objects retain dependency/ABI provenance; the added private nonvirtual helper
+changes no data layout. All old archives/objects/binaries remain hash-verified.
+Both different-source orders count one GNSS and one raw heading at birth;
+zero-lever XY variance remains 0.000196 m² for one 14 mm GNSS observation.
+Later cached covariances are not claimed as fresh endpoint marginals.
+
+The last Node cohort changes from **61 PASS / 3 runtime REDs** to **64/64 GREEN**
+with unchanged input sequences and assertions. Core tests take 1.222 s, Node
+3.969 s and the literal fixture 0.164 s. The six final TU compiles total 62.779 s,
+each under its 60 s cap; archive/relinks total 18.475 s. The final Core archive
+SHA-256 is `318cfecb9968af92bd93d27f05e05801222ca708ea37f1706c559bcb1731db80`.
+Two runner bookkeeping failures are retained; neither required recompiling a
+successful TU or changing test assertions. Exact commands, source/object/
+dependency hashes, failed attempts and traces remain outside Git under
+`true-flip-current/cross-source-bootstrap-live-validation/out/node64-green/`.
+Independent final code review closes the asynchronous ownership blocker and has
+no supported open BLOCKER or SHOULD-FIX finding. clang-format 18 changed-line
+and new-file checks and `git diff --check` pass. This cohort does not qualify
+ordinary nonprovisional receipt/source alignment, which is the next focused
+investigation; it does not claim current-head whole-stack CI.
+
+Model derivation and negative controls are retained in
+`different-source-scalar-oracle.py`, `different-source-joint-prototype/`,
+`different-source-endpoint-prototype/`, `shared-prefix-endpoint-prototype/`,
+`ASTRA_PREFIX_ENDPOINT_RESOLUTION.md` and their independent reviews. Production
+module/builder/phase evidence is in `shared-family-module-validation/`,
+`shared-family-module-green13/`, `source-bootstrap-builder-validation/` and
+`BOOTSTRAP_RUNTIME_INTEGRATION.md`. Earlier position-only RED/GREEN evidence is
+in `different-source-bootstrap-repro/` and its `-green/` counterpart. Paths are
+relative to the external investigation cache, not repository artifacts.
+
+The opt-in preintegration wheel-yaw diffusion question remains explicit:
+endpoint factors alone do not identify the physical interior noise law. No
+sigma was tuned or diffusion removed on that evidence; `use_imu_preint` remains
+false in shipped defaults. The failed bounded scale probe supplied no memory
+or timing measurement; only diagonal-Q storage is claimed. These software
+results neither attribute the original 13.943731 mm event nor establish physical
+containment or whole-unit cutting. The acceptance procedure below still applies.
+
+A smaller repair split can separate the already-tested same-source identity,
+position-only and fallback repairs from the coupled model. The coupled repair
+depends on admitted identities, copied policy selection, shared-noise family,
+isolated builder and full phase lifecycle; those pieces need joint integration
+validation. The existing independent repair-family assessment below remains;
+no extraction has been performed.
 
 ## Same-source bootstrap identity and current-Core repair (2026-11-01)
 
@@ -100,10 +147,9 @@ observations and consumed motion tail, and publishes the actual marginal.
 There is no additional data-derived body-pose prior. This preserves the expected
 lever-arm position/heading cross-covariance under the existing independent
 GNSS/yaw measurement model. It does not supply missing physical cross-sensor
-noise metadata. Different-source position information is repaired separately
-above; its heading transport remains unqualified. Explicit poses/dock seeds and
-the clear-carried heading prior keep their existing paths; their general
-initialization model is not claimed repaired here.
+noise metadata. Different-source raw headings use the coupled model above. Explicit poses/dock
+seeds retain their prior paths; the clear-carried heading uses one GNSS factor
+and a retimed prior, whose general cross-time uncertainty remains unqualified.
 
 Heading candidates retain their first producer-specific ID, payload and noise
 before motion support exists. A replay cannot replace that payload. When the

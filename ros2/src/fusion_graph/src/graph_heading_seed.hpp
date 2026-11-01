@@ -16,14 +16,18 @@ struct HeadingSeedState
   {
     PosePrior,
     RawSourceObservation,
-    RetimedPrior
+    RetimedPrior,
+    CoupledSourceObservations
   };
+  // Birth likelihood identity. A coupled family's heading may later be
+  // rekeyed; explicit recovery rejects that provenance before using this.
   gtsam::NonlinearFactor::shared_ptr prior;
-  // Separate original antenna likelihood for both observation bootstraps.
+  // Original antenna likelihood retained independently of heading provenance.
   gtsam::NonlinearFactor::shared_ptr source_position;
   HeadingProvenance heading_provenance = HeadingProvenance::PosePrior;
   uint64_t source_gnss_id = 0;
   std::optional<uint64_t> source_heading_id;
+  std::optional<int64_t> source_heading_ns;
   gtsam::Pose2 pose;
   double sigma_xy = 0.0;
   uint64_t epoch = 0;

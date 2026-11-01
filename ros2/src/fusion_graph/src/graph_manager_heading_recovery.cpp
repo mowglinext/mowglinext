@@ -64,9 +64,10 @@ HeadingRecoveryResult GraphManager::RecoverInvalidSeedHeading(
   if (!seed || seed != heading_seed_ || !seed->source_bound || !initialized_ || !motion_ ||
       !latest_)
     return HeadingRecoveryResult::SeedUnavailable;
-  // Retiming retains the original queued yaw as well as a synthetic prior.
-  // Retiring that coupled family needs a separate ownership model.
-  if (seed->heading_provenance == HeadingSeedState::HeadingProvenance::RetimedPrior)
+  // Synthetic retiming and the shared raw-source family both require their
+  // own retirement transaction; neither is a removable scalar seed prior.
+  if (seed->heading_provenance == HeadingSeedState::HeadingProvenance::RetimedPrior ||
+      seed->heading_provenance == HeadingSeedState::HeadingProvenance::CoupledSourceObservations)
     return HeadingRecoveryResult::UnsupportedFamily;
   const auto& state = *motion_;
   if (state.epoch != observation.epoch || seed->epoch != state.epoch ||

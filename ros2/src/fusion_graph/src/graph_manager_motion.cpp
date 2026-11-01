@@ -8,6 +8,7 @@
 #include "fusion_graph/graph_manager.hpp"
 #include "graph_heading_seed.hpp"
 #include "graph_motion_state.hpp"
+#include "source_bootstrap_state.hpp"
 #include <gtsam/linear/NoiseModel.h>
 
 namespace fusion_graph
@@ -70,6 +71,8 @@ bool GraphManager::AddConsumedMotionStep(const ConsumedMotionStep& step)
   if (status != MotionHistoryStatus::Ok)
     return status == MotionHistoryStatus::Duplicate;
   motion_->pending_steps.push_back(step);
+  if (motion_->bootstrap && motion_->bootstrap->provisional)
+    AccumulateSourceStepLocked(accum_, step);
   motion_->pending_gyro_ids.insert(step.gyro.id);
   motion_->consumed_ns = step.end_ns;
   return true;
@@ -129,6 +132,8 @@ std::optional<TickOutput> GraphManager::TickSource(int64_t schedule_ns,
     std::optional<TickOutput> result;
     if (source_ns > state.committed_ns && cadence && stationary_due)
     {
+      if (state.bootstrap && state.bootstrap->provisional)
+        return PromoteSourceBootstrapLocked(schedule_ns);
       state.active_end = source_ns;
       state.active_schedule_ns = schedule_ns;
       result = CreateNodeLocked(static_cast<double>(schedule_ns) * 1e-9);
@@ -252,9 +257,7 @@ bool GraphManager::QueueGnssAtEpoch(double x,
   auto& state = *motion_;
   if (state.observation_ids.count(observation_id))
     return false;
-  const int64_t oldest = !state.edges.empty()
-                             ? state.edges.front().bridge->edge().start_ns
-                             : (initialized_ ? state.committed_ns : state.baseline_ns);
+  const int64_t oldest = OldestSourceBoundaryLocked();
   if (source_ns < oldest || state.observations.size() >= 10000)
     return false;
   state.observations.push_back({{x, y},
@@ -281,9 +284,7 @@ bool GraphManager::QueueYawAtEpoch(double yaw,
   auto& state = *motion_;
   if (state.yaw_observation_ids.count(observation_id))
     return false;
-  const int64_t oldest = !state.edges.empty()
-                             ? state.edges.front().bridge->edge().start_ns
-                             : (initialized_ ? state.committed_ns : state.baseline_ns);
+  const int64_t oldest = OldestSourceBoundaryLocked();
   if (source_ns < oldest || state.observations.size() >= 10000)
     return false;
   // Match QueueYaw's legacy fallback; callers retain their producer-specific
@@ -302,9 +303,18 @@ bool GraphManager::AssimilateSourceObservationsLocked()
     return true;
   auto& state = *motion_;
   bool updated = false;
+  if (!AssimilateSourceBootstrapObservationsLocked(updated))
+    return false;
   for (auto it = state.observations.begin(); it != state.observations.end();)
   {
     if (it->source_ns > state.committed_ns)
+    {
+      ++it;
+      continue;
+    }
+    // Supported-family observations left pending have an unsupported local
+    // chart. Do not retire or retarget them through the ordinary edge path.
+    if (SourceBootstrapContainsLocked(it->source_ns))
     {
       ++it;
       continue;
@@ -397,7 +407,8 @@ bool GraphManager::AssimilateSourceObservationsLocked()
 bool GraphManager::NeedsSourceRebase() const
 {
   std::lock_guard<std::mutex> lock(mu_);
-  if (!motion_ || params_.max_graph_nodes == 0)
+  if (!motion_ || (motion_->bootstrap && motion_->bootstrap->provisional) ||
+      params_.max_graph_nodes == 0)
     return false;
   RefreshEstimateLocked();
   size_t count = 0;
@@ -433,6 +444,8 @@ std::optional<gtsam::Pose2> GraphManager::EstimatePoseAtSource(uint64_t epoch,
   {
     if (source_ns == motion_->committed_ns)
       return isam_->calculateEstimate<gtsam::Pose2>(PoseKey(latest_->node_index));
+    if (SourceBootstrapContainsLocked(source_ns))
+      return motion_->bootstrap->family->ConditionalMean(source_ns, isam_->calculateEstimate());
     for (const auto& entry : motion_->edges)
     {
       const auto& edge = entry.bridge->edge();
@@ -474,17 +487,21 @@ std::optional<int64_t> GraphManager::OldestRetainedSourceNs(uint64_t epoch) cons
   std::lock_guard<std::mutex> lock(mu_);
   if (!motion_ || motion_->epoch != epoch || !motion_->baseline_set)
     return std::nullopt;
-  return !motion_->edges.empty() ? motion_->edges.front().bridge->edge().start_ns
-                                 : (initialized_ ? motion_->committed_ns : motion_->baseline_ns);
+  return OldestSourceBoundaryLocked();
 }
 
 std::map<gtsam::Key, uint64_t> GraphManager::AcquisitionOwnersLocked() const
 {
   std::map<gtsam::Key, uint64_t> result;
   if (motion_)
+  {
     for (const auto& edge : motion_->edges)
       for (const auto& [key, time] : edge.acquisitions)
         result.emplace(key, edge.owner);
+    if (motion_->bootstrap)
+      for (const auto& [key, time] : motion_->bootstrap->auxiliary_poses)
+        result.emplace(key, 1);
+  }
   return result;
 }
 
@@ -495,8 +512,19 @@ void GraphManager::PruneSourceStateLocked()
   auto& state = *motion_;
   while (!state.edges.empty() && !isam_->valueExists(state.edges.front().bridge->edge().left_key))
     state.edges.pop_front();
-  const int64_t oldest =
-      !state.edges.empty() ? state.edges.front().bridge->edge().start_ns : state.committed_ns;
+  if (state.bootstrap)
+  {
+    bool retained = true;
+    for (const auto& window : state.bootstrap->family->windows())
+      retained = retained && isam_->valueExists(window.edge.left_key) &&
+                 isam_->valueExists(window.edge.right_key) &&
+                 (!window.edge.bias_key || isam_->valueExists(*window.edge.bias_key));
+    for (const auto& [key, time] : state.bootstrap->auxiliary_poses)
+      retained = retained && isam_->valueExists(key);
+    if (!retained)
+      state.bootstrap.reset();
+  }
+  const int64_t oldest = OldestSourceBoundaryLocked();
   std::erase_if(state.observation_ids,
                 [&](const auto& id)
                 {
@@ -520,6 +548,7 @@ void GraphManager::InvalidateSourceBridgesLocked()
   if (!motion_)
     return;
   motion_->edges.clear();
+  motion_->bootstrap.reset();
   // The rebuilt trajectory has no historical bridge references, but future
   // and boundary observations still describe the same physical map/source
   // epoch. Keep their admission and dedup identity through a live reanchor.

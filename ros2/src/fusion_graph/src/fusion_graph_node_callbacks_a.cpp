@@ -560,8 +560,8 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                                 integration_epoch_))
     return;
   commit_current_gnss_evidence();
-  // Latch whether the most recent seed came from RTK-Fixed so the next
-  // graph initialization can use a tight prior matching that quality.
+  // Retain the seed fix quality for initialization diagnostics. The admitted
+  // GNSS likelihood retains its original measurement noise.
   // Stale once seeded but TrySeedInitialPose only fires once per
   // (re)initialization, so the freshness window is the same as the
   // seed itself. NOT latched on the docked #512 override path: on the dock

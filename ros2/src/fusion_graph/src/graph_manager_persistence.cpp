@@ -18,6 +18,7 @@
 #include "fusion_graph/checkpoint_file.hpp"
 #include "fusion_graph/factors.hpp"
 #include "fusion_graph/graph_manager.hpp"
+#include "source_bootstrap_state.hpp"
 #include <boost/serialization/export.hpp>
 #include <gtsam/base/GenericValue.h>
 #include <gtsam/base/serialization.h>
@@ -174,7 +175,10 @@ try
     // next_index=0 / count=0; on next launch Load() restored that state,
     // marked initialized_, and the first Tick crashed with a Symbol-index
     // underflow. Keep whatever good state was on disk before the reset.
-    if (!initialized_ || next_index_ == 0)
+    // A private future endpoint is not a public checkpoint boundary. Defer
+    // until the first normal cadence closes the complete source family.
+    if (!initialized_ || next_index_ == 0 ||
+        (motion_ && motion_->bootstrap && motion_->bootstrap->provisional))
       return false;
     // Manual / on-checkpoint path. Always refreshes from iSAM2 — the
     // serialized state must reflect all factor updates since the last

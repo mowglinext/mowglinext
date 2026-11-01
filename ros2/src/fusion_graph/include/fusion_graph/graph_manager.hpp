@@ -161,9 +161,13 @@ public:
   /// covariance. Solver failure never falls back to a data-derived pose prior.
   SourceBootstrapResult InitializeSourceObservations(
       int64_t schedule_ns, int64_t source_ns, uint64_t epoch, uint64_t gnss_id, uint64_t yaw_id);
-  /// Different-source bootstrap retains the admitted GNSS likelihood once and
-  /// the legacy retimed yaw prior. Raw yaw observations remain pending; this
-  /// does not model their cross-time process/tail correlation.
+  /// Accepted raw GNSS at S and raw heading at T share their original process
+  /// history. Public x0 stays at S until the first actual source cadence.
+  SourceBootstrapResult InitializeSourceObservationPair(
+      int64_t schedule_ns, int64_t source_ns, uint64_t epoch, uint64_t gnss_id, uint64_t yaw_id);
+  /// A carried heading prior (for example after explicit clear) and one admitted
+  /// GNSS likelihood initialize X0. Raw sensor headings use the paired API; this
+  /// prior path does not model cross-time heading/process correlation.
   SourceBootstrapResult InitializeSourcePositionWithRetimedHeading(
       int64_t schedule_ns, int64_t source_ns, uint64_t epoch, uint64_t gnss_id, double yaw);
   std::optional<TickOutput> TickSource(int64_t schedule_ns, int64_t source_ns, uint64_t epoch);
@@ -426,6 +430,7 @@ private:
                                                            uint64_t gnss_id,
                                                            std::optional<uint64_t> yaw_id,
                                                            double retimed_yaw = 0.0);
+  void AccumulateSourceStepLocked(Accumulator& accumulator, const ConsumedMotionStep& step) const;
   void PrepareSourceInitializationLocked(GraphMotionState& state,
                                          Accumulator& accumulator,
                                          int64_t schedule_ns,
@@ -438,6 +443,13 @@ private:
                               const gtsam::Vector3& sigmas);
   void CommitSourceNodeLocked(TickOutput& output);
   bool AssimilateSourceObservationsLocked();
+  std::optional<TickOutput> PromoteSourceBootstrapLocked(int64_t schedule_ns);
+  bool AssimilateSourceBootstrapObservationsLocked(bool& updated);
+  bool SourceBootstrapContainsLocked(int64_t source_ns) const;
+  int64_t OldestSourceBoundaryLocked() const;
+  uint64_t AppendQueuedUnaryFactorsLocked(gtsam::NonlinearFactorGraph& factors,
+                                          uint64_t node_index,
+                                          double now_s) const;
   void InvalidateSourceBridgesLocked();
   void PruneSourceStateLocked();
   std::map<gtsam::Key, uint64_t> AcquisitionOwnersLocked() const;

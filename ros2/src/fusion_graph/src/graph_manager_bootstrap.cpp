@@ -30,24 +30,30 @@ void GraphManager::PrepareSourceInitializationLocked(GraphMotionState& state,
   for (const auto& step : state.pending_steps)
   {
     state.pending_gyro_ids.insert(step.gyro.id);
-    const double dt = static_cast<double>(step.end_ns - step.start_ns) * 1e-9;
-    accumulator.dx += step.wheel.vx * dt;
-    accumulator.dy += step.wheel.vy * dt;
-    accumulator.wheel_travel_m += std::hypot(step.wheel.vx, step.wheel.vy) * dt;
-    accumulator.dtheta_wheel += step.wheel.wz * dt;
-    accumulator.dt_total += dt;
-    accumulator.dtheta_gyro += (step.gyro.raw_z - step.bias_linearization) * dt;
-    accumulator.max_abs_gyro_rad_per_s =
-        std::max(accumulator.max_abs_gyro_rad_per_s, std::abs(step.gyro.raw_z));
-    if (params_.use_imu_preint)
-    {
-      accumulator.gyro_preint_dtheta += step.gyro.raw_z * dt;
-      accumulator.gyro_preint_dt += dt;
-      accumulator.gyro_preint_variance +=
-          dt * dt * params_.gyro_noise_density_rad_per_s * params_.gyro_noise_density_rad_per_s;
-    }
+    AccumulateSourceStepLocked(accumulator, step);
   }
   state.validation.PruneBefore(state.epoch, source_ns);
+}
+
+void GraphManager::AccumulateSourceStepLocked(Accumulator& accumulator,
+                                              const ConsumedMotionStep& step) const
+{
+  const double dt = static_cast<double>(step.end_ns - step.start_ns) * 1e-9;
+  accumulator.dx += step.wheel.vx * dt;
+  accumulator.dy += step.wheel.vy * dt;
+  accumulator.wheel_travel_m += std::hypot(step.wheel.vx, step.wheel.vy) * dt;
+  accumulator.dtheta_wheel += step.wheel.wz * dt;
+  accumulator.dt_total += dt;
+  accumulator.dtheta_gyro += (step.gyro.raw_z - step.bias_linearization) * dt;
+  accumulator.max_abs_gyro_rad_per_s =
+      std::max(accumulator.max_abs_gyro_rad_per_s, std::abs(step.gyro.raw_z));
+  if (params_.use_imu_preint)
+  {
+    accumulator.gyro_preint_dtheta += step.gyro.raw_z * dt;
+    accumulator.gyro_preint_dt += dt;
+    accumulator.gyro_preint_variance +=
+        dt * dt * params_.gyro_noise_density_rad_per_s * params_.gyro_noise_density_rad_per_s;
+  }
 }
 
 SourceBootstrapResult GraphManager::InitializeSourceObservations(
@@ -139,6 +145,8 @@ SourceBootstrapResult GraphManager::InitializeSourceObservationsLocked(
                : HeadingSeedState::HeadingProvenance::RetimedPrior;
     candidate_seed->source_gnss_id = gnss_id;
     candidate_seed->source_heading_id = yaw_id;
+    if (yaw_id)
+      candidate_seed->source_heading_ns = source_ns;
     candidate_seed->pose = initial_pose;
     candidate_seed->epoch = epoch;
     candidate_seed->source_ns = source_ns;
