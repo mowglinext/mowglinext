@@ -13,6 +13,19 @@ it('accepts legitimate zero and additive availability metadata without changing 
     const fixture=healthy().snapshot;if(!fixture)throw new Error('fixture');fixture.system.cpu_temperature=0;
     expect(decodeDiagnosticsSnapshot(fixture)).toEqual(fixture);
 });
+it.each([
+    {ready:false,transport:null},
+    {ready:false,transport:{connected:false,heartbeat_ok:false}},
+    {ready:false,transport:{connected:true,heartbeat_ok:false}},
+    {ready:true,transport:{connected:true,heartbeat_ok:true,last_pong_at:'2026-10-28T12:00:00Z'}},
+])('preserves optional ROS transport evidence %j',ros=>{
+    expect(decodeDiagnosticsSnapshot({...healthy().snapshot,ros}).ros).toEqual(ros);
+});
+it.each([null, {}, {ready:true,transport:null}, {ready:true,transport:{connected:true,heartbeat_ok:false}},
+    {ready:false,transport:{connected:'true',heartbeat_ok:false}},
+    {ready:true,transport:{connected:true,heartbeat_ok:true,last_pong_at:'bad'}}])('rejects malformed ROS transport evidence %j',ros=>{
+    expect(()=>decodeDiagnosticsSnapshot({...healthy().snapshot,ros})).toThrow('Invalid ROS transport health');
+});
 it('checks an API error that does not throw and preserves earlier data without confirming its freshness',async()=>{
     mock.request.mockResolvedValueOnce({data:healthy().snapshot});const hook=renderHook(useDiagnosticsSnapshot);
     await waitFor(()=>expect(hook.result.current.snapshot).not.toBeNull());

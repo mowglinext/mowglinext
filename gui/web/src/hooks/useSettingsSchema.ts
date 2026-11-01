@@ -95,11 +95,13 @@ export const useSettingsSchema = () => {
                     message: t("settingsSections.toasts.saved"),
                     description: t("settingsSections.toasts.savedDescription"),
                 });
+                return true;
             } catch (e) {
                 notification.error({
                     message: t("settingsSections.toasts.saveFailed"),
                     description: errorMessage(e),
                 });
+                return false;
             } finally {
                 setLoading(false);
             }

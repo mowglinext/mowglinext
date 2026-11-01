@@ -974,7 +974,11 @@ const FirmwareStep: React.FC<{ onNext: () => void; autoFlash?: boolean; mowerMod
                 style={{ marginBottom: 24, textAlign: "left" }}
             />
 
-            <Space size="middle">
+            <Space
+                size="middle"
+                wrap
+                style={{display: "flex", justifyContent: "center", width: "100%"}}
+            >
                 <Button type="primary" size="large" onClick={() => setShowFlash(true)}>
                     {t("onboardingPage.flashFirmware")}
                 </Button>
@@ -1145,8 +1149,11 @@ const OnboardingWizard: React.FC = () => {
             (currentStep >= STEP_NTRIP && currentStep <= STEP_CALIBRATION);
         if (isConfigStep) {
             setSaving(true);
-            await saveValues(localValues);
-            setSaving(false);
+            try {
+                if (!await saveValues(localValues)) return;
+            } finally {
+                setSaving(false);
+            }
         }
         // Leaving the GPS step: if any GPS/NTRIP/serial field actually
         // changed vs the snapshot taken on entry, bounce the GPS container

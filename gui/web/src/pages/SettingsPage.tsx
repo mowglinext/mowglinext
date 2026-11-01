@@ -20,6 +20,7 @@ import { SettingsSection, useSettingsManager } from "../hooks/useSettingsManager
 import { restartRos2 } from "../utils/containers.ts";
 import { useContainerRestart } from "../hooks/useContainerRestart.ts";
 import { SettingsNav } from "../components/settings/SettingsNav.tsx";
+import { SettingsLeaveGuard } from "../components/settings/SettingsLeaveGuard.tsx";
 import { HardwareSection } from "../components/settings/HardwareSection.tsx";
 import { HardwareBackendSection } from "../components/settings/HardwareBackendSection.tsx";
 import { HardwareBackendCard } from "../components/settings/HardwareBackendCard.tsx";
@@ -67,6 +68,7 @@ import {
 } from "../components/settings/settingsFieldGroups.ts";
 
 const { Text } = Typography;
+const EXTERNAL_DRAFT_SECTIONS: SettingsSection[] = ["weather", "remote_access", "notifications"];
 
 export const SettingsPage = () => {
     const asyncHandler = useAsyncHandler();
@@ -90,7 +92,6 @@ export const SettingsPage = () => {
         dirtyCount,
         registerExternalSaver,
         unregisterExternalSaver,
-        dirtyKeys,
         restartRequired,
         acknowledgeRestart,
         searchQuery,
@@ -101,6 +102,7 @@ export const SettingsPage = () => {
         handleChange,
         handleBulkChange,
         isSectionDirty,
+        isSectionPending,
         hasDefault,
         isOverridden,
         resetToDefault,
@@ -195,8 +197,8 @@ export const SettingsPage = () => {
             />
         ));
 
-    const renderSection = () => {
-        switch (activeSection) {
+    const renderSection = (section = activeSection) => {
+        switch (section) {
             case "updates":
                 return <UpdatesSection configuredModel={values.mower_model ? String(values.mower_model) : undefined}/>;
             case "appearance":
@@ -422,6 +424,7 @@ export const SettingsPage = () => {
 
     return (
         <div className="settings-page" style={{ minHeight: isMobile ? "auto" : "calc(100vh - 64px)", display: "flex", flexDirection: "column" }}>
+            <SettingsLeaveGuard dirty={isDirty} />
             {/* Header bar */}
             <div style={{
                 padding: isMobile ? "12px 12px 0" : "16px 24px 0",
@@ -440,7 +443,7 @@ export const SettingsPage = () => {
                     />
                     <div style={{ flex: 1 }} />
                     {isDirty && (
-                        <Badge count={dirtyKeys.size} size="small" offset={[-4, 0]}>
+                        <Badge count={dirtyCount} size="small" offset={[-4, 0]}>
                             <Text type="secondary" style={{ fontSize: 11 }}>{t("settingsPage.unsavedChanges")}</Text>
                         </Badge>
                     )}
@@ -541,7 +544,15 @@ export const SettingsPage = () => {
                         </div>
                     )}
 
-                    {visibleSections.length > 0 && renderSection()}
+                    {/* Keep pending integration drafts and their registered savers
+                        alive even when navigation or search hides the section. */}
+                    {EXTERNAL_DRAFT_SECTIONS.map(section => (
+                        <div key={section} hidden={activeSection !== section || visibleSections.length === 0}>
+                            {(activeSection === section && visibleSections.length > 0 || isSectionDirty(section) || isSectionPending(section))
+                                && renderSection(section)}
+                        </div>
+                    ))}
+                    {visibleSections.length > 0 && !EXTERNAL_DRAFT_SECTIONS.includes(activeSection) && renderSection()}
                 </div>
 
                 {/* Live preview rail (desktop only) */}
@@ -552,7 +563,7 @@ export const SettingsPage = () => {
                         position: "sticky",
                         top: 8,
                         alignSelf: "flex-start",
-                    }}>
+                    }} className="settings-preview-rail">
                         <SettingsPreview values={values} section={activeSection}/>
                     </div>
                 )}

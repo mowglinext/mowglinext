@@ -12,11 +12,12 @@ interface ApiCall {
 const mocks = vi.hoisted(() => ({
     request: vi.fn<(call: ApiCall) => Promise<unknown>>(),
     map: {} as Record<string, unknown>,
+    mobile: true,
 }));
 vi.mock('../hooks/useApi.ts', () => ({useApi: () => ({request: mocks.request})}));
 vi.mock('../hooks/useMowingMap.ts', () => ({useMowingMap: () => mocks.map}));
 vi.mock('../hooks/useSettings.ts', () => ({useSettings: () => ({settings: {}})}));
-vi.mock('../hooks/useIsMobile', () => ({useIsMobile: () => true}));
+vi.mock('../hooks/useIsMobile', () => ({useIsMobile: () => mocks.mobile}));
 vi.mock('../components/schedule/IrriSenseStatusChip.tsx', () => ({IrriSenseStatusChip: () => null}));
 
 interface Stored {
@@ -334,5 +335,19 @@ describe('schedule page area picker', () => {
 
         expect(await screen.findByText('Schedules overlap')).toBeInTheDocument();
         expect(await screen.findByText(/overlaps the enabled schedule starting at 09:30/)).toBeInTheDocument();
+    });
+});
+
+
+describe('schedule weekly overview', () => {
+    beforeEach(() => { vi.clearAllMocks(); mocks.mobile = false; });
+    it('shows exact minutes across the full day and every start in an hour', async () => {
+        await showPage(['00:00', '05:30', '09:45', '21:00', '23:59', '09:15', '09:45'].map((time, i) => stored({id: `s${i}`, time, enabled: false})));
+        const overview = screen.getByRole('region', {name: 'Weekly start times'});
+        expect(overview.querySelector('time[datetime="00:00"]')).toBeVisible();
+        for (const time of ['05:30', '21:00', '23:59', '09:15']) expect(overview.querySelector(`time[datetime="${time}"]`)).toBeVisible();
+        expect(within(overview).getAllByText('09:45')).toHaveLength(2);
+        expect(screen.getByText(/Blocks mark scheduled starts.*60 minutes.*no fixed duration/)).toBeVisible();
+        expect(putBodies()).toHaveLength(0);
     });
 });

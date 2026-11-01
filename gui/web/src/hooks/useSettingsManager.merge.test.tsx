@@ -307,3 +307,18 @@ it('owns advanced key authorization across all sections and backend-retired keys
     for (const name of ['', ' x ', 'a.b', '__proto__']) expect(result.current.validateAdvancedKey(name)).toBe('invalidName');
     expect(mocks.api.settings.yamlCreate).not.toHaveBeenCalled();
 });
+
+it('counts the IrriSense saver in its containing Weather section until explicit revert', async () => {
+    const {result} = renderHook(useSettingsManager);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const revert = vi.fn();
+    act(() => result.current.registerExternalSaver('irrisense', {dirtyCount: 2, save: vi.fn(), revert}));
+    act(() => result.current.handleChange('robot_name', 'Draft'));
+    expect(result.current.dirtyCount).toBe(3);
+    expect(result.current.isSectionDirty('weather')).toBe(true);
+    act(() => result.current.revert());
+    expect(revert).toHaveBeenCalledOnce();
+    act(() => result.current.registerExternalSaver('irrisense', {dirtyCount: 0, save: vi.fn(), revert}));
+    expect(result.current.dirtyCount).toBe(0);
+    expect(result.current.isSectionDirty('weather')).toBe(false);
+});

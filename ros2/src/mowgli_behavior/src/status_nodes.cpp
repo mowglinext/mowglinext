@@ -255,6 +255,7 @@ BT::NodeStatus EndSession::tick()
   // (coverage reset / re-mow) is wrongly judged "no progress" and pushed
   // toward premature give-up at kMaxAreaAttempts.
   ctx->area_last_coverage.clear();
+  ctx->area_last_partial_poses.clear();
   // Start-pose-blocked bookkeeping (issue #487) is per-session too: the next
   // COMMAND_START must get a fresh exemption budget, and a stale
   // start_blocked_area would make the first dispatch of the new session skip

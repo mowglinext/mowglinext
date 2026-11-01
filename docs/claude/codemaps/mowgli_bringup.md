@@ -58,7 +58,7 @@
 | `scripts/wait_for_tf.py` | 70 | `--parent map --child odom --timeout 120`; exit 0 when TF resolvable, 1 on timeout |
 | `scripts/empty_static_map_pub.py` | 61 | Latched empty `OccupancyGrid` on `/no_lidar_static_map` (params `size_m` 200, `resolution` 0.5, `frame_id` map) |
 | `scripts/cmd_vel_ws_relay.py` | 121 | WebSocket 127.0.0.1:8766 JSON → `/cmd_vel_teleop` (`TwistStamped`, clamps ±2.0 m/s / ±5.0 rad/s) |
-| `scripts/fleet_peer_obstacles.py` | 158 | Fleet coordination (commit `4bc36b74`, 2026-09-15): subs `/fleet/peers`, publishes `/fleet/peer_obstacles` consumed by both Nav2 costmap variants as an obstacle source; launched unconditionally from `full_system.launch.py` |
+| `scripts/fleet_peer_obstacles.py` | 158 | Fleet coordination (commit `4bc36b74`, 2026-09-15): subs `/fleet/peers` + `/fleet/docked_peers` + `/odometry/filtered_map` + `/map_server_node/docking_pose`, publishes `/fleet/peer_obstacles` consumed by both Nav2 costmap variants as an obstacle source; a charging peer beside our dock is left out while we undock/dock (`classify_docked_peer`, side-by-side docks, 2026-10-28); launched unconditionally from `full_system.launch.py` |
 | **`urdf/`** | | |
 | `urdf/mowgli.urdf.xacro` | 408 | Frames + visuals only (no sim plugins): base_footprint→base_link→wheels/casters/blade/imu/gps/lidar; all dims are xacro args |
 | **`test/`** | | |
@@ -67,7 +67,7 @@
 | `test/test_launch_injection.py` | 262 | AST guards: `num_headland_passes` unclamped, `mowing_enabled` → hardware_bridge only, `dock_max_retries`/`dock_use_charger_detection` → docking_server |
 | `test/test_tf_ownership.py` | 100 | Only fusion_graph + wheel_odometry construct `TransformBroadcaster`; `wheel_odometry.yaml publish_tf: false`; no launch file sets `publish_tf` |
 | `test/test_gnss_launch_config.py` | 61 | `full_system` declares no `use_universal_gnss`, includes no `universal_gnss.launch.py`, passes no legacy `gnss_backend`/`gps_protocol` params |
-| `test/test_fleet_peer_obstacles.py` | 63 | Guards `fleet_peer_obstacles.py`'s `/fleet/peers` sub / `/fleet/peer_obstacles` pub wiring |
+| `test/test_fleet_peer_obstacles.py` | 63 | Guards `fleet_peer_obstacles.py`'s footprint/cloud helpers and the docked-neighbour exception (incl. the 2026-10-28 bag poses) |
 | `test/test_drive_pid_defaults.py` | 167 | Drive PID/yaw-tuning template defaults |
 | `test/test_fusion_graph_launch_types.py` | 146 | `fusion_graph.launch.py` param type/coercion guards |
 | `test/test_gnss_sidecar_launcher.py` | 178 | Guards the Universal GNSS sidecar inline launcher (`docker-compose.gps.yml`'s Python `command:` block) reads `mowgli_robot.yaml` correctly |

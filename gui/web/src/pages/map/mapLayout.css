@@ -1,0 +1,7 @@
+.map-layout {
+    --map-joystick-height: 160px;
+}
+
+@media (max-height: 500px) and (min-width: 600px) {
+    .map-layout { --map-joystick-height: 100px; }
+}

@@ -135,11 +135,79 @@ func TestPeerFeed_PublishesOnlyWithPeersAndADatum(t *testing.T) {
 	assert.True(t, st.Active)
 	assert.Equal(t, 0, st.PeersPublished)
 	assert.Equal(t, uint64(1), st.Publishes)
-	require.Len(t, ros.Publishes, 1)
+	require.Len(t, ros.Publishes, 2, "/fleet/peers, then its docked subset")
 	assert.Equal(t, fleetPeersTopic, ros.Publishes[0].Topic)
 	assert.Equal(t, fleetPeersMsgType, ros.Publishes[0].MsgType)
 	assert.Empty(t, ros.Publishes[0].Msg.(*poseArrayMsg).Poses)
+	// The docked list goes out every tick, empty too, so the fleet node
+	// learns within one tick that a neighbour left its charger.
+	assert.Equal(t, fleetDockedPeersTopic, ros.Publishes[1].Topic)
+	assert.Equal(t, fleetPeersMsgType, ros.Publishes[1].MsgType)
+	assert.Empty(t, ros.Publishes[1].Msg.(*poseArrayMsg).Poses)
 	assert.Equal(t, 5.0, st.RateHz)
+}
+
+func hlsTopic(isCharging bool) json.RawMessage {
+	b, _ := json.Marshal(map[string]any{"state": 1, "state_name": "CHARGING", "is_charging": isCharging})
+	return b
+}
+
+func TestPeerMapPoses_FlagsAPeerOnItsChargerOnlyFromAFreshStatus(t *testing.T) {
+	rows := []FleetRobot{
+		peerRow("docked", ourDatum,
+			map[string]json.RawMessage{"pose": poseTopic(1, 0, 0), "highLevelStatus": hlsTopic(true)},
+			map[string]float64{"pose": 0.1, "highLevelStatus": 0.5}),
+		peerRow("moving", ourDatum,
+			map[string]json.RawMessage{"pose": poseTopic(2, 0, 0), "highLevelStatus": hlsTopic(false)},
+			map[string]float64{"pose": 0.1, "highLevelStatus": 0.5}),
+		// "Charging" 9 s ago says nothing about now: it may have undocked since.
+		peerRow("stale", ourDatum,
+			map[string]json.RawMessage{"pose": poseTopic(3, 0, 0), "highLevelStatus": hlsTopic(true)},
+			map[string]float64{"pose": 0.1, "highLevelStatus": 9.0}),
+		peerRow("nostatus", ourDatum,
+			map[string]json.RawMessage{"pose": poseTopic(4, 0, 0)},
+			map[string]float64{"pose": 0.1}),
+	}
+
+	poses := peerMapPoses(rows, ourDatum, peerPoseMaxAge)
+
+	require.Len(t, poses, 4, "every peer stays on /fleet/peers whatever its charger state")
+	onCharger := map[string]bool{}
+	for _, p := range poses {
+		onCharger[p.ID] = p.OnCharger
+	}
+	assert.Equal(t, map[string]bool{"docked": true, "moving": false, "stale": false, "nostatus": false}, onCharger)
+}
+
+func TestDockedPeerPoses_KeepsOnlyOrientedPeersOnTheirCharger(t *testing.T) {
+	in := []peerMapPose{
+		{ID: "docked", X: 1, HasYaw: true, OnCharger: true},
+		{ID: "moving", X: 2, HasYaw: true},
+		{ID: "disc", X: 3, OnCharger: true}, // fix-only fallback: no heading
+	}
+
+	out := dockedPeerPoses(in)
+
+	require.Len(t, out, 1)
+	assert.Equal(t, "docked", out[0].ID)
+	assert.Len(t, in, 3, "the input is not modified")
+}
+
+func TestPeerFeed_PublishesTheDockedSubsetWithTheSamePoses(t *testing.T) {
+	poses := []peerMapPose{
+		{ID: "docked", X: -3.469, Y: 1.5, Yaw: -1.342, HasYaw: true, OnCharger: true},
+		{ID: "moving", X: 5, Y: 5, Yaw: 0.3, HasYaw: true},
+	}
+	now := time.Unix(200, 0)
+
+	all := peerPoseArray(poses, now)
+	docked := peerPoseArray(dockedPeerPoses(poses), now)
+
+	require.Len(t, all.Poses, 2)
+	require.Len(t, docked.Poses, 1)
+	// The fleet node matches the two topics by pose: they must be identical.
+	assert.Equal(t, all.Poses[0], docked.Poses[0])
+	assert.Equal(t, all.Header, docked.Header)
 }
 
 func TestPeerFeed_StandsDownWithoutADatum(t *testing.T) {

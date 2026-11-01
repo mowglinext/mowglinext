@@ -178,3 +178,32 @@ for (const section of sections) {
         });
     });
 }
+
+for (const section of sections) {
+    it(`${section.name}: tracks unapplied secret text without persisting it, and Revert clears it`, async () => {
+        vi.clearAllMocks();
+        let stored = {enabled: true, ...section.fields};
+        mocks.request.mockImplementation(({path, method, body}) => {
+            if (method === 'PUT') stored = {...stored, ...body};
+            if (path.endsWith('/settings')) return Promise.resolve({data: structuredClone(stored)});
+            return Promise.resolve({data: {enabled: true, configured: false, sentCount: 0, failedCount: 0}});
+        });
+        let saver: ExternalSaver | undefined;
+        const register = (_id: string, value: ExternalSaver) => {saver = value;};
+        const Component = section.Component;
+        const view = render(<App><Component registerSaver={register}/></App>);
+        await screen.findByRole('switch', {name: section.label});
+        const input = view.container.querySelector<HTMLInputElement>('input[type="password"]')!;
+        expect(input).not.toBeNull();
+        fireEvent.change(input, {target: {value: 'fixture-secret'}});
+        await waitFor(() => expect(saver?.dirtyCount).toBe(1));
+        await act(async () => {await saver!.save();});
+        expect(puts()).toEqual([]);
+        expect(input).toHaveValue('fixture-secret');
+        expect(saver?.dirtyCount).toBe(1);
+        act(() => saver!.revert?.());
+        expect(input).toHaveValue('');
+        expect(saver?.dirtyCount).toBe(0);
+        view.unmount();
+    });
+}
