@@ -372,6 +372,7 @@ public:
   void onHalted() override;
 
 private:
+  friend struct FollowStripOutcomeTestAccess;
   void setBladeEnabled(bool enabled);
   bool bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx);
   void beginBladeReadyWait(const std::shared_ptr<BTContext>& ctx);
@@ -790,6 +791,7 @@ public:
   void onHalted() override;
 
 private:
+  friend struct FollowStripOutcomeTestAccess;
   /// The transit ended ABORTED/CANCELED. Waits (bounded) for nav2's error code,
   /// then records the destination in BTContext::transit_to_strip_failed_at so
   /// FollowStrip does not send the identical transit again — unless the planner
@@ -859,6 +861,7 @@ public:
   void onHalted() override;
 
 private:
+  friend struct FollowStripOutcomeTestAccess;
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
