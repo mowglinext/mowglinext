@@ -7,8 +7,10 @@ The local costmap remains rolling. Global resolution stays 0.08 m; the keepout
 mask stays at its configured resolution (0.05 m by default).
 
 `GardenKeepoutLayer` takes geometry and costs from one `/keepout_mask` snapshot.
-It applies authorization after sensor inflation, preserving the existing soft
-boundary bands and drawn-obstacle clearance. Startup, an empty mask, invalid
+It runs in Nav2's separate `filters` stage after sensor inflation, preserving the
+existing soft boundary bands and drawn-obstacle clearance. The primary grid never
+contains authorization costs, so retained boundary cells cannot become inflation
+seeds in a later bounded update. Startup, an empty mask, invalid
 data, or an edit awaiting its settled rebuild closes the complete planning grid.
 A geometry change also closes one update cycle while preceding sensor layers
 resize; the following update rebuilds sensor obstacles and inflation before
@@ -43,7 +45,19 @@ marks persist for at most 2 s, with a 0.5 s stream update deadline; absent/stale
 LiDAR prevents a current planning costmap. No-LiDAR fleet observations persist
 for 1 s and are marking-only. Removed observations clear their marks and
 inflation throughout the fixed extent; drawn mask obstacles remain lethal.
-Local obstacle handling and collision-monitor settings are unchanged.
+Updates cover the previous and current source bounds, with one cell of raster
+padding before inflation. This retains the ceil-rounded inflation extent when
+marks move or expire. A settled mask follows those bounds; map edits, resizing,
+reset, invalid authorization and explicit boundary recovery rebuild the complete
+grid. Legacy mask placement in the normal plugin list retains full updates.
+The rolling local fleet layer retains its full-update policy; local obstacle
+handling and collision-monitor settings are unchanged.
+
+The vendor overlay builds Nav2 costmap 1.5.2 from a separate source pin, guarded
+against public-header differences from the installed binary dependencies. Its
+selective-clear correction resets filters whenever the complete combined grid is
+erased, matching the existing all-layer reset contract. Without that notification,
+distant authorization cells could remain free after a plugin-specific clear.
 
 Map edits should be performed with autonomous motion stopped. This change gates
 new planning against unavailable authorization; it does not cancel an already

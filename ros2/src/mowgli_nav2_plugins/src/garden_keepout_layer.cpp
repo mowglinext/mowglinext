@@ -23,6 +23,13 @@ void GardenKeepoutLayer::onInitialize()
   resolution_ = node->declare_or_get_parameter("resolution", 0.08);
   if (max_cells_ <= 0 || !std::isfinite(resolution_) || resolution_ <= 0.0)
     throw std::runtime_error("Invalid garden costmap resolution or cell budget");
+  const auto* filters = layered_costmap_->getFilters();
+  separate_filter_ = std::any_of(filters->begin(),
+                                 filters->end(),
+                                 [this](const auto& filter)
+                                 {
+                                   return filter.get() == this;
+                                 });
   enabled_ = true;  // Authorization is mandatory, never dynamically disabled.
   current_ = false;
   mask_sub_ = node->create_subscription<nav_msgs::msg::OccupancyGrid>(
@@ -150,11 +157,16 @@ void GardenKeepoutLayer::updateBounds(
       }
     }
   }
-  const auto* map = layered_costmap_->getCostmap();
-  *min_x = std::min(*min_x, map->getOriginX());
-  *min_y = std::min(*min_y, map->getOriginY());
-  *max_x = std::max(*max_x, map->getOriginX() + map->getSizeInCellsX() * resolution_);
-  *max_y = std::max(*max_y, map->getOriginY() + map->getSizeInCellsY() * resolution_);
+  // Separate filters keep authorization out of the sensor/inflation grid.
+  // Legacy plugin placement still needs a full reset to avoid inflating the mask.
+  if (!separate_filter_ || !current_ || !filter_enabled_)
+  {
+    const auto* map = layered_costmap_->getCostmap();
+    *min_x = std::min(*min_x, map->getOriginX());
+    *min_y = std::min(*min_y, map->getOriginY());
+    *max_x = std::max(*max_x, map->getOriginX() + map->getSizeInCellsX() * resolution_);
+    *max_y = std::max(*max_y, map->getOriginY() + map->getSizeInCellsY() * resolution_);
+  }
 }
 
 void GardenKeepoutLayer::updateCosts(
@@ -202,14 +214,28 @@ void RecentObstacleLayer::updateBounds(double robot_x,
 {
   std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*getMutex());
   resetMaps();
+  double min_source_x = std::numeric_limits<double>::max(), min_source_y = min_source_x;
+  double max_source_x = std::numeric_limits<double>::lowest(), max_source_y = max_source_x;
   nav2_costmap_2d::ObstacleLayer::updateBounds(
-      robot_x, robot_y, robot_yaw, min_x, min_y, max_x, max_y);
-  // Resetting the layer also removes marks outside this tick's sensor rays;
-  // include the full old extent so the master's stale cells/inflation clear.
-  *min_x = std::min(*min_x, getOriginX());
-  *min_y = std::min(*min_y, getOriginY());
-  *max_x = std::max(*max_x, getOriginX() + getSizeInCellsX() * getResolution());
-  *max_y = std::max(*max_y, getOriginY() + getSizeInCellsY() * getResolution());
+      robot_x, robot_y, robot_yaw, &min_source_x, &min_source_y, &max_source_x, &max_source_y);
+  // Clear the previous observations too. One cell covers inflation's ceil-rounded
+  // radius even when continuous bounds fall between grid cells.
+  *min_x = std::min(*min_x, std::min(previous_min_x_, min_source_x) - getResolution());
+  *min_y = std::min(*min_y, std::min(previous_min_y_, min_source_y) - getResolution());
+  *max_x = std::max(*max_x, std::max(previous_max_x_, max_source_x) + getResolution());
+  *max_y = std::max(*max_y, std::max(previous_max_y_, max_source_y) + getResolution());
+  previous_min_x_ = min_source_x;
+  previous_min_y_ = min_source_y;
+  previous_max_x_ = max_source_x;
+  previous_max_y_ = max_source_y;
+  // The rolling local fleet layer retains its existing update policy.
+  if (rolling_window_)
+  {
+    *min_x = std::min(*min_x, getOriginX());
+    *min_y = std::min(*min_y, getOriginY());
+    *max_x = std::max(*max_x, getOriginX() + getSizeInCellsX() * getResolution());
+    *max_y = std::max(*max_y, getOriginY() + getSizeInCellsY() * getResolution());
+  }
 }
 }  // namespace mowgli_nav2_plugins
 

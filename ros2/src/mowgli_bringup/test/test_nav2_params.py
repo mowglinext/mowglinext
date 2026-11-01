@@ -782,7 +782,7 @@ def test_overlays_select_disjoint_costmap_layers() -> None:
             assert not ("obstacle_layer" in params and "static_layer" in params), (
                 f"{variant}: {cm} merged config has BOTH obstacle_layer and static_layer"
             )
-            for layer in params["plugins"]:
+            for layer in params["plugins"] + params.get("filters", []):
                 assert layer in params, (
                     f"{variant}: {cm} plugins references undefined layer '{layer}'"
                 )
@@ -1499,12 +1499,12 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
         # peers layer, which must be inflated like any obstacle), then
         # inflation, and the keepout filter LAST so the mask is never inflated.
         assert plugins[0] == first, f"global costmap plugin order is {plugins}"
-        assert plugins[-1] == "keepout_filter", f"global costmap plugin order is {plugins}"
-        assert plugins.index("inflation_layer") == len(plugins) - 2, (
-            f"inflation_layer must sit right before keepout_filter: {plugins}"
-        )
+        assert plugins[-1] == "inflation_layer", f"global costmap plugin order is {plugins}"
+        assert "keepout_filter" not in plugins
+        assert gc["filters"] == ["keepout_filter"]
         lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
         assert "keepout_filter" not in lc["plugins"]  # Invariant 5
+        assert "keepout_filter" not in lc.get("filters", [])
 
 
 def test_global_grid_is_garden_sized_with_bounded_recent_sources() -> None:
