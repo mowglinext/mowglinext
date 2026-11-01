@@ -522,6 +522,9 @@ private:
     // full_system.launch.py; the values below are only the compile-time
     // fallbacks for a node launched without them.
     StartBlockedEscapeCfg escape_cfg;
+    // Derived from the configured chassis by launch; an absent footprint never
+    // grants an open-loop escape authorization.
+    declare_parameter<std::vector<double>>("motion_footprint", std::vector<double>{});
     escape_cfg.enabled = declare_parameter<bool>("start_blocked_escape_enabled", false);
     escape_cfg.speed = declare_parameter<double>("start_blocked_escape_speed", 0.10);
     escape_cfg.distance = declare_parameter<double>("start_blocked_escape_distance", 0.40);
@@ -1339,6 +1342,11 @@ private:
     {
       const auto transit_xml =
           std::filesystem::path(tree_file).parent_path() / "navigate_to_pose_transit.xml";
+      const auto entry_xml =
+          std::filesystem::path(tree_file).parent_path() / "navigate_to_coverage_entry.xml";
+      if (!std::filesystem::exists(entry_xml))
+        throw std::runtime_error("Coverage entry tree not found: " + entry_xml.string());
+      context_->coverage_entry_tree_xml = entry_xml.string();
       const auto recovery_xml =
           std::filesystem::path(tree_file).parent_path() / "navigate_inside_boundary.xml";
       if (std::filesystem::exists(recovery_xml))

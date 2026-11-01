@@ -109,18 +109,25 @@ inline double OffsetLatticeStationSpacing(double offset_step, double max_slope)
 ///                        0 for none
 /// @param blocked         hard critic: true when the body cannot be at
 ///                        (station index, lateral offset)
+/// @param edge_blocked    optional hard critic for the complete edge ending at
+///                        station; with this critic the physical start offset
+///                        is preserved rather than rounded in the result
 inline OffsetLatticeResult PlanOffsetProfile(
     const std::vector<double>& stations,
     double start_offset,
     int preferred_sign,
     const std::function<bool(std::size_t, double)>& blocked,
-    const OffsetLatticeCfg& cfg = {})
+    const OffsetLatticeCfg& cfg = {},
+    const std::function<bool(std::size_t, double, double)>& edge_blocked = {})
 {
   OffsetLatticeResult result;
   if (stations.empty() || cfg.offset_step <= 0.0 || cfg.max_offset < 0.0)
   {
     return result;
   }
+  if (edge_blocked &&
+      (!std::isfinite(start_offset) || std::abs(start_offset) > cfg.max_offset + 1e-12))
+    return result;
 
   const int half = static_cast<int>(std::floor(cfg.max_offset / cfg.offset_step + 1e-9));
   const int width = 2 * half + 1;
@@ -148,6 +155,12 @@ inline OffsetLatticeResult PlanOffsetProfile(
       // station spacing the caller chose (OffsetLatticeStationSpacing).
       double best = kInf;
       int best_parent = -1;
+      bool node_checked = false;
+      const double offset = offset_of(k);
+      // A geometric edge certificate starts at the physical applied offset,
+      // not its rounded lattice index. Preserve the first-step slope bound.
+      if (i == 1 && edge_blocked && std::abs(offset - start_offset) > cfg.offset_step + 1e-12)
+        continue;
       for (int pk = std::max(0, k - 1); pk <= std::min(width - 1, k + 1); ++pk)
       {
         const double c = cost[i - 1][static_cast<std::size_t>(pk)];
@@ -155,7 +168,18 @@ inline OffsetLatticeResult PlanOffsetProfile(
         {
           continue;
         }
-        const double move = std::fabs(offset_of(k) - offset_of(pk));
+        if (!node_checked)
+        {
+          if (blocked(i, offset))
+            break;
+          node_checked = true;
+        }
+        if (edge_blocked && edge_blocked(i, i == 1 ? start_offset : offset_of(pk), offset_of(k)))
+        {
+          continue;
+        }
+        const double move =
+            std::fabs(offset_of(k) - (i == 1 && edge_blocked ? start_offset : offset_of(pk)));
         const double candidate = c + cfg.w_smooth * move;
         if (candidate < best)
         {
@@ -164,11 +188,6 @@ inline OffsetLatticeResult PlanOffsetProfile(
         }
       }
       if (best_parent < 0)
-      {
-        continue;
-      }
-      const double offset = offset_of(k);
-      if (blocked(i, offset))
       {
         continue;
       }
@@ -221,6 +240,8 @@ inline OffsetLatticeResult PlanOffsetProfile(
       k = parent[i][static_cast<std::size_t>(k)];
     }
   }
+  if (edge_blocked)
+    result.offsets[0] = start_offset;
   return result;
 }
 

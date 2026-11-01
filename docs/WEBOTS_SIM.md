@@ -41,43 +41,86 @@ one:
 |---|---|---|---|
 | **A — world + body** | `worlds_webots/mowgli_garden.wbt` | The world, and the physical robot instance. `EXTERNPROTO "../protos/MowgliMower.proto"` (`:11`), the `MowgliMower { … }` instance (`:71`–`:82`), `WorldInfo.basicTimeStep 20` (`:16`, matching controller_manager 50 Hz), sensor nodes in `extensionSlot` (`:82`+) | ROS topic names |
 | **B — device wiring** | `urdf_webots/mowgli_webots.urdf` | Which Webots device maps to which ROS topic, and which plugins load. `<webots>` block `:161`–`:204`, `<ros2_control>` joints `:206`–`:220` | Any geometry, mass, or joint physics |
-| **C — body motion** | `mowgli_simulation/kinematic_drive.py` | `/cmd_vel_wheels` (the POST-firmware-model achievable twist) → Supervisor teleport of the chassis, plus the chassis ODE velocity for sensor sampling | Wheel motor commands (owned by `diff_drive_controller`); the firmware motor model itself |
+| **C — body motion** | `mowgli_simulation/kinematic_drive.py` | Native measured wheel-position increments → exact SE2 chassis teleport and planar ODE velocity; native-epoch truth/applied observations | Wheel motor commands (owned by `diff_drive_controller`); the firmware motor model itself |
 
 **Geometry lives in A only.** The URDF is *device + plugin wiring* — it does
 not spawn a body (see § 7).
 
 ### Signal chain (current topic names)
 
-**`sim_actuation_node` is the SOLE firmware-model authority** (PR #507,
-merged 2026-09-05, "centralize Webots actuation and startup"). Before that,
-`kinematic_drive` ran its own independent copy of the firmware model on raw
-`/cmd_vel`, which could diverge from `sim_actuation_node`'s copy — ground
-truth could move while `/wheel_odom` read zero, breaking the RTK
-motion-consistency gate. Now BOTH the chassis teleport and
-`diffdrive_controller` are fed the SAME post-firmware-model twist, so they
-cannot diverge by scheduler phase:
+**`sim_actuation_node` is the sole firmware-model authority.** The chassis
+now follows actual native wheel-position increments, after controller limits
+and joint dynamics. The previous shared-command arrangement still had two
+plants: a native profile measured firmware velocity 0.215 m/s moving the body
+4.3 mm immediately, while the acceleration-limited wheel traveled about 0.4 mm.
+Sharing an input topic did not make those observations agree.
 
+```text
+/cmd_vel -> sim_actuation_node -> /cmd_vel_wheels -> diffdrive_controller
+                                                        |
+                                      limits + wheel motor setpoints
+                                                        |
+                                           native PositionSensors
+                                               /             \
+                                  KinematicDrive         joint odometry
+                                  chassis + GT           /wheel_odom_raw
+                                  + applied twist              |
+                                                        sim_wheel_slip
+                                                              |
+                                                         /wheel_odom
 ```
-/cmd_vel ──> sim_actuation_node ──> /cmd_vel_wheels ─┬─> kinematic_drive plugin ──> Supervisor teleport of the chassis
-     (sim_actuation_node.cpp:80-83)                  │      (urdf:205 <cmdVelTopic>/cmd_vel_wheels</cmdVelTopic>,
-                                                      │       urdf:206 <applyFirmwareModel>false</applyFirmwareModel>)
-                                                      │
-                                                      └─> diffdrive_controller (webots_minimal.launch.py:111)
-                                                                 │
-                                           /wheel_odom_raw <─────┘ (launch:112)
-                                                 │
-                               sim_wheel_slip (sim_full_system.launch.py:396-415)
-                                                 │
-                                            /wheel_odom
-```
+
+The controller remains the sole motor writer. Its velocity/acceleration limits
+and command timeout are unchanged. KinematicDrive does not subscribe to a
+command or run another firmware model. It holds a finite initial sensor
+baseline, integrates exact wheel SE2 increments at native time, rejects invalid
+acquisitions without publishing unsupported packets, and never replays the same
+native epoch. Measured residual braking remains body motion; an expired command
+does not justify falsely reporting instantaneous physical zero. The stationary
+zero-motion assertions remain, and this is not hardware stop evidence.
+
+`diffdrive_controller.velocity_rolling_window_size` is explicitly **1** in
+`config_webots/ros2_control.yaml`. Its pose and reported Twist must describe
+the same wheel interval: Fusion Graph integrates that velocity at its source
+stamp. The upstream default ten-sample mean lags during acceleration, braking
+and turns while the pose remains current. `test_wheel_odom_interval` exercises
+the real upstream odometry implementation with the shipped configuration and
+checks this relation independently from pose increments. This preserves
+joint-derived odometry. A bounded post-repair native component verifies the
+same measured motion to arithmetic precision for 751 exact intervals under the
+predeclared +20 ms controller-header phase. Same-header acquisition identity
+is not claimed: controller ROS-header phase and consumer holding remain
+separate timing questions.
 
 Sensors:
 
 | Raw topic | Source | Post-processor | Final topic |
 |---|---|---|---|
-| `/imu/data_sim` | Ros2IMU plugin, `mowgli_webots.urdf:185` | `sim_imu_noise` (`sim_full_system.launch.py:424-437`) | `/imu/data` |
+| `/sim/applied_twist` | `KinematicDrive`, native step epoch | `sim_imu_noise` (full-system synthetic mode) | `/imu/data` |
+| `/imu/data_sim` | Ros2IMU plugin | `sim_imu_noise` (raw mode only) | `/imu/data` |
 | `/gps/fix_raw` | GPS device, `mowgli_webots.urdf:176` | `sim_navsat_rtk_fix` (`sim_full_system.launch.py:313-330`) | `/gps/fix` |
 | `/scan` | Lidar device, `mowgli_webots.urdf:166` | — (world-level `noise 0.002` / `resolution 0.01`, `mowgli_garden.wbt:122-123`) | `/scan` |
+
+`/sim/ground_truth_pose` is the post-integration chassis pose at native
+`Supervisor.getTime()`. `/sim/applied_twist` carries the actual body twist
+integrated over the measured wheel interval **ending** at that same epoch,
+including the resulting controller/joint braking behavior. It is an observation, not a drive input.
+The synthetic IMU takes its gyro value and stamp from that packet, rather than
+pairing a cached command with an independently stamped raw IMU callback.
+Up to ten future packets wait in source-time order for asynchronous `/clock`
+delivery (matching subscriber queue depth); overflow drops the oldest pending
+packet, like transport loss. The final zero remains eligible for publication.
+Rewind clears pending/accepted identity. This does not identify arbitrary old
+packets replayed across clock generations.
+
+The GNSS relay uses raw GPS only as its cadence trigger. Generated planar
+coordinates and fix/status stamps belong to the selected new truth pose; the
+GPS antenna frame and lifetime observation sequence remain paired. A future
+truth sample cannot advance the accepted watermark. Both helpers wait for
+clock eligibility without restamping or increasing a future tolerance.
+Raw driver wheel/IMU header phase is a separate contract: these changes do not
+establish native acquisition identity for those vendor messages or establish
+boundary containment.
 
 `/wheel_odom`, `/imu/data` and `/gps/fix` then feed `fusion_graph_node`, which
 is the sole localizer and owns **both** `map→odom` and `odom→base_footprint`

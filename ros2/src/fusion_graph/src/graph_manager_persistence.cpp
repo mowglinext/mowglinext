@@ -18,6 +18,7 @@
 #include "fusion_graph/checkpoint_file.hpp"
 #include "fusion_graph/factors.hpp"
 #include "fusion_graph/graph_manager.hpp"
+#include "source_bootstrap_state.hpp"
 #include <boost/serialization/export.hpp>
 #include <gtsam/base/GenericValue.h>
 #include <gtsam/base/serialization.h>
@@ -118,7 +119,7 @@ void GraphManager::ResetLocked()
   p.optimizationParams = gtsam::ISAM2GaussNewtonParams(0.001);
   p.relinearizeThreshold = 0.05;
   p.relinearizeSkip = std::max(1, params_.isam2_relinearize_skip);
-  isam_ = gtsam::ISAM2(p);
+  isam_ = std::make_unique<gtsam::ISAM2>(p);
 
   new_factors_ = gtsam::NonlinearFactorGraph();
   new_values_ = gtsam::Values();
@@ -131,6 +132,11 @@ void GraphManager::ResetLocked()
   initialized_ = false;
 
   accum_.Reset();
+  motion_.reset();
+  heading_seed_.reset();
+  // A new graph's absolute bias prior starts at zero. A reused instance must
+  // not seed pose-only restored states from the previous graph/session bias.
+  current_bias_estimate_ = 0.0;
   slip_window_.Clear();
   queue_ = UnaryQueue{};
 
@@ -169,13 +175,24 @@ try
     // next_index=0 / count=0; on next launch Load() restored that state,
     // marked initialized_, and the first Tick crashed with a Symbol-index
     // underflow. Keep whatever good state was on disk before the reset.
-    if (!initialized_ || next_index_ == 0)
+    // A private future endpoint is not a public checkpoint boundary. Defer
+    // until the first normal cadence closes the complete source family.
+    if (!initialized_ || next_index_ == 0 ||
+        (motion_ && motion_->bootstrap && motion_->bootstrap->provisional))
       return false;
     // Manual / on-checkpoint path. Always refreshes from iSAM2 — the
     // serialized state must reflect all factor updates since the last
     // RefreshEstimateLocked() call.
     RefreshEstimateLocked();
-    estimate_snapshot = current_estimate_;
+    // The restore contract is pose-only: transient bias states are
+    // re-estimated against the new session's sensor calibration. Serializing
+    // GenericValue<double> here was both unnecessary and unregistered, making
+    // every checkpoint with preintegration enabled fail to save.
+    for (const auto& value : current_estimate_)
+    {
+      if (gtsam::Symbol(value.key).chr() == 'x')
+        estimate_snapshot.insert(value.key, value.value);
+    }
     next_index_snapshot = next_index_;
     last_node_time_s_snapshot = last_node_time_s_;
   }
@@ -340,9 +357,9 @@ try
                                             pin_noise));
     kept_values.insert(key_value.key, key_value.value);
   }
-  auto restored = isam_;
-  restored.update(fg, kept_values);
-  isam_ = std::move(restored);
+  auto restored = std::make_unique<gtsam::ISAM2>(*isam_);
+  restored->update(fg, kept_values);
+  isam_.swap(restored);
   estimate_dirty_ = true;
 
   next_index_ = next_idx;
@@ -376,7 +393,7 @@ try
     out.pose = PoseAt(next_index_ - 1);
     try
     {
-      out.covariance = isam_.marginalCovariance(PoseKey(next_index_ - 1));
+      out.covariance = isam_->marginalCovariance(PoseKey(next_index_ - 1));
     }
     catch (const std::exception&)
     {

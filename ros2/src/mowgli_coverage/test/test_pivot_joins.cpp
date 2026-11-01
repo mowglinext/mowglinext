@@ -31,6 +31,7 @@
 #include <utility>
 #include <vector>
 
+#include "fixtures/isabey.hpp"
 #include "mowgli_coverage/coverage_planning.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
 #include "ogr_geometry.h"
@@ -391,6 +392,134 @@ TEST(SharpCornerPivot, ExistingTwinsAreNotDoubled)
   EXPECT_EQ(pivotSharpCorners(pts, 60.0 * M_PI / 180.0, limits), pts);
 }
 
+// Float32 goal geometry and the original residual corner from the PR #950
+// replay. Its signed CW body sweep clears the raw hole; the full disc does not.
+PivotJoinLimits residualSignedLimits()
+{
+  const auto f32 = [](double x)
+  {
+    return static_cast<double>(static_cast<float>(x));
+  };
+  auto limits = shippedLimits(
+      {{-4.5, f32(.8)}, {4.5, f32(.8)}, {4.5, f32(6.8)}, {-4.5, f32(6.8)}},
+      {{{f32(2.7), f32(1.2)}, {f32(3.3), f32(1.2)}, {f32(3.3), f32(1.8)}, {f32(2.7), f32(1.8)}}});
+  limits.footprint = {{-.17, -.275}, {.53, -.275}, {.53, .275}, {-.17, .275}};
+  return limits;
+}
+
+Pts residualSignedCorner(double outgoing = 3.140918321144495)
+{
+  const double x = 2.454825207353694, y = .8013791580379307;
+  const double incoming = -.49087385212338086;
+  return {{x - .5 * std::cos(incoming), y - .5 * std::sin(incoming)},
+          {x, y},
+          {x + .5 * std::cos(outgoing), y + .5 * std::sin(outgoing)}};
+}
+
+TEST(ResidualSignedPivot, CertifiesClockwiseWithoutMovingOrReorderingAnyDirectedEdge)
+{
+  const auto limits = residualSignedLimits();
+  const auto pts = residualSignedCorner();
+  EXPECT_FALSE(pivotSweepFits(pts[1].first, pts[1].second, limits));
+  EXPECT_NEAR(distanceToRing(pts[1].first, pts[1].second, limits.recorded_obstacles[0]),
+              .4679843116952202,
+              1e-14);
+  std::vector<bool> twins(pts.size(), false);
+  const auto out = pivotSharpCorners(pts, M_PI / 3, limits, &twins);
+  const Pts expected{pts[0], pts[1], pts[1], pts[2]};
+  EXPECT_EQ(out, expected);
+  EXPECT_EQ(twins, (std::vector<bool>{false, false, true, false}));
+  const auto headings = pathHeadings(out);
+  ASSERT_EQ(headings.size(), expected.size());
+  EXPECT_NEAR(wrap(headings[2] - headings[1]), -2.6513931339117103, 1e-14);
+  EXPECT_EQ(pivotSharpCorners(out, M_PI / 3, limits), out);
+  EXPECT_FALSE(pivotSweepFits(pts[1].first, pts[1].second, limits))
+      << "the original full-disc API remains conservative";
+}
+
+TEST(ResidualSignedPivot, RefusesCounterclockwiseSectorThroughRawHole)
+{
+  // Both endpoint bodies clear; the shortest CCW sector crosses the raw hole.
+  const auto pts = residualSignedCorner(2.6);
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, residualSignedLimits()), pts);
+}
+
+TEST(ResidualSignedPivot, MissingMalformedOrInconsistentFootprintKeepsLegacyRefusal)
+{
+  const auto pts = residualSignedCorner();
+  for (const Pts& body : std::vector<Pts>{
+           {},
+           {{0, 0}, {.53, .275}},
+           {{0, 0}, {.2, 0}, {.53, 0}},
+           {{-.17, -.275}, {.53, .275}, {.53, -.275}, {-.17, .275}},
+           {{-.17, -.275}, {.53, -.275}, {std::numeric_limits<double>::quiet_NaN(), .275}},
+           {{-.17, -.275}, {.6, -.275}, {.6, .275}, {-.17, .275}}})
+  {
+    auto limits = residualSignedLimits();
+    limits.footprint = body;
+    EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts);
+  }
+  auto limits = residualSignedLimits();
+  limits.sweep_radius = .55;
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts);
+  limits = residualSignedLimits();
+  limits.boundary_margin = .55;
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts);
+}
+
+TEST(ResidualSignedPivot, InvalidRawContextRefusesAndEveryPassUsesItsCurrentRawHoles)
+{
+  const auto pts = residualSignedCorner();
+  auto limits = residualSignedLimits();
+  limits.recorded_boundary.clear();
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts);
+  limits = residualSignedLimits();
+  limits.recorded_obstacles.push_back({{0, 0}, {1, 1}});
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts);
+  limits = residualSignedLimits();
+  const auto [x, y] = pts[1];
+  limits.recorded_obstacles.push_back(
+      {{x - .01, y - .01}, {x + .01, y - .01}, {x + .01, y + .01}, {x - .01, y + .01}});
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts);
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, residualSignedLimits()).size(), pts.size() + 1);
+}
+
+TEST(ResidualSignedPivot, OuterBodyOverhangDoesNotAuthorizeAnOutsideReference)
+{
+  const auto limits = residualSignedLimits();
+  auto pts = residualSignedCorner();
+  for (auto& p : pts)
+    p.second -= .02;
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts);
+}
+
+TEST(ResidualSignedPivot, IsabeyExplicitFootprintRetainsTheExistingRouteCountBound)
+{
+  const auto recorded = isabeyRings();
+  f2c::types::Cell field(toRing(recorded.front()));
+  auto limits =
+      shippedLimits(recorded.front(), std::vector<Pts>(recorded.begin() + 1, recorded.end()));
+  limits.footprint = {{-.17, -.275}, {.53, -.275}, {.53, .275}, {-.17, .275}};
+  for (const auto& obstacle : limits.recorded_obstacles)
+    field.addRing(mowgli_coverage::bufferRingOutward(toRing(obstacle), .389));
+  const auto plan = planBoustrophedon(field, .16, .18, 5, 0, -1, .15);
+  const auto paths = buildContinuousSubPaths(
+      plan, plan.connector_clearance_boundary, .2, .2, .03, nullptr, {}, limits);
+  EXPECT_LE(paths.size(), 6u);
+  expectCornerContract(paths);
+  limits.footprint.clear();
+  const auto legacy = buildContinuousSubPaths(
+      plan, plan.connector_clearance_boundary, .2, .2, .03, nullptr, {}, limits);
+  const auto directed_geometry = [](SubPaths paths)
+  {
+    for (auto& path : paths)
+      path.erase(std::unique(path.begin(), path.end()), path.end());
+    return paths;
+  };
+  EXPECT_EQ(directed_geometry(paths), directed_geometry(legacy))
+      << "only bit-exact twins may be added; route order and every driven edge must survive";
+}
+
 TEST(PivotCorner, PathHeadingsGiveEachTwinItsOwnHeading)
 {
   const Pts pts = {{0.0, 0.0}, {0.0, 1.0}, {0.0, 1.0}, {0.5, 1.0}, {0.5, 1.0}, {0.5, 0.0}};
@@ -680,3 +809,34 @@ TEST(SharpRingCorner, GentleCornersKeepTheirArc)
 }
 
 }  // namespace
+
+TEST(ResidualSignedPivot, CollisionPaddingMatchesExecutionWithoutExpandingThePhysicalBand)
+{
+  auto limits = residualSignedLimits();
+  const auto pts = residualSignedCorner();
+  limits.collision_footprint = {{-.18, -.285}, {.54, -.285}, {.54, .285}, {-.18, .285}};
+  EXPECT_GT(std::hypot(.54, .285), limits.sweep_radius);
+  EXPECT_FALSE(pivotSweepFits(pts[1].first, pts[1].second, limits));
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits).size(), 4u);
+  limits.collision_footprint = {{-.1, -.1}, {.1, -.1}, {.1, .1}, {-.1, .1}};
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts)
+      << "a collision outline cannot shrink the physical body";
+}
+
+TEST(ResidualSignedPivot, PaddedOnlyContactRefusesTheSignedAlternative)
+{
+  auto limits = residualSignedLimits();
+  const auto pts = residualSignedCorner();
+  const double direction = -.49087385212338086 + std::atan2(.285, .54);
+  const double x = pts[1].first + .604 * std::cos(direction);
+  const double y = pts[1].second + .604 * std::sin(direction);
+  limits.recorded_obstacles.push_back({{x - .0005, y - .0005},
+                                       {x + .0005, y - .0005},
+                                       {x + .0005, y + .0005},
+                                       {x - .0005, y + .0005}});
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits).size(), 4u)
+      << "the added obstacle lies beyond the physical circumscribed radius";
+  limits.collision_footprint = {{-.18, -.285}, {.54, -.285}, {.54, .285}, {-.18, .285}};
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts)
+      << "Nav2 padding must be checked against raw holes exactly once";
+}

@@ -116,7 +116,31 @@ if(BUILD_TESTING)
 
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
+  find_package(diff_drive_controller REQUIRED)
+  find_package(yaml_cpp_vendor REQUIRED)
+  find_package(yaml-cpp REQUIRED)
 
+  ament_add_gtest(test_wheel_odom_interval test/test_wheel_odom_interval.cpp)
+  target_link_libraries(test_wheel_odom_interval
+    diff_drive_controller::diff_drive_controller yaml-cpp
+  )
+  target_compile_definitions(test_wheel_odom_interval PRIVATE
+    WHEEL_ODOM_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config_webots/ros2_control.yaml"
+  )
+
+  ament_add_pytest_test(test_cutting_tool_frame
+    test/test_cutting_tool_frame.py
+  )
+  ament_add_pytest_test(test_fake_hardware_blade_status
+    test/test_fake_hardware_blade_status.py
+    ENV ROS_DOMAIN_ID=186
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_sim_imu_provenance
+    test/test_sim_imu_provenance.py
+    ENV ROS_DOMAIN_ID=188
+    TIMEOUT 30
+  )
   ament_add_pytest_test(test_sim_navsat_rtk_fix
     test/test_sim_navsat_rtk_fix.py
   )
@@ -126,8 +150,17 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_e2e_ground_truth
     test/test_e2e_ground_truth.py
   )
+  ament_add_pytest_test(test_sim_mission_geometry
+    test/test_sim_mission_geometry.py
+  )
+  ament_add_pytest_test(test_e2e_no_lidar_validation
+    test/test_e2e_no_lidar_validation.py
+  )
   ament_add_pytest_test(test_nav2_readiness_gate
     test/test_nav2_readiness_gate.py
+  )
+  ament_add_pytest_test(test_kinematic_wheel_feedback
+    test/test_kinematic_wheel_feedback.py
   )
   ament_add_pytest_test(test_ground_truth_publisher
     test/test_ground_truth_publisher.py

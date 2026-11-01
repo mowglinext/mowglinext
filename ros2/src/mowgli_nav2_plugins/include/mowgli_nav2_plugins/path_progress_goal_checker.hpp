@@ -34,18 +34,15 @@
 // entirely inside the goal tolerance and completes on proximity, as the
 // short_path_poses paths already do.
 //
-// The plugin subscribes to the FTC controller's republished
-// `<plugin_name>/global_plan` topic so it always has the latest path
-// for index-tracking. Resets the max-reached index on a new path,
-// detected by pose-count change OR the front pose moving more than 2 m.
-// header.stamp is intentionally ignored — it is unreliable when
-// controller_server forwards a stale plan and would defeat the
-// republish-tolerance that keeps the index monotonic across per-tick
-// republishes.
+// FTC binds its complete working plan directly at compute time. reset() revokes
+// that binding until the controller supplies the current plan again. Topic
+// updates remain a legacy input before the first reset/binding, but cannot
+// replace controller-owned progress or identify a new action.
 
 #ifndef MOWGLI_NAV2_PLUGINS__PATH_PROGRESS_GOAL_CHECKER_HPP_
 #define MOWGLI_NAV2_PLUGINS__PATH_PROGRESS_GOAL_CHECKER_HPP_
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -82,6 +79,14 @@ public:
 
   void reset() override;
 
+  /// Called only by the selected FTC controller, on its control thread. The
+  /// owner and revision identify a plan independently of DDS delivery/stamps.
+  /// Repeated calls for the same binding do not copy the plan or reset progress.
+  void bindControllerPlan(const void* owner,
+                          uint64_t revision,
+                          const std_msgs::msg::Header& header,
+                          const std::vector<geometry_msgs::msg::PoseStamped>& poses);
+
   bool isGoalReached(const geometry_msgs::msg::Pose& query_pose,
                      const geometry_msgs::msg::Pose& goal_pose,
                      const geometry_msgs::msg::Twist& velocity,
@@ -100,6 +105,11 @@ private:
   friend class PathProgressGoalCheckerTest;
   friend class PathProgressEndApproachTest;
   void onPath(nav_msgs::msg::Path::SharedPtr msg);
+  void resetProgress();
+  bool isGoalReachedImpl(const geometry_msgs::msg::Pose& query_pose,
+                         const geometry_msgs::msg::Pose& goal_pose,
+                         const nav_msgs::msg::Path& transformed_global_plan,
+                         bool check_yaw);
   // Path length from the furthest monotonically-reached point to the last pose.
   double remainingPathLength(const geometry_msgs::msg::Point& robot) const;
 
@@ -108,6 +118,7 @@ private:
   std::shared_ptr<rclcpp::Clock> clock_;
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::string query_frame_;
+  std::string base_frame_;
   std::string path_frame_;
 
   // Parameters
@@ -133,6 +144,10 @@ private:
   // State guarded by mutex_ (controller_server may call isGoalReached
   // from one thread while the topic callback fires on another).
   std::mutex mutex_;
+  bool controller_plan_required_{false};
+  bool controller_plan_bound_{false};
+  const void* controller_plan_owner_{nullptr};
+  uint64_t controller_plan_revision_{0};
   std::vector<geometry_msgs::msg::PoseStamped> path_poses_;
   // Arc length from the first pose to each pose of path_poses_ (same size,
   // element 0 = 0). Rebuilt with path_poses_ in onPath().

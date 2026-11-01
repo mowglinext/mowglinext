@@ -222,11 +222,12 @@ protected:
   {
     geometry_msgs::msg::TransformStamped tf;
     tf.header.frame_id = "map";
+    tf.header.stamp = ctx->node->now();
     tf.child_frame_id = "base_footprint";
     tf.transform.translation.x = x;
     tf.transform.translation.y = y;
     tf.transform.rotation.w = 1.0;
-    ctx->tf_buffer->setTransform(tf, "test", /*is_static=*/true);
+    ctx->tf_buffer->setTransform(tf, "test", /*is_static=*/false);
   }
 
   /// What PlanCoverageArea leaves on the context: the sub-paths, their
@@ -433,6 +434,9 @@ TEST_F(TransitNonBlockingTest, ADerivedBoundDoesNotCutANormalTransitShort)
       },
       2.0);
   EXPECT_FALSE(navigate->isCanceling(0));
+  // Action success represents actual arrival, independently checked by the
+  // production entry guard. Publish the fresh supported pose at the goal.
+  setRobot(5.0, 0.0);
   navigate->succeed(0);
 
   // Assert

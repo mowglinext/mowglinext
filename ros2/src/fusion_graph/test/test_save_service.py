@@ -7,10 +7,11 @@ from pathlib import Path
 import subprocess
 import time
 
-import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
+import rclpy
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from sensor_msgs.msg import Imu
 from std_srvs.srv import Trigger
 
 
@@ -38,6 +39,7 @@ def test_save_result_and_executor_progress(tmp_path):
         PoseWithCovarianceStamped, '/fusion_graph_node/set_pose',
         QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
     wheel = client_node.create_publisher(Odometry, '/wheel_odom', 50)
+    imu = client_node.create_publisher(Imu, '/imu/data', 50)
 
     def pump_until(predicate, timeout=10.0, moving=False):
         deadline = time.monotonic() + timeout
@@ -48,6 +50,11 @@ def test_save_result_and_executor_progress(tmp_path):
                 message.header.stamp = client_node.get_clock().now().to_msg()
                 message.twist.twist.linear.x = 0.5
                 wheel.publish(message)
+                # Source-mode integration needs an IMU baseline and consumed
+                # intervals; wheel callbacks alone do not advance its epoch.
+                motion = Imu()
+                motion.header.stamp = message.header.stamp
+                imu.publish(motion)
             rclpy.spin_once(client_node, timeout_sec=0.02)
             if predicate():
                 return

@@ -147,6 +147,11 @@ if(BUILD_TESTING)
     INSTALL_RPATH "/opt/fields2cover-300/lib"
   )
 
+  # Private sparse headland-ring seam and its geometric rollback controls.
+  ament_add_gtest(test_ring_corner_smoothing test/test_ring_corner_smoothing.cpp)
+  target_include_directories(test_ring_corner_smoothing PRIVATE src)
+  target_link_libraries(test_ring_corner_smoothing ${PROJECT_NAME}_core Fields2Cover::Fields2Cover)
+
   # Operator-chosen start point: where a ring closes, the outermost ring first, the
   # pinned first sub-path. Real F2C v3, no ROS.
   ament_add_gtest(test_start_point test/test_start_point.cpp)
@@ -178,6 +183,7 @@ if(BUILD_TESTING)
   # Passive exact snapshots must not change the planner or connector output.
   ament_add_gtest(test_planning_trace test/replay/test_trace.cpp)
   target_link_libraries(test_planning_trace ${PROJECT_NAME}_core Fields2Cover::Fields2Cover)
+  ament_add_gtest(test_semantic_diagnostics test/replay/test_semantic_diagnostics.cpp)
 
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   include(test/replay/configure_replay.cmake)

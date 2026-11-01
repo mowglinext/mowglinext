@@ -29,19 +29,13 @@
 //   7. Force PWM=0 on a stopped-target wheel once |actual| < hold_thresh_mps,
 //      matching the real firmware's residual-hum suppression.
 //   8. Forward kinematics recombine (left_actual, right_actual) into the
-//      ACHIEVABLE body twist — this is what actually reached the chassis.
+//      modelled achievable twist used as the downstream wheel setpoint.
 //
-// Ported from (and MUST be kept in lockstep with) the identical Python model
-// in ros2/src/mowgli_simulation/mowgli_simulation/kinematic_drive.py::
-// __simulate_firmware_motor_model, which drives the Webots body teleport +
-// IMU from raw /cmd_vel every physics tick. This C++ copy runs on the same
-// raw /cmd_vel (after the host angular-rate PI, matching what the real
-// firmware receives over the wire) to produce /cmd_vel_wheels for the ideal
-// ros2_control diff_drive_controller, so /wheel_odom_raw reflects the same
-// actuation dynamics the body pose and IMU already do. See
-// sim_actuation_node.cpp for the rest of the pipeline and
-// sim_full_system.launch.py for why /cmd_vel_wheels exists as a topic
-// separate from /cmd_vel.
+// sim_actuation_node is the sole model owner. Its /cmd_vel_wheels output
+// is a setpoint for ros2_control, whose limits and native joint dynamics may
+// further constrain motion. KinematicDrive observes actual PositionSensors;
+// it does not run an independent Python model or integrate this command as
+// chassis truth. See sim_actuation_node.cpp and webots_minimal.launch.py.
 //
 // Default gains mirror firmware/stm32/ros_usbnode/{include/board.h,
 // src/ros/ros_custom/cpp_main.cpp} — coordinate changes with Firmware.

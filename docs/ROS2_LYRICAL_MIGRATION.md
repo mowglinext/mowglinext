@@ -36,7 +36,8 @@ Les compilations s'exécutent sous un utilisateur non privilégié.
 
 ## Dépendances reproductibles
 
-Les paquets manquants du dépôt binaire Lyrical sont construits par
+Les dépendances manquantes du dépôt binaire Lyrical et le contrôleur RotationShim
+corrigé sont construits par
 `ros2/scripts/build_lyrical_vendor.sh`, commun à Docker et à la CI, dans
 `/opt/lyrical_vendor`. Le script ne modifie aucun sous-module du projet. Les constructions Docker
 utilisent des caches par architecture pour conserver les compilations après un échec.
@@ -50,11 +51,17 @@ Les seuls correctifs appliqués à Fields2Cover sont des inclusions standard man
 | grid_map | `7ae24725d7effa0c22a23524b91b46bada5b2728` |
 | Beluga | `22adc90e08cc7229cde042a756f044b908600fed` |
 | Sophus | `de0f8d3d92bf776271e16de56d1803940ebccab9` |
-| Nav2 Smac | `a6354f3f39d12c6e5c3e323f8021c831752edb23`, tag 1.5.1 |
+| Nav2 Smac / RotationShim | `a6354f3f39d12c6e5c3e323f8021c831752edb23`, correctif local des contrôles de collision RotationShim |
 | LD19/LDLiDAR | `4ee53a8b176037cf418a54b25007075bb2b1d3a0`, v0.3.0, adaptation lifecycle Nav2 |
 | RPLidar | `24cc9b6dea97e045bda1408eaa867ce730fd3fc3` |
 | STL27L | `bf668a89baf722a787dadc442860dcbf33a82f5a` |
 | webots_ros2 | `db4a77c84ee91445d39de9a631e5b57a888814e2`, simulation seulement |
+
+RotationShim est superposé au paquet binaire dans `/opt/lyrical_vendor`; RPP
+reste binaire. Le correctif vérifie les arcs commandés avant de libérer la
+rotation et propage un refus de collision. Le test enregistré
+`test_rotation_shim_collision` distingue le binaire original du correctif;
+voir la matrice dans `MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
 
 L'ancienne copie Fields2Cover v2, inutilisée, n'est plus construite. L'image
 `ros2/Dockerfile.dev`, orpheline et divergente, est retirée ; utiliser

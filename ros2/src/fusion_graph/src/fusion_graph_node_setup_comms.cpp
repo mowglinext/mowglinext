@@ -58,9 +58,10 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
                           [this]()
                           {
-                            if (!pose_extrap_.HasFusionPose())
-                              return;
+                            ObserveMotionClockEpoch();
                             const double now_s = this->now().seconds();
+                            if (!FastPoseSourceIsCurrent(now_s))
+                              return;
                             auto extrap = pose_extrap_.Extrapolate(now_s);
                             if (!extrap)
                               return;
@@ -316,10 +317,6 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
           return;
         }
 
-        // A stationary robot produces no COG. Keep the graph's last heading so
-        // the next accepted GPS position can restore map->odom immediately;
-        // subsequent COG/mag factors still refine this bootstrap yaw.
-        const auto pre_clear_snapshot = graph_->LatestSnapshot();
         // The clear operation must survive a container restart. Previously it
         // reset RAM only, so the next boot silently loaded the old graph and
         // restored the localization state the operator had just discarded.
@@ -331,49 +328,17 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
           RCLCPP_ERROR(get_logger(), "fusion_graph: %s", resp->message.c_str());
           return;
         }
-        graph_->Reset();
-        // Drop the latched position seed so a pre-clear GPS fix cannot put the
-        // new graph back at the position the operator was trying to escape.
-        // Heading is safe to retain: a stationary robot cannot produce a new
-        // COG, and it is refined as soon as COG/magnetometer observations resume.
-        seed_xy_.reset();
-        seed_yaw_ = pre_clear_snapshot ? std::optional<double>(pre_clear_snapshot->pose.theta())
-                                       : std::nullopt;
-        seed_xy_rtk_fixed_ = false;
-        gnss_observation_tracker_.Reset();
-        last_rtk_fixed_stamp_.reset();
-        last_usable_gnss_stamp_.reset();
-        last_gps_map_xy_.reset();
-        ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
-        // Re-zero the dead-reckoning frame. Without this the odom→base
-        // transform keeps whatever offset it had accumulated (observed
-        // 74 m), so map→odom = graph_pose ∘ dr⁻¹ still has the huge
-        // lever arm that amplifies any graph-vs-DR yaw difference into
-        // metres of map-pose jump — i.e. clearing the graph alone does
-        // NOT stop the robot from "sliding". Resetting dr_* collapses
-        // the lever arm to zero so map→odom tracks the fresh graph
-        // directly. The odom→base TF jumps here, but clear_graph is an
-        // explicit operator escape hatch (robot parked), so the local
-        // costmap discontinuity is acceptable and self-heals on the
-        // next costmap clear.
-        {
-          // tf_state_mu_: dr_* / anchor are read concurrently by
-          // TfBroadcastLoop — reset them atomically so the loop never
-          // sees zeroed dr_* paired with a stale (still-valid) anchor.
-          std::lock_guard<std::mutex> lock(tf_state_mu_);
-          dr_x_ = 0.0;
-          dr_y_ = 0.0;
-          dr_yaw_ = 0.0;
-          ResetLidarTiming();
-          t_map_odom_anchor_valid_ = false;
-        }
+        // Explicit clear retains only a supported current-source heading and
+        // input baseline, so stationary recovery still needs a genuinely new
+        // GNSS position but does not require motion to produce another COG.
+        ResetForExplicitGraphClear();
         // A docked graph does not consume live GPS as a bootstrap position: the
         // calibrated dock pose is authoritative. Re-seed it synchronously so a
         // clear at the station never leaves map->odom absent indefinitely.
         if (last_is_charging_valid_ && last_is_charging_)
         {
           SeedFromDockPose();
-          dock_seeded_this_session_ = true;
+          dock_seeded_this_session_ = graph_->IsInitialized();
         }
         resp->success = true;
         resp->message = graph_->IsInitialized()
@@ -388,14 +353,10 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
   tick_timer_ = create_wall_timer(std::chrono::duration<double>(timer_period_s),
                                   std::bind(&FusionGraphNode::OnTimer, this));
 
-  // Maintenance timer at 30 s: dispatch iSAM2 rebasing. This operation
-  // rebuilds the Bayes tree from ~50k PriorFactors — ~1 s of CPU
-  // that used to block the executor and stall the map→odom TF
-  // (observed 2026-05-14, caused DockRobot to abort with
-  // `Transform data too old`). Dispatch it to a detached worker so
-  // the callback returns immediately; GraphManager::RebaseISAM2
-  // now does the heavy reconstruction outside the graph mutex and
-  // only takes the lock briefly to replay pending factors + swap.
+  // Maintenance timer at 30 s: rebuild outside the executor/graph lock.
+  // Count acquisition poses too: stationary throttling can add many GNSS
+  // states between cadence nodes. The window budget is checked each maintenance
+  // period, so transient growth before that check remains possible.
   maintenance_timer_ =
       create_wall_timer(std::chrono::seconds(30),
                         [this]()
@@ -403,7 +364,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                           if (!graph_->IsInitialized())
                             return;
                           const auto stats = graph_->Stats();
-                          if (stats.total_nodes - last_rebase_index_ < isam2_rebase_every_nodes_)
+                          if (stats.total_nodes - last_rebase_index_ < isam2_rebase_every_nodes_ &&
+                              !graph_->NeedsSourceRebase())
                             return;
                           bool expected = false;
                           if (!rebase_in_flight_->compare_exchange_strong(expected, true))
@@ -517,6 +479,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         add("gps_rejects_stuck_value", std::to_string(stats.gps_rejects_stuck_value));
         add("stationary_hand_push", std::to_string(stats.stationary_hand_push));
         add("slip_veto", std::to_string(stats.slip_veto));
+        add("cog_flip_source_rejects", std::to_string(cog_flip_source_rejects_));
+        add("cog_flip_pending", std::to_string(pending_cog_flip_checks_.size()));
         add("live_nodes", std::to_string(graph_->LiveNodeCount()));
         // Gyro bias telemetry (item #3).
         {

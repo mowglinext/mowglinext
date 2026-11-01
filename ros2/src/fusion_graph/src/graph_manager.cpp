@@ -17,6 +17,8 @@
 #include <sstream>
 
 #include "fusion_graph/factors.hpp"
+#include "graph_heading_seed.hpp"
+#include "source_bootstrap_state.hpp"
 #include <gtsam/base/GenericValue.h>
 #include <gtsam/base/serialization.h>
 #include <gtsam/linear/NoiseModel.h>
@@ -41,7 +43,7 @@ namespace fusion_graph
 bool GraphManager::HasPoseAt(uint64_t idx) const
 {
   // valueExists is O(1); avoids the cost of try/catch on a missing key.
-  return isam_.valueExists(PoseKey(idx));
+  return isam_->valueExists(PoseKey(idx));
 }
 
 gtsam::Pose2 GraphManager::PoseAt(uint64_t idx) const
@@ -50,7 +52,7 @@ gtsam::Pose2 GraphManager::PoseAt(uint64_t idx) const
   // calculateEstimate() copy that returns ALL pose values.
   try
   {
-    return isam_.calculateEstimate<gtsam::Pose2>(PoseKey(idx));
+    return isam_->calculateEstimate<gtsam::Pose2>(PoseKey(idx));
   }
   catch (const std::exception&)
   {
@@ -65,7 +67,7 @@ void GraphManager::RefreshEstimateLocked() const
   // periodic checkpoint).
   if (!estimate_dirty_)
     return;
-  current_estimate_ = isam_.calculateEstimate();
+  current_estimate_ = isam_->calculateEstimate();
   estimate_dirty_ = false;
 }
 
@@ -79,7 +81,7 @@ GraphManager::GraphManager(const GraphParams& params)
   p.optimizationParams = gtsam::ISAM2GaussNewtonParams(0.001);
   p.relinearizeThreshold = 0.05;
   p.relinearizeSkip = std::max(1, params_.isam2_relinearize_skip);
-  isam_ = gtsam::ISAM2(p);
+  isam_ = std::make_unique<gtsam::ISAM2>(p);
 }
 
 gtsam::SharedNoiseModel GraphManager::MakeDiagonal(const std::vector<double>& sigmas)
@@ -95,6 +97,10 @@ void GraphManager::AddWheelTwist(double vx, double vy, double wz, double dt)
   if (dt <= 0.0)
     return;
   std::lock_guard<std::mutex> lock(mu_);
+  // Source-bound process windows contain accepted consumed intervals. A
+  // receipt interval can cross any source commit or extend beyond its head.
+  if (motion_ && motion_->baseline_set)
+    return;
   // Body-frame integration. Yaw is integrated separately because gyro
   // is so much better than wheel-derived yaw on a differential drive.
   // We integrate wheel position assuming the yaw was constant over dt
@@ -102,21 +108,23 @@ void GraphManager::AddWheelTwist(double vx, double vy, double wz, double dt)
   // the between-factor noise absorbs.
   accum_.dx += vx * dt;
   accum_.dy += vy * dt;
+  accum_.wheel_travel_m += std::hypot(vx, vy) * dt;
   accum_.dtheta_wheel += wz * dt;
   accum_.dt_total += dt;
 }
 
-void GraphManager::AddGyroDelta(double wz, double dt)
+double GraphManager::AddGyroDelta(double wz, double dt)
 {
   if (dt <= 0.0)
-    return;
+    return 0.0;
   std::lock_guard<std::mutex> lock(mu_);
+  const bool source_bound = motion_ && motion_->baseline_set;
 
   // Track the running maximum on the RAW sample for the multi-source
   // stationary gate (item #1). Done before bias subtraction so a
   // drifty bias can't mask a real manual rotation.
   const double abs_wz_raw = std::abs(wz);
-  if (abs_wz_raw > accum_.max_abs_gyro_rad_per_s)
+  if (!source_bound && abs_wz_raw > accum_.max_abs_gyro_rad_per_s)
     accum_.max_abs_gyro_rad_per_s = abs_wz_raw;
 
   // Online gyro bias estimation (item #3, pragmatic). When the last
@@ -144,6 +152,10 @@ void GraphManager::AddGyroDelta(double wz, double dt)
   const double bias_correction = params_.use_imu_preint
                                      ? current_bias_estimate_
                                      : (params_.gyro_bias_estimation_enabled ? gyro_bias_z_ : 0.0);
+  // Keep the existing callback EMA/correction policy. The source ledger adds
+  // this sample only after its complete consumed interval is accepted.
+  if (source_bound)
+    return bias_correction;
   const double wz_corrected = wz - bias_correction;
   accum_.dtheta_gyro += wz_corrected * dt;
 
@@ -152,11 +164,16 @@ void GraphManager::AddGyroDelta(double wz, double dt)
   // ω itself. Independent of which bias correction is applied above.
   if (params_.use_imu_preint)
   {
-    accum_.gyro_preint_dtheta += wz_corrected * dt;
+    // The factor's bias variable is absolute, not an increment around this
+    // window's prediction bias. Keep the raw integral here so the factor
+    // subtracts that bias exactly once. Only the pose prediction above uses
+    // wz_corrected; pre-correcting this integral would subtract it twice.
+    accum_.gyro_preint_dtheta += wz * dt;
     accum_.gyro_preint_dt += dt;
     const double sigma = params_.gyro_noise_density_rad_per_s;
     accum_.gyro_preint_variance += dt * dt * sigma * sigma;
   }
+  return bias_correction;
 }
 
 bool GraphManager::QueueGnss(
@@ -202,6 +219,13 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
                               std::optional<double> sigma_xy_override)
 {
   std::lock_guard<std::mutex> lock(mu_);
+  InitializeLocked(X0, timestamp, sigma_xy_override);
+}
+
+void GraphManager::InitializeLocked(const gtsam::Pose2& X0,
+                                    double timestamp,
+                                    std::optional<double> sigma_xy_override)
+{
   if (initialized_)
     return;
 
@@ -215,7 +239,8 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
 
   auto k0 = PoseKey(0);
   new_values_.insert(k0, X0);
-  new_factors_.add(gtsam::PriorFactor<gtsam::Pose2>(k0, X0, prior_noise));
+  auto prior = std::make_shared<gtsam::PriorFactor<gtsam::Pose2>>(k0, X0, prior_noise);
+  new_factors_.add(prior);
 
   // When IMU preintegration is on, seed the bias state at 0 with a
   // loose prior. iSAM2 refines it from the very first preint factor.
@@ -229,7 +254,7 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
     new_factors_.add(gtsam::PriorFactor<double>(k_bias0, 0.0, bias_prior_noise));
   }
 
-  isam_.update(new_factors_, new_values_);
+  isam_->update(new_factors_, new_values_);
   estimate_dirty_ = true;
   new_factors_.resize(0);
   new_values_.clear();
@@ -239,6 +264,10 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
   node_time_index_.clear();
   node_time_index_.emplace_back(timestamp, 0);
   initialized_ = true;
+  heading_seed_ = std::make_shared<HeadingSeedState>();
+  heading_seed_->prior = std::move(prior);
+  heading_seed_->pose = X0;
+  heading_seed_->sigma_xy = sigma_xy;
 
   TickOutput out;
   out.pose = X0;
@@ -276,7 +305,8 @@ uint64_t GraphManager::LiveNodeCount() const
   uint64_t n = 0;
   for (const auto& kv : current_estimate_)
   {
-    if (gtsam::Symbol(kv.key).chr() == 'x')
+    const char kind = gtsam::Symbol(kv.key).chr();
+    if (kind == 'x' || kind == 'a')
       ++n;
   }
   return n;
@@ -344,15 +374,28 @@ void GraphManager::ForceAnchor(uint64_t node_index,
   auto noise = MakeDiagonal({sigma_xy, sigma_xy, sigma_theta});
   gtsam::NonlinearFactorGraph fg;
   fg.add(gtsam::PriorFactor<gtsam::Pose2>(PoseKey(node_index), pose, noise));
+  std::shared_ptr<SourceBootstrapState> anchored_bootstrap;
+  const bool provisional = motion_ && motion_->bootstrap && motion_->bootstrap->provisional;
+  if (provisional)
+  {
+    anchored_bootstrap = std::make_shared<SourceBootstrapState>(*motion_->bootstrap);
+    anchored_bootstrap->request.extra_factors.push_back(fg[0]);
+  }
   if (!ApplyIsamUpdateLocked(fg, gtsam::Values()))
   {
     return;  // ill-posed reset; latest_ is now null, nothing to anchor
   }
+  if (anchored_bootstrap)
+    motion_->bootstrap.swap(anchored_bootstrap);
   estimate_dirty_ = true;
-  // Update latest_ snapshot so PublishOutputs sees the new pose.
-  if (latest_ && latest_->node_index == node_index)
+  // Any live anchor can change the latest optimized state, even when the
+  // prior was attached to an older node. Refresh the published snapshot and
+  // advance its revision without changing its source or schedule timestamps.
+  if (latest_)
   {
-    latest_->pose = PoseAt(node_index);
+    latest_->pose = PoseAt(latest_->node_index);
+    latest_->covariance = isam_->marginalCovariance(PoseKey(latest_->node_index));
+    ++latest_->revision;
   }
 }
 

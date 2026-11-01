@@ -11,6 +11,7 @@
 | Map RTK state from `/gps/status` vs NavSatFix fallback into `AbsolutePose.flags` | `ros2/src/mowgli_localization/include/mowgli_localization/navsat_projection_utils.hpp` (`ResolveAbsolutePoseFlags`, `HasAuthoritativeRtkPoseState`) |
 | Datum handling / `set_datum` service | `navsat_to_absolute_pose_node.cpp` `on_set_datum()` L152–183, `wgs84_to_enu()` L440 |
 | COG yaw wrong during reverse / turns, lever-arm de-bias, σ_yaw model | `ros2/src/mowgli_localization/include/mowgli_localization/cog_yaw_math.hpp` (`compute_cog_body_yaw`, `cog_sweep_dominates`, `cog_latch_rotation_increment`) then `src/cog_to_imu_node.cpp` `on_fix()` L317 |
+| Delayed COG motion provenance / direction changes inside a baseline | `include/mowgli_localization/cog_motion_history.hpp`; `cog_to_imu_node.cpp` source-stamped wheel/gyro callbacks and `on_fix`; `test_cog_motion_history.cpp`, actual publisher regression `test_cog_source_motion_node.cpp` |
 | Stationary yaw latch republish / staleness after pivots | `src/cog_to_imu_node.cpp` `republish_latched_when_stationary()` L573; params L120–161 |
 | Online magnetometer hard-iron refit (writes `mag_calibration.yaml`) | `src/cog_to_imu_node.cpp` `maybe_refit_mag()` L707, `write_mag_cal()` L876 |
 | Tilt-compensated mag yaw, declination, calibration reload | `ros2/src/mowgli_localization/src/mag_yaw_publisher_node.cpp` `on_mag()`, `reload_cal_if_needed()` L123 |
@@ -35,6 +36,7 @@
 | `package.xml` | 50 | Deps (rclcpp, rclcpp_action, tf2*, mowgli_interfaces, yaml-cpp); description text is stale (see Pitfalls) |
 | `config/wheel_odometry.yaml` | 18 | `wheel_odometry` params (0.325 m / 399 ticks/m / `publish_tf: false`); loaded by no launch file, pinned by `test_tf_ownership.py` |
 | **`include/mowgli_localization/`** | | |
+| `cog_motion_history.hpp` | | Bounded source-stamped held wheel/gyro context, baseline direction transitions and source-time rotation; explicit coverage misses and clock epochs |
 | `cog_yaw_math.hpp` | 166 | Pure COG→body-heading algebra, sweep-dominance gate, latch rotation increment |
 | `delta_gate.hpp` | 163 | Pure `DeltaGate`: jump-reject + EMA + stale-latch re-seed for map→odom yaw Δ (issue #390) |
 | `dock_cog_gate.hpp` | 184 | Pure circular mean/std + `evaluate_dock_cog_gate()` (dock yaw = reversed RTK travel bearing) |
@@ -142,6 +144,7 @@ ros2/build/mowgli_localization/test_cog_yaw_math
 ```
 Unit tests (all `ament_add_gtest`, `CMakeLists.txt` L254–349; no launch_testing in this package):
 - `test_wheel_odometry` — differential-drive integration math (helper mirrors `on_wheel_tick()`).
+- `test_cog_motion_history` / `test_cog_source_motion_node` — delayed reverse/forward motion provenance, source rotation, invalid/reordered inputs, clock rewind and actual ROS heading publications.
 - `test_cog_yaw_math` — reverse-motion yaw fix (2026-05-27 incident), sweep gate, latch staleness.
 - `test_costmap_scan_filter` — links `sensor_msgs` only; the two static helpers are **copied** into the test (L19–23 comment) — keep in sync with `costmap_scan_filter_node.cpp` L217/L250 by hand.
 - `test_navsat_projection_utils` — typed `/gps/status` beats NavSatFix status.

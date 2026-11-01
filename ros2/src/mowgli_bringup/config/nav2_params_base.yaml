@@ -101,7 +101,7 @@ controller_server:
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker",
-                           "coverage_axis_goal_checker"]
+                           "coverage_axis_goal_checker", "coverage_entry_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
     path_handler_plugins: ["PathHandler"]
     PathHandler:
@@ -154,6 +154,15 @@ controller_server:
       xy_goal_tolerance: 0.30
       yaw_goal_tolerance: 3.14
       stateful: true
+
+    # Unit entry only: paired with FollowStrip's independent pose predicate.
+    # Non-stateful XY prevents a terminal rotation drifting outside 3 cm from
+    # retaining an earlier XY success. Default docking/legacy transit unchanged.
+    coverage_entry_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.03
+      yaw_goal_tolerance: 0.30
+      stateful: false
 
     # Coverage strip endpoint validation.
     #
@@ -309,6 +318,10 @@ controller_server:
       # STALE point and oscillates / runs to a wrong heading and never aligns
       # (root cause hardware-confirmed 2026-06-20; see use_rotate_to_heading below).
       rotate_to_heading_once: true
+      # Choose the longer initial arc only after checking both complete local
+      # footprint sweeps. Requires raw mapped holes in the local costmap.
+      # Startup-only vendor capability; terminal goal rotation is unchanged.
+      allow_alternate_initial_rotation: true
       # Terminal pivot. With this false, neither RotationShim (start-of-path
       # only) nor RPP (mid-path, rotate_to_heading_min_angle: 0.785 rad =
       # 45°) does anything when the navigation ends with a yaw error in the
@@ -463,6 +476,11 @@ controller_server:
       # freshly recomputed PID cannot jump directly from 0 to ±max_cmd_vel_ang.
       # At the 10 Hz controller rate, 1.0 rad/s² changes omega by ~0.1 per tick.
       obstacle_restart_angular_acceleration: 1.0
+      # Assumed STOP-response integral bound for FTC's forward geometry and
+      # lattice lethal-cell sweeps; geometry applies independently of obstacles.
+      # Not a measured physical stopping guarantee. Lower only with validated
+      # response evidence; accepted startup/live range [0.01, 2.0] seconds.
+      obstacle_coast_time_bound_s: 0.5
       min_speed_mps: 0.15
       # Anti-wheelspin / traction control. When the carrot commands forward speed
       # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
@@ -1045,6 +1063,9 @@ local_costmap:
       # so the publish thread stays idle and isCurrent() never flips true.
       always_send_full_costmap: true
       footprint: "[[0.50, 0.20], [0.50, -0.20], [-0.10, -0.20], [-0.10, 0.20]]"
+      # Nav2's existing default, explicit so collision-monitor subpolygons
+      # derive the SAME padded body rather than assuming an unpadded outline.
+      footprint_padding: 0.01
       resolution: 0.05
       rolling_window: true
       # 12×12 m local costmap. The 13 m headland walk plus the controller's

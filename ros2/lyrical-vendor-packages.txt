@@ -18,6 +18,7 @@ ros-lyrical-cv-bridge
 ros-lyrical-filters
 ros-lyrical-nav2-common
 ros-lyrical-nav2-core
+ros-lyrical-nav2-controller
 ros-lyrical-nav2-util
 ros-lyrical-nav2-ros-common
 ros-lyrical-rosbag2-cpp

@@ -16,7 +16,9 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "behaviortree_cpp/behavior_tree.h"
@@ -24,7 +26,13 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
+#include "mowgli_interfaces/motion_geometry_types.hpp"
 #include "rclcpp/rclcpp.hpp"
+
+namespace mowgli_interfaces::motion
+{
+struct Snapshot;
+}
 
 namespace mowgli_behavior
 {
@@ -92,13 +100,13 @@ namespace mowgli_behavior
 /// The blade check is re-run on EVERY tick, not just at entry: if the blade
 /// state goes stale or reads enabled mid-manoeuvre, the escape stops
 /// immediately and publishes zero.
+/// A fresh map-frame pose, configured chassis footprint and unchanged transit
+/// geometry must authorize the full straight sweep. There is no exemption for
+/// starting outside the recorded reference-point region.
 class EscapeStartBlocked : public BT::StatefulActionNode
 {
 public:
-  EscapeStartBlocked(const std::string& name, const BT::NodeConfig& config)
-      : BT::StatefulActionNode(name, config)
-  {
-  }
+  EscapeStartBlocked(const std::string& name, const BT::NodeConfig& config);
 
   static BT::PortsList providedPorts()
   {
@@ -116,7 +124,7 @@ public:
   /// parameter: this is a safety precondition, not a tuning knob.
   static constexpr double kBladeStateMaxAgeSec = 2.0;
 
-  /// Upper clamp on the per-tick dt used to integrate the distance budget [s].
+  /// Maximum permitted interval between executing ticks [s]; larger gaps stop.
   /// A scheduling hiccup must not be able to charge several tenths of a metre
   /// to the budget in one tick (which would end the escape early — safe) nor,
   /// with a negative clock step, un-charge it (which would not).
@@ -129,12 +137,39 @@ public:
   /// recovery.
   static constexpr double kSignalHoldoffSec = 1.0;
 
+  // Conservative intended-command horizon: shipped mux navigation timeout
+  // 0.6 s + firmware cmd_vel watchdog 0.2 s, with additional margin. Collision
+  // monitor source_timeout (1.5 s) is SENSOR freshness, not a command lease.
+  // Transport delays and changed downstream timeouts are not proved here;
+  // this is not a physical stopping-distance or final actuator guarantee.
+  static constexpr double kCommandHoldEnvelopeSec = 2.5;
+
 private:
   /// Publish one TwistStamped on /cmd_vel_nav (zero angular — this is a
   /// straight-line nudge, never a turn).
   void publishForward(const std::shared_ptr<BTContext>& ctx, double vx);
   /// Publish a single zero command and log the manoeuvre summary.
   void finish(const std::shared_ptr<BTContext>& ctx, const char* reason);
+  bool readPose(const std::shared_ptr<BTContext>& ctx, mowgli_interfaces::motion::Pose& pose);
+
+  // Shared callback storage outlives an in-flight subscription callback. Its
+  // lock covers both authorization and publication, so revocation cannot be
+  // processed between checking a snapshot and issuing its command.
+  struct GeometryState
+  {
+    std::mutex mutex;
+    std::shared_ptr<const mowgli_interfaces::motion::Snapshot> snapshot;
+    uint64_t generation{0};
+  };
+  std::shared_ptr<GeometryState> geometry_{std::make_shared<GeometryState>()};
+  rclcpp::SubscriptionBase::SharedPtr geometry_sub_;
+  mowgli_interfaces::motion::Ring footprint_;
+  std::string authorized_identity_;
+  uint64_t authorized_generation_{0};
+  mowgli_interfaces::motion::Pose start_pose_{};
+  mowgli_interfaces::motion::Pose last_pose_{};
+  double measured_travel_{0.0};
+  std::chrono::steady_clock::time_point started_{};
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_;
   StartBlockedEscapeCfg cfg_{};

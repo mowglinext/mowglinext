@@ -11,11 +11,8 @@
 //   3. Run iSAM2 update.
 //   4. Return the latest optimized Pose2 + marginal covariance.
 //
-// The sliding window is implemented as a fixed-lag smoother (we keep
-// the full graph but never reorder nodes older than the window). The
-// plan called for explicit marginalization; that's a future cleanup —
-// for now iSAM2's incremental Bayes-tree handles the cost adequately
-// at our graph sizes (a few thousand nodes max per session).
+// Periodic rebases marginalize removed history into a linear separator
+// factor and retain the original nonlinear factors in the live window.
 
 #pragma once
 #include <chrono>
@@ -41,6 +38,44 @@
 namespace fusion_graph
 {
 
+struct ConsumedMotionStep;
+struct GraphMotionState;
+struct HeadingSeedState;
+
+/// Opaque identity of one source-bound initialization. Reset/reseed invalidates it.
+using HeadingSeedToken = std::shared_ptr<const HeadingSeedState>;
+
+struct RecoveryYawObservation
+{
+  uint64_t epoch = 0;
+  int64_t source_ns = 0;
+  uint64_t id = 0;
+  double yaw = 0.0;
+  double sigma = 0.0;
+  bool robust = false;
+};
+
+enum class HeadingRecoveryResult
+{
+  Applied,
+  SeedNotInvalid,
+  SeedUnavailable,
+  UnsupportedPrefix,
+  UnsupportedFamily,
+  UnsupportedSource,
+  ObservationConflict,
+  DuplicateObservation,
+  InvalidObservation,
+  Failed
+};
+
+enum class SourceBootstrapResult
+{
+  Applied,
+  PendingProofUnavailable,
+  Failed
+};
+
 // Pose-variable key for node index i (symbol 'x'). Inline + namespace-scope so
 // every graph_manager_*.cpp translation unit shares one definition (the class
 // implementation is split across several TUs to stay within the file-size budget).
@@ -55,7 +90,10 @@ struct TickOutput
   gtsam::Pose2 pose;
   Eigen::Matrix3d covariance;  // (x, y, theta) marginal
   uint64_t node_index;  // monotonically increasing
-  double timestamp;  // ROS time, seconds
+  double timestamp;  // Schedule time, seconds
+  int64_t source_stamp_ns = 0;
+  uint64_t source_epoch = 0;
+  uint64_t revision = 0;
 };
 
 // Lightweight stats snapshot for diagnostics.
@@ -108,7 +146,64 @@ public:
   void AddWheelTwist(double vx, double vy, double wz, double dt);
 
   // Gyro yaw rate (rad/s) integrated with given dt.
-  void AddGyroDelta(double wz, double dt);
+  double AddGyroDelta(double wz, double dt);
+
+  // Source-time path: states end at wholly consumed integration boundaries.
+  bool AddConsumedMotionStep(const ConsumedMotionStep& step);
+  void ResetConsumedMotionEpoch(uint64_t epoch);
+  void SetConsumedMotionBaseline(uint64_t epoch, int64_t source_ns);
+  bool InitializeSource(const gtsam::Pose2& pose,
+                        int64_t schedule_ns,
+                        int64_t source_ns,
+                        uint64_t epoch,
+                        std::optional<double> sigma_xy = std::nullopt);
+  /// Same-source accepted GNSS and heading constrain X0 once, retaining lever
+  /// covariance. Solver failure never falls back to a data-derived pose prior.
+  SourceBootstrapResult InitializeSourceObservations(
+      int64_t schedule_ns, int64_t source_ns, uint64_t epoch, uint64_t gnss_id, uint64_t yaw_id);
+  /// Accepted raw GNSS at S and raw heading at T share their original process
+  /// history. Public x0 stays at S until the first actual source cadence.
+  SourceBootstrapResult InitializeSourceObservationPair(
+      int64_t schedule_ns, int64_t source_ns, uint64_t epoch, uint64_t gnss_id, uint64_t yaw_id);
+  /// A carried heading prior (for example after explicit clear) and one admitted
+  /// GNSS likelihood initialize X0. Raw sensor headings use the paired API; this
+  /// prior path does not model cross-time heading/process correlation.
+  SourceBootstrapResult InitializeSourcePositionWithRetimedHeading(
+      int64_t schedule_ns, int64_t source_ns, uint64_t epoch, uint64_t gnss_id, double yaw);
+  std::optional<TickOutput> TickSource(int64_t schedule_ns, int64_t source_ns, uint64_t epoch);
+  bool QueueGnssAtEpoch(double x,
+                        double y,
+                        double sigma,
+                        bool robust,
+                        int64_t source_ns,
+                        uint64_t observation_id,
+                        uint64_t epoch);
+  std::optional<int64_t> OldestRetainedSourceNs(uint64_t epoch) const;
+  // Read-only optimized acquisition pose or frozen first-order conditional
+  // mean. Only committed, retained source support is eligible; no new value,
+  // factor, observation identity, revision or cadence state is introduced.
+  std::optional<gtsam::Pose2> EstimatePoseAtSource(uint64_t epoch, int64_t source_ns) const;
+  uint64_t SourceGnssFactorCount() const;
+  // Dynamic absolute headings retain source time and a separate identity
+  // namespace from GNSS. COG/Mag callers distinguish their producer IDs.
+  bool QueueYawAtEpoch(double yaw,
+                       double sigma,
+                       bool robust,
+                       int64_t source_ns,
+                       uint64_t observation_id,
+                       uint64_t epoch);
+  uint64_t SourceYawFactorCount() const;
+  bool NeedsSourceRebase() const;
+
+  HeadingSeedToken OriginalHeadingSeed() const;
+  /// Explicit invalid-seed operation, NOT an automatic COG-conflict policy.
+  /// Rebuilds complete retained source families with relative-error conditionals,
+  /// retires only this seed's yaw and applies one actual source-yaw observation.
+  /// Unsupported/failed requests leave the live graph and pending inputs intact.
+  /// Requires a committed source boundary (no partially consumed process tail).
+  HeadingRecoveryResult RecoverInvalidSeedHeading(const HeadingSeedToken& seed,
+                                                  bool seed_heading_invalid,
+                                                  const RecoveryYawObservation& observation);
 
   // GPS measurement (in map frame, datum-anchored). Cached and consumed
   // at next tick. sigma is per-axis; pass < 0 to use floor. When
@@ -180,11 +275,12 @@ public:
   // node, for non-finite timestamps, or while uninitialized.
   std::optional<uint64_t> FindNodeAtOrBefore(double timestamp_s) const;
 
-  // Count of pose ('x') variables currently live in the iSAM2 graph.
+  // Count of cadence ('x') and acquisition ('a') Pose2 states live in iSAM2.
   // Distinct from GraphStats::total_nodes, which is the monotonic
   // next-index (never decreases). After a windowed RebaseISAM2 the
   // live count is capped at max_graph_nodes while total_nodes keeps
-  // climbing. Exposed primarily for the sliding-window unit test.
+  // climbing. Growth between maintenance checks is allowed. Exposed primarily
+  // for the sliding-window unit test.
   uint64_t LiveNodeCount() const;
 
   // GPS wrong-fix rejection counter; mutex-protected.
@@ -213,11 +309,10 @@ public:
                    double sigma_xy,
                    double sigma_theta);
 
-  // Reset iSAM2 with the current optimized values as tight priors,
-  // dropping every accumulated factor. Bounds the
-  // per-tick update cost on long sessions where factor count grows
-  // unbounded. Call periodically (e.g. every 2000 nodes); pose
-  // estimates and the variable set are preserved.
+  // Rebuild iSAM2, retaining the nonlinear factors in the live window and
+  // marginalizing removed history at its current linearization point.
+  // This preserves the retained joint information and process correlations.
+  // Call periodically (e.g. every 2000 nodes) to bound graph history.
   void RebaseISAM2();
 
   // Apply a map-frame correction to every live pose and rebuild their priors.
@@ -254,15 +349,21 @@ public:
   void Reset();
 
 private:
+  friend class GraphManagerRebaseTestAccess;
+  friend class GraphManagerSourceTestAccess;
+  friend class GraphManagerHeadingRecoveryTestAccess;
+
   // Reset() body without taking mu_ — for callers that already hold the lock
   // (e.g. the iSAM2 indeterminate-system catch inside ApplyIsamUpdateLocked).
   void ResetLocked();
+  void InitializeLocked(const gtsam::Pose2& pose, double timestamp, std::optional<double> sigma_xy);
 
   // Per-node accumulator for between-factors.
   struct Accumulator
   {
     double dx = 0.0;  // body-frame integration since last tick
     double dy = 0.0;
+    double wheel_travel_m = 0.0;  // sum of raw translation magnitudes, including reversals
     double dtheta_wheel = 0.0;
     double dtheta_gyro = 0.0;
     double dt_total = 0.0;
@@ -276,7 +377,7 @@ private:
     // gyro_dt_total separately from dt_total because IMU may publish
     // at a different rate than wheel odom — we want strictly the
     // integrated gyro time horizon.
-    double gyro_preint_dtheta = 0.0;
+    double gyro_preint_dtheta = 0.0;  // raw integral; factor applies absolute bias once
     double gyro_preint_dt = 0.0;
     double gyro_preint_variance = 0.0;  // Σ(dt_i² · σ_gyro²)
     void Reset()
@@ -321,12 +422,45 @@ private:
     std::optional<LidarMapXy> lidar_map_xy;
   };
 
+  std::shared_ptr<GraphMotionState> motion_;
+  std::shared_ptr<HeadingSeedState> heading_seed_;
+  SourceBootstrapResult InitializeSourceObservationsLocked(int64_t schedule_ns,
+                                                           int64_t source_ns,
+                                                           uint64_t epoch,
+                                                           uint64_t gnss_id,
+                                                           std::optional<uint64_t> yaw_id,
+                                                           double retimed_yaw = 0.0);
+  void AccumulateSourceStepLocked(Accumulator& accumulator, const ConsumedMotionStep& step) const;
+  void PrepareSourceInitializationLocked(GraphMotionState& state,
+                                         Accumulator& accumulator,
+                                         int64_t schedule_ns,
+                                         int64_t source_ns) const;
+  gtsam::Pose2 SourceBetweenLocked(const gtsam::Pose2& fallback, bool translation, bool rotation);
+  void FreezeSourceEdgeLocked(gtsam::Key left,
+                              gtsam::Key right,
+                              const gtsam::Pose2& previous,
+                              const gtsam::Pose2& predicted,
+                              const gtsam::Vector3& sigmas);
+  void CommitSourceNodeLocked(TickOutput& output);
+  bool AssimilateSourceObservationsLocked();
+  std::optional<TickOutput> PromoteSourceBootstrapLocked(int64_t schedule_ns);
+  bool AssimilateSourceBootstrapObservationsLocked(bool& updated);
+  bool SourceBootstrapContainsLocked(int64_t source_ns) const;
+  int64_t OldestSourceBoundaryLocked() const;
+  uint64_t AppendQueuedUnaryFactorsLocked(gtsam::NonlinearFactorGraph& factors,
+                                          uint64_t node_index,
+                                          double now_s) const;
+  void InvalidateSourceBridgesLocked();
+  void PruneSourceStateLocked();
+  std::map<gtsam::Key, uint64_t> AcquisitionOwnersLocked() const;
+
   GraphParams params_;
   mutable std::mutex mu_;
 
   bool initialized_ = false;
 
-  gtsam::ISAM2 isam_;
+  // Pointer ownership makes isolated rebuild publication a non-allocating swap.
+  std::unique_ptr<gtsam::ISAM2> isam_;
   gtsam::NonlinearFactorGraph new_factors_;
   gtsam::Values new_values_;
   // Cached full estimate, refreshed lazily (only by callers that need
@@ -402,19 +536,14 @@ private:
   bool wheel_stationary_now_ = false;
 
   // ── Async-rebase pipeline ───────────────────────────────────────
-  // RebaseISAM2 rebuilds the iSAM2 Bayes tree from scratch with one
-  // PriorFactor per existing variable. For a 50k-node graph that
-  // update() call is ~1 s, and holding mu_ for that long stalls the
-  // tick that publishes map→odom (observed 2026-05-14, caused
-  // DockRobot to abort with `Transform data too old`). The fix is to
-  // do the heavy iSAM2 rebuild OUTSIDE the lock: phase 1 snapshots
-  // current_estimate_ under mu_; phase 2 builds the fresh iSAM2 on
-  // that snapshot without holding mu_; phase 3 takes mu_ briefly to
-  // replay anything Tick() added in the meantime and atomically swap
-  // isam_. Tick() accumulates its post-snapshot factors/values into
-  // rebase_pending_factors_ / rebase_pending_values_ when
-  // rebase_in_progress_ is true.
+  // Snapshot factors/values under mu_, marginalize and rebuild outside mu_,
+  // then replay post-snapshot updates and swap under mu_. Keeping the heavy
+  // work off the lock prevents maintenance from stalling TF publication.
+  // Reset/RigidTransform cancels by clearing the flag. Each new worker owns
+  // a distinct generation so a cancelled worker cannot consume another's
+  // pending buffer or overwrite its result.
   bool rebase_in_progress_ = false;
+  uint64_t rebase_generation_ = 0;
   gtsam::NonlinearFactorGraph rebase_pending_factors_;
   gtsam::Values rebase_pending_values_;
 

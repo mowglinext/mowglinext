@@ -17,9 +17,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+
+#include "mowgli_interfaces/motion_authorization.hpp"
+#include "tf2/utils.hpp"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 namespace mowgli_behavior
 {
@@ -39,6 +44,62 @@ double AgeSeconds(const std::chrono::steady_clock::time_point& now,
 }
 
 }  // namespace
+
+EscapeStartBlocked::EscapeStartBlocked(const std::string& name, const BT::NodeConfig& config)
+    : BT::StatefulActionNode(name, config)
+{
+  auto ctx = config.blackboard->get<std::shared_ptr<BTContext>>("context");
+  const auto storage = geometry_;
+  geometry_sub_ = ctx->node->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      rclcpp::QoS(1).transient_local().reliable(),
+      [storage](visualization_msgs::msg::MarkerArray::ConstSharedPtr msg)
+      {
+        const auto next = mowgli_interfaces::motion::Snapshot::parse(*msg);
+        std::lock_guard<std::mutex> lock(storage->mutex);
+        if (!storage->snapshot || next->valid != storage->snapshot->valid ||
+            next->identity != storage->snapshot->identity)
+        {
+          ++storage->generation;
+        }
+        storage->snapshot = next;
+      });
+}
+
+bool EscapeStartBlocked::readPose(const std::shared_ptr<BTContext>& ctx,
+                                  mowgli_interfaces::motion::Pose& pose)
+{
+  if (!ctx->tf_buffer)
+  {
+    return false;
+  }
+  try
+  {
+    const auto transform =
+        ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    const double age = (ctx->node->now() - rclcpp::Time(transform.header.stamp,
+                                                        ctx->node->get_clock()->get_clock_type()))
+                           .seconds();
+    // fusion_graph deliberately leads live TF by 0.1 s in simulation. Bound
+    // that lead as well as old transforms; static/zero-stamp pose is refused.
+    if (rclcpp::Time(transform.header.stamp).nanoseconds() == 0 || age > 0.3 || age < -0.15)
+    {
+      return false;
+    }
+    const auto& q = transform.transform.rotation;
+    const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    if (!std::isfinite(norm) || std::abs(norm - 1.0) > 0.01)
+    {
+      return false;
+    }
+    pose = {transform.transform.translation.x, transform.transform.translation.y, tf2::getYaw(q)};
+    return std::isfinite(pose.x) && std::isfinite(pose.y) && std::isfinite(pose.yaw);
+  }
+  catch (const tf2::TransformException&)
+  {
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Command plumbing
@@ -80,6 +141,8 @@ void EscapeStartBlocked::finish(const std::shared_ptr<BTContext>& ctx, const cha
   }
   running_ = false;
   direction_ = EscapeDirection::kUnknown;
+  authorized_identity_.clear();
+  authorized_generation_ = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -94,6 +157,8 @@ BT::NodeStatus EscapeStartBlocked::onStart()
   state_ = StartBlockedEscapeState{};
   direction_ = EscapeDirection::kUnknown;
   running_ = false;
+  measured_travel_ = 0.0;
+  authorized_identity_.clear();
 
   // SanitizeEscapeCfg is already applied when the parameters are loaded; re-run
   // it so a hand-poked context (tests, future callers) still cannot exceed the
@@ -161,6 +226,37 @@ BT::NodeStatus EscapeStartBlocked::onStart()
   }
 
   direction_ = EscapeVerdictDirection(verdict);
+  footprint_.clear();
+  if (ctx->node->has_parameter("motion_footprint"))
+  {
+    const auto parameter = ctx->node->get_parameter("motion_footprint");
+    const auto values = parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY
+                            ? parameter.as_double_array()
+                            : std::vector<double>{};
+    if (values.size() >= 6 && values.size() <= 64 && values.size() % 2 == 0)
+    {
+      for (std::size_t i = 0; i < values.size(); i += 2)
+      {
+        footprint_.push_back({values[i], values[i + 1]});
+      }
+    }
+  }
+  std::lock_guard<std::mutex> geometry_lock(geometry_->mutex);
+  const auto snapshot = geometry_->snapshot;
+  const double vx = direction_ == EscapeDirection::kForward ? cfg_.speed : -cfg_.speed;
+  if (!snapshot || !readPose(ctx, start_pose_) ||
+      !snapshot->permits(start_pose_, footprint_, vx > 0 ? 1.0 : -1.0, 0.0, cfg_.distance, false))
+  {
+    direction_ = EscapeDirection::kUnknown;
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "EscapeStartBlocked: no valid geometry, chassis, pose or complete escape sweep; "
+                "falling through to non-motion recovery");
+    return BT::NodeStatus::SUCCESS;
+  }
+  authorized_identity_ = snapshot->identity;
+  authorized_generation_ = geometry_->generation;
+  last_pose_ = start_pose_;
+  started_ = now;
   last_tick_ = now;
   running_ = true;
 
@@ -184,6 +280,42 @@ BT::NodeStatus EscapeStartBlocked::onRunning()
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   const auto now = std::chrono::steady_clock::now();
 
+  if (!running_)
+  {
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  // Bind the bounded operation to exactly the geometry admitted onStart. A
+  // revocation followed by restoration of identical rings still ends this
+  // action; a new armed attempt must authorize again.
+  std::lock_guard<std::mutex> geometry_lock(geometry_->mutex);
+  const auto snapshot = geometry_->snapshot;
+  mowgli_interfaces::motion::Pose pose{};
+  if (!snapshot || !snapshot->valid || snapshot->identity != authorized_identity_ ||
+      geometry_->generation != authorized_generation_ || !readPose(ctx, pose))
+  {
+    finish(ctx, "ABORTED - geometry revoked/changed or pose unavailable");
+    return BT::NodeStatus::SUCCESS;
+  }
+  const double dx = pose.x - start_pose_.x, dy = pose.y - start_pose_.y;
+  const double sign = direction_ == EscapeDirection::kForward ? 1.0 : -1.0;
+  const double along = sign * (dx * std::cos(start_pose_.yaw) + dy * std::sin(start_pose_.yaw));
+  const double cross = -dx * std::sin(start_pose_.yaw) + dy * std::cos(start_pose_.yaw);
+  const double yaw_delta = std::remainder(pose.yaw - start_pose_.yaw, 2.0 * M_PI);
+  measured_travel_ += std::hypot(pose.x - last_pose_.x, pose.y - last_pose_.y);
+  last_pose_ = pose;
+  const double elapsed = AgeSeconds(now, started_);
+  const double tick_dt = AgeSeconds(now, last_tick_);
+  const double remaining = std::max(0.0, cfg_.distance - std::max(along, state_.travelled));
+  if (elapsed >= cfg_.timeout_s || tick_dt > kMaxTickDtSec || std::abs(cross) > 0.05 ||
+      std::abs(yaw_delta) > 0.15 || along < -0.05 || along >= cfg_.distance ||
+      measured_travel_ >= cfg_.distance ||
+      !snapshot->permits(pose, footprint_, sign, 0.0, remaining, false))
+  {
+    finish(ctx, "ABORTED - bounded escape envelope or budget exhausted");
+    return BT::NodeStatus::SUCCESS;
+  }
+
   // Re-verify the blade EVERY tick. A blade that turns on, or a status stream
   // that dies, ends the manoeuvre immediately.
   bool blade_ok = false;
@@ -202,7 +334,7 @@ BT::NodeStatus EscapeStartBlocked::onRunning()
 
   // Clamp dt so a scheduling hiccup (or a clock that went backwards) cannot
   // charge or refund a large slice of the distance budget in one tick.
-  const double dt = std::clamp(AgeSeconds(now, last_tick_), 0.0, kMaxTickDtSec);
+  const double dt = std::clamp(tick_dt, 0.0, kMaxTickDtSec);
   last_tick_ = now;
 
   const double vx = EscapeStep(cfg_, state_, direction_, dt);
@@ -215,7 +347,23 @@ BT::NodeStatus EscapeStartBlocked::onRunning()
     return BT::NodeStatus::SUCCESS;
   }
 
-  publishForward(ctx, vx);
+  // The last issued twist can outlive the next BT tick. Certify that held
+  // command as well as the intended complete escape, and taper near the bound.
+  // EscapeStep still charges the full configured speed, conservatively ending
+  // a tapering nudge before either its commanded or measured distance can grow
+  // beyond the original budget. Updating downstream timeouts requires updating
+  // this envelope too; final mux/hardware authorization is a separate contract.
+  const double command_remaining =
+      std::max(0.0, cfg_.distance - std::max({along, measured_travel_, state_.travelled}));
+  const double command_vx =
+      sign * std::min(cfg_.speed, command_remaining / kCommandHoldEnvelopeSec);
+  if (command_vx == 0.0 ||
+      !snapshot->permits(pose, footprint_, command_vx, 0.0, kCommandHoldEnvelopeSec, false))
+  {
+    finish(ctx, "ABORTED - held command has no authorized sweep");
+    return BT::NodeStatus::SUCCESS;
+  }
+  publishForward(ctx, command_vx);
   return BT::NodeStatus::RUNNING;
 }
 

@@ -33,11 +33,11 @@
 // needed anymore (the removed angular-rate PI was the only gyro-feedback
 // consumer here). A future firmware-yaw-loop fidelity stage would re-add it.
 //
-// The per-wheel model here MUST be kept in lockstep with the identical Python
-// copy in mowgli_simulation/kinematic_drive.py (which drives the Webots body
-// teleport + IMU from the same raw /cmd_vel) — see firmware_wheel_model.hpp.
+// This is the sole firmware-model owner. ros2_control applies its limits to
+// the resulting wheel setpoint; KinematicDrive observes actual native wheel
+// sensors for chassis truth instead of integrating a separate model copy.
 //
-// Safety: SIM ONLY. Reads /cmd_vel + /imu/data, publishes one wheel-command
+// Safety: SIM ONLY. Reads /cmd_vel and publishes one wheel-command
 // topic. Never runs on real hardware (the real hardware_bridge owns this loop).
 
 #include <algorithm>

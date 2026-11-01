@@ -46,12 +46,16 @@ add_library(${PROJECT_NAME} SHARED
   src/oscillation_detector.cpp
   src/obstacle_deviation.cpp
   src/ftc_lattice_solver.cpp
+  src/ftc_motion_critic.cpp
+  src/ftc_motion_geometry_index.cpp
+  src/ftc_forward_sweep.cpp
   src/ftc_turn_fallback.cpp
   src/ftc_controller.cpp
   src/ftc_controller_turn_fallback.cpp
   src/ftc_controller_plugin.cpp
   src/path_progress_goal_checker.cpp
   src/garden_keepout_layer.cpp
+  src/mapped_obstacle_layer.cpp
   src/authorized_transit_planner.cpp
 )
 
@@ -133,8 +137,17 @@ if(BUILD_TESTING)
   # processes discover each other's nodes (docs/claude/testing-ci.md).
   find_package(ament_cmake_ros REQUIRED)
   find_package(nav2_smac_planner REQUIRED)
+  find_package(nav2_rotation_shim_controller REQUIRED)
+  ament_add_ros_isolated_gtest(test_rotation_shim_collision test/test_rotation_shim_collision.cpp)
+  target_link_libraries(test_rotation_shim_collision
+    nav2_rotation_shim_controller::nav2_rotation_shim_controller)
+
   ament_add_ros_isolated_gtest(test_garden_costmap test/test_garden_costmap.cpp TIMEOUT 180)
   target_link_libraries(test_garden_costmap ${PROJECT_NAME} ${nav2_smac_planner_TARGETS})
+
+  ament_add_ros_isolated_gtest(test_mapped_obstacle_layer test/test_mapped_obstacle_layer.cpp)
+  target_link_libraries(test_mapped_obstacle_layer
+    ${PROJECT_NAME} nav2_rotation_shim_controller::nav2_rotation_shim_controller)
 
   ament_add_ros_isolated_gtest(test_authorized_transit test/test_authorized_transit.cpp)
   target_link_libraries(test_authorized_transit ${PROJECT_NAME})
@@ -323,6 +336,15 @@ if(BUILD_TESTING)
 
   ament_add_ros_isolated_gtest(test_ftc_speed_limit test/test_ftc_speed_limit.cpp)
   target_link_libraries(test_ftc_speed_limit ${PROJECT_NAME})
+
+  ament_add_ros_isolated_gtest(test_motion_authorization test/test_motion_authorization.cpp)
+  target_link_libraries(test_motion_authorization ${PROJECT_NAME})
+
+  ament_add_gtest(test_motion_sweeps test/test_motion_sweeps.cpp)
+  target_link_libraries(test_motion_sweeps ${PROJECT_NAME})
+
+  ament_add_gtest(test_ftc_motion_critic test/test_ftc_motion_critic.cpp)
+  target_link_libraries(test_ftc_motion_critic ${PROJECT_NAME})
 
   add_executable(lattice_replay test/lattice_replay.cpp)
   target_link_libraries(lattice_replay ${PROJECT_NAME})

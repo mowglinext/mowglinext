@@ -42,7 +42,9 @@ Webots driver outputs (e.g. ``/wheel_odom_raw``, ``/imu``, ``/scan``,
 Phase 2 work — until that lands the helpers below may not see live data.
 """
 
+import json
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -57,12 +59,21 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 import yaml
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from robot_config_util import chassis_footprint, load_robot_params  # noqa: E402
+
 
 def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # Package directories
     # ------------------------------------------------------------------
     bringup_dir = get_package_share_directory("mowgli_bringup")
+    robot_params = load_robot_params(bringup_dir, "/ros2_ws/config/mowgli_robot.yaml")
+    front_x, rear_x, half_width = chassis_footprint(robot_params)
+    motion_footprint = [
+        front_x, half_width, front_x, -half_width,
+        rear_x, -half_width, rear_x, half_width,
+    ]
     simulation_dir = get_package_share_directory("mowgli_simulation")
     behavior_dir = get_package_share_directory("mowgli_behavior")
     map_dir = get_package_share_directory("mowgli_map")
@@ -78,6 +89,7 @@ def generate_launch_description() -> LaunchDescription:
     datum_lon = float(gps_reference["longitude"])
     lever_arm_x = float(antenna_lever_arm["x"])
     lever_arm_y = float(antenna_lever_arm["y"])
+    areas = scenario["areas"]
 
     # ------------------------------------------------------------------
     # Declared arguments
@@ -122,6 +134,15 @@ def generate_launch_description() -> LaunchDescription:
         "mode",
         default_value="realtime",
         description="Webots execution mode: realtime | fast | pause.",
+    )
+
+    gps_quality_pattern_arg = DeclareLaunchArgument(
+        "gps_quality_pattern",
+        default_value="",
+        description=(
+            "Simulated GNSS-quality cycle, e.g. "
+            "90,RTK_FIXED;30,RTK_FLOAT;10,NO_FIX. Empty keeps RTK-Fixed."
+        ),
     )
 
     # use_magnetometer comes from mowgli_robot.yaml via navigation.launch.py
@@ -175,6 +196,12 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "use_sim_time": "true",
             "use_lidar": use_lidar,
+            # Freeze one complete scenario datum/antenna snapshot for both
+            # localization consumers; never self-seed the map at the antenna.
+            "simulation_geometry": json.dumps({
+                "datum_lat": datum_lat, "datum_lon": datum_lon,
+                "lever_arm_x": lever_arm_x, "lever_arm_y": lever_arm_y,
+            }, allow_nan=False),
             # cog_to_imu defaults are fine in sim now that the node
             # self-gates the stationary anchor on |wheel_omega| (won't
             # republish a stale forward-motion yaw while the robot is
@@ -210,7 +237,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             behavior_params,
-            {"use_sim_time": True},
+            {"use_sim_time": True, "motion_footprint": motion_footprint},
         ],
     )
 
@@ -229,14 +256,17 @@ def generate_launch_description() -> LaunchDescription:
             # ships with empty area_* arrays so a fresh real-robot install
             # never tries to mow a phantom polygon at the GPS datum (see
             # commit history for BLOCKER #1). The sim needs a polygon to
-            # exercise coverage, so override here. 9×6 m rectangle, no
-            # pre-defined obstacles — runtime obstacle tracker handles
-            # whatever appears in the world file.
+            # exercise coverage. Scenario geometry separates the 9×6 m lawn
+            # from the synthetic charger and records its blade-off transit.
+            # Runtime obstacle tracking handles the objects in the world.
             {
-                "area_names": ["main_mow"],
-                "area_polygons": ["-4.5,-3.0;4.5,-3.0;4.5,3.0;-4.5,3.0"],
-                "area_is_navigation": [False],
-                "area_obstacles": [""],
+                "area_names": [area["name"] for area in areas],
+                "area_polygons": [
+                    ";".join(f"{float(x)},{float(y)}" for x, y in area["polygon"])
+                    for area in areas
+                ],
+                "area_is_navigation": [area["is_navigation"] for area in areas],
+                "area_obstacles": [""] * len(areas),
             },
             # Same datum the sim navsat converter projects with (below) —
             # keeps the areas.dat datum stamp / datum-change migration
@@ -342,13 +372,11 @@ def generate_launch_description() -> LaunchDescription:
                 "datum_lon": datum_lon,
                 "lever_arm_x": lever_arm_x,
                 "lever_arm_y": lever_arm_y,
-                # Realistic mowing scenario: 90 s RTK-Fixed (open sky),
-                # 30 s RTK-Float (light tree cover), 10 s no-fix (dense
-                # canopy / multipath). Empty pattern → always RTK_FIXED
-                # (σ=3 mm, no Python noise injection). Bias disabled while
-                # debugging fusion_graph; restore the cycle pattern once
-                # the baseline is clean.
-                "quality_pattern": "",
+                # Keep the always-Fixed control by default. Recovery tests
+                # explicitly request the quality cycle; no second GPS producer.
+                "quality_pattern": ParameterValue(
+                    LaunchConfiguration("gps_quality_pattern"), value_type=str
+                ),
                 "noise_seed": 42,
             }
         ],
@@ -473,12 +501,11 @@ def generate_launch_description() -> LaunchDescription:
                 # Webots samples the ODE body between KinematicDrive
                 # teleports, so obstacle contacts can create angular
                 # velocity that is absent from the authoritative
-                # kinematic pose. Synthesize gyro_z from the post-firmware
-                # achievable twist consumed by KinematicDrive itself.
-                # Using /cmd_vel_wheels rather than raw /cmd_vel preserves
-                # deadband, PI, and saturation behavior.
-                "synthesize_from_cmd_vel": True,
-                "cmd_vel_topic": "/cmd_vel_wheels",
+                # kinematic pose. KinematicDrive reports the exact twist it
+                # applied with that step's native epoch, keeping the gyro
+                # value and timestamp on the same source observation.
+                "synthesize_from_applied_twist": True,
+                "applied_twist_topic": "/sim/applied_twist",
             }
         ],
     )
@@ -494,6 +521,7 @@ def generate_launch_description() -> LaunchDescription:
             headless_arg,
             use_lidar_arg,
             mode_arg,
+            gps_quality_pattern_arg,
             # Subsystem includes
             simulation_launch,
             navigation_launch,

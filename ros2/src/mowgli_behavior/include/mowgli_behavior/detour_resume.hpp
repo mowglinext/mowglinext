@@ -36,6 +36,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -190,10 +191,12 @@ inline bool footprintClear(const DetourCostmap& cm, double x, double y, double r
 //     (so the resume point is genuinely past the obstacle, not a clear pose
 //     reached before it).
 // A missing/invalid costmap yields {false, nullopt} -> the caller falls back.
-inline DetourDecision decideDetour(const DetourCostmap& cm,
-                                   const std::vector<geometry_msgs::msg::PoseStamped>& poses,
-                                   std::size_t stuck_idx,
-                                   const DetourResumeCfg& cfg)
+inline DetourDecision decideDetour(
+    const DetourCostmap& cm,
+    const std::vector<geometry_msgs::msg::PoseStamped>& poses,
+    std::size_t stuck_idx,
+    const DetourResumeCfg& cfg,
+    const std::function<bool(double, double)>& candidate_eligible = {})
 {
   DetourDecision d;
   if (!cm.valid() || poses.size() < 2 || stuck_idx >= poses.size())
@@ -235,7 +238,9 @@ inline DetourDecision decideDetour(const DetourCostmap& cm,
       continue;  // still on the clear approach BEFORE the obstacle
     }
     const double euclid = std::hypot(p.x - s.x, p.y - s.y);
-    if (euclid >= cfg.min_skip_dist_m)
+    // A transit-specific rejection must never manufacture obstacle evidence:
+    // confirmation and the lethal-only footprint policy above stay independent.
+    if (euclid >= cfg.min_skip_dist_m && (!candidate_eligible || candidate_eligible(p.x, p.y)))
     {
       d.resume_idx = i;
       break;

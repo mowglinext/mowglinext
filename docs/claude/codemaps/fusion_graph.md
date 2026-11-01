@@ -2,7 +2,71 @@
 
 > `ros2/src/fusion_graph` is the GTSAM iSAM2 Pose2 factor-graph localizer — the sole owner of BOTH `map→odom` and `odom→base_footprint` (CLAUDE.md Invariants 1–2). It fuses `/wheel_odom` + `/imu/data` (between-factors), `/gps/fix` (`GnssLeverArmFactor`), `/imu/cog_heading` / `/imu/mag_yaw` (yaw unaries) and, with LiDAR, a persistent RTK-built map anchor used only after complete GNSS outages; it persists the graph and tiled map under `/ros2_ws/maps/fusion_graph*`. Scan-to-scan ICP and loop closure were removed. Index refreshed 2026-09-09; regenerate when files are added/removed. Loaded on demand from `ros2/CLAUDE.md`.
 
+## Source bootstrap and explicit heading-seed repair
+
+`graph_manager_bootstrap.cpp` initializes an exact same-source admitted GNSS/yaw
+tuple from its two original likelihoods, once each, with actual marginal and
+lever-arm cross-covariance. `TrySeedInitialPose` requires accepted identities;
+missing queue proof stays pending. A carried heading after explicit clear uses
+one GNSS likelihood plus its existing retimed prior, with no extra XY prior.
+Explicit/dock pose priors remain separate. Node heading candidates retain
+original payload/noise across pre-baseline replay; candidate and admission
+identity are distinct.
+
+`graph_manager_bootstrap_pair.cpp` and `graph_manager_bootstrap_phase.cpp` own
+raw different-source bootstrap through private `source_bootstrap_state.hpp`.
+Public x0 stays at GNSS S while a consumed U is private; the first normal cadence
+rebuilds through actual V and publishes only x1/V. No extra normal U node advances
+gates. `source_bootstrap_builder.hpp/.cpp` stages the full nonlinear joint and
+raw factors; `shared_source_process_family.hpp/.cpp` supplies correlated gyro
+endpoint factors and normalized source queries using original acquisition IDs.
+The cold bias prior is at S; prefix and normal suffix select independent copied
+policy state. Pure `process_window_policy.hpp/.cpp` is also used by ordinary
+node creation. Only the suffix advances public slip/EMA state. Shared gyro
+covariance and acquisition conditionals form a declared local model, not a
+physical calibration or a marginal of the old independent-factor product.
+Provisional persistence/rebase defer; promoted auxiliary keys retire with their
+family. Reset/epoch change and rigid pose-only reanchor clear that ownership.
+
+`graph_manager_heading_recovery.cpp` provides an **explicit invalid-seed** Core
+transaction, not an automatic Node policy. Opaque seed identity and complete
+live conditional ownership are required. `relative_conditional_factor.hpp/.cpp`
+and `ConditionalProcessBridge::Mode::RelativeErrors` define the local
+relative-error model used for whole-family promotion and subsequent insertion
+and read-only queries. Default families remain frozen affine until promotion.
+Unknown/marginalized prefixes and uncommitted tails reject without mutation;
+unsupported local branch observations stay pending. Solver pointer ownership
+permits non-allocating atomic publication and stale-rebase cancellation.
+`HeadingSeedState` distinguishes independent pose, raw same-source heading,
+synthetic retimed heading and coupled-source provenance. Retimed families
+return `UnsupportedFamily` without mutation. Coupled recovery
+requires a closed family, exact current birth-yaw binding and complete nonlinear
+factor lineage in `SourceBootstrapState`; the immutable birth token alone is
+insufficient after promotion rekeys its raw yaw. It preserves all process states
+and retires only that live absolute likelihood. This remains an explicit
+invalid-seed operation, with no automatic Node invalidation policy.
+
+Tests: `test_source_bootstrap`, `test_source_bootstrap_builder`,
+`test_source_bootstrap_phase`, `test_shared_source_process_family`,
+`test_process_window_policy`, `test_source_policy_accumulator`,
+`test_heading_recovery`, `test_coupled_heading_recovery`,
+`test_relative_conditional` and the real `test_sensor_input_node` cases.
+Core bootstrap/heading tests include private `src` metadata for lifecycle,
+rollback and covariance checks. Evidence and limits are in the dated
+bootstrap section of `docs/MOTION_AUTHORIZATION_IMPLEMENTATION.md`.
+
 ## Where to look
+
+TF publication in `fusion_graph_node_publish.cpp` emits the captured source pose
+at its consumed source timestamp and the unchanged constant-twist forecast at
+source plus lead. Both map/odom and odom/base legs share that capture. Inline
+publication is paired in `PublishLocalOdom`; the dedicated thread owns all TF
+when enabled. Source insertion intentionally backfills older forecasts, so wire
+stamps are not monotonic. Zero rounded lead emits one sample per leg. This fixes
+known source knots, not arbitrary interpolation or physical prediction accuracy.
+`test/test_tf_source_epoch.py` runs the real executable and tf2 in isolated ROS
+pytest cases for thread/inline and positive/zero lead.
+
 | Task | Start here |
 |------|------------|
 | Add / rename a ROS parameter | Graph-side (`GraphParams`) → `ros2/src/fusion_graph/src/fusion_graph_node.cpp:30-91`; node-side → `ros2/src/fusion_graph/src/fusion_graph_node_setup_params.cpp`; yaml default → `ros2/src/fusion_graph/config/fusion_graph.yaml`; struct default → `ros2/src/fusion_graph/include/fusion_graph/graph_params.hpp` |
@@ -11,6 +75,7 @@
 | `GnssLeverArmFactor` residual / Jacobian | `ros2/src/fusion_graph/src/factors.cpp` (`evaluateError`), pinned by `test/test_factors.cpp` `JacobianMatchesNumeric` |
 | GPS wrong-fix gate / unknown-covariance reject / max-σ reject | `ros2/src/fusion_graph/src/fusion_graph_node_callbacks_a.cpp` `OnGnss` (:108; rejects logged at :159, :200, :232); pure rule `include/fusion_graph/rtk_wrongfix_gate.hpp` |
 | GPS payload-staleness backstops (mowglinext#694) — two independent checks against a receiver whose receipt stamp keeps advancing under a frozen payload, since `gnss_observation_tracker_`'s own receipt-stamp dedup can't see that. (1) Withhold `/gps/fix` while `LocalizationMonitorNode` reports DEAD_RECKONING on `/mowgli/localization/mode_id` — field-proven INSUFFICIENT ALONE (two full 2026-09-20 sessions: mode_id never left RTK_FLOAT/FIXED despite a session-long frozen fix). (2) Direct payload-VALUE comparison, `gps_stuck_gate.hpp` — withholds once wheel travel since `msg->latitude/longitude` last actually changed exceeds `gps_stuck_min_wheel_dist_m`; this is the one that actually catches the observed bug | `OnGnss` (`callbacks_a.cpp:464` DEAD_RECKONING check, `:510` stuck-value check, both after the dock block so a genuinely-docked re-anchor isn't gated on them); value-tracking update near `LatLonToMap` earlier in the same function; accumulator increments in `OnWheelOdom`/`OnImu`; subscription in `fusion_graph_node_setup_comms.cpp` (`SetupCommunications`); pure gate `include/fusion_graph/gps_stuck_gate.hpp` + `test/test_gps_stuck_gate.cpp`; counters `GraphStats::gps_rejects_dead_reckoning` / `gps_rejects_stuck_value` (`graph_manager.hpp`/`.cpp`), both surfaced on `/fusion_graph/diagnostics` |
+| Wheel/IMU source order, nonfinite inputs and ROS-clock rewind | `fusion_graph_node_callbacks_a.cpp` `ObserveMotionClockEpoch`, `OnWheelOdom`, `OnImu`; real constructor/callback regression `test/test_sensor_input_node.cpp` |
 | GNSS timestamp → node association (delayed fixes) | `OnGnss` (`FindNodeAtOrBefore`, warns at :393/:403/:413) + `ros2/src/fusion_graph/src/graph_manager.cpp:257`; `test/test_gnss_timestamp.cpp` |
 | Dock hold while charging, dock-prior-vs-GPS yield (#512) | `OnGnss` block ending in `ForceAnchor` (ERROR at :346); pure rule `include/fusion_graph/dock_gps_consistency.hpp` |
 | Dock-arrival seed / gauge reset / boot fallback | `ros2/src/fusion_graph/src/fusion_graph_node_misc.cpp` `SeedFromDockPose` (:25); `OnHardwareStatus` `callbacks_b.cpp:390`; boot fallback `fusion_graph_node_timer.cpp:31-58` |
@@ -18,12 +83,16 @@
 | Slip veto (dead-reckoning side, #488) | `fusion_graph_node_callbacks_a.cpp` `OnImu` (:59) + `include/fusion_graph/dr_slip_veto.hpp` (`kDrSlipWheelMinDefaultRadPerS` 0.44) |
 | Wheel σ random-walk model (#491), pivot release, adaptive inflation | `graph_manager_node.cpp:258-325`; `test_wheel_sigma_scaling.cpp`, `test_adaptive_noise.cpp` |
 | Stationary yaw snap, hand-push gate, gyro-bias EMA | `graph_manager_node.cpp:125-190`; `graph_manager.cpp` `AddGyroDelta` (:109); `test_stationary_yaw.cpp`, `test_gyro_bias.cpp` |
-| COG yaw gating, σ floor, 180° flip recovery | `fusion_graph_node_callbacks_b.cpp` `OnCogHeading` (:44); pure rules `include/fusion_graph/yaw_gates.hpp`, `include/fusion_graph/cog_flip_recovery.hpp` |
+| COG yaw gating, σ floor, 180° flip recovery | `fusion_graph_node_callbacks_b.cpp` `OnCogHeading` / `ProcessPendingCogFlipChecks`; supported checks follow acquisition order with a lifecycle-scoped watermark; delayed normal yaw admission is unchanged. Pure rules `include/fusion_graph/yaw_gates.hpp`, `include/fusion_graph/cog_flip_recovery.hpp`; actual `test_sensor_input_node.cpp` covers stale votes, batch maturity and clock reset |
 | Graph persistence, crash recovery, legacy `.graph/.meta` loading, datum guard | `PERSISTENCE.md`; `src/graph_manager_persistence.cpp` `Save` / `Load`; `src/checkpoint_file.cpp`; persistence tests |
 | Save / clear services, auto-checkpoints | `fusion_graph_node_setup_comms.cpp:205-270`; `DispatchAsyncSave` `callbacks_b.cpp:363`; `OnHighLevelStatus` :276; `OnPeriodicSaveTimer` `misc.cpp:126` |
 | map→odom anchor, slew limiter (unwired), odom re-base, TF thread | `src/fusion_graph_node_publish.cpp` (`PublishOutputs` :153, `SlewPublishedAnchor` :278, `TfBroadcastLoop` :320); re-base `fusion_graph_node_timer.cpp:483-500`; pure `include/fusion_graph/anchor_slew.hpp` |
 | Published covariance frame (body→map) | `fusion_graph_node_publish.cpp:183` + `include/fusion_graph/covariance_frame.hpp`; `test_covariance_frame.cpp` |
-| Sliding-window cap / iSAM2 rebase | `src/graph_manager_rebase.cpp` `RebaseISAM2`; maintenance timer `setup_comms.cpp`; `test_graph_window.cpp` |
+| Absolute preintegrated gyro bias / pose-only reload and reanchor | `graph_manager.cpp` `AddGyroDelta` (raw preintegration vs corrected prediction), `graph_manager_node.cpp` bias predecessor; `test/test_gyro_preint_bias.cpp` |
+| Post-anchor pose/covariance/revision snapshot | `graph_manager.cpp` `ForceAnchor` refreshes the current latest snapshot after any live-node anchor without advancing source/cadence; `test/test_rebase_information.cpp` uses actual iSAM marginal semantics |
+| Source-time GNSS/COG/Mag association and read-only historical pose | `src/graph_manager_motion.cpp`, private `src/graph_motion_state.hpp`, `motion_source_history.hpp`, `conditional_process_bridge.hpp`; `test_source_epoch.cpp`, `test_source_epoch_query.cpp`, helper tests |
+| Source-stamped TF, revision anchors, continuous odom gauge, bootstrap heading epochs | Node `misc.cpp`, `timer.cpp`, `publish.cpp`, `callbacks_a/b.cpp`; actual `test_sensor_input_node.cpp` |
+| Sliding-window cap / iSAM2 rebase | `src/graph_manager_rebase.cpp` `RebaseISAM2`; maintenance timer `setup_comms.cpp`; `test_graph_window.cpp`, `test_rebase_information.cpp` (joint-information preservation, typed bias, async cancellation/replay) |
 | LiDAR map anchor (scan-to-MAP localisation for complete GNSS outages): grid, gate, particle filter, per-estimate trust, shadow mode | `src/fusion_graph_node_lidar_anchor.cpp` (RTK-only map learning, any-usable-GNSS outage age, warm-up, verdicts, `/fusion_graph/lidar_anchor_candidate`); pure pieces `include/fusion_graph/lidar_occupancy_mapper.hpp` (log-odds grid, `ScoreScan`, `ImportCells`), `lidar_map_anchor_gate.hpp` (RTK-age mapping hysteresis), `lidar_compute_gate.hpp` (outage warm-up / compute cadence), `lidar_anchor_decision.hpp` (seed/reference/application decisions), `lidar_anchor_validator.hpp` (score / spread / dead-reckoning gates); params `setup_params.cpp` (`use_lidar_map_anchor`, `lidar_anchor_*`, `lidar_map_*`); graph consumer `graph_manager_node.cpp` (`PoseTranslationPrior`, XY only) |
 | Replaying a bag through the node on a laptop (reproduce a field failure) | `ros2/src/fusion_graph/tools/replay/README.md` |
 | LiDAR anchor map persistence / reset | persisted as tiles under `<graph_save_prefix>.lidartiles`; `src/lidar_submap_store.cpp` + `include/fusion_graph/lidar_submap_store.hpp`; legacy `.lidarmap` import remains only for migration; `~/clear_lidar_map` wipes the tiles, local window and filter. Continuous filter odometry: `lidar_anchor_odom.hpp` |
@@ -32,6 +101,9 @@
 | Perf regression | `test/test_perf.cpp` (Release only, `TIMEOUT 300` in `CMakeLists.txt`) |
 
 ## Files
+
+The launch-only helper `launch/fusion_graph_simulation_geometry.py` validates the complete simulator datum/antenna snapshot forwarded by bringup. Nonempty overrides require simulation time and are applied together to COG and Fusion Graph; an empty snapshot preserves the physical robot configuration. See `mowgli_bringup/test/test_sim_localization_geometry.py` for the full launch-chain regression.
+
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`ros2/src/fusion_graph/` (package root)** | | |
@@ -45,6 +117,9 @@
 | `.../graph_manager.hpp` | 582 | `GraphManager` API, `TickOutput`, `GraphStats`, accumulator/queue structs |
 | `.../graph_params.hpp` | 373 | `GraphParams` aggregate + `kTunedNodePeriodS` (0.04) / `kMinWheelSigmaM` |
 | `.../factors.hpp` | 160 | `GnssLeverArmFactor`, `GyroPreintFactor`, `YawUnaryFactor`, `WrapAngle` |
+| `.../motion_source_history.hpp` | | Immutable consumed wheel/gyro intervals, Expmap trajectory and source/bias derivatives |
+| `.../conditional_process_bridge.hpp` | | Frozen normalized first-order conditional acquisition states shared by GNSS and heading factors |
+| `.../shared_source_process_family.hpp` | | Shared per-ID gyro endpoint covariance and normalized multi-window source acquisition queries |
 | `.../slip_window.hpp` | 125 | Pure windowed slip veto: `SlipWindowNodes`, `SlipDetectedOverWindow`, `SlipWindow` |
 | `.../dr_slip_veto.hpp` | 79 | Pure DR slip veto + wheel yaw-rate quantum; shipped thresholds 0.44 / 0.15 rad/s |
 | `.../rtk_wrongfix_gate.hpp` | 57 | Pure `GpsJumpImplausible` + `ResetRtkWrongFixAccumulators` (reset on EVERY fix) |
@@ -66,6 +141,14 @@
 | `.../fusion_graph_node_publish.cpp` | | Initial pose, local odometry, map output, map→odom anchor and TF thread |
 | `.../fusion_graph_node_misc.cpp` | 140 | `SeedFromDockPose` (rigid gauge reset > 5 cm), `OnPeriodicSaveTimer` |
 | `.../graph_manager.cpp` | | Accumulators, queues, initialization, statistics and pose snapshots |
+| `.../graph_manager_motion.cpp` | | Integer schedule/source clocks, retained trajectories, queued source unaries, read-only source-pose mean and retention metadata |
+| `.../graph_motion_state.hpp` | | Private source/edge/observation state, outside public Node includes |
+| `.../graph_manager_bootstrap.cpp` | | Atomic same-source raw tuple or GNSS plus carried heading prior, source-tail preparation |
+| `.../graph_manager_bootstrap_pair.cpp`, `.../graph_manager_bootstrap_phase.cpp` | | Accepted cross-source pair, provisional source ownership, first normal frontier promotion and delayed insertion |
+| `.../source_bootstrap_state.hpp` | | Private phase owner, original builder request and auxiliary pose lineage |
+| `.../source_bootstrap_builder.hpp`, `.../source_bootstrap_builder.cpp` | | Isolated full-joint construction, original observation factors, actual marginals and candidate solver |
+| `.../shared_source_process_family.cpp` | | Shared-noise endpoint/query factor implementation and original per-ID duration validation |
+| `.../process_window_policy.hpp`, `.../process_window_policy.cpp` | | Pure copied-state selection of existing stationary/slip/pivot/adaptive wheel policy |
 | `.../graph_manager_node.cpp` | 574 | `Tick` / `CreateNodeLocked`: all per-node gates + factor construction + iSAM2 update + throttled marginal |
 | `.../graph_manager_rebase.cpp` | | Windowed iSAM2 rebase, robust update/reset, rigid whole-graph transforms |
 | `.../graph_manager_persistence.cpp` | | Graph reset, snapshot/restore, semantic validation and datum guard |
@@ -75,7 +158,15 @@
 | **`ros2/src/fusion_graph/test/`** | | |
 | `.../test_checkpoint_file.cpp`, `.../test_persistence_faults.cpp` | | Deterministic I/O faults, process interruption, recovery and legacy migration |
 | `.../test_save_service.py`, `.../checkpoint_test_delay.cpp` | | Real-node save result, busy failure and executor progress during held file I/O |
+| `.../test_tf_source_epoch.py` | | Real-node source/forecast TF values, paired anchor/body publication, zero-lead batches and map/base composition |
 | `.../test_factors.cpp` | | Graph factor residual and Jacobian tests |
+| `.../test_source_bootstrap.cpp`, `.../test_sensor_input_node.cpp` | | Raw seed likelihood identity/covariance, callback admission, clear-carried prior and first cadence |
+| `.../test_source_bootstrap_builder.cpp` | | Independent QR full-joint covariance oracle, both time orders, lever and bias modes |
+| `.../test_source_bootstrap_phase.cpp` | | S/U/V lifecycle, promotion rollback, auxiliary ownership, delayed factors, save/rebase/reanchor/reset |
+| `.../test_shared_source_process_family.cpp` | | Dense/conditional covariance, shared gyro IDs, exact rank support and metadata mismatch rejection |
+| `.../test_process_window_policy.cpp` | | Existing gates/EMA/counters copied without mutation, source versus schedule duration |
+| `.../test_source_policy_accumulator.cpp` | | Source-window ownership across asynchronous ordinary cadence, throttle/noise invariance, EMA and source-free compatibility |
+| `.../test_coupled_heading_recovery.cpp` | | Explicit coupled birth-yaw retirement, full-joint same-model QR control, moving flips, aliases/identity, lineage and rollback |
 | `.../test_gnss_timestamp.cpp` | 142 | Delayed GNSS constrains the node at `header.stamp`, bounded by the window |
 | `.../test_rtk_wrongfix_gate.cpp` | 167 | Wrong-fix budget math; reject-forever regression if reset only on accept |
 | `.../test_dock_gps_consistency.cpp` | 127 | #512 field numbers; Float / no-fix never yields |
@@ -135,7 +226,7 @@ Diagnostics keys (`setup_comms.cpp`): graph/dock state, scan and LiDAR map/filte
 | Service | Type | Where | Caller |
 |---------|------|-------|--------|
 | `~/save_graph` (`/fusion_graph_node/save_graph`) | `std_srvs/Trigger` | `setup_comms.cpp:205` — async `DispatchAsyncSave("manual-service")` | GUI `gui/pkg/api/mowglinext.go:668` (`fusion_graph_save`) |
-| `~/clear_graph` (`/fusion_graph_node/clear_graph`) | `std_srvs/Trigger` | `setup_comms.cpp` — exact IDLE + stationary gate; `Reset()`, persisted `.graph/.meta` deletion and DR zeroing; immediate dock-pose re-seed when charging, otherwise fresh-GPS re-init with retained heading | GUI `mowglinext.go:670` (`fusion_graph_clear`) |
+| `~/clear_graph` (`/fusion_graph_node/clear_graph`) | `std_srvs/Trigger` | `setup_comms.cpp` — exact IDLE + stationary gate; `Reset()`, persisted `.graph/.meta` deletion and DR zeroing; source-supported dock-pose retry while charging, otherwise fresh-GPS re-init with a heading prior retained only at a verified consumed boundary | GUI `mowglinext.go:670` (`fusion_graph_clear`) |
 
 No actions. Auto-save triggers: RECORDING exit (`callbacks_b.cpp:276`), `is_charging` rising edge / boot-docked (`callbacks_b.cpp:404`), `periodic_save_period_s` (300 s) while `HIGH_LEVEL_STATE_AUTONOMOUS` (`misc.cpp:126`).
 
@@ -167,7 +258,7 @@ All read ONCE at construction (`declare_parameter`, no dynamic reconfigure). Pre
 
 ## Build, test, run
 - Build (devcontainer, `/ros2_ws`): `cd ros2 && make build-pkg PKG=fusion_graph` (`ros2/Makefile:64` → `scripts/build.sh`); raw: `colcon build --packages-select fusion_graph --cmake-args -DCMAKE_BUILD_TYPE=Release`.
-- Unit tests: `PACKAGES="fusion_graph" ./scripts/test.sh` (`ros2/scripts/test.sh`) or `colcon test --packages-select fusion_graph && colcon test-result --verbose`. Single binary: `./build/fusion_graph/test_factors`. All 22 targets are gtest, no ROS graph needed (pure headers + `GraphManager`). `test_perf` is Release-only meaningful, 300 s timeout.
+- Unit tests: `PACKAGES="fusion_graph" ./scripts/test.sh` (`ros2/scripts/test.sh`) or `colcon test --packages-select fusion_graph && colcon test-result --verbose`. Single binary: `./build/fusion_graph/test_factors`. There are 52 GTest targets. Most exercise pure headers and `GraphManager`; `test_sensor_input_node` directly drives the real node callbacks with a controlled ROS clock, isolated domain and no input executor. Its production implementation objects are shared through `fusion_graph_node_support`. `test_perf` is Release-only meaningful, 300 s timeout.
 - GTSAM 4.3a1 is built from source (`ros2/Dockerfile:2-23` stage `gtsam-builder`, `.devcontainer/Dockerfile:26-30`, CI `.github/workflows/ros2-ci.yml:186-226` cached under `/opt/gtsam`). `find_package(GTSAM CONFIG REQUIRED)` needs `CMAKE_PREFIX_PATH=/opt/gtsam`.
 - CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (:128) runs whole-workspace `colcon build` (:338) + `colcon test` (:347); `format-check` (:404, clang-format-18 on changed lines); `static-analysis` (:448). No launch_testing / e2e test targets fusion_graph specifically; `ros2/src/e2e_test.py:187` and `e2e_test_no_lidar.py:111` consume `/odometry/filtered_map`.
 - Run standalone: `ros2 launch fusion_graph fusion_graph.launch.py use_lidar_map_anchor:=true`; manual save: `ros2 service call /fusion_graph_node/save_graph std_srvs/srv/Trigger`.
@@ -197,11 +288,11 @@ All read ONCE at construction (`declare_parameter`, no dynamic reconfigure). Pre
 - While `is_charging` the node suppresses live GPS factors and re-asserts the dock prior once per node, and `seed_xy_` is NOT updated from the docked fix — the dock bootstrap is `SeedFromDockPose` (`misc.cpp:25`), not `TrySeedInitialPose`, which needs a GPS `seed_xy_` + COG/mag `seed_yaw_` (`publish.cpp:27-33`). A yielded node (#512) still marks `last_dock_reanchor_node_` (`callbacks_a.cpp:343-364`).
 - `Save()` refuses an empty graph (`graph_manager_persistence.cpp:159`) — a Reset followed by auto-save used to persist `next_index=0` and crash the next boot (`test_persistence.cpp`).
 - `Load()` rejects a map whose `.meta` datum differs from the configured one (cross-garden guard, `graph_manager_persistence.cpp:300-309`); (0,0) datum skips the check (`test_persistence.cpp` `LoadRefusesGraphSavedUnderAnotherDatum`).
-- `clear_graph` rejects unless the high-level state is exactly `IDLE`/`IDLE_DOCKED`, wheel speeds are within 0.02 m/s and 0.05 rad/s, and no save/rebase is active. It deletes the persisted graph, zeroes `dr_*`, and invalidates the anchor; while charging it immediately seeds the calibrated dock pose, otherwise it retains the last heading and waits for a fresh GPS position.
+- `clear_graph` rejects unless the high-level state is exactly `IDLE`/`IDLE_DOCKED`, wheel speeds are within 0.02 m/s and 0.05 rad/s, and no save/rebase is active. It deletes the persisted graph, zeroes `dr_*`, and invalidates the anchor; while charging it retries the calibrated dock seed once a consumed source is available and cancels that path on undock. Off-dock it carries only a heading prior derived at the verified consumed boundary, restores accepted input baselines there, and waits for a genuinely new GPS identity. Cached pre-clear fixes remain deduplicated. A real IMU gap or ROS-clock rewind invalidates the carried heading.
 - Per-tick gates (`stationary_thresh_*`, `pivot_gate_dtheta_rad`, `slip_*`) are tuned at 25 Hz and multiplied by `tick_scale` (`graph_manager_node.cpp:98`); raising the per-frame slip thresholds instead of using `slip_window_s` blinds the veto (`fusion_graph.yaml:141-160`).
 - `dr_slip_wheel_min_rad_per_s` must exceed 2× the wheel yaw-rate quantum (`dr_slip_veto.hpp:10-32`, #488) — a lower value zeroes DR translation on straight drives and breaks Nav2 BackUp distances (Invariant 10).
 - Heavy work off the executor: `RebaseISAM2` (maintenance timer, detached thread, `setup_comms.cpp:292-325`) and `Save` (`DispatchAsyncSave`) — never call them inline; TF has its own thread for the same reason (`fusion_graph_node.hpp:401-424`).
-- `tf_publish_lead_s` is a genuine forward prediction (`ForwardStampPose`); sim needs 0.1, hardware 0.05 (`navigation.launch.py:214-217`). `fusion_graph.launch.py` arg default is 0.0 — only relevant when launched standalone.
+- `tf_publish_lead_s` is a source-stamped Expmap prediction; timer delivery lag is not added to the configured lead. Numeric odom recentering preserves the published SE2 gauge. Legacy `ForwardStampPose` remains a tested helper; sim needs 0.1, hardware 0.05 (`navigation.launch.py:214-217`). `fusion_graph.launch.py` arg default is 0.0 — only relevant when launched standalone.
 - `/fusion_graph/markers` is transient_local and decimated to 1500 nodes; `GetAllPoses` is O(N) — keep it on the 1 Hz diag timer.
 - Scan subscription defaults to `/scan_deskewed`, not `/scan` (`setup_comms.cpp:141`); with `use_lidar=false` both LiDAR flags are ANDed off upstream so the node never subscribes to a dead topic.
 - Invariant 16: the graph-side slip veto is rotational only; do not extend it to catch straight-line digs — that is `hardware_bridge`'s dig detector's job.

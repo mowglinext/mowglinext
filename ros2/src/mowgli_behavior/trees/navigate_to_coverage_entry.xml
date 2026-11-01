@@ -1,0 +1,106 @@
+<!--
+  Coverage unit entry only (TransitToStrip and FollowStrip). Reach the actual
+  trimmed start within 3 cm and 0.30 rad before blade enable. Pin FollowPath's
+  checker directly so a latched goal_checker_selector cannot loosen entry.
+  Recovery and planning otherwise match navigate_to_pose_transit.xml.
+  Legacy detours and the default docking tree retain their existing checkers.
+-->
+<root BTCPP_format="4" main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
+        <GoalCheckerSelector selected_goal_checker="{selected_goal_checker}" default_goal_checker="coverage_entry_goal_checker" topic_name="goal_checker_selector"/>
+        <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
+        <RateController hz="1.0">
+          <!--
+            Replan only if the existing path is invalid OR the goal has been
+            updated. Otherwise the previous path stays in {path} and the
+            downstream FollowPath keeps tracking it — no PRE_ROTATE flap.
+
+            ClearGlobalCostmap-Context recovery removed: under the no-lidar
+            config the global_costmap has only static_layer + keepout_filter
+            + inflation, and ClearEntireCostmap forces those layers to
+            re-subscribe and resets current_=false, which puts Nav2 into a
+            loop where every plan attempt times out. The bottom-level
+            RecoveryFallback below still has a costmap-clear action if real
+            recovery is needed.
+          -->
+          <Fallback name="FallbackComputePathToPose">
+            <ReactiveSequence name="CheckIfNewPathNeeded">
+              <Inverter>
+                <GlobalUpdatedGoal/>
+              </Inverter>
+              <!-- Validate the path the way SmacPlanner2D PLANS it: as a POINT
+                   (tiny footprint), lethal cells only. Nav2 Lyrical's ValidatePath
+                   defaults to the ROBOT footprint, so a point path Smac had just
+                   planned past the boundary band or a drawn obstacle's band came
+                   back "invalid" at once and the tree replanned every second
+                   (field 2026-09-22: 118 of 124 transit plans; 2026-09-21: 76 of
+                   92). Replanning cannot help there — Smac returns the same path —
+                   and the body is guarded by RPP's footprint check and
+                   collision_monitor, not by this node. A LiDAR obstacle landing ON
+                   the path still invalidates it. -->
+              <ValidatePath path="{path}" footprint="[[0.01,0.01],[0.01,-0.01],[-0.01,-0.01],[-0.01,0.01]]"/>
+            </ReactiveSequence>
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="{selected_planner}" error_code_id="{compute_path_error_code}"/>
+          </Fallback>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="{selected_controller}" goal_checker_id="coverage_entry_goal_checker" error_code_id="{follow_path_error_code}"/>
+          <Sequence>
+            <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+          </Sequence>
+        </RecoveryNode>
+      </PipelineSequence>
+      <Sequence>
+        <Fallback>
+          <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
+          <WouldAPlannerRecoveryHelp error_code="{compute_path_error_code}"/>
+        </Fallback>
+        <ReactiveFallback name="RecoveryFallback">
+          <GoalUpdated/>
+          <!-- BackUp FIRST, unlike the stock Nav2 order. A coverage transit that
+               fails almost always fails because the robot's OWN footprint sits on
+               a lethal cell: RPP's isCollisionImminent tests the current pose
+               before it projects anything, so it refuses to emit any command at
+               all and reports "collision ahead" at its control rate. Backing up
+               0.30 m is the only action here that changes that. Clearing the
+               costmaps only hides a REAL obstacle until the next scan re-marks
+               it, and waiting does nothing.
+               Field 2026-09-18: a 2.13 m transit at the start of the first ring
+               spent its whole 36 s budget on 164 "collision ahead" reports and one
+               useless spin, and FollowStrip's watchdog cancelled it before the
+               RoundRobin ever reached the BackUp that would have freed it.
+               The blade is provably OFF for every coverage transit (structural gap
+               guard in FollowStrip), and the move stays bounded at 0.30 m.
+
+               Spin is DELIBERATELY NOT in this RoundRobin (removed 2026-09-25,
+               field bag near a hedge). The reasoning above assumed spinning
+               "keeps the footprint exactly where it is (and is itself refused for
+               the same reason)" as FollowPath — the field bag disproved that:
+               `Running spin` / `spin completed successfully` fired repeatedly
+               right next to a hedge that RPP was simultaneously, correctly
+               refusing to approach (`detected collision ahead!`, tens of times
+               per cycle). A hedge is soft, sparse-return vegetation, and Spin's
+               own collision check runs against whatever the local costmap holds
+               at that instant — right after this SAME RoundRobin's
+               ClearingActions branch wiped it, with no guarantee LiDAR has
+               re-marked the hedge from every angle before Spin's sweep. Spin also
+               cannot reposition the footprint off a lethal cell the way BackUp
+               does, so it bought nothing here even when it "worked" — only risk,
+               never recovery, next to a hedge specifically. -->
+          <RoundRobin name="RecoveryActions" wrap_around="true">
+            <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
+            <Sequence name="ClearingActions">
+              <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+              <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+            </Sequence>
+            <Wait wait_duration="5.0"/>
+          </RoundRobin>
+        </ReactiveFallback>
+      </Sequence>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

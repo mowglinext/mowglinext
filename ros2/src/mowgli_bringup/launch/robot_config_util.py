@@ -111,6 +111,56 @@ def chassis_footprint(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     )
 
 
+def collision_monitor_velocity_polygons(front, rear, half_width, footprint_padding):
+    """Signed-motion narrow catcher, derived from the launched Nav2 rectangle.
+
+    Nav2 pads the three-decimal footprint sent by navigation.launch.py again.
+    Keep that full padded body in reverse/rotation: approach checks CURRENT
+    occupancy before projecting the command. Only the extra front band must
+    disappear during a rear-clear reverse. Forward retains the existing band.
+    These static subpolygons are regenerated at bringup, like the old catcher;
+    FootprintApproach continues to subscribe to the live costmap footprint.
+    """
+    values = (front, rear, half_width, footprint_padding)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("collision-monitor geometry must be finite")
+    if front <= rear or half_width <= 0.0 or footprint_padding < 0.0:
+        raise ValueError("invalid collision-monitor footprint or padding")
+    # Match the footprint string actually delivered through RewrittenYaml.
+    f, r, h = (float(f"{value:.3f}") for value in (front, rear, half_width))
+    if f <= r or h <= 0.0:
+        raise ValueError("collision-monitor footprint collapses at launch precision")
+    bf, br, bh = f + footprint_padding, r - footprint_padding, h + footprint_padding
+    if not all(math.isfinite(value) for value in (bf, br, bh)):
+        raise ValueError("padded collision-monitor footprint must be finite")
+    body = [[bf, bh], [bf, -bh], [br, -bh], [br, bh]]
+    # Preserve the previous launch-injected forward points, including rounding.
+    ff, fr = (float(f"{value:.3f}") for value in (front + 0.12, front - 0.02))
+    if ff <= fr:
+        raise ValueError("collision-monitor catcher collapses at launch precision")
+    forward = [[ff, h], [ff, -h], [fr, -h], [fr, h]]
+    tail = min(br, float(f"{rear - 0.12:.3f}"))
+    if tail == br:
+        reverse = body
+    elif bh == h:
+        reverse = [[bf, bh], [bf, -bh], [tail, -bh], [tail, bh]]
+    else:
+        reverse = [[bf, bh], [br, bh], [br, h], [tail, h],
+                   [tail, -h], [br, -h], [br, -bh], [bf, -bh]]
+
+    def region(points, minimum, maximum):
+        return {"points": repr(points), "linear_min": minimum, "linear_max": maximum,
+                "theta_min": -sys.float_info.max, "theta_max": sys.float_info.max}
+
+    # Inclusive first-match ranges: exact zero FIRST, then every finite signed
+    # linear velocity. No epsilon gap where a previous direction can linger.
+    return {"type": "velocity_polygon", "holonomic": False,
+            "velocity_polygons": ["rotation", "reverse", "forward"],
+            "rotation": region(body, 0.0, 0.0),
+            "reverse": region(reverse, -sys.float_info.max, 0.0),
+            "forward": region(forward, 0.0, sys.float_info.max)}
+
+
 def chassis_half_width(params, margin=CHASSIS_FOOTPRINT_MARGIN_M):
     """Half-width of the Nav2 footprint, i.e. how far the BODY reaches sideways.
 

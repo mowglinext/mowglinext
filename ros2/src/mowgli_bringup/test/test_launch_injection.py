@@ -267,6 +267,38 @@ def test_navigation_launch_injects_pivot_join_limits(key: str, helper: str) -> N
         ), f'cov_params["{key}"] must be {helper}(rp), not a literal or another value'
 
 
+def test_residual_signed_pivot_extents_are_the_live_chassis_footprint() -> None:
+    """The optional residual certificate uses execution's padded body extents."""
+    tree = _parse("navigation.launch.py")
+    footprint_assignments = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "chassis_footprint"
+        and len(node.value.args) == 1
+        and isinstance(node.value.args[0], ast.Name)
+        and node.value.args[0].id == "rp"
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Tuple)
+    ]
+    assert footprint_assignments, "derive coverage body extents with chassis_footprint(rp)"
+    for key, index in [("footprint_front", 0), ("footprint_rear", 1)]:
+        names = {
+            node.targets[0].elts[index].id for node in footprint_assignments
+            if isinstance(node.targets[0].elts[index], ast.Name)
+        }
+        values = _subscript_assign_values(tree, "cov_params", key)
+        if index == 1:
+            assert values and all(isinstance(value, ast.UnaryOp)
+                                  and isinstance(value.op, ast.USub)
+                                  and isinstance(value.operand, ast.Name)
+                                  and value.operand.id in names for value in values), key
+        else:
+            assert values and all(isinstance(value, ast.Name) and value.id in names
+                                  for value in values), key
+
+
 # ---------------------------------------------------------------------------
 # (c) mowing_enabled must reach hardware_bridge_node (issue #195).
 # ---------------------------------------------------------------------------
@@ -653,3 +685,58 @@ def test_dock_pose_reaches_mqtt_bridge() -> None:
         scope = {"__builtins__": {}, "float": float}
         assert eval(expression, scope, {"robot_params": {key: 1.25}}) == 1.25, key
         assert eval(expression, scope, {"robot_params": {}}) == 0.0, key
+
+
+def test_residual_pivot_launch_values_match_physical_and_padded_execution_body() -> None:
+    """Execute the actual wiring expressions, including the signed rear X."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("pivot_robot_config", _launch_path("robot_config_util.py"))
+    util = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(util)
+    tree = _parse("navigation.launch.py")
+    assignments = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                   and isinstance(node.value, ast.Call)
+                   and isinstance(node.value.func, ast.Name)
+                   and node.value.func.id == "chassis_footprint"
+                   and len(node.value.args) == 1
+                   and isinstance(node.value.args[0], ast.Name)
+                   and node.value.args[0].id == "rp"
+                   and len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple)]
+    for rp, padding in (({}, 0.01), ({"chassis_width": .4512}, 0.035)):
+        import yaml
+        front, signed_rear, half_width = util.chassis_footprint(rp)
+        scope = {"rp": rp, "chassis_footprint": util.chassis_footprint, "float": float,
+                 "yaml": yaml, "fp_f": front, "fp_r": signed_rear, "fp_hw": half_width,
+                 "doc": {"local_costmap": {"local_costmap": {"ros__parameters": {
+                     "footprint_padding": padding}}}}}
+        serialized = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                      and isinstance(node.value, ast.JoinedStr)
+                      and any(isinstance(target, ast.Name) and target.id == "footprint_str"
+                              for target in node.targets)]
+        assert len(serialized) == 1
+        exec(compile(ast.Module(body=serialized, type_ignores=[]), "navigation.launch.py", "exec"), scope)
+        collision = [node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                     and any(isinstance(target, ast.Name) and target.id == "pivot_collision"
+                             for target in node.targets)]
+        assert len(collision) == 1
+        exec(compile(ast.Module(body=collision, type_ignores=[]), "navigation.launch.py", "exec"), scope)
+        for assignment in assignments:
+            exec(compile(ast.Module(body=[assignment], type_ignores=[]), "navigation.launch.py", "exec"), scope)
+        values = {}
+        for key in ("footprint_front", "footprint_rear", "footprint_padding", "collision_extents"):
+            expressions = _subscript_assign_values(tree, "cov_params", key)
+            assert len(expressions) == 1, key
+            values[key] = eval(compile(ast.Expression(expressions[0]), "navigation.launch.py", "eval"), scope)
+        front, signed_rear, half_width = util.chassis_footprint(rp)
+        assert values["footprint_front"] == front
+        assert values["footprint_rear"] == -signed_rear > 0
+        assert values["footprint_padding"] == padding
+        execution = [float(f"{value:.3f}") for value in (front, -signed_rear, half_width)]
+        assert values["collision_extents"] == execution
+        # The server covers the real body and Nav2's serialized outline, then
+        # adds its padding once. Neither may understate execution for custom sizes.
+        modeled = [max(physical, actual) + padding for physical, actual in
+                   zip((front, -signed_rear, half_width), values["collision_extents"])]
+        assert all(certificate >= actual + padding for certificate, actual in
+                   zip(modeled, execution))

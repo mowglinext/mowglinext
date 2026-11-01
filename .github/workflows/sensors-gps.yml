@@ -67,6 +67,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential \
             cmake \
+            libboost-dev \
             python3-colcon-common-extensions \
             ros-lyrical-ament-cmake \
             ros-lyrical-ament-cmake-gtest \
@@ -80,7 +81,8 @@ jobs:
             ros-lyrical-rosidl-default-runtime \
             ros-lyrical-rtcm-msgs \
             ros-lyrical-sensor-msgs \
-            ros-lyrical-std-msgs
+            ros-lyrical-std-msgs \
+            ros-lyrical-visualization-msgs
 
       - name: Assemble the workspace
         shell: bash

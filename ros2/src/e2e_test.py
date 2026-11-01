@@ -896,7 +896,7 @@ class E2ETestNode(Node):
             )
         elif encountered:
             self.obstacle_test_result = "PARTIAL"
-            self.get_logger().warn(
+            self.get_logger().warning(
                 f"=== OBSTACLE AVOIDANCE TEST: PARTIAL — entered the obstacle vicinity "
                 f"but did not both detect and pass it (detected={detected}, "
                 f"departed={departed}) ==="
@@ -1741,7 +1741,7 @@ def main():
         while rclpy.ok() and not node.mowing_cycle_complete:
             rclpy.spin_once(node, timeout_sec=0.1)
             if time.time() - start > timeout:
-                node.get_logger().warn(f"Mowing cycle timeout after {timeout}s")
+                node.get_logger().warning(f"Mowing cycle timeout after {timeout}s")
                 break
 
         # ── New Feature Tests (run after mowing cycle or timeout) ────────

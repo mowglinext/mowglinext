@@ -32,7 +32,10 @@ directories. The normal package's ament suite runs `test_planning_trace`, the
 Python runner/provenance tests and a 26-fixture replay matrix with two repetitions in each
 of two fresh processes (104 replay runs). Larger stress runs use the commands
 above. These are registered checks, not a statement that they have passed.
-The standalone suite builds all five existing planner test files unchanged.
+The standalone candidate suite builds all six planner test files unchanged,
+including the private ring-corner smoothing safety regressions. Baseline builds
+retain the five historical planner test files and also run the ring-corner suite
+when it exists in the extracted revision.
 
 For an isolated container with no network or robot/service mounts:
 
@@ -87,6 +90,11 @@ saves both snapshots and its first differing JSON location. Timing notes are
 excluded. Full snapshots are compressed; summaries contain SHA-256 stage/output
 hashes, pose/swath/ring/transit counts, path/endpoint-link lengths, connector
 outcomes, planner/connector times and process peak RSS.
+The known mixed diagnostic note keeps its `angles`/`mainland_area` suffix and
+all other characters in semantic identity, replacing only the three elapsed
+millisecond values. Raw timing notes remain under `timing.planner_notes`.
+Malformed notes using that recognized timing prefix fail closed; other notes
+and dropped-piece diagnostics remain exact.
 Use a fresh output directory for each comparison. A timeout or process failure
 returns nonzero and may leave a partial report; never treat it as a completed run.
 
@@ -101,7 +109,8 @@ and not every submillimetre change changes that quantized fingerprint.
 ## Baseline and performance comparison
 
 Build the same harness against a separately extracted baseline implementation
-and matching headers using `-DPLANNER_SOURCE=... -DPLANNER_INCLUDE=...`
+and matching public and private source headers using
+`-DPLANNER_SOURCE=... -DPLANNER_INCLUDE=...`
 and `-DREPLAY_BASELINE=ON`. If the baseline tests differ, also supply
 `-DPLANNER_TEST_ROOT=...` with that revision's test sources and relative fixtures.
 Then run baseline and candidate with `--no-trace`
@@ -117,22 +126,26 @@ revision refresh at build time, including incremental and packed-ref updates.
 The dedicated `Coverage planner replay` workflow runs Release, Debug and
 RelWithDebInfo on changes to this package (or by manual dispatch). It extracts
 the tested synthetic merge's base parent (validated against the PR head), with
-matching planner/header/tests/fixtures, freezes the 26 fixture files once and feeds
-them to both implementations. Each configuration runs 15 untraced repetitions
+matching planner source, public and private headers, shared geometry header, tests
+and fixtures. It freezes the 26 fixture files once and feeds them to both
+implementations. Each configuration runs 15 untraced repetitions
 per fixture for each implementation and 100 traced candidate repetitions per
 fixture: 3,380 replay records, plus the standalone tests. Multi-polygon records
 contain more than one field-planning call.
 
 Artifacts named `coverage-planner-replay-<build type>` retain the exact fixtures,
 compressed snapshots, summaries, comparison JSON/Markdown, build logs/flags,
-dependency versions and library hashes for 14 days. Baseline and candidate must
-match exact execution output and geometry metrics; traced execution coordinates
-and quaternions must match the untraced candidate. Source identities are allowed
-to differ. Runtime/RSS measurements are reported rather than gated by a noisy
-percentage threshold. The job uses the existing pinned dependency cache; on a
-cache hit its original compiler flags are unavailable and are reported as such.
+dependency versions and library hashes for 14 days. The workflow retains the
+unchanged strict comparison and its raw differences, then gates on complete
+strict identity or the certified microscopic bevel contract below. The pristine
+baseline/reference equality and real-planner mutation controls are mandatory.
+Traced execution coordinates and quaternions must match the untraced candidate.
+Source identities are allowed to differ. Runtime/RSS measurements are reported
+rather than gated by a noisy percentage threshold. The job uses the existing
+pinned dependency cache; on a cache hit its original compiler flags are unavailable
+and are reported as such.
 The comparison verifies summaries against retained fixture/snapshot hashes and
-rejects missing, null or invalid evidence. Its nine rejection/passivity tests
+rejects missing, null or invalid evidence. Comparator rejection/passivity tests
 run in both the package and standalone suites.
 
 To compare downloaded artifacts locally:
@@ -229,3 +242,162 @@ FMA/AVX2/fast-math/evaluation macros. Requested flags and compiler macros do not
 establish every dependency's effective flags; consult the retained binaries.
 All identities remain offline diagnostics, with production resume validation
 unchanged.
+
+## Certified microscopic bevel changes
+
+`--require-identical` retains its strict baseline/candidate equality contract.
+The workflow retains that comparison as a diagnostic and gates on
+`--require-certified-fillets`, which is limited to the microscopic bevel repair;
+it accepts either the complete strict identity predicate or an independently
+certified microscopic bevel change, and reports the method per fixture. It does
+not approve arbitrary changed geometry or update expected snapshots.
+
+Configure the extracted baseline build with both `-DREPLAY_BASELINE=ON` and
+`-DREPLAY_CERTIFIED_FILLET_REFERENCE=ON`. This additionally builds
+`coverage_replay_reference` and registers `test_ring_contract_reference`.
+The ordinary `coverage_replay` still compiles the pristine baseline directly.
+The reference adapter includes that byte-unchanged implementation in a separate
+translation unit to call its existing ordinary-rounding and densification helpers.
+It requires the original `PlanningTrace` API (present in `dev` at `e48cf12a`);
+missing or incompatible APIs/helpers fail the build. There is no compatibility
+patch or runtime planner policy switch.
+
+Both paths require ordinary reference output to match the directly compiled
+pristine baseline, matching source/header/build/helper identities, exact fixture
+identity, deterministic repetitions and passive candidate observation. The exact
+identity path also compares every traced-reference stage in order. Once the
+baseline contains the repair, identical output needs no pre-repair reconstruction.
+If an older baseline lacks the new bevel observation records, those extra records
+still pass the geometry oracle below; unknown stages or malformed records fail.
+
+Candidate observation records the actual sparse ring, intermediate bevel-only
+replacement, ordinary-rounded result and accepted local spans. The oracle binds
+these observations to both real outputs: old rounding/densification of the sparse
+ring must reproduce the pristine baseline ring exactly, and old rounding of the
+independently checked intermediate must reproduce the candidate ring exactly.
+It accounts for every original vertex, requires unchanged start/closure/order and
+winding, preserves pivot twins, checks the existing bevel eligibility and radius
+floor, derives circle/tangency from emitted coordinates, and checks every emitted
+chord and both tangent connectors continuously against the original boundary and
+holes. Independent deterministic circular-V1 sampling must also match every replacement
+exactly. The legacy-first selector V2 preserves valid pristine-helper radius and
+tangent choices; a rejected selection may use the bounded analytic fallback below.
+Every changed final densified ring receives the same continuous containment check,
+covering neighbouring ordinary fillets retuned after a support edge is shortened.
+The observer is passive; plain/traced execution must remain bit-identical.
+
+The bounded bevel pass first asks the unchanged ordinary helper for a fillet.
+A valid selection retains that helper's exact entry/exit and both supporting
+endpoints before circular sampler V1 replaces only the interior samples. The circle radius is inferred from the entry trim and
+support turn; interior points follow the signed, unwrapped support angle. For
+radius `r`, support turn `theta` and requested step `s`, define
+`L = min(max(0.001, s/r), 15 degrees)` and `N = ceil(theta/L)`. This retains the
+existing Dubins minimum angular step, adds the existing supported-turn cap and
+emits interior angles `theta*k/N` for `k=1..N-1`. Entry and exit occur once each;
+there are no Dubins word boundaries or nearly zero straight seams. Total local
+point count, including both supporting endpoints, is `N+3`. Finite/positive checks
+and the derived bound `N <= ceil(pi/0.001)` precede conversion/allocation; no count
+is clamped. Arc spacing is at most `max(0.001*r, s)`, with heading increments at
+most 15 degrees. The actual replay step is 0.03 m with radius at least 0.2 m.
+
+Only an ordinary-helper result with at most three points triggers selector V2's
+analytic fallback. It enumerates the same `max(fillet_r, min_radius)` to
+`min_radius - 1e-9` sequence in 0.01 m decrements, retaining the 0.49 adjacent-edge
+trim budgets. For each radius it constructs the tangent pair with
+`trim = r/tan((pi-theta)/2)` and runs unchanged circular sampler V1. Sampled checks
+and strict continuous boundary/hole checks must pass before that radius is accepted.
+A valid legacy selection whose V1 conversion or containment fails is rejected;
+it never triggers fallback retuning. The ordinary helper and generic Dubins
+callers retain their original behavior.
+
+The reference implements both the legacy-first selection and fallback separately,
+using its pristine ordinary helper and its own tangent construction and V1 code.
+It requires exact local sample identity in addition
+to the unchanged independent radius, tangency, sweep, locality and containment
+checks. Old rounding/densification of S and T, and all downstream comparisons,
+remain exact. General Dubins connectors and ordinary corner rounding are unchanged.
+
+Hosted run 38993303690 exposed two numerical seams in the generic Dubins sampler:
+`multi_polygon` and `near_degenerate` had radial residuals 10.627 and 11.617 nm,
+above the unchanged 10 nm check. A cancellation residual in the normalized RSR
+straight length produced an 11.623 nm seam. The circular recipe preserves the
+selected tangents and radius model; uniform interior sampling also changes chord
+placement, so its geometry effect is not limited to those nanometres. Captured
+source/boundary regression inputs exercise both cases without F2C regeneration.
+
+Hosted Debug at diagnostic source `49bc04ee` also exposed a whole missed southwest
+bevel: all 21 legacy radii returned the unrounded triple with actual and wide
+diagnostic boundaries. Original source vertices survived into T/R/D, producing
+two approximately 45-degree turns with measured radii 0.07186/0.07173 m. This is
+separate from the earlier nanometre seam. The exact four-point support capture
+preserves this regression; a second case fixes minimum and maximum radius at
+0.4 m to isolate a genuinely rejected legacy choice. It measures the recovered
+0.4 m circle and rejects a 20-micrometre hole between samples. Native default
+0.4-to-0.2 selection accepted 0.25 m and passed before this repair, so that native
+run is not claimed as a reproduction of the hosted default-case failure.
+
+All non-ring plan state and existing planner trace stages must match the original
+baseline. Only after certification does the reference replace its public
+`plan.rings`, run its unchanged downstream planner, and require exact candidate
+execution coordinates, quaternions, fingerprint, fields and metrics. Its ordinary
+run must first match the separately compiled pristine baseline exactly, guarding
+against numerical changes caused by the adapter itself. Compiled baseline source,
+header, flags and reference-helper identities are checked against retained evidence.
+Raw baseline/candidate differences remain in the report.
+
+Run the real-planner rejection controls after building both variants:
+
+```sh
+python3 ros2/src/mowgli_coverage/test/replay/test_certified_fillets.py \
+  --baseline /tmp/replay-baseline/coverage_replay \
+  --reference /tmp/replay-baseline/coverage_replay_reference \
+  --candidate /tmp/replay-candidate/coverage_replay
+```
+
+The controls check the square's actual comparison method and the strict gate
+(expected RED for an old baseline, PASS for an identical future baseline), then reject downstream bit drift, inserted points, erased pivots, changed radius,
+forged observation/state, changed fixture, trace drift and unstable repetitions.
+Use `--expect-method certified_fillets` or `--expect-method identical` to pin the
+intended contrast. All mutation controls run in both modes, including full CLI
+acceptance/rejection checks for exact identity, execution drift, trace drift and
+unstable data. The baseline-only GTests always run and additionally reject tiny holes and concave boundary
+crossings between samples that the old sample-only helper accepts. Python unit
+controls reject changed baseline source/header/build and reference-helper identity.
+`test_semantic_diagnostics` runs in both package and standalone CTest suites,
+checking the clock-only separation, exact semantic suffix/other notes and
+malformed-timing rejection.
+
+For the complete retained matrix use the same comparison command above, replacing
+`--require-identical` with:
+
+```sh
+--require-certified-fillets \
+--baseline-binary /tmp/replay-baseline/coverage_replay_reference
+```
+
+Every fixture still requires exact repeated outputs, exact shared inputs and exact
+candidate trace passivity. Unsupported deltas, missing evidence or incompatible
+reference builds fail closed. This certifies changed planner ring polylines;
+unchanged legacy rings are not containment-certified. The production bevel pass continuously checks the actual
+final densified proposal after ordinary rounding, which can retune a neighbouring
+corner. A failed check rolls back that entire ring to exact legacy rounding of
+the sparse source; its emitted provenance has no accepted replacements. Valid
+contained bevel fillets remain enabled.
+
+The first full native Release matrix (`e48cf12a` baseline, `4ec46f77` proposal)
+exposed an existing ordinary-rounding limit in both split-mainland fixtures: the old outer ring had 43.504 mm of chord length
+outside `plan.safe_boundary`, the working/headland envelope expanded outward by
+0.08 m (half the operation width), rather than the raw fixture boundary. The
+initial bevel proposal retained two byte-identical old
+chords totalling 29.442 mm outside that envelope, with a 5.155 mm outside midpoint.
+That midpoint is 85.155 mm outside the raw transported fixture boundary; these
+are software geometry measurements, not physical field observations. Full-ring
+validation rejected that proposal; conservative rollback restores the exact old
+ring, including its existing limit. This is a strict nonregression check and denial
+of unproven changes, not a claim that every legacy path is contained or safer.
+The production regression separately covers a new retuned-neighbour chord
+crossing a 20-micrometre hole where the exact legacy path is contained; it requires
+rollback, exact passive provenance and continued valid fillets without the hole.
+
+The schema does not contain a chassis footprint/frame, and this mode supplies no physical
+swept-body or field-coverage evidence.

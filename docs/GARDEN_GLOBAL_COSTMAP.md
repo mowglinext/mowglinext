@@ -43,7 +43,11 @@ marks persist for at most 2 s, with a 0.5 s stream update deadline; absent/stale
 LiDAR prevents a current planning costmap. No-LiDAR fleet observations persist
 for 1 s and are marking-only. Removed observations clear their marks and
 inflation throughout the fixed extent; drawn mask obstacles remain lethal.
-Local obstacle handling and collision-monitor settings are unchanged.
+Local `MappedObstacleLayer` now adds raw mapped obstacle rings after local
+inflation, independently of LiDAR/fleet visibility. It does not copy the global
+outer-boundary mask, planner body margin or dock-body costs. Collision-monitor
+settings remain unchanged; see `TRANSIT_AUTHORIZATION.md` for the paired transit
+rotation repair and validation limits.
 
 Map edits should be performed with autonomous motion stopped. This change gates
 new planning against unavailable authorization; it does not cancel an already

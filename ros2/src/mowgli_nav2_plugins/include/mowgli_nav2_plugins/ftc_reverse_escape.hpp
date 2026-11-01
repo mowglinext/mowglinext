@@ -9,8 +9,8 @@
 // the lateral deviation needed to skirt it exceeds the cap). It exists ONLY as
 // an escape sub-state; normal path following stays forward_only. The maneuver is
 // a PURE STRAIGHT reverse (no rotation — a turning reverse re-creates the ±180°
-// pirouette deadlock that forward_only was introduced to avoid), bounded HARD to
-// max_dist_m, and gated on the rear footprint being clear of lethal cells. Any
+// pirouette deadlock that forward_only was introduced to avoid), with a hard
+// max_dist_m command-distance budget, and a rear footprint clear of lethal cells. Any
 // ambiguity fails safe (no reverse → the caller holds/aborts as before).
 //
 // The controller owns the accumulator state (dist_done) and the costmap-based
@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace mowgli_nav2_plugins
 {
@@ -31,7 +32,7 @@ struct ReverseEscapeCfg
   // is field-validated per-robot. The controller always sets this explicitly
   // from the ROS param, so this default governs only unconfigured callers/tests.
   bool enabled = false;
-  double max_dist_m = 0.30;  // hard cap on total reversed distance
+  double max_dist_m = 0.30;  // hard cap on conservatively charged reverse distance
   double speed_mps = 0.10;  // straight reverse speed (must clear firmware deadband)
 };
 
@@ -67,17 +68,28 @@ inline ReverseEscapeAction ReverseEscapeDecide(const ReverseEscapeCfg& cfg,
   return ReverseEscapeAction::kReverse;
 }
 
-/// Advance the reversed-distance accumulator by the odom-measured motion this
-/// tick, hard-capped at max_dist_m so the total reverse NEVER exceeds the
-/// budget. Returns the new dist_done. `measured_fwd_speed` is the odom forward
-/// speed (negative while reversing — magnitude is what matters).
+/// Advance the reversed-distance accumulator by conservatively consumed motion
+/// this tick, rounded upward and hard-capped at max_dist_m. The
+/// caller bounds the next command by the remaining budget. Returns the new
+/// dist_done. `measured_fwd_speed` is the consumed speed magnitude (the caller
+/// takes the greater of measured and last authorized pre-taper escape speeds).
 inline double ReverseEscapeAdvance(const ReverseEscapeCfg& cfg,
                                    double dist_done,
                                    double measured_fwd_speed,
                                    double dt)
 {
-  const double step = std::abs(measured_fwd_speed) * std::max(0.0, dt);
-  return std::min(cfg.max_dist_m, dist_done + step);
+  const double speed = std::abs(measured_fwd_speed);
+  if (speed == 0.0 || dt <= 0.0)
+  {
+    return std::min(cfg.max_dist_m, dist_done);
+  }
+  // Round consumption upward, never the available budget. In particular, a
+  // positive consumption must still advance an accumulator one ULP below
+  // its cap even when the integration interval is short. Otherwise
+  // half of the last ULP can round away forever, leaving reverse active.
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double step = std::nextafter(speed * dt, infinity);
+  return std::min(cfg.max_dist_m, std::nextafter(dist_done + step, infinity));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

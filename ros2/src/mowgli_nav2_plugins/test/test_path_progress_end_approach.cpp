@@ -184,8 +184,8 @@ protected:
       ps.pose.orientation = yawToQuat(p.yaw);
       msg->poses.push_back(ps);
     }
-    checker_.onPath(msg);
     checker_.reset();
+    checker_.bindControllerPlan(this, 1, msg->header, msg->poses);
     goal_ = toOdom(path.back());
   }
 

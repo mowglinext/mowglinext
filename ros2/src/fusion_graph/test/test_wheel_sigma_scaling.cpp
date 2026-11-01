@@ -28,8 +28,10 @@
 
 #include <cmath>
 #include <cstdio>
+#include <optional>
 
 #include "fusion_graph/graph_manager.hpp"
+#include "fusion_graph/motion_source_history.hpp"
 #include <gtest/gtest.h>
 
 namespace fg = fusion_graph;
@@ -286,4 +288,156 @@ TEST(WheelSigmaScaling, PivotReleaseStillOverridesTheTravelTerm)
   // win.
   EXPECT_GE(sigma_x, gp.pivot_wheel_sigma_x);
   EXPECT_LT(0.05 * std::sqrt(kPhantomVx * kSampleDt + 0.04 * kSampleDt), 0.01);
+}
+
+TEST(WheelSigmaScaling, SourceReversalRetainsTravelNoiseAcrossNodeCadences)
+{
+  struct SourceRun
+  {
+    double summed_variance = 0.0;
+    double endpoint_x = 0.0;
+    double midpoint_x = 0.0;
+    double endpoint_variance_x = 0.0;
+    int nodes = 0;
+  };
+  const auto run =
+      [](double node_period, double first_speed, double second_speed) -> std::optional<SourceRun>
+  {
+    auto params = MakeParams(node_period);
+    params.cov_update_every_n = 1;
+    fg::GraphManager graph(params);
+    graph.SetConsumedMotionBaseline(1, 0);
+    if (!graph.InitializeSource(gtsam::Pose2(), 0, 0, 1))
+      return std::nullopt;
+    SourceRun result;
+    for (int i = 1; i <= 2; ++i)
+    {
+      const int64_t start = (i - 1) * 100000000LL;
+      const int64_t end = i * 100000000LL;
+      const double speed = i == 1 ? first_speed : second_speed;
+      graph.AddWheelTwist(speed, 0.0, 0.0, 0.1);
+      const double bias = graph.AddGyroDelta(0.0, 0.1);
+      if (!graph.AddConsumedMotionStep(
+              {1,
+               start,
+               end,
+               {{fg::MotionSourceKind::Wheel, static_cast<uint64_t>(i), end},
+                {start, end},
+                speed,
+                0.0,
+                0.0},
+               {{fg::MotionSourceKind::Gyro, static_cast<uint64_t>(i), end}, {start, end}, 0.0},
+               bias,
+               true,
+               true}))
+        return std::nullopt;
+      if (graph.TickSource(end, end, 1))
+      {
+        const double sigma = graph.Stats().wheel_sigma_x_eff;
+        result.summed_variance += sigma * sigma;
+        ++result.nodes;
+      }
+    }
+    const auto endpoint = graph.LatestSnapshot();
+    const auto count = graph.LiveNodeCount();
+    const auto midpoint = graph.EstimatePoseAtSource(1, 100000000);
+    if (!endpoint || endpoint->source_stamp_ns != 200000000 || !midpoint ||
+        graph.LiveNodeCount() != count)
+      return std::nullopt;
+    result.endpoint_x = endpoint->pose.x();
+    result.midpoint_x = midpoint->x();
+    result.endpoint_variance_x = endpoint->covariance(0, 0);
+    return result;
+  };
+
+  // These are the same two consumed source intervals at each cadence. Same-sign
+  // forward and reverse controls isolate cancellation from the sign of velocity.
+  for (const double second_speed : {0.2, -0.2})
+  {
+    for (const double first_speed : {0.2, -0.2})
+    {
+      const auto fine = run(0.1, first_speed, second_speed);
+      const auto coarse = run(0.2, first_speed, second_speed);
+      ASSERT_TRUE(fine);
+      ASSERT_TRUE(coarse);
+      EXPECT_EQ(fine->nodes, 2);
+      EXPECT_EQ(coarse->nodes, 1);
+      const double expected_variance = 0.05 * 0.05 * (0.04 + 0.04 * 0.2);
+      EXPECT_NEAR(fine->summed_variance, expected_variance, 1e-12);
+      EXPECT_NEAR(coarse->summed_variance, expected_variance, 1e-12)
+          << "signed wheel displacement must not erase forward/reverse travel";
+      EXPECT_NEAR(fine->endpoint_x, (first_speed + second_speed) * 0.1, 1e-12);
+      EXPECT_NEAR(coarse->endpoint_x, fine->endpoint_x, 1e-12);
+      EXPECT_NEAR(fine->midpoint_x, first_speed * 0.1, 1e-12);
+      EXPECT_NEAR(coarse->midpoint_x, fine->midpoint_x, 1e-12);
+      // Only the decoupled straight-line x marginal is compared: this is not
+      // a claim of general nonlinear posterior invariance under node changes.
+      EXPECT_NEAR(coarse->endpoint_variance_x, fine->endpoint_variance_x, 1e-12);
+    }
+  }
+}
+
+TEST(WheelSigmaScaling, LegacyReversalRetainsTravelNoiseAcrossNodeCadences)
+{
+  for (const double period : {0.1, 0.2})
+  {
+    fg::GraphManager graph(MakeParams(period));
+    graph.Initialize(gtsam::Pose2(), 0.0);
+    double summed_variance = 0.0;
+    int nodes = 0;
+    for (int i = 1; i <= 2; ++i)
+    {
+      graph.AddWheelTwist(i == 1 ? 0.2 : -0.2, 0.0, 0.0, 0.1);
+      graph.AddGyroDelta(0.0, 0.1);
+      if (graph.Tick(i * 0.1))
+      {
+        const double sigma = graph.Stats().wheel_sigma_x_eff;
+        summed_variance += sigma * sigma;
+        ++nodes;
+      }
+    }
+    EXPECT_EQ(nodes, period == 0.1 ? 2 : 1);
+    EXPECT_NEAR(summed_variance, 0.05 * 0.05 * (0.04 + 0.04 * 0.2), 1e-12);
+    const auto endpoint = graph.LatestSnapshot();
+    ASSERT_TRUE(endpoint);
+    EXPECT_NEAR(endpoint->pose.x(), 0.0, 1e-12);
+  }
+}
+
+TEST(WheelSigmaScaling, SourceBootstrapReplaysOnlyRetainedClippedTravel)
+{
+  fg::GraphManager graph(MakeParams(0.2));
+  graph.SetConsumedMotionBaseline(1, 0);
+  for (int i = 1; i <= 2; ++i)
+  {
+    const int64_t start = (i - 1) * 100000000LL;
+    const int64_t end = i * 100000000LL;
+    const double speed = i == 1 ? 0.2 : -0.2;
+    graph.AddWheelTwist(speed, 0.0, 0.0, 0.1);
+    const double bias = graph.AddGyroDelta(0.0, 0.1);
+    ASSERT_TRUE(graph.AddConsumedMotionStep(
+        {1,
+         start,
+         end,
+         {{fg::MotionSourceKind::Wheel, static_cast<uint64_t>(i), end},
+          {start, end},
+          speed,
+          0.0,
+          0.0},
+         {{fg::MotionSourceKind::Gyro, static_cast<uint64_t>(i), end}, {start, end}, 0.0},
+         bias,
+         true,
+         true}));
+  }
+  // The seed discards the first 50 ms. Its remaining first source interval
+  // contributes 0.01 m, then the full reverse interval contributes 0.02 m.
+  ASSERT_TRUE(graph.InitializeSource(gtsam::Pose2(0.01, 0.0, 0.0), 0, 50000000, 1));
+  const auto endpoint = graph.TickSource(200000000, 200000000, 1);
+  ASSERT_TRUE(endpoint);
+  EXPECT_NEAR(endpoint->pose.x(), 0.0, 1e-12);
+  const auto midpoint = graph.EstimatePoseAtSource(1, 100000000);
+  ASSERT_TRUE(midpoint);
+  EXPECT_NEAR(midpoint->x(), 0.02, 1e-12);
+  const double sigma = graph.Stats().wheel_sigma_x_eff;
+  EXPECT_NEAR(sigma * sigma, 0.05 * 0.05 * (0.03 + 0.04 * 0.15), 1e-12);
 }

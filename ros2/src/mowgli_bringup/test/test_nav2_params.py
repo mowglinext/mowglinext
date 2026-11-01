@@ -48,6 +48,22 @@ def _load_params() -> dict:
                        _load_yaml("nav2_params_lidar.yaml"))
 
 
+def test_residual_signed_pivot_dimensions_default_disabled_without_operator_knobs() -> None:
+    here = os.path.dirname(os.path.abspath(__file__))
+    server = os.path.join(here, "..", "..", "mowgli_coverage", "src", "coverage_server.cpp")
+    with open(server, encoding="utf-8") as fh:
+        source = fh.read()
+    template = _load_yaml("mowgli_robot.yaml")
+    with open(os.path.join(here, "..", "..", "..", "..", "gui", "asserts",
+                           "mower_config.schema.json"), encoding="utf-8") as fh:
+        schema_source = fh.read()
+    for key in ("footprint_front", "footprint_rear"):
+        assert re.search(rf'declare_double\("{key}", 0\.0\)', source)
+        assert key not in template["mowgli"]["ros__parameters"]
+        assert f'"{key}"' not in schema_source
+        assert key not in _load_yaml("nav2_params_base.yaml")["coverage_server"]["ros__parameters"]
+
+
 def _controller_section(params: dict) -> dict:
     return params["controller_server"]["ros__parameters"]
 
@@ -916,6 +932,13 @@ def test_coverage_is_ftc_transit_is_not() -> None:
         )
 
 
+def test_ftc_forward_coast_bound_is_preserved_in_both_overlays() -> None:
+    """Both merged configurations retain the declared forward STOP assumption."""
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        assert fcp["obstacle_coast_time_bound_s"] == 0.5
+
+
 def test_lidar_collision_monitor_has_active_hard_stop() -> None:
     """The LiDAR variant MUST carry an ACTIVE pre-contact hard-stop layer.
 
@@ -1507,6 +1530,22 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
         assert "keepout_filter" not in lc["plugins"]  # Invariant 5
 
 
+def test_local_mapped_obstacles_follow_inflation_in_both_variants() -> None:
+    """Raw mapped holes must reach local consumers without another body margin."""
+    for loader in (_load_params, _load_no_lidar_params):
+        cfg = loader()
+        local = cfg["local_costmap"]["local_costmap"]["ros__parameters"]
+        global_ = cfg["global_costmap"]["global_costmap"]["ros__parameters"]
+        follow = _controller_section(cfg)["FollowPath"]
+        assert follow["allow_alternate_initial_rotation"] is True
+        assert follow["rotate_to_heading_once"] is True
+        assert follow["plugin"] == "nav2_rotation_shim_controller::RotationShimController"
+        assert local["plugins"][-2:] == ["inflation_layer", "mapped_obstacles"]
+        assert local["mapped_obstacles"]["plugin"] == "mowgli_nav2_plugins::MappedObstacleLayer"
+        assert "mapped_obstacles" not in global_["plugins"]
+        assert "keepout_filter" not in local["plugins"]
+
+
 def test_global_grid_is_garden_sized_with_bounded_recent_sources() -> None:
     for loader, source in ((_load_params, "obstacle_layer"),
                            (_load_no_lidar_params, "fleet_layer")):
@@ -1687,13 +1726,15 @@ def test_collision_monitor_polygons_follow_the_chassis() -> None:
     before touching. FootprintApproach is exempt: it reads
     /local_costmap/published_footprint and already follows the real geometry."""
     src = _read_text("launch/navigation.launch.py")
-    for polygon in ("PolygonStopNarrow", "PolygonStop"):
+    for polygon in ("PolygonStop",):
         assert re.search(
             rf'cm_params\["{polygon}"\]\["points"\]\s*=\s*_poly\(', src), (
             f"{polygon}.points must be DERIVED from the chassis footprint at "
             "launch, not left as a literal in the overlay yaml."
         )
-    assert re.search(r"_poly\(\s*fp_f \+ 0\.12,\s*fp_f - 0\.02,\s*fp_hw\)", src)
+    assert re.search(
+        r"narrow\.update\(collision_monitor_velocity_polygons\(\s*"
+        r'fp_f, fp_r, fp_hw, float\(local_params\["footprint_padding"\]\)\)\)', src)
     assert re.search(r"_poly\(\s*fp_f \+ 0\.05,\s*fp_r - 0\.05,\s*fp_hw\)", src)
     # The footprint triple must be bound unconditionally — reading it from the
     # injection closure when only an `if rp:` branch assigned it is the
@@ -1808,3 +1849,18 @@ def test_fleet_peer_node_is_respawned_and_gets_the_chassis_footprint() -> None:
     assert re.search(r"fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint\(robot_params\)", src)
     for key in ("chassis_front_m", "chassis_rear_m", "chassis_half_width_m"):
         assert key in block, f"{key} must be injected into fleet_peer_obstacles"
+
+
+def test_coverage_entry_checker_requires_current_xy_and_heading() -> None:
+    """Coverage entry is independent of legacy transit and docking checks."""
+    for params in (_load_params(), _load_no_lidar_params()):
+        cfg = _controller_section(params)
+        assert "coverage_entry_goal_checker" in cfg["goal_checker_plugins"]
+        gc = cfg["coverage_entry_goal_checker"]
+        assert gc["plugin"] == "nav2_controller::SimpleGoalChecker"
+        assert gc["xy_goal_tolerance"] == 0.03
+        assert gc["yaw_goal_tolerance"] == 0.30
+        assert gc["stateful"] is False
+        assert cfg["transit_goal_checker"]["xy_goal_tolerance"] == 0.30
+        assert cfg["transit_goal_checker"]["yaw_goal_tolerance"] == 3.14
+        assert cfg["transit_goal_checker"]["stateful"] is True

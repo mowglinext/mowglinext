@@ -15,16 +15,16 @@
 
 /**
  * @file area_progress.hpp
- * @brief Did a pass on an area mow anything new? (GetNextUnmowedArea's no-progress budget.)
+ * @brief Did a pass add coverage execution? (GetNextUnmowedArea's no-progress budget.)
  *
  * The budget used to count only units booked FULLY mowed. A large area drawn with few points
  * plans into very few, very long units (rings + swaths, hundreds of metres each), so a pass
  * that mowed a long stretch and then stopped inside a unit — a transit refused at the next
  * boundary, an obstacle, a dig — counted as "nothing new": five of those retired an area that
- * was still being mowed. The furthest pose reached inside each unfinished unit
- * (BTContext::area_unit_progress) is what the next pass resumes from, so it also measures that
- * pass's real progress. It is a high-water mark against a finite plan, so crediting it keeps
- * the budget bounded: each credit needs a fixed share of the plan more.
+ * was still being mowed. Coverage execution credit (BTContext::area_unit_execution)
+ * measures newly observed progress, excluding skipped spans and replay. Recovery
+ * offsets (area_unit_progress) also include selected targets and must not provide
+ * this credit. Each credit consumes a fixed share of the finite plan.
  *
  * Pure and header-only so it is unit-testable without ROS.
  */
@@ -40,12 +40,12 @@
 namespace mowgli_behavior
 {
 
-/// What an area has mowed so far, as the no-progress budget measures it.
+/// Software coverage evidence used by the no-progress budget, not physical cut evidence.
 struct AreaProgressMark
 {
-  /// Units booked fully mowed (BTContext::area_completed_swaths).
+  /// Processed units whose ledger certifies no known gaps.
   std::size_t done_units = 0;
-  /// Sum, over the units left part-way, of the furthest pose reached in each.
+  /// Observed execution poses, including processed units; historical field name.
   std::size_t partial_poses = 0;
 };
 
@@ -53,7 +53,7 @@ struct AreaProgressMark
 /// gain to count, on a small plan.
 constexpr std::size_t kAreaProgressMinPartialPoses = 34;
 
-/// Sum of the furthest pose reached in each unfinished unit of one area.
+/// Sum of logical resume offsets. Not coverage execution or retry credit.
 inline std::size_t partialUnitPoses(const std::map<std::size_t, std::size_t>* unit_progress)
 {
   std::size_t sum = 0;
@@ -75,8 +75,8 @@ inline std::size_t minPartialProgressPoses(std::size_t total_poses, float share_
 }
 
 /// Whether the pass that ended at `now` made progress since `last` (none = first dispatch).
-/// A newly finished unit always counts. With the same finished units, the furthest poses
-/// reached inside unfinished ones must have grown by `min_partial_gain`. Fewer finished units
+/// A newly covered unit always counts. With the same covered units, observed execution
+/// must have grown by `min_partial_gain`. Fewer covered units
 /// than last time (the area's record was reset) does not count: the caller's high-water mark
 /// stays where it was, exactly as before partial progress was considered.
 inline bool areaPassMadeProgress(const std::optional<AreaProgressMark>& last,
