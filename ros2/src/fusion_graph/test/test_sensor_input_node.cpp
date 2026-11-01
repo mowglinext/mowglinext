@@ -375,6 +375,10 @@ protected:
   {
     return node_->graph_->IsInitialized();
   }
+  GraphStats GraphStatistics() const
+  {
+    return node_->graph_->Stats();
+  }
   bool AdmitFutureYaw(int64_t source_ns, uint64_t id)
   {
     return node_->graph_->QueueYawAtEpoch(0.0, .1, true, source_ns, id, node_->integration_epoch_);
@@ -1536,6 +1540,45 @@ TEST_F(FusionGraphNodeInputTest, PreintegrationSharesOriginalGyroAcrossGnssSourc
   EXPECT_EQ(AppliedYawFactors(), 1u);
 }
 
+TEST_F(FusionGraphNodeInputTest, OrdinarySourceCadenceCutsDoNotReuseWheelReceiptIntervals)
+{
+  node_.reset();
+  CreateNode(.1, 0., 0., true, .1);
+  Clock(20.0);
+  Wheel(20.0, .2, 0., .2);
+  Imu(20.0, .2);
+  SetOffDock();
+  Heading(20.0, 0., false);
+  Gnss(20.0, 0., .014);
+  ASSERT_TRUE(Snapshot());
+  Clock(20.2);
+  Wheel(20.2, .2, 0., .2);
+  Imu(20.2, .2);
+  Timer();
+  ASSERT_TRUE(Snapshot());
+  EXPECT_EQ(Snapshot()->node_index, 1u);
+  Clock(20.3);
+  Imu(20.3, .2);  // A normal cadence cut inside the next wheel receipt interval.
+  Timer();
+  EXPECT_EQ(Snapshot()->node_index, 2u);
+  Clock(20.4);
+  Wheel(20.4, .2, 0., .2);
+  Imu(20.4, .2);
+  Timer();
+  ASSERT_TRUE(Snapshot());
+  EXPECT_EQ(Snapshot()->node_index, 3u);
+  EXPECT_EQ(Snapshot()->source_stamp_ns, 20400000000);
+  EXPECT_NEAR(Snapshot()->pose.x(), std::sin(.08), 1e-12);
+  EXPECT_NEAR(Snapshot()->pose.y(), 1. - std::cos(.08), 1e-12);
+  EXPECT_NEAR(Snapshot()->pose.theta(), .08, 1e-12);
+  const auto stats = GraphStatistics();
+  EXPECT_EQ(stats.stationary_hand_push, 0u);
+  EXPECT_EQ(stats.slip_veto, 0u);
+  EXPECT_NEAR(stats.residual_ema_rad, 0., 1e-15);
+  EXPECT_EQ(AppliedGnssFactors(), 1u);
+  EXPECT_EQ(AppliedYawFactors(), 1u);
+}
+
 TEST_F(FusionGraphNodeInputTest, ExplicitClearRetimesSnapshotHeadingThroughConsumedTurn)
 {
   ResetSources();
@@ -1658,6 +1701,11 @@ TEST_F(FusionGraphNodeInputTest, FutureCogCannotBlockReadyChecksBeforeTheirFacto
   EXPECT_EQ(CogRecoveries(), 0u);
   EXPECT_EQ(PendingCogChecks(), 1u);
   EXPECT_EQ(AppliedYawFactors(), 0u);
+  Timer();
+  // The accepted history through 100.4 is stationary. The later wheel
+  // receipt cannot bypass its configured five-second source-node throttle.
+  EXPECT_EQ(AppliedYawFactors(), 0u);
+  Clock(105.0);
   Timer();
   EXPECT_EQ(AppliedYawFactors(), 2u);
   EXPECT_EQ(PendingCogChecks(), 1u);

@@ -71,8 +71,7 @@ bool GraphManager::AddConsumedMotionStep(const ConsumedMotionStep& step)
   if (status != MotionHistoryStatus::Ok)
     return status == MotionHistoryStatus::Duplicate;
   motion_->pending_steps.push_back(step);
-  if (motion_->bootstrap && motion_->bootstrap->provisional)
-    AccumulateSourceStepLocked(accum_, step);
+  AccumulateSourceStepLocked(accum_, step);
   motion_->pending_gyro_ids.insert(step.gyro.id);
   motion_->consumed_ns = step.end_ns;
   return true;

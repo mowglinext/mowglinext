@@ -5,6 +5,88 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Accepted source motion and ordinary policy windows (2026-11-01)
+
+A subsequent actual-Core discriminator establishes that the asynchronous
+bookkeeping defect also affects ordinary source-bound windows. Wheel callbacks
+add their receipt intervals, while gyro integration and the published relative
+pose use accepted IMU-source intervals. A cadence boundary can cut a wheel
+receipt interval. The next receipt can therefore count pre-boundary motion
+again; an IMU-only cadence can instead see zero wheel accumulation despite
+accepted held-wheel motion. Correct source-pose means alone do not prove that
+the stationary, hand-push, slip and noise selectors used the right interval.
+
+Three small A/B invariance cases run both same-source raw and explicit-pose
+initialization, with unchanged default thresholds and identical accepted source
+motion. Only wheel receipt alignment differs:
+
+- At speed 0.075 m/s, S..V is 0.015 m in both arms. One incorrectly creates x1/V,
+  while the aligned arm stays throttled under the default 0.02 m threshold.
+- At 0.2 m/s both publish the same 0.04 m source pose, but selected X process
+  variance is 0.00024 versus 0.00012 m². With the raw GNSS seed, published X
+  variance is 0.000436 versus 0.000316 m².
+- After both arms share an aligned first edge, a later ordinary cadence cuts
+  an upcoming wheel receipt. Final source and pose agree, but one arm records
+  a false hand-push, residual EMA 0.0080952381 instead of zero, and effective
+  wheel sigma X 0.030952381 instead of 0.007745967 m. A first-window-only marker
+  would leave this recurrence intact.
+
+All three invariance cases fail at runtime in both initialization modes; no
+other assertions fail. Compile/link/run take 4.499/0.605/0.019 s against the
+unchanged pinned Core archive. Full original source IDs, support, source means,
+public keys/timestamps, policy counters and 3x3 covariances are retained in
+external `true-flip-current/same-source-overlap-ab/`. The first fixture version
+also asserted the old defective 0.00024 variance as a trace diagnostic. That
+source/output remain preserved. The frozen physical-v2 oracle instead requires
+0.00012 in both arms at the same 1e-14 tolerance and adds explicit no-throttle-
+bypass assertions. It first fails all three cases against the original archive,
+then passes **3/3 unchanged**, including the same precompiled fixture object,
+against the repair. No assertion was removed or tolerance relaxed.
+
+Once a consumed source baseline exists, accepted source records now own process
+accumulation throughout normal operation as well as provisional bootstrap.
+Receipt callbacks retain the existing gyro-bias EMA update and correction;
+the accepted record retains that exact correction. Rejected/duplicate records
+cannot change the integral. Source-free legacy callers retain receipt-based
+integration. The production change touches only two TUs and changes no header,
+class layout, threshold, noise constant or safety acceptance.
+
+Final focused software validation passes **26 registered Core test executables /
+188 GTests**, **65 actual Node GTests**, the older unchanged actual-Node fixture
+**3/3**, and physical-v2 **3/3**. Five new permanent Core cases cover raw/explicit
+seeds, both bias modes, ordinary hand-push/slip/noise invariance, callback EMA,
+recorded bias, rejection/dedup and legacy operation. The new actual-Node case
+checks an asynchronous arc's source pose, policy counters and observation counts.
+The phase regression now explicitly requires continuing source ownership after
+promotion. The selective build compiles two Core TUs and three test TUs,
+retaining the other fourteen archive objects and existing Node support objects.
+Successful final compiles total 47.811 s, each under 60 s; final Node runtime is
+4.070 s and the external fixtures take 0.164/0.016 s. No full ROS/colcon build or
+current-head whole-stack CI is claimed. Final archive SHA-256:
+`0d101c926782e496d1d54a3728b88d082852029ca3f6f5269dc88dc0b5ef791c`.
+
+One existing Node COG-order test depended on the removed bug: after consuming
+stationary history through 100.4, Wheel(100.65) falsely forced an early normal
+node and factor assimilation. It now also asserts zero factors at the early
+Timer, then advances only the controlled clock to the configured 105.0
+stationary deadline before its original two-factor/one-pending assertions.
+All original sensor data, parameters, debounce/count assertions and tolerances
+remain. Independent review confirms the ordering claim and stationary contract;
+no production change was made for that test. The earlier private-access test
+compile failure and 64-PASS/1-FAIL run remain preserved. Final validation, exact
+source/dependency/object hashes, commands and all intermediate attempts are in
+`cross-source-bootstrap-live-validation/out/source-owner-baseline-green/`.
+Independent review has no open BLOCKER or SHOULD-FIX finding; clang-format 18
+and diff checks pass. These are software bookkeeping results, not attribution
+of the original boundary event or physical uncertainty calibration.
+
+Current `dev` 5baff9d3 has neither `graph_manager_motion.cpp` nor
+`motion_source_history.hpp`. Although this final production delta is small, it
+depends on this PR's accepted-source substrate; it is not a drop-in independent
+cherry-pick to dev. The simulator observation-window and other standalone repair
+families below remain better candidates for separate target-base validation.
+No extraction has been performed.
+
 ## Source-coupled GNSS/heading bootstrap (2026-11-01)
 
 A different-source sensor heading now retains its original likelihood and the
@@ -99,9 +181,8 @@ dependency hashes, failed attempts and traces remain outside Git under
 `true-flip-current/cross-source-bootstrap-live-validation/out/node64-green/`.
 Independent final code review closes the asynchronous ownership blocker and has
 no supported open BLOCKER or SHOULD-FIX finding. clang-format 18 changed-line
-and new-file checks and `git diff --check` pass. This cohort does not qualify
-ordinary nonprovisional receipt/source alignment, which is the next focused
-investigation; it does not claim current-head whole-stack CI.
+and new-file checks and `git diff --check` pass. The subsequent ordinary source-policy cohort above addresses nonprovisional
+alignment. Neither cohort claims current-head whole-stack CI.
 
 Model derivation and negative controls are retained in
 `different-source-scalar-oracle.py`, `different-source-joint-prototype/`,
@@ -120,6 +201,18 @@ false in shipped defaults. The failed bounded scale probe supplied no memory
 or timing measurement; only diagonal-Q storage is claimed. These software
 results neither attribute the original 13.943731 mm event nor establish physical
 containment or whole-unit cutting. The acceptance procedure below still applies.
+
+A separate source-selection limit remains explicit: wheel odometry is an
+end-stamped aggregate average of firmware acquisition pairs. The current Node
+consumes a held payload and retains that actual consumed history. Cross-stream
+arrival order can change which payload is available; an endpoint average does
+not identify the physical trajectory inside its aggregation window. A future-
+header rejection alone would not prove a better physical reconstruction. The
+source-grounded limits and next discriminator are retained in external
+`FUTURE_WHEEL_SELECTION_LIMIT.md`: preserve original aggregation membership,
+encoder acquisition pairs, IMU/GNSS/truth acquisition identities and clock
+mapping before comparing reconstructed source poses. This is an unqualified
+prediction/model boundary, not a newly proved physical bug or hardware result.
 
 A smaller repair split can separate the already-tested same-source identity,
 position-only and fallback repairs from the coupled model. The coupled repair

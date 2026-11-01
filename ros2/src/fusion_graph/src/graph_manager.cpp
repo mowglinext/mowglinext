@@ -97,9 +97,9 @@ void GraphManager::AddWheelTwist(double vx, double vy, double wz, double dt)
   if (dt <= 0.0)
     return;
   std::lock_guard<std::mutex> lock(mu_);
-  // During bootstrap, only accepted consumed intervals own S..V motion. A
-  // wheel receipt interval can overlap S or extend past the consumed source.
-  if (motion_ && motion_->bootstrap && motion_->bootstrap->provisional)
+  // Source-bound process windows contain accepted consumed intervals. A
+  // receipt interval can cross any source commit or extend beyond its head.
+  if (motion_ && motion_->baseline_set)
     return;
   // Body-frame integration. Yaw is integrated separately because gyro
   // is so much better than wheel-derived yaw on a differential drive.
@@ -118,13 +118,13 @@ double GraphManager::AddGyroDelta(double wz, double dt)
   if (dt <= 0.0)
     return 0.0;
   std::lock_guard<std::mutex> lock(mu_);
-  const bool provisional = motion_ && motion_->bootstrap && motion_->bootstrap->provisional;
+  const bool source_bound = motion_ && motion_->baseline_set;
 
   // Track the running maximum on the RAW sample for the multi-source
   // stationary gate (item #1). Done before bias subtraction so a
   // drifty bias can't mask a real manual rotation.
   const double abs_wz_raw = std::abs(wz);
-  if (!provisional && abs_wz_raw > accum_.max_abs_gyro_rad_per_s)
+  if (!source_bound && abs_wz_raw > accum_.max_abs_gyro_rad_per_s)
     accum_.max_abs_gyro_rad_per_s = abs_wz_raw;
 
   // Online gyro bias estimation (item #3, pragmatic). When the last
@@ -154,7 +154,7 @@ double GraphManager::AddGyroDelta(double wz, double dt)
                                      : (params_.gyro_bias_estimation_enabled ? gyro_bias_z_ : 0.0);
   // Keep the existing callback EMA/correction policy. The source ledger adds
   // this sample only after its complete consumed interval is accepted.
-  if (provisional)
+  if (source_bound)
     return bias_correction;
   const double wz_corrected = wz - bias_correction;
   accum_.dtheta_gyro += wz_corrected * dt;

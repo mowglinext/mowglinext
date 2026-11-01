@@ -290,6 +290,9 @@ if(BUILD_TESTING)
   target_include_directories(test_source_bootstrap_phase PRIVATE src)
   target_link_libraries(test_source_bootstrap_phase fusion_graph_core)
 
+  ament_add_gtest(test_source_policy_accumulator test/test_source_policy_accumulator.cpp TIMEOUT 60)
+  target_link_libraries(test_source_policy_accumulator fusion_graph_core)
+
   ament_add_gtest(test_rebase_information
     test/test_rebase_information.cpp
     TIMEOUT 60

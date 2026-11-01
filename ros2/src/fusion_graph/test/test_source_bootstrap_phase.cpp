@@ -340,13 +340,26 @@ TEST(SourceBootstrapPhase, OverlappingWheelReceiptsCannotAdvanceAcceptedSourceAc
     ASSERT_TRUE(manager.TickSource(due, v, epoch));
     EXPECT_EQ(manager.LatestSnapshot()->node_index, 1u);
     EXPECT_EQ(manager.LatestSnapshot()->source_stamp_ns, v);
-    // Closing the phase restores the ordinary receipt-based callback path.
+    // Closing the coupled family retains source ownership for ordinary edges.
     manager.AddWheelTwist(.4, 0., .3, .3);
-    manager.AddGyroDelta(.3, .1);
+    const double next_correction = manager.AddGyroDelta(.3, .1);
+    const auto before_source = Access::Capture(manager);
+    EXPECT_DOUBLE_EQ(before_source.input.dt_total, 0.);
+    EXPECT_DOUBLE_EQ(before_source.input.dx, 0.);
+    EXPECT_DOUBLE_EQ(before_source.input.dtheta_gyro, 0.);
+    auto next = step;
+    next.start_ns = v;
+    next.end_ns = v + 100000000;
+    next.wheel.id = {fg::MotionSourceKind::Wheel, 3, next.end_ns};
+    next.wheel.support = {v, next.end_ns};
+    next.gyro.id = {fg::MotionSourceKind::Gyro, 3, next.end_ns};
+    next.gyro.support = {v, next.end_ns};
+    next.bias_linearization = next_correction;
+    ASSERT_TRUE(manager.AddConsumedMotionStep(next));
     const auto ordinary = Access::Capture(manager);
-    EXPECT_NEAR(ordinary.input.dt_total, .3, 1e-15);
-    EXPECT_NEAR(ordinary.input.dx, .4 * .3, 1e-15);
-    EXPECT_NEAR(ordinary.input.dtheta_gyro, .3 * .1 - ordinary.feedback * .1, 1e-15);
+    EXPECT_NEAR(ordinary.input.dt_total, .1, 1e-15);
+    EXPECT_NEAR(ordinary.input.dx, .4 * .1, 1e-15);
+    EXPECT_NEAR(ordinary.input.dtheta_gyro, (.3 - next_correction) * .1, 1e-15);
   }
 }
 
