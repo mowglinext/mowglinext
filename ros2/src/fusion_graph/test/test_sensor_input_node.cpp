@@ -1818,6 +1818,109 @@ TEST_F(FusionGraphNodeInputTest, DuplicateCogCannotAdvanceRecoveryAndRetiredSour
   EXPECT_EQ(CogSourceRejects(), 1u);
 }
 
+TEST_F(FusionGraphNodeInputTest, OlderCogCannotRestartStreakAfterNewerAlignedObservation)
+{
+  StartCogScenario(M_PI);
+  Clock(100.4);
+  Imu(100.4);
+  Clock(100.65);
+  Wheel(100.65, .15);
+  Gnss(100.4, 0.0);
+  const auto before = Snapshot();
+  ASSERT_TRUE(before);
+  Heading(100.35, M_PI, true);  // The newest acquisition breaks the flip streak.
+  for (const double source : {100.1, 100.2, 100.3})
+    Heading(source, 0.0, true);
+  EXPECT_EQ(CogRecoveries(), 0u);
+  EXPECT_EQ(CogDebounce(), 0);
+  EXPECT_EQ(CogSourceRejects(), 3u);
+  const auto after = Snapshot();
+  ASSERT_TRUE(after);
+  EXPECT_EQ(after->revision, before->revision);
+  EXPECT_TRUE(after->pose.equals(before->pose, 1e-12));
+  EXPECT_LT((after->covariance - before->covariance).cwiseAbs().maxCoeff(), 1e-12);
+  // All four physical observations still belong to the normal graph input.
+  // Recovery ordering changes neither their admission nor their noise.
+  Clock(105.0);
+  Timer();
+  EXPECT_EQ(AppliedYawFactors(), 4u);
+}
+
+TEST_F(FusionGraphNodeInputTest, OlderCogCannotSupplyVotesOrCancelNewerStreak)
+{
+  StartCogScenario(M_PI);
+  Clock(100.4);
+  Imu(100.4);
+  Clock(100.65);
+  Wheel(100.65, .15);
+  Gnss(100.4, 0.0);
+  Heading(100.3, 0.0, true);
+  Heading(100.1, M_PI, true);  // An older aligned sample cannot cancel this vote.
+  EXPECT_EQ(CogDebounce(), 1);
+  Heading(100.2, 0.0, true);  // Nor may an older flip supply another vote.
+  EXPECT_EQ(CogDebounce(), 1);
+  EXPECT_EQ(CogRecoveries(), 0u);
+  EXPECT_EQ(CogSourceRejects(), 2u);
+  Heading(100.36, 0.0, true);
+  EXPECT_EQ(CogDebounce(), 2);
+  EXPECT_EQ(CogRecoveries(), 0u);
+  Heading(100.38, 0.0, true);
+  EXPECT_EQ(CogRecoveries(), 1u);
+}
+
+TEST_F(FusionGraphNodeInputTest, SimultaneouslyMatureCogChecksUseAcquisitionOrder)
+{
+  StartCogScenario(M_PI);
+  Clock(100.4);
+  Imu(100.4);
+  Clock(100.65);
+  Wheel(100.65, .15);
+  Gnss(100.4, 0.0);
+  for (const double source : {100.64, 100.60, 100.62})
+    Heading(source, 0.0, true);
+  ASSERT_EQ(PendingCogChecks(), 3u);
+  ASSERT_EQ(CogDebounce(), 0);
+  Imu(100.64);
+  Timer();
+  EXPECT_EQ(CogRecoveries(), 1u);
+  EXPECT_EQ(PendingCogChecks(), 0u);
+  EXPECT_EQ(CogSourceRejects(), 0u);
+}
+
+TEST_F(FusionGraphNodeInputTest, RecoveryOrderRestartsAfterSourceClockEpochChanges)
+{
+  StartCogScenario(M_PI);
+  Clock(100.4);
+  Imu(100.4);
+  Clock(100.65);
+  Wheel(100.65, .15);
+  Gnss(100.4, 0.0);
+  Heading(100.35, M_PI, true);
+  ResetSources();
+  Clock(1.0);
+  Wheel(1.0, 0.0);
+  Imu(1.0);
+  Clock(1.02);
+  Imu(1.02);
+  SeedLatest(M_PI);
+  SetOffDock();
+  Clock(1.4);
+  Imu(1.4);
+  Clock(1.65);
+  Wheel(1.65, .15);
+  Gnss(1.4, 0.0);
+  // The first GNSS callback after a clock rewind only invalidates the old
+  // receipt epoch. Supply a distinct new fix before asking its RTK gate.
+  EXPECT_FALSE(FixedGnssReceipt());
+  Clock(1.67);
+  Gnss(1.41, 0.0);
+  ASSERT_TRUE(FixedGnssReceipt());
+  for (const double source : {1.1, 1.2, 1.3})
+    Heading(source, 0.0, true);
+  EXPECT_EQ(CogRecoveries(), 1u);
+  EXPECT_EQ(CogSourceRejects(), 0u);
+}
+
 TEST_F(FusionGraphNodeInputTest, SourceResetAndExplicitClearInvalidatePendingCogChecks)
 {
   PrepareFutureCogChecks();

@@ -424,8 +424,11 @@ private:
     double yaw;
   };
   std::deque<PendingCogFlipCheck> pending_cog_flip_checks_;
+  // Recovery votes follow acquisition order. Late normal yaw observations
+  // remain admissible, but cannot revise a newer recovery disposition.
+  std::optional<int64_t> cog_flip_last_checked_source_ns_;
   static constexpr size_t kPendingCogFlipCapacity = 1024;
-  uint64_t cog_flip_source_rejects_ = 0;  // unavailable/overrun source checks
+  uint64_t cog_flip_source_rejects_ = 0;  // unavailable/overrun/out-of-order recovery checks
   // Robustness gates so the recovery is a reliable safety net, not an
   // amplifier (it fired repeatedly on garbage COG during an FTC oscillation,
   // field 2026-05-29): require RTK-Fixed fresh (COG GPS-grounded), require the

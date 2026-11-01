@@ -5,6 +5,7 @@
 // is split across several translation units to keep each file within the project's 600-line budget;
 // all share fusion_graph_node.hpp + fusion_graph_node_util.hpp.)
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -169,9 +170,18 @@ void FusionGraphNode::ProcessPendingCogFlipChecks()
   if (!cog_flip_recovery_enabled_ || !graph_->IsInitialized())
   {
     pending_cog_flip_checks_.clear();
+    cog_flip_last_checked_source_ns_.reset();
     reset_debounce();
     return;
   }
+  // Several future checks can become supported by the same IMU callback.
+  // Visit that batch in acquisition order, independently of delivery order.
+  std::stable_sort(pending_cog_flip_checks_.begin(),
+                   pending_cog_flip_checks_.end(),
+                   [](const auto& left, const auto& right)
+                   {
+                     return left.source_ns < right.source_ns;
+                   });
   // Inspect every check that was pending on entry. A newer source awaiting
   // IMU support must not block mature checks before their own yaw factors run.
   for (size_t remaining = pending_cog_flip_checks_.size(); remaining > 0; --remaining)
@@ -189,6 +199,14 @@ void FusionGraphNode::ProcessPendingCogFlipChecks()
       pending_cog_flip_checks_.push_back(check);
       continue;  // Its unary stays queued; other mature checks still run now.
     }
+    if (cog_flip_last_checked_source_ns_ && check.source_ns <= *cog_flip_last_checked_source_ns_)
+    {
+      ++cog_flip_source_rejects_;
+      continue;  // Neither vote nor cancel a newer streak; keep the ordinary unary.
+    }
+    // A mature disposition also concludes this acquisition when its current
+    // gates/source lookup reject recovery. Future checks never advance it.
+    cog_flip_last_checked_source_ns_ = check.source_ns;
     const bool rtk_fresh = !cog_flip_require_rtk_ || RtkFixedReceiptIsFresh(cog_rtk_max_age_s_);
     const auto snap = graph_->LatestSnapshot();
     if (!rtk_fresh || !snap || snap->source_epoch != integration_epoch_ ||

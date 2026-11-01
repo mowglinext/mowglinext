@@ -5,6 +5,54 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Acquisition order for automatic COG recovery (2026-11-01)
+
+An actual-Node reproduction found a separate automatic-recovery defect. With
+consumed source through 100.4, a COG acquired at 100.35 agrees with the source
+estimate and ends the flip streak. Three distinct delayed COGs acquired at
+100.1/100.2/100.3 then incorrectly rebuild that streak in callback order and
+add a pose anchor. The baseline changes pose, revision and covariance despite
+the newer acquisition already having contradicted that streak; maximum
+covariance change in this fixture is 0.0024752475247524757.
+
+Recovery now processes each supported pending batch in acquisition order and
+retains the last conclusively checked source time. An admitted older COG can
+neither vote nor cancel a newer recovery streak. Its ordinary yaw likelihood
+remains queued and is assimilated once with its original noise. Future checks
+do not advance this watermark. Source reset/clear, clock epoch change and an
+unavailable/disabled recovery lifetime clear it. Existing retired-source
+fail-closed resets, RTK/motion/docking gates, consistency, vote count and
+cooldown remain unchanged. This prevents a temporal decision error; it does not
+certify that the initial seed is invalid or replace the additive anchor model.
+
+Two of three initial focused tests fail on the baseline; the batch control
+passes there and protects the interaction between sorting and the new
+watermark. The final **69/69 actual Node tests pass**, including those three
+and a new clock-epoch restart control. All nine production Node translation
+units plus the fixture were freshly compiled because the Node layout changed.
+The unchanged Core archive remains SHA-256
+`299e3b65a0be5c60cb8084bbdb0ee4db31e1e5305ce2b8a49c055508b6e00225`;
+its previous 194-case result is retained, not rerun. The optional external
+three-case Node fixture was not rerun for this change. All compiles fit the
+60 s per-TU cap (slowest 44.139 s); the final Node run takes 4.320 s.
+
+Exact snapshots, commands, dependency closures and failures remain outside Git
+under `automatic-recovery-next/{red,green}/`. One initial link used the older
+Core archive; only the link was corrected, retaining successful compiles and
+the failed result. A new restart fixture initially omitted the separate new
+GNSS fix required after receipt-epoch invalidation. It now asserts that first
+rejection and subsequent fresh receipt before the unchanged recovery assertion.
+No production gate or tolerance changed. Independent final review has no open
+BLOCKER or SHOULD-FIX; the small fixture correction was reviewed separately.
+
+Current `dev` and `main` remain 5baff9d3 and 5ba9ad46. Dev still uses callback-time
+recovery without this PR's source-associated pending checks, so this repair
+depends on that lifecycle and needs separate target-base validation if split.
+No extraction is performed. The final-tail audit found the existing 0.50 m
+action-completion allowance is explicitly retained; action success is not proof
+of full-tail traversal or cutting. Automatic invalid-seed authorization, the
+original event attribution and physical acceptance remain open as described below.
+
 ## Explicit retirement of a coupled bootstrap heading (2026-11-01)
 
 The explicit invalid-seed operation now supports a closed, wholly retained

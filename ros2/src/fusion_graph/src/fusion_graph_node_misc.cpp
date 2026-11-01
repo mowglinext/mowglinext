@@ -62,6 +62,7 @@ void FusionGraphNode::ResetMotionSourceEpoch()
   seed_yaw_source_ns_.reset();
   pending_explicit_seed_.reset();
   pending_cog_flip_checks_.clear();
+  cog_flip_last_checked_source_ns_.reset();
   cog_flip_count_ = 0;
   cog_flip_prev_yaw_.reset();
   seed_xy_.reset();
