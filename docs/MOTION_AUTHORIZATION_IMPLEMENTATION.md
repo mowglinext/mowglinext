@@ -69,6 +69,29 @@ Artifacts: external `pr950-resume-20261101/true-flip-current/`, particularly
 `logs/attempt-003-resume-001/`, `logs/counterfactual-001/` and
 `node-consumer/logs/node-green-004/`.
 
+A separate paired actual-Node discriminator gives the old and new binaries the
+same 21 accepted callback inputs: one +14 mm north-biased Fixed seed at sigma
+14 mm, then five exact fixes 200 ms apart while moving at 0.15 m/s. Matched
+source timestamps and counters (GNSS 1..6, yaw one throughout) show an effect on
+the mean trajectory, not only the covariance:
+
+| Time after seed | Old north error | New north error |
+| --- | ---: | ---: |
+| 0 s | +14.000 mm | +14.000 mm |
+| 0.2 s | +12.408 mm | +6.641 mm |
+| 1.0 s | +4.747 mm | -0.877 mm |
+
+Initial north sigma is 4.71 mm versus the new 14 mm, consistent with removal of
+the duplicated tight prior. This is not uniform improvement of every axis:
+final yaw error is -0.03343 rad old versus -0.04261 rad new, with corresponding
+yaw sigma 0.04514 versus 0.09142 rad. Both are deterministic synthetic-input
+runs under the declared noise model; no field uncertainty or original-event
+attribution follows. Arm-specific compiler include traces, byte-exact archived
+headers, Core/Node object hashes and all inputs/full covariance traces are
+retained in external `true-flip-current/bootstrap-biased-fix-trace/`. The missing
+dependency-file and ROS loader setup failures are separately identified; neither
+is a runtime estimator result. The corrected paired runtime totals 0.327 s.
+
 Initial inline Eigen-heavy compilation hit the enforced 60 s per-TU caps.
 Moving unchanged factor definitions out of the header allowed the next fresh
 10-TU Core build to finish in 55 s. The final 11-TU/test build totals 171 s under
