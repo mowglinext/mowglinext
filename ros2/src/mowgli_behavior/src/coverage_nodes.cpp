@@ -155,6 +155,34 @@ uint64_t hashPlanGeometry(const std::vector<nav_msgs::msg::Path>& units)
   return h;
 }
 
+// A matching restored plan with no unprocessed units needs no transit.
+// FollowStrip still validates execution and decides clean versus incomplete;
+// a gap or unknown ledger must not send the mower back to a processed exclusion.
+bool pendingProcessedPlanNeedsNoTransit(const BTContext& ctx)
+{
+  if (ctx.current_area < 0)
+    return false;
+  const auto area = static_cast<uint32_t>(ctx.current_area);
+  if (ctx.area_execution_pending_validation.count(area) == 0)
+    return false;
+  std::vector<nav_msgs::msg::Path> units;
+  for (const auto& unit : ctx.current_strip_subpaths)
+    if (unit.poses.size() >= 2)
+      units.push_back(unit);
+  const auto fingerprint = ctx.area_plan_fingerprint.find(area);
+  const auto processed = ctx.area_completed_swaths.find(area);
+  if (units.empty() || fingerprint == ctx.area_plan_fingerprint.end() ||
+      fingerprint->second != hashPlanGeometry(units) ||
+      processed == ctx.area_completed_swaths.end() || processed->second.size() != units.size())
+    return false;
+  for (std::size_t unit = 0; unit < units.size(); ++unit)
+  {
+    if (processed->second.count(unit) == 0)
+      return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 ResumeLocation resolveResumeLocation(const std::vector<nav_msgs::msg::Path>& units,
@@ -266,7 +294,13 @@ void refreshSwathProgress(BTContext& ctx, uint32_t area_idx, std::size_t unit_co
   // seen area (matching the existing area_completed_swaths access pattern), so a
   // fresh area reads 0 completed. Display-only — no blade/motion effect.
   ctx.total_swaths = static_cast<int>(unit_count);
-  ctx.completed_swaths = static_cast<int>(ctx.area_completed_swaths[area_idx].size());
+  const auto execution = ctx.area_unit_execution.find(area_idx);
+  ctx.completed_swaths = static_cast<int>(
+      fullyCoveredUnitCount(ctx.area_completed_swaths[area_idx],
+                            execution == ctx.area_unit_execution.end() ? nullptr
+                                                                       : &execution->second,
+                            ctx.area_execution_unverified.count(area_idx) > 0 ||
+                                ctx.area_execution_pending_validation.count(area_idx) > 0));
 }
 
 float coveragePercentFromCursor(std::size_t absolute_cursor, std::size_t total_poses)
@@ -429,6 +463,15 @@ BT::NodeStatus FollowStrip::onStart()
     const bool has_persisted_state = ctx->area_resume_pose_index.count(area_idx_) > 0 ||
                                      ctx->area_completed_swaths.count(area_idx_) > 0 ||
                                      ctx->area_unit_progress.count(area_idx_) > 0;
+    if (fpit == ctx->area_plan_fingerprint.end() &&
+        ctx->area_execution_pending_validation.count(area_idx_) > 0)
+    {
+      // Same-sized units do not establish saved geometry identity. Keep route
+      // and processed exclusions, but discard unowned retrospective credit
+      // before installing the current plan's fingerprint below.
+      ctx->area_execution_unverified.insert(area_idx_);
+      ctx->area_unit_execution.erase(area_idx_);
+    }
     if (fpit != ctx->area_plan_fingerprint.end() && fpit->second != plan_fingerprint &&
         has_persisted_state)
     {
@@ -447,6 +490,9 @@ BT::NodeStatus FollowStrip::onStart()
       ctx->area_last_coverage.erase(area_idx_);
       ctx->area_last_partial_poses.erase(area_idx_);
       ctx->area_attempt_count.erase(area_idx_);
+      ctx->area_unit_execution.erase(area_idx_);
+      ctx->area_execution_unverified.erase(area_idx_);
+      ctx->area_execution_pending_validation.erase(area_idx_);
       ctx->area_unit_progress.erase(area_idx_);
       ctx->area_completed_swaths.erase(area_idx_);
       ctx->completed_areas.erase(area_idx_);
@@ -504,6 +550,23 @@ BT::NodeStatus FollowStrip::onStart()
     for (std::size_t unit = 0; unit < units.size(); ++unit)
     {
       const std::size_t offset = starts[unit];
+      auto& ledger = ctx->area_unit_execution[area_idx_];
+      auto [execution, inserted] = ledger.try_emplace(unit);
+      const std::size_t last = units[unit].poses.size() - 1;
+      if ((inserted && (offset > 0 || mowed.count(unit) > 0)) ||
+          execution->second.accounted_frontier > last ||
+          execution->second.executed_poses > execution->second.accounted_frontier ||
+          (!execution->second.has_gap &&
+           execution->second.executed_poses != execution->second.accounted_frontier) ||
+          (mowed.count(unit) > 0 && !execution->second.has_gap &&
+           execution->second.accounted_frontier != last))
+      {
+        // A resume/processed offset is not retrospective execution evidence.
+        ctx->area_execution_unverified.insert(area_idx_);
+        execution->second = {std::min(offset, last), 0, true};
+      }
+      if (execution->second.accounted_frontier < offset)
+        accountCoverageSkip(execution->second, execution->second.accounted_frontier, offset);
       if (offset == 0)
       {
         continue;
@@ -521,6 +584,19 @@ BT::NodeStatus FollowStrip::onStart()
                   units.size(),
                   offset);
     }
+    auto& execution_units = ctx->area_unit_execution[area_idx_];
+    for (auto it = execution_units.begin(); it != execution_units.end();)
+      if (it->first >= units.size())
+      {
+        ctx->area_execution_unverified.insert(area_idx_);
+        it = execution_units.erase(it);
+      }
+      else
+        ++it;
+    for (const auto unit : mowed)
+      if (unit >= units.size())
+        ctx->area_execution_unverified.insert(area_idx_);
+    ctx->area_execution_pending_validation.erase(area_idx_);
   }
   if (units.size() > 1)
   {
@@ -567,14 +643,13 @@ BT::NodeStatus FollowStrip::onStart()
       // Every swath already mowed this session — nothing left for this area.
       // total/completed swaths were already seeded by refreshSwathProgress above
       // (both == swaths_.size() here); just finalise the percentage.
-      ctx->completed_areas.insert(area_idx_);
-      saveCoverageResumeState(*ctx);
-      ctx->coverage_percent = 100.0f;
+      const bool covered = finalizeProcessedArea(ctx);
       RCLCPP_INFO(ctx->node->get_logger(),
-                  "FollowStrip: area %u already fully mowed (%zu/%zu swaths) — nothing to do",
+                  "FollowStrip: area %u already processed (%zu/%zu units, coverage verified=%d)",
                   area_idx_,
                   done.size(),
-                  swaths_.size());
+                  swaths_.size(),
+                  covered);
       return BT::NodeStatus::SUCCESS;
     }
   }
@@ -721,7 +796,7 @@ double FollowStrip::distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx
 
 void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
 {
-  if (swath_idx_ >= swaths_.size())
+  if (swath_idx_ >= swaths_.size() || !follow_handle_ || transit_active_ || transit_pending_)
   {
     return;
   }
@@ -733,7 +808,18 @@ void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
   double rx, ry, ryaw;
   try
   {
-    const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    const auto now = ctx->node->now();
+    const auto latest =
+        ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    const rclcpp::Time stamp(latest.header.stamp, now.get_clock_type());
+    const auto epoch = stamp.nanoseconds() == 0 ? now : std::min(now, stamp);
+    const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", epoch);
+    const auto& q = tf.transform.rotation;
+    const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+    if ((now - epoch).seconds() > kCoverageEntryPoseMaxAgeSec || !std::isfinite(norm) ||
+        std::abs(norm - 1.0) > 1e-3 || !std::isfinite(tf.transform.translation.x) ||
+        !std::isfinite(tf.transform.translation.y))
+      return;
     rx = tf.transform.translation.x;
     ry = tf.transform.translation.y;
     // A TF rotation is always populated; 0 is only the unreachable fallback.
@@ -765,6 +851,11 @@ void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
                     *k);
         if (*k > path_progress_idx_)
         {
+          const std::size_t offset = swath_resume_start_indices_[swath_idx_];
+          accountCoverageSkip(ctx->area_unit_execution[area_idx_][swath_idx_],
+                              offset + path_progress_idx_,
+                              offset + *k);
+          ctx->coverage_plausibility_warning = true;
           skipped_tally_.addRejoin(*k - path_progress_idx_,
                                    pathLengthBetween(poses, path_progress_idx_, *k));
         }
@@ -778,6 +869,10 @@ void FollowStrip::updateProgress(const std::shared_ptr<BTContext>& ctx)
   // The arc bound alone does not close that case at a pivot-joined row end
   // (issue #742), so candidates must also be oriented with the robot.
   path_progress_idx_ = advanceProgressCursor(poses, path_progress_idx_, rx, ry, ryaw);
+  if (truncated_at_ && *truncated_at_ > 0)
+    path_progress_idx_ = std::min(path_progress_idx_, *truncated_at_ - 1);
+  accountCoverageAdvance(ctx->area_unit_execution[area_idx_][swath_idx_],
+                         swath_resume_start_indices_[swath_idx_] + path_progress_idx_);
 }
 
 float FollowStrip::livePercent() const
@@ -1348,9 +1443,8 @@ BT::NodeStatus FollowStrip::onRunning()
     // count as done — they roll over to the next pass).
     if (done.size() >= swaths_.size())
     {
-      ctx->completed_areas.insert(area_idx_);
-      checkCoveragePlausibility(ctx);
-      saveCoverageResumeState(*ctx);
+      if (finalizeProcessedArea(ctx))
+        checkCoveragePlausibility(ctx);
     }
     if (swaths_skipped_ >= swaths_.size())
     {
@@ -1438,7 +1532,7 @@ BT::NodeStatus FollowStrip::onRunning()
                 swaths_.size(),
                 area_idx_);
     follow_handle_.reset();
-    markCurrentUnitMowed(ctx);
+    markCurrentUnitMowed(ctx, false);
     return advance();
   }
 
@@ -1787,6 +1881,9 @@ BT::NodeStatus FollowStrip::onRunning()
         static_cast<double>(path_progress_idx_) >= kPathCompleteFraction * static_cast<double>(cut);
     if (reached_cut)
     {
+      if (status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
+        accountCoverageAdvance(ctx->area_unit_execution[area_idx_][swath_idx_],
+                               swath_resume_start_indices_[swath_idx_] + cut - 1);
       RCLCPP_INFO(ctx->node->get_logger(),
                   "FollowStrip: segment %zu/%zu mowed up to the dig skip zone (pose %zu) — "
                   "crossing it blade-off, then resuming the same unit",
@@ -1899,6 +1996,11 @@ BT::NodeStatus FollowStrip::onRunning()
       path_progress_idx_ =
           forwardSkipIndex(swaths_[swath_idx_].poses, path_progress_idx_, kNonObstacleAbortSkipM);
     }
+    accountCoverageSkip(ctx->area_unit_execution[area_idx_][swath_idx_],
+                        trim_offset + reached_idx,
+                        trim_offset + path_progress_idx_);
+    ctx->coverage_plausibility_warning =
+        ctx->coverage_plausibility_warning || path_progress_idx_ > reached_idx;
     RCLCPP_WARN(ctx->node->get_logger(),
                 "FollowStrip: unit %zu/%zu aborted/canceled at %.0f%% of the unit (area %u), not "
                 "obstacle-related — stepping resume cursor %zu→%zu poses (~%.2fm) past the abort "
@@ -2276,6 +2378,10 @@ void FollowStrip::trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t 
   // Trim the current unit to [idx, end). Fold idx into its resume offset so the
   // absolute cursor stays a consistent index into the concatenation.
   const auto& poses = swaths_[swath_idx_].poses;
+  const std::size_t offset = swath_resume_start_indices_[swath_idx_];
+  auto& execution = ctx->area_unit_execution[area_idx_][swath_idx_];
+  accountCoverageSkip(execution, offset + path_progress_idx_, offset + idx);
+  ctx->coverage_plausibility_warning = ctx->coverage_plausibility_warning || execution.has_gap;
   swath_resume_start_indices_[swath_idx_] += idx;
   nav_msgs::msg::Path remainder;
   remainder.header = swaths_[swath_idx_].header;
@@ -2302,8 +2408,17 @@ void FollowStrip::noteUnitProgress(const std::shared_ptr<BTContext>& ctx, std::s
   recorded = std::max(recorded, local);
 }
 
-void FollowStrip::markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx)
+void FollowStrip::markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx, bool action_succeeded)
 {
+  auto& execution = ctx->area_unit_execution[area_idx_][swath_idx_];
+  const std::size_t offset = swath_resume_start_indices_[swath_idx_];
+  const std::size_t end = offset + swaths_[swath_idx_].poses.size() - 1;
+  if (action_succeeded)
+    // This is action-contract completion, not a physical cutting measurement.
+    accountCoverageAdvance(execution, end);
+  else
+    accountCoverageSkip(execution, offset + path_progress_idx_, end);
+  ctx->coverage_plausibility_warning = ctx->coverage_plausibility_warning || execution.has_gap;
   ctx->area_resume_pose_index.erase(area_idx_);
   if (const auto progress = ctx->area_unit_progress.find(area_idx_);
       progress != ctx->area_unit_progress.end())
@@ -2315,8 +2430,34 @@ void FollowStrip::markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx)
     }
   }
   ctx->area_completed_swaths[area_idx_].insert(swath_idx_);
-  ++swaths_mowed_this_pass_;
+  if (!execution.has_gap && ctx->area_execution_unverified.count(area_idx_) == 0)
+    ++swaths_mowed_this_pass_;
   saveCoverageResumeState(*ctx);
+}
+
+bool FollowStrip::finalizeProcessedArea(const std::shared_ptr<BTContext>& ctx)
+{
+  refreshSwathProgress(*ctx, area_idx_, swaths_.size());
+  const bool covered = static_cast<std::size_t>(ctx->completed_swaths) >= swaths_.size();
+  ctx->coverage_percent = swaths_.empty() ? 0.0f
+                                          : 100.0f * static_cast<float>(ctx->completed_swaths) /
+                                                static_cast<float>(swaths_.size());
+  if (covered)
+    ctx->completed_areas.insert(area_idx_);
+  else
+  {
+    // Exclusions remain processed so recovery never loops into a dig zone.
+    // They cannot certify a clean area, including after a process restart.
+    ctx->completed_areas.erase(area_idx_);
+    ctx->attempted_areas.insert(area_idx_);
+    ctx->incomplete_retired_areas.insert(area_idx_);
+    ctx->coverage_plausibility_warning = true;
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "FollowStrip: area %u processed with known or unverified coverage gaps; incomplete",
+                area_idx_);
+  }
+  saveCoverageResumeState(*ctx);
+  return covered;
 }
 
 // ---------------------------------------------------------------------------
@@ -2509,7 +2650,13 @@ FollowStrip::DigRecoveryStep FollowStrip::stepDigRecovery(const std::shared_ptr<
                 unit_poses - std::min(run.start, unit_poses),
                 unit_resumes_without_progress_);
     // Leave the cursor PAST the zone, so a later pass does not resume into it.
-    path_progress_idx_ = std::min(run.start, unit_poses > 0 ? unit_poses - 1 : 0);
+    const std::size_t offset = swath_resume_start_indices_[swath_idx_];
+    const std::size_t next = std::min(run.start, unit_poses > 0 ? unit_poses - 1 : 0);
+    accountCoverageSkip(ctx->area_unit_execution[area_idx_][swath_idx_],
+                        offset + reached,
+                        offset + next);
+    ctx->coverage_plausibility_warning = true;
+    path_progress_idx_ = next;
     persistResumeCursor(ctx);
     return DigRecoveryStep::kUnitGivenUp;
   }
@@ -2815,6 +2962,8 @@ BT::NodeStatus TransitToStrip::onStart()
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   // A new attempt: forget any earlier failure, whatever happens below.
   ctx->transit_to_strip_failed_at.reset();
+  if (pendingProcessedPlanNeedsNoTransit(*ctx))
+    return BT::NodeStatus::SUCCESS;
 
   // Nothing to transit to if there is no coverage path (e.g. the area is
   // already fully mowed → PlanCoverageArea returned an empty path with a
@@ -3623,6 +3772,9 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     ctx->area_completed_swaths.erase(current_area_idx_);
     ctx->area_resume_pose_index.erase(current_area_idx_);
     ctx->area_unit_progress.erase(current_area_idx_);
+    ctx->area_unit_execution.erase(current_area_idx_);
+    ctx->area_execution_unverified.erase(current_area_idx_);
+    ctx->area_execution_pending_validation.erase(current_area_idx_);
     ctx->area_path_pose_count.erase(current_area_idx_);
     ctx->area_plan_fingerprint.erase(current_area_idx_);
     ctx->area_swath_count.erase(current_area_idx_);
@@ -3751,20 +3903,22 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     return advanceAndProbe();
   }
 
-  // Area has remaining work. Guard against an area that can never finish
-  // (e.g. every swath aborts): count CONSECUTIVE dispatches that added no
-  // newly-completed swath toward kMaxAreaAttempts. The high-water mark is
-  // the size of ctx->area_completed_swaths[area] — if it grew since the last
-  // dispatch, the previous FollowStrip pass mowed at least one more swath, so
-  // reset the counter. This replaces the old cell-coverage-percent high-water.
-  // A pass that got far into an UNFINISHED unit counts too (area_progress.hpp):
-  // a large area drawn with few points has only a few very long units.
+  // Retry credit uses coverage execution, not the logical resume offsets that
+  // also advance over skipped spans and selected, unreached transit targets.
+  const auto execution_it = ctx->area_unit_execution.find(current_area_idx_);
+  const UnitCoverageExecutionMap* execution =
+      execution_it != ctx->area_unit_execution.end() ? &execution_it->second : nullptr;
   std::size_t done_swaths = 0;
   {
     auto it = ctx->area_completed_swaths.find(current_area_idx_);
     if (it != ctx->area_completed_swaths.end())
     {
-      done_swaths = it->second.size();
+      done_swaths =
+          fullyCoveredUnitCount(it->second,
+                                execution,
+                                ctx->area_execution_unverified.count(current_area_idx_) > 0 ||
+                                    ctx->area_execution_pending_validation.count(
+                                        current_area_idx_) > 0);
     }
   }
   // Issue #487: the PREVIOUS pass on this area ended with every sub-path
@@ -3850,11 +4004,11 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
   }
 
   auto& n = ctx->area_attempt_count[current_area_idx_];
-  const auto unit_progress_it = ctx->area_unit_progress.find(current_area_idx_);
   const AreaProgressMark now_mark{done_swaths,
-                                  partialUnitPoses(unit_progress_it != ctx->area_unit_progress.end()
-                                                       ? &unit_progress_it->second
-                                                       : nullptr)};
+                                  ctx->area_execution_pending_validation.count(current_area_idx_) >
+                                          0
+                                      ? 0
+                                      : executedAreaPoses(execution)};
   std::optional<AreaProgressMark> last_mark;
   if (const auto last_it = ctx->area_last_coverage.find(current_area_idx_);
       last_it != ctx->area_last_coverage.end())
@@ -3874,8 +4028,8 @@ BT::NodeStatus GetNextUnmowedArea::processResponse()
     if (last_mark && now_mark.done_units == last_mark->done_units)
     {
       RCLCPP_INFO(ctx->node->get_logger(),
-                  "GetNextUnmowedArea: area %u — no unit finished, but the last pass got %zu poses "
-                  "further into unfinished ones (>= %zu): counts as progress",
+                  "GetNextUnmowedArea: area %u — no gap-free unit finished, but the last pass "
+                  "added %zu coverage execution poses (>= %zu): counts as progress",
                   current_area_idx_,
                   now_mark.partial_poses - last_mark->partial_poses,
                   min_partial_gain);

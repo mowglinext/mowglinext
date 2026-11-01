@@ -77,6 +77,7 @@ TEST(SwathProgress, CompletedClimbsPerSwathAndEqualsTotalAtEnd)
   for (std::size_t i = 0; i < kUnits; ++i)
   {
     ctx.area_completed_swaths[kArea0].insert(i);
+    ctx.area_unit_execution[kArea0][i] = {100, 100, false};
     refreshSwathProgress(ctx, kArea0, kUnits);
     EXPECT_EQ(ctx.total_swaths, static_cast<int>(kUnits));
     EXPECT_EQ(ctx.completed_swaths, static_cast<int>(i + 1));
@@ -91,6 +92,7 @@ TEST(SwathProgress, ResumeSeedsPartialCompleted)
 {
   BTContext ctx;
   ctx.area_completed_swaths[kArea0] = {0, 1};  // two units already mowed
+  ctx.area_unit_execution[kArea0] = {{0, {100, 100, false}}, {1, {100, 100, false}}};
   constexpr std::size_t kUnits = 5;
 
   refreshSwathProgress(ctx, kArea0, kUnits);
@@ -107,6 +109,9 @@ TEST(SwathProgress, ResetsAcrossAreas)
 
   // Area 0 finishes: 3/3 units mowed.
   ctx.area_completed_swaths[kArea0] = {0, 1, 2};
+  ctx.area_unit_execution[kArea0] = {{0, {100, 100, false}},
+                                     {1, {100, 100, false}},
+                                     {2, {100, 100, false}}};
   refreshSwathProgress(ctx, kArea0, 3);
   ASSERT_EQ(ctx.total_swaths, 3);
   ASSERT_EQ(ctx.completed_swaths, 3);
@@ -209,4 +214,17 @@ TEST(CoverageInterruption, NearEndCursorSurvivesRestart)
 
     std::remove(path.c_str());
   }
+}
+
+TEST(SwathProgress, ProcessedExclusionsAndUnknownProvenanceAreNotCleanCoverage)
+{
+  BTContext ctx;
+  ctx.area_completed_swaths[kArea0] = {0, 1, 2};
+  ctx.area_unit_execution[kArea0] = {{0, {100, 100, false}}, {1, {100, 40, true}}};
+  refreshSwathProgress(ctx, kArea0, 3);
+  EXPECT_EQ(ctx.total_swaths, 3);
+  EXPECT_EQ(ctx.completed_swaths, 1);
+  ctx.area_execution_unverified.insert(kArea0);
+  refreshSwathProgress(ctx, kArea0, 3);
+  EXPECT_EQ(ctx.completed_swaths, 0);
 }

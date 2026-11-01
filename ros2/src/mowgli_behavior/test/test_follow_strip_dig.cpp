@@ -62,6 +62,7 @@
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
 #include "nav2_msgs/srv/get_costmap.hpp"
 #include "tf2_ros/buffer.hpp"
@@ -1540,6 +1541,10 @@ TEST_F(FollowStripDigTest, UnitLyingEntirelyInsideADigZoneIsBookedWithoutAnyGoal
   EXPECT_EQ(navigate->goalCount(), 0u);
   EXPECT_EQ(ctx->area_completed_swaths[0].count(0), 1u)
       << "an un-mowable unit must not keep the area open forever";
+  EXPECT_TRUE(ctx->completed_areas.empty()) << "processed exclusion is not full coverage";
+  EXPECT_EQ(ctx->incomplete_retired_areas.count(0), 1u);
+  EXPECT_EQ(ctx->completed_swaths, 0);
+  EXPECT_LT(ctx->coverage_percent, 100.0f);
 }
 
 // A controller ABORT is not evidence that the final unverified tail was mowed.
@@ -1609,6 +1614,341 @@ TEST_F(FollowStripDigTest, HaltingBeforeTheTransitIsAnsweredStillCancelsIt)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
   EXPECT_TRUE(canceled) << "the abandoned transit goal was never cancelled";
+}
+
+TEST_F(FollowStripDigTest, FailedBladeOffResumeDoesNotEarnCoverageRetryCredit)
+{
+  const auto unit = straightUnit(2.0, 20.0);
+  ctx->transit_to_strip_failed_at = unit.poses.front().pose.position;
+  startFollowStrip({unit});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 0u);
+  ASSERT_GE(navigate->goal(0)->pose.pose.position.x, 4.0);
+  // The blade-off target also fails. Recovery may choose another target,
+  // but neither selection is evidence of any coverage execution.
+  navigate->abort(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 2;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  ASSERT_GT(ctx->area_unit_progress.at(0).at(0), 34u);
+  tree->haltTree();
+  tree.reset();
+  auto map_service = server_node->create_service<mowgli_interfaces::srv::GetMowingArea>(
+      "/map_server_node/get_mowing_area",
+      [](std::shared_ptr<mowgli_interfaces::srv::GetMowingArea::Request> request,
+         std::shared_ptr<mowgli_interfaces::srv::GetMowingArea::Response> response)
+      {
+        response->success = request->index == 0;
+        response->area.id = 950;
+        response->area.name = "lawn";
+      });
+  executor->add_node(ctx->helper_node);
+  ctx->area_ids[0] = 950;
+  ctx->area_last_coverage[0] = 0;
+  ctx->area_last_partial_poses[0] = 0;
+  ctx->area_attempt_count[0] = 3;
+  factory.registerNodeType<mowgli_behavior::GetNextUnmowedArea>("GetNextUnmowedArea");
+  tree = std::make_unique<BT::Tree>(
+      factory.createTreeFromText("<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\">"
+                                 "<GetNextUnmowedArea max_areas=\"1\" area_index=\"{area}\"/>"
+                                 "</BehaviorTree></root>",
+                                 blackboard));
+  ASSERT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                5.0),
+            BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->area_attempt_count.at(0), 4u)
+      << "unexecuted skipped poses must not reset the coverage no-progress budget";
+  EXPECT_EQ(ctx->area_last_partial_poses.at(0), 0u);
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  EXPECT_EQ(follow->goalCount(), 0u);
+}
+
+TEST_F(FollowStripDigTest, CoverageExecutionCreditsLegsButNotRecoveryTransit)
+{
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  for (double x = .25; x <= 1.0; x += .25)
+  {
+    setRobot(x, 0);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  }
+  const auto before = ctx->area_unit_execution.at(0).at(0).executed_poses;
+  ASSERT_EQ(before, 20u);
+  follow->abort(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  const auto& skipped = ctx->area_unit_execution.at(0).at(0);
+  EXPECT_EQ(skipped.executed_poses, before);
+  EXPECT_TRUE(skipped.has_gap);
+  const double resumed = navigate->goal(0)->pose.pose.position.x;
+  setRobot(resumed, 0);
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 2;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(ctx->area_unit_execution.at(0).at(0).executed_poses, before);
+  for (int step = 1; step <= 4; ++step)
+  {
+    setRobot(resumed + .25 * step, 0);
+    ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  }
+  EXPECT_EQ(ctx->area_unit_execution.at(0).at(0).executed_poses, before + 20u);
+  tree->haltTree();
+}
+
+TEST_F(FollowStripDigTest, SuccessfulSuffixCannotCertifyItsSkippedPrefix)
+{
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  follow->abort(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  setRobot(navigate->goal(0)->pose.pose.position.x, 0);
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 2;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  follow->succeed(1);
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                5.0),
+            BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->area_completed_swaths.at(0).count(0), 1u)
+      << "processed without retrying exclusion";
+  EXPECT_TRUE(ctx->area_unit_execution.at(0).at(0).has_gap);
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  EXPECT_EQ(ctx->incomplete_retired_areas.count(0), 1u);
+  EXPECT_EQ(ctx->completed_swaths, 0);
+  EXPECT_TRUE(ctx->coverage_plausibility_warning);
+}
+
+TEST_F(FollowStripDigTest, ExcludedFinalPoseCannotBecomeCleanThroughExclusiveCut)
+{
+  ctx->dig_skip_radius_m = .01;
+  reportDig(2.0, 0.0);
+  startFollowStrip({straightUnit(0.0, 2.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goal(0)->path.poses.size(), 40u);
+  EXPECT_NEAR(follow->goal(0)->path.poses.back().pose.position.x, 1.95, 1e-9);
+  follow->succeed(0);
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                5.0),
+            BT::NodeStatus::SUCCESS);
+  EXPECT_TRUE(ctx->area_unit_execution.at(0).at(0).has_gap);
+  EXPECT_EQ(ctx->area_unit_execution.at(0).at(0).executed_poses, 39u);
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  EXPECT_EQ(ctx->incomplete_retired_areas.count(0), 1u);
+  EXPECT_EQ(navigate->goalCount(), 0u) << "no transit into the excluded final pose";
+}
+
+TEST_F(FollowStripDigTest, RestoredCompletionRequiresMatchingFullUnitGeometry)
+{
+  const auto unit = straightUnit(0.0, 2.0);
+  ctx->coverage_resume_path =
+      std::string(::testing::TempDir()) + "/coverage_completed_validate.txt";
+  startFollowStrip({unit});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  tree->haltTree();
+  tree.reset();
+  ctx->area_completed_swaths[0] = {0};
+  ctx->area_unit_execution[0][0] = {40, 40, false};
+  ctx->completed_areas.insert(0);
+  ASSERT_TRUE(mowgli_behavior::saveCoverageResumeState(*ctx));
+  ctx->completed_areas.clear();
+  ctx->area_completed_swaths.clear();
+  ctx->area_unit_execution.clear();
+  ASSERT_TRUE(mowgli_behavior::loadCoverageResumeState(*ctx));
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  EXPECT_EQ(ctx->area_execution_pending_validation.count(0), 1u);
+  startFollowStrip({unit});
+  ctx->current_strip_path = unit;
+  ctx->current_transit_goal = unit.poses.front();
+  tree.reset();
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\">"
+      "<Sequence><TransitToStrip/><FollowStrip/></Sequence></BehaviorTree></root>",
+      blackboard));
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->completed_areas.count(0), 1u);
+  EXPECT_EQ(ctx->area_execution_pending_validation.count(0), 0u);
+  EXPECT_EQ(follow->goalCount(), 1u) << "matching clean checkpoint needs no new motion";
+  EXPECT_EQ(navigate->goalCount(), 0u);
+  std::remove(ctx->coverage_resume_path.c_str());
+}
+
+TEST_F(FollowStripDigTest, KeptGappedCompletionValidatesWithoutReturningToExcludedUnit)
+{
+  const auto unit = straightUnit(0.0, 2.0);
+  ctx->coverage_resume_path = std::string(::testing::TempDir()) + "/coverage_kept_gap.txt";
+  startFollowStrip({unit});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  tree->haltTree();
+  tree.reset();
+  ctx->area_completed_swaths[0] = {0};
+  ctx->area_unit_execution[0][0] = {40, 20, true};
+  ctx->attempted_areas.insert(0);
+  ctx->incomplete_retired_areas.insert(0);
+  tree = std::make_unique<BT::Tree>(
+      factory.createTreeFromText("<root BTCPP_format=\"4\"><BehaviorTree ID=\"E\">"
+                                 "<EndSession keep_incomplete=\"true\"/></BehaviorTree></root>",
+                                 blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+  tree.reset();
+  EXPECT_TRUE(ctx->attempted_areas.empty());
+  ctx->area_completed_swaths.clear();
+  ctx->area_unit_execution.clear();
+  ASSERT_TRUE(mowgli_behavior::loadCoverageResumeState(*ctx));
+  ASSERT_EQ(ctx->area_execution_pending_validation.count(0), 1u);
+  ctx->current_strip_path = unit;
+  ctx->current_transit_goal = unit.poses.front();
+  setRobot(10.0, 0.0);
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\">"
+      "<Sequence><TransitToStrip/><FollowStrip/></Sequence></BehaviorTree></root>",
+      blackboard));
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  EXPECT_EQ(ctx->incomplete_retired_areas.count(0), 1u);
+  EXPECT_EQ(ctx->completed_swaths, 0);
+  EXPECT_TRUE(ctx->coverage_plausibility_warning);
+  EXPECT_EQ(navigate->goalCount(), 0u);
+  EXPECT_EQ(follow->goalCount(), 1u);
+  std::remove(ctx->coverage_resume_path.c_str());
+}
+
+TEST_F(FollowStripDigTest, MissingSavedPlanIdentityCannotCertifyCurrentGeometry)
+{
+  const auto old_unit = straightUnit(0.0, 2.0);
+  ctx->coverage_resume_path = std::string(::testing::TempDir()) + "/coverage_missing_identity.txt";
+  startFollowStrip({old_unit});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  tree->haltTree();
+  tree.reset();
+  ctx->area_completed_swaths[0] = {0};
+  ctx->area_unit_execution[0][0] = {40, 40, false};
+  ctx->completed_areas.insert(0);
+  ctx->area_plan_fingerprint.clear();
+  ASSERT_TRUE(mowgli_behavior::saveCoverageResumeState(*ctx));
+  ctx->completed_areas.clear();
+  ctx->area_completed_swaths.clear();
+  ctx->area_unit_execution.clear();
+  ASSERT_TRUE(mowgli_behavior::loadCoverageResumeState(*ctx));
+  startFollowStrip({straightUnit(10.0, 12.0)});
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  EXPECT_EQ(ctx->area_execution_unverified.count(0), 1u);
+  EXPECT_EQ(ctx->incomplete_retired_areas.count(0), 1u);
+  EXPECT_EQ(ctx->area_unit_execution.at(0).at(0).executed_poses, 0u);
+  EXPECT_EQ(follow->goalCount(), 1u);
+  std::remove(ctx->coverage_resume_path.c_str());
+}
+
+TEST_F(FollowStripDigTest, ShortRestoredFrontierCannotCertifyProcessedUnit)
+{
+  const auto unit = straightUnit(0.0, 2.0);
+  ctx->coverage_resume_path = std::string(::testing::TempDir()) + "/coverage_completed_short.txt";
+  startFollowStrip({unit});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  tree->haltTree();
+  tree.reset();
+  ctx->area_completed_swaths[0] = {0};
+  ctx->area_unit_execution[0][0] = {0, 0, false};
+  ctx->completed_areas.insert(0);
+  ASSERT_TRUE(mowgli_behavior::saveCoverageResumeState(*ctx));
+  ctx->completed_areas.clear();
+  ctx->area_completed_swaths.clear();
+  ctx->area_unit_execution.clear();
+  ASSERT_TRUE(mowgli_behavior::loadCoverageResumeState(*ctx));
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  startFollowStrip({unit});
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  EXPECT_EQ(ctx->incomplete_retired_areas.count(0), 1u);
+  EXPECT_EQ(ctx->area_execution_unverified.count(0), 1u);
+  EXPECT_EQ(follow->goalCount(), 1u);
+  std::remove(ctx->coverage_resume_path.c_str());
 }
 
 TEST_F(FollowStripDigTest, ResumeDoesNotCompleteEarlierUnitSkippedAfterTransitFailure)

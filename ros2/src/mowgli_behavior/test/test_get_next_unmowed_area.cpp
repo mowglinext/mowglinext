@@ -33,7 +33,9 @@
  */
 
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <string>
@@ -328,10 +330,13 @@ TEST_F(GetNextUnmowedAreaTest, PartialProgressInsideALongUnitKeepsTheAreaAlive)
   constexpr std::size_t kPathPoseCount = 100000;  // minimum gain: 0.5 % = 500 poses
   ctx->area_path_pose_count[0u] = kPathPoseCount;
   ctx->area_completed_swaths[0u] = {0u};
+  ctx->area_unit_execution[0u][0u] = {1000, 1000, false};
 
   for (uint32_t pass = 0; pass < 2 * BTContext::kMaxAreaAttempts; ++pass)
   {
     ctx->area_unit_progress[0u][1u] = 1000u * (pass + 1u);
+    const auto reached = ctx->area_unit_progress[0u][1u];
+    ctx->area_unit_execution[0u][1u] = {reached, reached, false};
     auto tree = makeTree(/*max_areas=*/5);
     ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS) << "pass " << pass;
     EXPECT_EQ(ctx->area_attempt_count[0u], 1u) << "pass " << pass;
@@ -350,16 +355,21 @@ TEST_F(GetNextUnmowedAreaTest, PartialGainBelowTheMinimumStillRetiresAtAttemptCa
   constexpr std::size_t kPathPoseCount = 100000;
   ctx->area_path_pose_count[0u] = kPathPoseCount;
   ctx->area_completed_swaths[0u] = {0u};
+  ctx->area_unit_execution[0u][0u] = {1000, 1000, false};
 
   for (uint32_t attempt = 1; attempt < BTContext::kMaxAreaAttempts; ++attempt)
   {
     ctx->area_unit_progress[0u][1u] = 5000u + 100u * attempt;  // +100 < 500 per pass
+    const auto reached = ctx->area_unit_progress[0u][1u];
+    ctx->area_unit_execution[0u][1u] = {reached, reached, false};
     auto tree = makeTree(/*max_areas=*/5);
     ASSERT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS) << "dispatch " << attempt;
     EXPECT_EQ(ctx->area_attempt_count[0u], attempt);
   }
 
   ctx->area_unit_progress[0u][1u] = 5000u + 100u * BTContext::kMaxAreaAttempts;
+  const auto reached = ctx->area_unit_progress[0u][1u];
+  ctx->area_unit_execution[0u][1u] = {reached, reached, false};
   auto tree = makeTree(/*max_areas=*/5);
   EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::FAILURE);
   EXPECT_EQ(ctx->attempted_areas.count(0u), 1u);
@@ -1798,4 +1808,25 @@ TEST_F(GetNextUnmowedAreaTest, FollowStripYieldsWhenItsAreaIsAssignedToAPeer)
       blackboard);
   EXPECT_EQ(tree2.tickOnce(), BT::NodeStatus::SUCCESS);
   EXPECT_EQ(ctx->fleet_yielded_areas.count(2u), 1u);
+}
+
+TEST_F(GetNextUnmowedAreaTest, RestoredCompletionMustReachCurrentPlanValidation)
+{
+  areas[0] = {"lawn", false, 950};
+  waitForService();
+  const std::string path = std::string(::testing::TempDir()) + "/coverage_select_v4.txt";
+  {
+    std::ofstream f(path);
+    f << "mowgli_coverage_resume v4\ncurrent_area 0\ncompleted_areas 0\n"
+         "area 0 950 41 1234 -1 completed 0\nunit_execution 0 0 0 0 0\n";
+  }
+  ctx->coverage_resume_path = path;
+  ASSERT_TRUE(mowgli_behavior::loadCoverageResumeState(*ctx));
+  EXPECT_TRUE(ctx->completed_areas.empty());
+  auto tree = makeTree(/*max_areas=*/1);
+  EXPECT_EQ(tickToCompletion(tree), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->current_area, 0);
+  EXPECT_FALSE(ctx->coverage_all_complete);
+  EXPECT_EQ(ctx->area_execution_pending_validation.count(0), 1u);
+  std::remove(path.c_str());
 }

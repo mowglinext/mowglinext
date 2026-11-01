@@ -5,6 +5,65 @@ intended commands, checks the assumed forward response against mowing geometry,
 and bounds EscapeStartBlocked. It does not establish the
 stack-wide autonomous-motion invariant or physical containment.
 
+## Coverage execution versus recovery offsets (2026-11-01)
+
+A public real-BT/fake-Nav2 regression reproduces a retry-accounting defect on
+`bd45072b`: two failed blade-off recovery transits advance the original-unit
+resume offset by 80 poses without any accepted FollowPath goal. GetNext counted
+that offset as new coverage and reset attempt 3 to 1 instead of advancing to 4.
+The same conflation allowed a successful suffix, or a unit excluded entirely by
+a dig zone, to certify the original whole unit and area as covered.
+
+Coverage execution now has an original-index frontier, finite execution credit
+and a sticky known-gap bit, separate from logical resume offsets. Active
+FollowPath progress requires supported current TF; successful goals retain the
+existing action-completion contract. Blade-off target selection, skipped abort
+spans, dig exclusions and controller rejoins consume resume position without
+creating execution credit. Half-open truncated goals credit only their last
+sent pose. Replaying an old prefix cannot repeatedly refill the retry budget.
+
+Processed exclusions remain processed, so bounded recovery does not drive back
+into them. Clean completed-unit counts, whole-area completion and retry credit
+use the execution ledger. An all-processed area with a known or unverified gap
+retires incomplete rather than reporting MOWING_COMPLETE. This is execution
+bookkeeping under the existing action contract, not measured physical cutting.
+The existing 0.50 m terminal goal allowance is unchanged.
+
+The v4 resume format preserves ledger/gap provenance. Migration from v3 retains
+route/cursor, target, command, critical-charge STOP and cross-hatch metadata, but
+cannot retroactively certify skipped or unknown prefixes. Duplicate/malformed
+ledger rows are quarantined. Restored completion stays provisional until a
+fresh plan validates geometry identity, exact unit indices and frontier bounds.
+Missing saved plan identity discards retrospective execution credit. A matching
+all-processed plan hands off from TransitToStrip without motion, even with gaps;
+FollowStrip remains the sole clean/incomplete certifier. This also covers the
+EndSession keep-incomplete path, which clears per-session retirement flags
+before saving. All state resets and area-ID reconciliation clear the associated ledger.
+
+A coherent rebuild passes **186 cases** across FollowStrip 51, selection 58,
+swath status 10, incomplete resume 11, persistence 44, area progress 7 and
+execution 5. All context-bearing objects/fixtures and the production node
+consumer TU were rebuilt against the same headers. Independent reviews found
+an exclusive-cut endpoint error, duplicate-row evidence loss, provisional
+completion before geometry validation, unnecessary restart transit and missing
+saved identity. Each is repaired. The last two regressions fail against the
+retained pre-fix coverage object; the strengthened clean-checkpoint control
+passes. On the final source, **nine selected FollowStrip cases and the other
+135 cases pass** after relinking affected fixtures. These overlap the 186-case
+snapshot; there are 188 distinct cases across snapshots, not a claimed full
+188-case rerun at the last source. Original assertions and tolerances remain,
+except the persistence contract now explicitly requires provisional completion
+instead of trusting a stored completed flag.
+
+Two complete coherent builds/linking total 266.273 s under the 280 s cap;
+those tests total 170.060 s under 180 s. The separately authorized final
+lifecycle discriminator stays under 60 s compile/link and 40 s tests including
+its two RED cases. A missing `/repo` mount caused one fixture setup failure;
+the corrected mount rerun passes. Earlier attempts are not counted as passes.
+Clang-format 18 changed-line verification is clean. Exact source/binary hashes,
+RED/GREEN logs and review findings are retained outside Git under
+`pr950-resume-20261101/progress-attribution/`. No hardware evidence is implied.
+
 ## Current dev integration and plan identity (2026-11-01)
 
 After the cusp repair (`5979e582`), current `origin/dev` at `5baff9d3` was
@@ -44,13 +103,10 @@ hit. These two attempts total 57.217 s. Fresh behavior builds/linking total
 total 89.3 s under 240 s. Artifacts are in the external `cusp-production/`
 `dev-integration/`, `dev-public/` and `config-dev/` directories.
 
-Dev's partial retry credit still consumes resume offsets, which may include
-explicitly skipped/blade-off spans. It fixes premature no-progress retirement;
-it does not prove those poses were cut. The next software discriminator is a
-bounded real-action skip/detour replay that attributes progress separately to
-actual positive coverage commands and blade-off/failed transit spans. Full-unit
-cut acceptance and the previously recorded 180-degree prior/history recovery
-remain open. No hardware run or Ready/merge operation is implied.
+The bounded skip/recovery discriminator above now establishes and repairs the
+resume-offset attribution defect in dev's partial retry credit. Full-unit
+physical cut acceptance and the previously recorded 180-degree prior/history
+recovery remain open. No hardware run or Ready/merge operation is implied.
 
 ## Original cusp: signed pivot, braking and restart (2026-11-01)
 
@@ -1459,6 +1515,7 @@ than inheriting a whole-branch CI result.
 | Rebase information and absolute gyro bias | Two independently causal Core repairs, with their tests/lifecycle pieces; source acquisition retention depends on information-preserving typed rebase. 52 focused cases passed before source integration. |
 | COG producer source context | Producer/history/tests form a separate repair from GraphManager. Its pre-change producer, timing/math helpers and package CMake match latest fetched dev byte-for-byte; direct base application is plausible, but any extracted PR still needs its own validation. Retain delayed heading, completed-pivot latch and clock-epoch cases together. |
 | Wheel travel-noise accounting | Four small production edits plus source/legacy/clipped-bootstrap regressions; all three new cases RED on the old Core, 15 selected targets / 156 cases GREEN after coherent ABI rebuild. Can be separated with its bootstrap source integration dependency retained; it does not repair true-flip lineage. |
+| Coverage execution provenance | Separate recovery offsets from executed coverage and retain gaps through v4 checkpoints. Baseline failed-transit credit RED and checkpoint lifecycle REDs are repaired with focused tests. Keep ledger producers, completion/retry consumers, migration and plan/area reset handling together; target-base revalidation remains required. |
 | Post-anchor snapshot | Small Core/API repair with two baseline RED cases, 11 rebase and 48 Node GREEN cases; depends on existing source/revision semantics. It does not repair the invalid true-flip prior. |
 | Automatic dock seed provenance | Keep the shared charging guard, callback ordering and timer fallback together. Two old-Node RED cases, two charging controls and 52 actual-Node GREEN cases support the narrow repair; general bad authoritative seed recovery remains separate. |
 | BT action result ownership | Five per-dispatch slot renewals and real-class/fake-Nav2 regressions form a small separate family. Five late-old-success REDs across FollowStrip follow/transit, TransitToStrip, DetourAroundObstacle and generic NavigateToPose; nine coverage-action and four generic-navigation/boundary-recovery cases GREEN, with independent reviews. No dependency on the unshipped maneuver or downstream cancellation qualification. |

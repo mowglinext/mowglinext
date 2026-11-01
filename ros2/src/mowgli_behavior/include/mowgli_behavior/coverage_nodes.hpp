@@ -454,7 +454,9 @@ private:
   /// past the dig zone through the existing blade-off transit.
   DigRecoveryStep stepDigRecovery(const std::shared_ptr<BTContext>& ctx);
   /// Book the current unit as mowed (shared by the success paths).
-  void markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx);
+  void markCurrentUnitMowed(const std::shared_ptr<BTContext>& ctx, bool action_succeeded = true);
+  // Finalize processed units without certifying known gaps as full coverage.
+  bool finalizeProcessedArea(const std::shared_ptr<BTContext>& ctx);
   // Reach the actual trimmed entry blade-off unless already aligned there.
   // Later unit boundaries always transit; force_transit prevents recursive
   // direct dispatch if entry changes during the handoff.

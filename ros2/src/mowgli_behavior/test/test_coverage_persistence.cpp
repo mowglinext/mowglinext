@@ -175,6 +175,10 @@ void seedContext(BTContext& ctx, const std::string& path)
   ctx.area_completed_swaths[0] = {0};  // area 0 fully done
   ctx.area_completed_swaths[2] = {};  // present but empty
   ctx.completed_areas = {0};
+  // A v4 clean completion carries execution provenance, independently of its
+  // logical resume cursor. Legacy/missing provenance is tested separately.
+  ctx.area_unit_execution[0][0] = {999, 999, false};
+  ctx.area_unit_execution[2][0] = {1234, 1234, false};
 }
 }  // namespace
 
@@ -202,7 +206,11 @@ TEST(CoveragePersistence, RoundTripsAllResumeState)
   // area 0 has no live cursor (fully mowed) → must NOT be resurrected.
   EXPECT_EQ(loaded.area_resume_pose_index.count(0), 0u);
   EXPECT_EQ(loaded.area_completed_swaths[0], (std::set<std::size_t>{0}));
-  EXPECT_EQ(loaded.completed_areas, (std::set<uint32_t>{0}));
+  // Even valid stored completion is provisional until current plan geometry
+  // checks its complete unit set and exact frontier bounds.
+  EXPECT_TRUE(loaded.completed_areas.empty());
+  EXPECT_EQ(loaded.area_execution_pending_validation.count(0), 1u);
+  EXPECT_EQ(loaded.area_completed_swaths.at(0), (std::set<std::size_t>{0}));
 
   std::remove(path.c_str());
 }
@@ -989,4 +997,117 @@ TEST(CoveragePersistence, ExpiredProgressKeepsTheCrossHatchPhase)
   ASSERT_EQ(restarted.cross_hatch.count(0), 1u) << "the phase describes the lawn, not the run";
   EXPECT_TRUE(restarted.cross_hatch.at(0).next_perpendicular);
   std::remove(ctx.coverage_resume_path.c_str());
+}
+
+TEST(CoveragePersistence, ExecutionGapAndCreditSurviveRestartWithoutBecomingComplete)
+{
+  const std::string path = tempPath("coverage_execution_gap.txt");
+  BTContext saved;
+  seedContext(saved, path);
+  saved.area_unit_execution[0][0] = {999, 400, true};
+  saved.completed_areas.erase(0);
+  saved.attempted_areas.insert(0);
+  saved.incomplete_retired_areas.insert(0);
+  ASSERT_TRUE(saveCoverageResumeState(saved));
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  ASSERT_EQ(loaded.area_unit_execution.at(0).count(0), 1u);
+  EXPECT_EQ(loaded.area_unit_execution.at(0).at(0).executed_poses, 400u);
+  EXPECT_EQ(loaded.area_unit_execution.at(0).at(0).accounted_frontier, 999u);
+  EXPECT_TRUE(loaded.area_unit_execution.at(0).at(0).has_gap);
+  EXPECT_EQ(loaded.completed_areas.count(0), 0u);
+  EXPECT_EQ(loaded.incomplete_retired_areas.count(0), 1u);
+  EXPECT_EQ(loaded.attempted_areas.count(0), 1u);
+  std::remove(path.c_str());
+}
+
+TEST(CoveragePersistence, LegacyResumeRetainsSafetyAndRouteButCannotInventExecution)
+{
+  const std::string path = tempPath("coverage_execution_v3.txt");
+  {
+    std::ofstream f(path);
+    f << "mowgli_coverage_resume v3\ncurrent_command 0\n"
+         "critical_charge_stop_latched 1\nbattery_charge_pending 1\n"
+         "critical_dock_failure_latched 1\ncurrent_area 2\n"
+         "area 2 950 1000 1234 500 completed\nunit_progress 2 0 500\n";
+  }
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  EXPECT_EQ(loaded.area_resume_pose_index.at(2), 500u);
+  EXPECT_EQ(loaded.area_unit_progress.at(2).at(0), 500u);
+  EXPECT_EQ(loaded.area_execution_unverified.count(2), 1u);
+  EXPECT_EQ(mowgli_behavior::executedAreaPoses(
+                loaded.area_unit_execution.count(2) ? &loaded.area_unit_execution.at(2) : nullptr),
+            0u);
+  EXPECT_EQ(loaded.current_command, 0);
+  EXPECT_TRUE(loaded.critical_charge_stop_latched);
+  EXPECT_TRUE(loaded.battery_charge_pending);
+  EXPECT_TRUE(loaded.critical_dock_failure_latched);
+  std::remove(path.c_str());
+}
+
+TEST(CoveragePersistence, LegacyZeroOffsetHasNoUnverifiedCoveredPrefix)
+{
+  const std::string path = tempPath("coverage_execution_v3_zero.txt");
+  {
+    std::ofstream f(path);
+    f << "mowgli_coverage_resume v3\ncurrent_command 1\ncurrent_area 0\n"
+         "area 0 950 1000 1234 0 completed\nunit_progress 0 0 0\n";
+  }
+  BTContext loaded;
+  loaded.coverage_resume_path = path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  EXPECT_TRUE(loaded.area_execution_unverified.empty());
+  EXPECT_TRUE(loaded.area_unit_execution.empty());
+  EXPECT_EQ(loaded.area_resume_pose_index.at(0), 0u);
+  EXPECT_EQ(loaded.current_command, 1);
+  std::remove(path.c_str());
+}
+
+TEST(CoveragePersistence, MissingOrInvalidV4ExecutionCannotCertifyCompletion)
+{
+  for (const std::string row : {"", "unit_execution 0 0 20 21 0\n", "unit_execution 0 0 99 0 0\n"})
+  {
+    const std::string path = tempPath("coverage_execution_v4_missing.txt");
+    {
+      std::ofstream f(path);
+      f << "mowgli_coverage_resume v4\ncurrent_area 0\ncompleted_areas 0\n"
+           "area 0 950 100 1234 -1 completed 0\n"
+        << row;
+    }
+    BTContext loaded;
+    loaded.coverage_resume_path = path;
+    ASSERT_TRUE(loadCoverageResumeState(loaded));
+    EXPECT_TRUE(loaded.completed_areas.empty());
+    EXPECT_EQ(loaded.area_execution_unverified.count(0), 1u);
+    EXPECT_EQ(loaded.incomplete_retired_areas.count(0), 1u);
+    std::remove(path.c_str());
+  }
+}
+
+TEST(CoveragePersistence, DuplicateExecutionRowsCannotEraseGapEvidence)
+{
+  for (const auto rows : {"unit_execution 0 0 99 40 1\nunit_execution 0 0 99 99 0\n",
+                          "unit_execution 0 0 99 99 0\nunit_execution 0 0 99 40 1\n",
+                          "unit_execution 0 0 99 99 0\nunit_execution 0 0 99 99 0\n"})
+  {
+    const std::string path = tempPath("coverage_execution_duplicate.txt");
+    {
+      std::ofstream f(path);
+      f << "mowgli_coverage_resume v4\ncurrent_command 0\ncritical_charge_stop_latched 1\n"
+           "completed_areas 0\narea 0 950 100 1234 -1 completed 0\n"
+        << rows;
+    }
+    BTContext loaded;
+    loaded.coverage_resume_path = path;
+    ASSERT_TRUE(loadCoverageResumeState(loaded));
+    EXPECT_TRUE(loaded.completed_areas.empty());
+    EXPECT_EQ(loaded.area_execution_unverified.count(0), 1u);
+    EXPECT_EQ(loaded.incomplete_retired_areas.count(0), 1u);
+    EXPECT_TRUE(loaded.critical_charge_stop_latched);
+    EXPECT_EQ(loaded.current_command, 0);
+    std::remove(path.c_str());
+  }
 }

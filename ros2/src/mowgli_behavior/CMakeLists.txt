@@ -823,6 +823,7 @@ if(BUILD_TESTING)
   # ---- test_area_progress ---- (area_progress.hpp, pure header, no ROS)
   ament_add_gtest(test_area_progress
     test/test_area_progress.cpp
+    test/test_coverage_execution.cpp
   )
 
   target_include_directories(test_area_progress PUBLIC

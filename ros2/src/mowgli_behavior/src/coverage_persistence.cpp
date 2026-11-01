@@ -39,7 +39,9 @@ namespace
 // the index and the pose count. Bumped rather than made optional because an
 // old v2 row parsed against the new column layout would silently read the
 // pose count into the id field and shift every field after it.
-constexpr const char* kHeader = "mowgli_coverage_resume v3";
+// v4 separates recovery offsets from coverage execution and preserves known gaps.
+constexpr const char* kHeader = "mowgli_coverage_resume v4";
+constexpr const char* kLegacyHeader = "mowgli_coverage_resume v3";
 // The phase-only snapshot never carries a command or cursor, so it cannot
 // auto-start the mower. Older readers ignore these optional rows.
 
@@ -113,13 +115,22 @@ bool hasCoverageResumeState(const BTContext& ctx)
 
 void discardRestoredCoverageProgress(BTContext& ctx)
 {
+  // Only known-gap terminal retirements are restored from disk. Expiring their
+  // geometry must also permit the fresh coverage pass to dispatch these areas.
+  for (uint32_t area : ctx.incomplete_retired_areas)
+    ctx.attempted_areas.erase(area);
+  ctx.incomplete_retired_areas.clear();
   ctx.area_completed_swaths.clear();
   ctx.area_swath_count.clear();
   ctx.area_resume_pose_index.clear();
   ctx.area_unit_progress.clear();
+  ctx.area_unit_execution.clear();
+  ctx.area_execution_unverified.clear();
+  ctx.area_execution_pending_validation.clear();
   ctx.area_path_pose_count.clear();
   ctx.area_plan_fingerprint.clear();
   ctx.completed_areas.clear();
+  ctx.coverage_plausibility_warning = false;
   clearSingleAreaMode(ctx);
   ctx.resume_after_incomplete_end = false;
   ctx.resume_after_incomplete_end_time = {};
@@ -250,6 +261,10 @@ bool saveCoverageResumeState(const BTContext& ctx, std::chrono::system_clock::ti
     areas.insert(idx);
   for (const auto& [idx, _] : ctx.area_unit_progress)
     areas.insert(idx);
+  for (const auto& [idx, _] : ctx.area_unit_execution)
+    areas.insert(idx);
+  for (uint32_t idx : ctx.area_execution_unverified)
+    areas.insert(idx);
   for (const auto& [idx, _] : ctx.area_completed_swaths)
     areas.insert(idx);
   for (uint32_t idx : ctx.completed_areas)
@@ -338,6 +353,25 @@ bool saveCoverageResumeState(const BTContext& ctx, std::chrono::system_clock::ti
       out << "unit_progress " << idx << ' ' << unit << ' ' << offset << '\n';
     }
   }
+  for (const auto& [idx, units] : ctx.area_unit_execution)
+  {
+    for (const auto& [unit, execution] : units)
+      out << "unit_execution " << idx << ' ' << unit << ' ' << execution.accounted_frontier << ' '
+          << execution.executed_poses << ' ' << (execution.has_gap ? 1 : 0) << '\n';
+  }
+  for (uint32_t idx : ctx.area_execution_unverified)
+    out << "execution_unverified " << idx << '\n';
+  // Preserve terminal gap disposition across a process restart without changing
+  // the existing retry policy for areas retired for unrelated reasons.
+  for (uint32_t idx : ctx.incomplete_retired_areas)
+  {
+    bool has_gap = ctx.area_execution_unverified.count(idx) > 0;
+    if (const auto it = ctx.area_unit_execution.find(idx); it != ctx.area_unit_execution.end())
+      for (const auto& [unit, execution] : it->second)
+        has_gap = has_gap || execution.has_gap;
+    if (has_gap)
+      out << "execution_retired " << idx << '\n';
+  }
 
   return writeSnapshot(ctx, out.str());
 }
@@ -355,12 +389,13 @@ bool loadCoverageResumeState(BTContext& ctx)
   }
 
   std::string header;
-  if (!std::getline(f, header) || header != kHeader)
+  if (!std::getline(f, header) || (header != kHeader && header != kLegacyHeader))
   {
     return false;  // absent / empty / unknown version → start fresh
   }
 
   std::string line;
+  std::set<std::pair<uint32_t, std::size_t>> seen_execution;
   while (std::getline(f, line))
   {
     std::istringstream ls(line);
@@ -481,6 +516,41 @@ bool loadCoverageResumeState(BTContext& ctx)
         ctx.area_unit_progress[area][unit] = offset;
       }
     }
+    else if (tag == "unit_execution" && header == kHeader)
+    {
+      uint32_t area;
+      std::size_t unit, frontier, executed;
+      int gap;
+      if (ls >> area >> unit)
+      {
+        if (!seen_execution.emplace(area, unit).second)
+        {
+          ctx.area_execution_unverified.insert(area);
+          ctx.area_unit_execution[area].erase(unit);
+        }
+        else if (ls >> frontier >> executed >> gap && executed <= frontier &&
+                 (gap == 0 || gap == 1) && (gap != 0 || executed == frontier))
+          ctx.area_unit_execution[area][unit] = {frontier, executed, gap != 0};
+        else
+          ctx.area_execution_unverified.insert(area);
+      }
+    }
+    else if (tag == "execution_unverified" && header == kHeader)
+    {
+      uint32_t area;
+      if (ls >> area)
+        ctx.area_execution_unverified.insert(area);
+    }
+    else if (tag == "execution_retired" && header == kHeader)
+    {
+      uint32_t area;
+      if (ls >> area)
+      {
+        ctx.attempted_areas.insert(area);
+        ctx.incomplete_retired_areas.insert(area);
+        ctx.coverage_plausibility_warning = true;
+      }
+    }
     else if (tag == "area")
     {
       uint32_t idx;
@@ -517,6 +587,80 @@ bool loadCoverageResumeState(BTContext& ctx)
         done.insert(s);
     }
   }
+  // Keep legacy route/resume, targeting, command and safety metadata. Its old
+  // offsets and processed units have no execution provenance and earn no credit.
+  if (header == kLegacyHeader)
+  {
+    for (const auto& [area, cursor] : ctx.area_resume_pose_index)
+      if (cursor > 0)
+        ctx.area_execution_unverified.insert(area);
+    for (const auto& [area, units] : ctx.area_unit_progress)
+      for (const auto& [unit, offset] : units)
+        if (offset > 0)
+          ctx.area_execution_unverified.insert(area);
+    for (const auto& [area, units] : ctx.area_completed_swaths)
+      if (!units.empty())
+        ctx.area_execution_unverified.insert(area);
+    ctx.area_execution_unverified.insert(ctx.completed_areas.begin(), ctx.completed_areas.end());
+  }
+  else
+  {
+    // Missing or malformed v4 evidence cannot turn a saved logical offset into
+    // certified coverage. Unknown scalar cursors are checked against the unit
+    // geometry by FollowStrip before resuming.
+    for (const auto& [area, units] : ctx.area_unit_progress)
+    {
+      const auto execution = ctx.area_unit_execution.find(area);
+      for (const auto& [unit, offset] : units)
+      {
+        if (offset > 0 &&
+            (execution == ctx.area_unit_execution.end() || execution->second.count(unit) == 0))
+          ctx.area_execution_unverified.insert(area);
+      }
+    }
+    for (const auto& [area, units] : ctx.area_completed_swaths)
+    {
+      const auto execution = ctx.area_unit_execution.find(area);
+      for (std::size_t unit : units)
+        if (execution == ctx.area_unit_execution.end() || execution->second.count(unit) == 0)
+          ctx.area_execution_unverified.insert(area);
+    }
+    for (const auto& [area, cursor] : ctx.area_resume_pose_index)
+      if (cursor > 0 && ctx.area_unit_execution.count(area) == 0)
+        ctx.area_execution_unverified.insert(area);
+  }
+  for (auto it = ctx.completed_areas.begin(); it != ctx.completed_areas.end();)
+  {
+    const uint32_t area = *it;
+    const auto execution = ctx.area_unit_execution.find(area);
+    const auto processed = ctx.area_completed_swaths.find(area);
+    const bool verified = ctx.area_execution_unverified.count(area) == 0 &&
+                          processed != ctx.area_completed_swaths.end() &&
+                          !processed->second.empty() &&
+                          fullyCoveredUnitCount(processed->second,
+                                                execution != ctx.area_unit_execution.end()
+                                                    ? &execution->second
+                                                    : nullptr) == processed->second.size();
+    if (verified)
+    {
+      // Completion is provisional until the current plan validates its unit
+      // set and exact bounds; GetNext must allow that plan-only validation.
+      ctx.area_execution_pending_validation.insert(area);
+      it = ctx.completed_areas.erase(it);
+    }
+    else
+    {
+      ctx.area_execution_unverified.insert(area);
+      ctx.attempted_areas.insert(area);
+      ctx.incomplete_retired_areas.insert(area);
+      ctx.coverage_plausibility_warning = true;
+      it = ctx.completed_areas.erase(it);
+    }
+  }
+  for (const auto& [area, units] : ctx.area_unit_execution)
+    ctx.area_execution_pending_validation.insert(area);
+  for (const auto& [area, offset] : ctx.area_resume_pose_index)
+    ctx.area_execution_pending_validation.insert(area);
   return true;
 }
 

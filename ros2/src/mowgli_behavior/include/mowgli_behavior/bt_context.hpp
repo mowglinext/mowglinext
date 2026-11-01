@@ -31,6 +31,7 @@
 #include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_behavior/blade_direction.hpp"
 #include "mowgli_behavior/blade_ready.hpp"
+#include "mowgli_behavior/coverage_execution.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/fleet_yield.hpp"
@@ -116,7 +117,8 @@ struct BTContext
   /// attempted_areas, incomplete_retired_areas, area_attempt_count, area_last_coverage,
   /// area_last_partial_poses,
   /// area_completed_swaths,
-  /// area_swath_count, area_resume_pose_index, area_path_pose_count,
+  /// area_swath_count, area_resume_pose_index, area_unit_progress,
+  /// area_unit_execution, area_execution_unverified, area_path_pose_count,
   /// area_plan_fingerprint, completed_areas, session_failed_transit_targets,
   /// coverage_all_complete, area_ids, current_area_list_generation,
   /// area_verified_generation). Those
@@ -331,9 +333,8 @@ struct BTContext
   /// progress and thus resets the no-progress attempt counter. Cleared by
   /// EndSession.
   std::map<uint32_t, float> area_last_coverage;
-  /// Its partner (area_progress.hpp): the high-water mark of the furthest
-  /// poses reached inside the area's UNFINISHED units (area_unit_progress), so
-  /// a pass that mowed a long stretch of a long unit is not "no progress".
+  /// Its partner (area_progress.hpp): the high-water mark of observed coverage
+  /// execution (area_unit_execution), excluding synthetic resume/skipped spans.
   /// Reset with area_last_coverage, everywhere.
   std::map<uint32_t, std::size_t> area_last_partial_poses;
   static constexpr uint32_t kMaxAreaAttempts = 5;
@@ -497,13 +498,11 @@ struct BTContext
   // -----------------------------------------------------------------------
   // Swath-completion model (replaces the mow_progress cell grid)
   // -----------------------------------------------------------------------
-  /// Indices of swaths already mowed for each area, in the deterministic F2C
-  /// swath order. FollowStrip inserts a swath index once its FollowPath goal
-  /// succeeds; on a re-plan (resume after recharge / preempt) it skips any
-  /// index already present. F2C is deterministic for a fixed area+params, so
-  /// indices are stable across re-plans within a session. Persisted with the
-  /// area set so resume survives a restart. Cleared per area by EndSession /
-  /// a coverage reset.
+  /// Terminal processed-unit indices in deterministic F2C order (historical
+  /// name). Includes acknowledged exclusions such as units inside dig zones;
+  /// use area_unit_execution/fullyCoveredUnitCount to distinguish clean coverage.
+  /// Re-plans skip these indices so bounded recovery does not retry exclusions.
+  /// Persisted for restart and cleared with the area's coverage record.
   std::map<uint32_t, std::set<std::size_t>> area_completed_swaths;
   /// Total swath count for each area, set by FollowStrip after segmenting the
   /// planned path. 0 until the area has been planned at least once.
@@ -528,6 +527,15 @@ struct BTContext
   /// it on the next pass; erased when the unit is booked mowed, with the rest of an area's state
   /// when the plan changes, and by EndSession. Persisted with the resume cursor.
   std::map<uint32_t, std::map<std::size_t, std::size_t>> area_unit_progress;
+  /// Coverage execution credit and known gaps, separate from recovery offsets.
+  /// Retain processed units: their gap provenance still controls area completion.
+  std::map<uint32_t, UnitCoverageExecutionMap> area_unit_execution;
+  /// Legacy or incomplete checkpoints retain logical resume behavior without
+  /// certifying unknown prefixes/processed units as fully covered.
+  std::set<uint32_t> area_execution_unverified;
+  /// Restored accounting must match the current re-planned unit geometry
+  /// before it supplies completion or retrospective retry credit.
+  std::set<uint32_t> area_execution_pending_validation;
   /// Total pose count of the area's continuous full_path (the denominator for
   /// the resume-cursor coverage_percent). Set by FollowStrip at dispatch.
   std::map<uint32_t, std::size_t> area_path_pose_count;
@@ -1178,6 +1186,9 @@ inline void clearRecordedCoverageProgress(BTContext& ctx)
   ctx.area_swath_count.clear();
   ctx.area_resume_pose_index.clear();
   ctx.area_unit_progress.clear();
+  ctx.area_unit_execution.clear();
+  ctx.area_execution_unverified.clear();
+  ctx.area_execution_pending_validation.clear();
   ctx.area_path_pose_count.clear();
   ctx.area_plan_fingerprint.clear();
   ctx.completed_areas.clear();
@@ -1192,6 +1203,9 @@ inline void clearAreaCoverageProgress(BTContext& ctx, uint32_t area)
   ctx.area_completed_swaths.erase(area);
   ctx.area_resume_pose_index.erase(area);
   ctx.area_unit_progress.erase(area);
+  ctx.area_unit_execution.erase(area);
+  ctx.area_execution_unverified.erase(area);
+  ctx.area_execution_pending_validation.erase(area);
   ctx.area_last_coverage.erase(area);
   ctx.area_last_partial_poses.erase(area);
   ctx.completed_areas.erase(area);
