@@ -29,7 +29,9 @@ retires incomplete rather than reporting MOWING_COMPLETE. This is execution
 bookkeeping under the existing action contract, not measured physical cutting.
 The existing 0.50 m terminal goal allowance is unchanged.
 
-The v4 resume format preserves ledger/gap provenance. Migration from v3 retains
+The v4 resume format preserves ledger/gap provenance; older readers reject v4
+rather than silently trusting coverage whose gap metadata they cannot read.
+Migration from v3 retains
 route/cursor, target, command, critical-charge STOP and cross-hatch metadata, but
 cannot retroactively certify skipped or unknown prefixes. Duplicate/malformed
 ledger rows are quarantined. Restored completion stays provisional until a
@@ -63,6 +65,53 @@ the corrected mount rerun passes. Earlier attempts are not counted as passes.
 Clang-format 18 changed-line verification is clean. Exact source/binary hashes,
 RED/GREEN logs and review findings are retained outside Git under
 `pr950-resume-20261101/progress-attribution/`. No hardware evidence is implied.
+
+## Additional pivot and heading-lineage discriminators (2026-11-01)
+
+A different exact 32-pose production window, new indices 840..871, completes
+through the real ControllerServer in 19.769 s (FollowPath status 4/error 0).
+Both local pivots at indices 12 and 14 complete, followed by curved departure;
+final command is zero with no raw-body-hole or reference-union witness. The
+loaded controller inode/hash matches the previously validated `7020ebd4f0e4`
+library. The unchanged checker finishes at index 25/32 (78.1%), remaining arc
+0.465 m and XY error 0.486 m under its existing 0.50 m allowance. This is pivot
+and departure execution evidence, not complete-window cutting. Exact input SHA
+is `31ef4987042ba01e499351cbcd882366873df13e2438db0e1ce801a3fded3f57`.
+The retained generic runner's scope/index labels still say 180..210; those are
+incorrect for this attempt. Input bytes and extraction manifest establish the
+actual indices. Raw outputs are preserved, with a separate metadata correction,
+in external `cusp-production/next-cusp-candidates/`.
+
+The separate true-flip investigation now distinguishes two losses. A dense
+Gaussian oracle shows that keeping seed-heading/retained-state joint evidence
+allows exact finite-prior retirement even after prefix marginalization; the
+current retained marginal alone is insufficient. A pinned actual Core/GTSAM
+prototype preserves full means/covariance when it transports relative bridge
+references in an untrimmed pure-gauge history. Interleaved GNSS deforms those
+references: visibility of the initial prior alone is insufficient. Transforming
+a marginalized separator leaves full-state errors of 0.38..0.61 in the tested
+cases. These are external experiments on retained `088ad8c` plus its recorded
+covariance repair, not validation of a current-production recovery change.
+
+A live relative-coordinate conditional residual is now a bounded candidate for
+removing the absolute reference-chart dependence. Its first-order rows can
+match the existing shared-noise bridge while remaining globally SE2 invariant.
+It changes the likelihood away from the frozen reference and has not been
+adopted in production. An external whole-family discriminator replaces all
+eight identified bridge factors, retains GNSS/process/bias/XY evidence, and
+retires only the explicitly invalid seed yaw before adding the finite 1-degree
+recovery heading. Deferred/interleaved observations with preintegration off/on
+agree with independent same-new-model controls to 1.97e-16 in full-state mean
+and 2.88e-14 in covariance; perfect-fixture XY/yaw errors are below 1.7e-16.
+Later-before-earlier insertion plus a third acquisition agrees with the
+independent joint error-coordinate quadratic to 1.59e-10 (cost about 5766).
+This supports a pre-prefix repair route. It neither identifies which initial
+prior may be retired on a real conflict nor recovers discarded prefix evidence. Complete-family insertion, bias, singular constraints,
+endpoint noise and normalization must be qualified before changing that model;
+prefix information loss remains a separate problem. Exact experiment inputs,
+failed ABI-mismatch attempt, complete pinned headers/objects and independent
+model review are retained under external `true-flip-next/`. The genuine 180°
+production recovery remains RED; no sigma or acceptance bound was changed.
 
 ## Current dev integration and plan identity (2026-11-01)
 
