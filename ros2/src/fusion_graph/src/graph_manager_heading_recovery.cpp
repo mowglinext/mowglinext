@@ -64,6 +64,10 @@ HeadingRecoveryResult GraphManager::RecoverInvalidSeedHeading(
   if (!seed || seed != heading_seed_ || !seed->source_bound || !initialized_ || !motion_ ||
       !latest_)
     return HeadingRecoveryResult::SeedUnavailable;
+  // Retiming retains the original queued yaw as well as a synthetic prior.
+  // Retiring that coupled family needs a separate ownership model.
+  if (seed->heading_provenance == HeadingSeedState::HeadingProvenance::RetimedPrior)
+    return HeadingRecoveryResult::UnsupportedFamily;
   const auto& state = *motion_;
   if (state.epoch != observation.epoch || seed->epoch != state.epoch ||
       latest_->source_epoch != state.epoch || observation.source_ns < seed->source_ns ||
@@ -80,9 +84,11 @@ HeadingRecoveryResult GraphManager::RecoverInvalidSeedHeading(
       return HeadingRecoveryResult::UnsupportedPrefix;
     if (seed->source_position)
     {
-      if (std::count(original.begin(), original.end(), seed->source_position) != 1 ||
+      if (seed->heading_provenance != HeadingSeedState::HeadingProvenance::RawSourceObservation ||
+          !seed->source_heading_id ||
+          std::count(original.begin(), original.end(), seed->source_position) != 1 ||
           state.observation_ids.count(seed->source_gnss_id) == 0 ||
-          state.yaw_observation_ids.count(seed->source_heading_id) == 0)
+          state.yaw_observation_ids.count(*seed->source_heading_id) == 0)
         return HeadingRecoveryResult::UnsupportedFamily;
     }
     else if (!SeedPositionCostIsCartesian(*seed) || !std::isfinite(seed->sigma_xy) ||

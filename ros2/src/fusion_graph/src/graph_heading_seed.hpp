@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include <gtsam/geometry/Pose2.h>
 #include <gtsam/nonlinear/NonlinearFactor.h>
@@ -11,12 +12,18 @@ namespace fusion_graph
 {
 struct HeadingSeedState
 {
+  enum class HeadingProvenance
+  {
+    PosePrior,
+    RawSourceObservation,
+    RetimedPrior
+  };
   gtsam::NonlinearFactor::shared_ptr prior;
-  // Non-null for a raw observation seed: its separate antenna likelihood
-  // remains intact when only the explicitly invalid heading is retired.
+  // Separate original antenna likelihood for both observation bootstraps.
   gtsam::NonlinearFactor::shared_ptr source_position;
+  HeadingProvenance heading_provenance = HeadingProvenance::PosePrior;
   uint64_t source_gnss_id = 0;
-  uint64_t source_heading_id = 0;
+  std::optional<uint64_t> source_heading_id;
   gtsam::Pose2 pose;
   double sigma_xy = 0.0;
   uint64_t epoch = 0;

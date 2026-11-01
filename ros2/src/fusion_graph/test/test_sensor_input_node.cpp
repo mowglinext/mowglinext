@@ -26,7 +26,11 @@ protected:
   {
     rclcpp::shutdown();
   }
-  void CreateNode(double period = .1, double lever_x = 0.0, double lever_y = 0.0)
+  void CreateNode(double period = .1,
+                  double lever_x = 0.0,
+                  double lever_y = 0.0,
+                  bool use_magnetometer = false,
+                  double stationary_period = 5.0)
   {
     rclcpp::NodeOptions options;
     options.parameter_overrides(
@@ -38,6 +42,8 @@ protected:
          {"periodic_save_period_s", 0.0},
          {"fast_pose_publish_rate_hz", 0.0},
          {"node_period_s", period},
+         {"stationary_node_period_s", stationary_period},
+         {"use_magnetometer", use_magnetometer},
          {"lever_arm_x", lever_x},
          {"lever_arm_y", lever_y},
          {"graph_save_prefix", "/tmp/fusion_graph_node_input_" + std::to_string(getpid())}});
@@ -362,6 +368,88 @@ protected:
     Wheel(10.02, 0.0);
     Imu(10.02);
     SetOffDock();
+  }
+  void StartBootstrapCovarianceScenario(double lever_x = 0.0, double lever_y = 0.0)
+  {
+    node_.reset();
+    CreateNode(.1, lever_x, lever_y, true, .1);
+    Clock(20.0);
+    Wheel(20.0, 0.0);
+    Imu(20.0);
+    Clock(20.02);
+    Wheel(20.02, 0.0);
+    Imu(20.02);
+    SetOffDock();
+  }
+  void ConsumeStationarySourceSupport(double through_seconds)
+  {
+    const int intervals = static_cast<int>(std::llround((through_seconds - 20.0) / .02));
+    for (int i = 2; i <= intervals; ++i)
+    {
+      const double source = 20.0 + .02 * i;
+      Clock(source);
+      Wheel(source, 0.0);
+      Imu(source);
+    }
+  }
+  void ExpectDifferentSourceBootstrapCovariance(double position_source,
+                                                double heading_source,
+                                                double lever_x = 0.0,
+                                                double lever_y = 0.0,
+                                                bool heading_first = false)
+  {
+    const double through = std::max(position_source, heading_source);
+    StartBootstrapCovarianceScenario(lever_x, lever_y);
+    ConsumeStationarySourceSupport(through);
+    Clock(through);
+
+    if (heading_first)
+    {
+      Heading(heading_source, 0.0, false);
+      Gnss(position_source, lever_x, .014, lever_y);
+    }
+    else
+    {
+      Gnss(position_source, lever_x, .014, lever_y);
+      Heading(heading_source, 0.0, false);
+    }
+
+    const int64_t position_ns = std::llround(position_source * 1e9);
+    const int64_t heading_ns = std::llround(heading_source * 1e9);
+    const auto snapshot = Snapshot();
+    ASSERT_TRUE(snapshot);
+    ASSERT_EQ(snapshot->source_stamp_ns, position_ns);
+    ASSERT_TRUE(node_->last_rtk_fixed_stamp_);
+    EXPECT_EQ(node_->last_rtk_fixed_stamp_->nanoseconds(), position_ns);
+    ASSERT_TRUE(node_->seed_yaw_candidate_);
+    EXPECT_EQ(node_->seed_yaw_candidate_->id, (static_cast<uint64_t>(heading_ns) << 1) | 1U);
+    EXPECT_NEAR(node_->seed_yaw_candidate_->sigma, .1, 1e-12);
+    EXPECT_TRUE(node_->seed_yaw_candidate_->robust);
+
+    // Different-source bootstrap retains the legacy 50 mrad retimed yaw
+    // prior, while the accepted Fixed GNSS position contributes its reported
+    // variance once. The candidate heading's raw factor remains independently
+    // queued at its original source epoch (and may be retired if T < S).
+    const Eigen::Vector3d yaw_sensitivity(lever_y, -lever_x, 1.0);
+    Eigen::Matrix3d expected = .05 * .05 * yaw_sensitivity * yaw_sensitivity.transpose();
+    expected(0, 0) += .014 * .014;
+    expected(1, 1) += .014 * .014;
+    EXPECT_LT((snapshot->covariance - expected).cwiseAbs().maxCoeff(), 1e-9);
+    EXPECT_EQ(AppliedGnssFactors(), 1u);
+    EXPECT_EQ(AppliedYawFactors(), 0u);
+
+    // Commit later source nodes so the queued position/heading observations
+    // are exercised, without making future covariance evolution part of this
+    // seed contract.
+    for (int i = 1; i <= 3; ++i)
+    {
+      const double source = through + .1 * i;
+      Clock(source);
+      Wheel(source, 0.0);
+      Imu(source);
+      Timer();
+    }
+    EXPECT_EQ(AppliedGnssFactors(), 1u);
   }
   void ExpectSameSourceBootstrapBelief(double yaw,
                                        double heading_sigma,
@@ -1023,6 +1111,40 @@ TEST_F(FusionGraphNodeInputTest, SameSourceBootstrapUsesOneGnssAndOneHeadingLike
   EXPECT_EQ(repeated->source_stamp_ns, snapshot->source_stamp_ns);
   EXPECT_LT((repeated->covariance - snapshot->covariance).cwiseAbs().maxCoeff(), 1e-15);
   EXPECT_LT(snapshot->pose.localCoordinates(repeated->pose).norm(), 1e-15);
+}
+
+TEST_F(FusionGraphNodeInputTest, SameSourceMagBootstrapUsesReportedGnssAndMagCovariance)
+{
+  constexpr double source = 20.20;
+  StartBootstrapCovarianceScenario();
+  ConsumeStationarySourceSupport(source);
+  Clock(source);
+  Gnss(source, 0.0, .014, 0.0);
+  ASSERT_FALSE(Snapshot());
+  Heading(source, 0.0, false);
+
+  ASSERT_TRUE(Snapshot());
+  EXPECT_EQ(Snapshot()->source_stamp_ns, std::llround(source * 1e9));
+  EXPECT_EQ(AppliedGnssFactors(), 1u);
+  EXPECT_EQ(AppliedYawFactors(), 1u);
+  const Eigen::Matrix3d expected = Eigen::Vector3d(.014 * .014, .014 * .014, .1 * .1).asDiagonal();
+  EXPECT_LT((Snapshot()->covariance - expected).cwiseAbs().maxCoeff(), 1e-10);
+}
+
+TEST_F(FusionGraphNodeInputTest, DifferentSourcePositionFirstKeepsGnssAndLegacyYawCovariance)
+{
+  ExpectDifferentSourceBootstrapCovariance(20.20, 20.40);
+}
+
+TEST_F(FusionGraphNodeInputTest, DifferentSourceHeadingFirstKeepsGnssAndLegacyYawCovariance)
+{
+  ExpectDifferentSourceBootstrapCovariance(20.40, 20.20, 0.0, 0.0, true);
+}
+
+TEST_F(FusionGraphNodeInputTest, DifferentSourceBootstrapCovarianceIncludesLeverYawUncertainty)
+{
+  constexpr double lever_x = .2, lever_y = -.1;
+  ExpectDifferentSourceBootstrapCovariance(20.20, 20.40, lever_x, lever_y);
 }
 
 TEST_F(FusionGraphNodeInputTest, SameSourceBootstrapPreservesLeverArmHeadingCrossCovariance)

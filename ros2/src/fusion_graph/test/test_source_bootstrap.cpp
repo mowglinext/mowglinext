@@ -82,6 +82,14 @@ public:
       }
     throw std::runtime_error("admitted heading missing from failure fixture");
   }
+
+  static void InvalidateQueuedPositionSigma(GraphManager& manager)
+  {
+    std::lock_guard<std::mutex> lock(manager.mu_);
+    for (auto& observation : manager.motion_->observations)
+      if (!observation.yaw)
+        observation.sigma = std::numeric_limits<double>::quiet_NaN();
+  }
 };
 }  // namespace fusion_graph
 
@@ -338,6 +346,184 @@ TEST(SourceBootstrap, RawRecoveryRetiresOnlyHeadingAndKeepsActualGnssLikelihoodA
     EXPECT_FALSE(manager.QueueYawAtEpoch(kTrueYaw, .1, false, kSource, recovery.id, 1));
     EXPECT_FALSE(manager.TickSource(kSource + 1, kSource, 1));
     Unchanged(repaired, Access::Capture(manager));
+  }
+}
+
+TEST(SourceBootstrap, RetimedHeadingUsesOnlyOriginalGnssAndPreservesRawYawAndSplitTail)
+{
+  constexpr int64_t source = kSource + 50000000, schedule = kTail + 100000000;
+  for (const bool bias : {false, true})
+    for (const bool lever : {false, true})
+      for (const int order : {-1, 1})
+      {
+        SCOPED_TRACE(::testing::Message() << bias << ' ' << lever << ' ' << order);
+        auto params = Params(bias);
+        params.prior_sigma_theta = .07;
+        if (!lever)
+          params.lever_arm_x = params.lever_arm_y = 0;
+        fg::GraphManager manager(params);
+        Support(manager, true);
+        const auto antenna =
+            gtsam::Pose2(1, 2, kTrueYaw)
+                .transformFrom(gtsam::Point2(params.lever_arm_x, params.lever_arm_y));
+        ASSERT_TRUE(
+            manager.QueueGnssAtEpoch(antenna.x(), antenna.y(), .014, true, source, kGnss, 1));
+        const auto yaw_source = source + order * 30000000;
+        ASSERT_TRUE(manager.QueueYawAtEpoch(.9, kHeadingSigma, true, yaw_source, kYaw, 1));
+        ASSERT_TRUE(manager.QueueYawAtEpoch(.8, .2, false, kTail + 1, 21, 1));
+        const auto before = Access::Capture(manager);
+        ASSERT_EQ(manager.InitializeSourcePositionWithRetimedHeading(
+                      schedule, source, 1, kGnss, kTrueYaw),
+                  fg::SourceBootstrapResult::Applied);
+        const auto initialized = Access::Capture(manager);
+        ASSERT_TRUE(initialized.latest);
+        EXPECT_LT(gtsam::Pose2(1, 2, kTrueYaw).localCoordinates(initialized.latest->pose).norm(),
+                  1e-10);
+        const gtsam::Vector3 sensitivity(params.lever_arm_y, -params.lever_arm_x, 1);
+        gtsam::Matrix3 expected = params.prior_sigma_theta * params.prior_sigma_theta *
+                                  sensitivity * sensitivity.transpose();
+        expected(0, 0) += .014 * .014;
+        expected(1, 1) += .014 * .014;
+        EXPECT_LT((initialized.latest->covariance - expected).cwiseAbs().maxCoeff(), 1e-12);
+        const auto marginal = gtsam::Marginals(initialized.factors, initialized.values)
+                                  .marginalCovariance(fg::PoseKey(0));
+        EXPECT_LT((marginal - expected).cwiseAbs().maxCoeff(), 1e-12);
+        const auto seed = manager.OriginalHeadingSeed();
+        ASSERT_TRUE(seed);
+        EXPECT_EQ(seed->heading_provenance, fg::HeadingSeedState::HeadingProvenance::RetimedPrior);
+        EXPECT_FALSE(seed->source_heading_id);
+        EXPECT_EQ(seed->source_gnss_id, kGnss);
+        EXPECT_EQ(std::count(initialized.factors.begin(),
+                             initialized.factors.end(),
+                             seed->source_position),
+                  1);
+        EXPECT_EQ(initialized.factors.nrFactors(), bias ? 3u : 2u);
+        for (const auto& factor : initialized.factors)
+          EXPECT_EQ(dynamic_cast<const gtsam::PriorFactor<gtsam::Pose2>*>(factor.get()), nullptr);
+        EXPECT_EQ(initialized.motion.gnss_factors, 1u);
+        EXPECT_EQ(initialized.motion.yaw_factors, 0u);
+        EXPECT_EQ(initialized.motion.observation_ids, before.motion.observation_ids);
+        EXPECT_EQ(initialized.motion.yaw_observation_ids, before.motion.yaw_observation_ids);
+        ASSERT_EQ(initialized.motion.observations.size(), 2u);
+        for (size_t i = 0; i < initialized.motion.observations.size(); ++i)
+        {
+          const auto& retained = initialized.motion.observations[i];
+          const auto& original = before.motion.observations[i + 1];
+          EXPECT_EQ(retained.id, original.id);
+          EXPECT_EQ(retained.source_ns, original.source_ns);
+          EXPECT_EQ(retained.yaw, original.yaw);
+          EXPECT_EQ(retained.sigma, original.sigma);
+          EXPECT_EQ(retained.robust, original.robust);
+        }
+        EXPECT_EQ(initialized.latest->source_stamp_ns, source);
+        EXPECT_EQ(initialized.latest->source_epoch, 1u);
+        EXPECT_EQ(initialized.latest->node_index, 0u);
+        EXPECT_EQ(initialized.latest->timestamp, static_cast<double>(schedule) * 1e-9);
+        EXPECT_EQ(initialized.motion.schedule_ns, schedule);
+        EXPECT_EQ(initialized.motion.committed_ns, source);
+        EXPECT_EQ(initialized.motion.consumed_ns, kTail);
+        ASSERT_EQ(initialized.motion.pending_steps.size(), 1u);
+        auto tail = before.motion.pending_steps.back();
+        tail.start_ns = source;
+        EXPECT_EQ(initialized.motion.pending_steps.front(), tail);
+        ASSERT_EQ(initialized.motion.pending_gyro_ids.size(), 1u);
+        EXPECT_TRUE(initialized.motion.pending_gyro_ids.count(tail.gyro.id));
+        EXPECT_FALSE(manager.QueueGnssAtEpoch(3, 4, .1, false, source, kGnss, 1));
+        // A duplicate input and a same-schedule tick cannot apply that GNSS again
+        // or consume the retained process tail before the normal cadence.
+        manager.TickSource(schedule, kTail, 1);
+        const auto ticked = Access::Capture(manager);
+        EXPECT_EQ(ticked.motion.gnss_factors, 1u);
+        EXPECT_EQ(ticked.motion.committed_ns, source);
+        EXPECT_EQ(ticked.motion.pending_steps.front(), tail);
+        EXPECT_EQ(std::count(ticked.factors.begin(), ticked.factors.end(), seed->source_position),
+                  1);
+      }
+}
+
+TEST(SourceBootstrap, RetimedHeadingPreservesEffectiveGnssFloorAndHuberLikelihood)
+{
+  for (const double reported_sigma : {.001, .014})
+    for (const bool robust : {false, true})
+    {
+      SCOPED_TRACE(::testing::Message() << reported_sigma << ' ' << robust);
+      auto params = Params(false);
+      fg::GraphManager manager(params);
+      Support(manager);
+      const auto antenna = Antenna();
+      ASSERT_TRUE(manager.QueueGnssAtEpoch(
+          antenna.x(), antenna.y(), reported_sigma, robust, kSource, kGnss, 1));
+      ASSERT_EQ(
+          manager.InitializeSourcePositionWithRetimedHeading(kSource, kSource, 1, kGnss, kTrueYaw),
+          fg::SourceBootstrapResult::Applied);
+      const auto snapshot = Access::Capture(manager);
+      const double sigma = std::max(reported_sigma, params.gps_sigma_floor);
+      const gtsam::Vector3 sensitivity(kLeverY, -kLeverX, 1);
+      gtsam::Matrix3 expected = params.prior_sigma_theta * params.prior_sigma_theta * sensitivity *
+                                sensitivity.transpose();
+      expected(0, 0) += sigma * sigma;
+      expected(1, 1) += sigma * sigma;
+      EXPECT_LT((snapshot.latest->covariance - expected).cwiseAbs().maxCoeff(), 1e-12);
+      auto displaced = snapshot.values;
+      displaced.update(fg::PoseKey(0), gtsam::Pose2(1 + 10 * sigma, 2, kTrueYaw));
+      const auto seed = manager.OriginalHeadingSeed();
+      ASSERT_TRUE(seed);
+      // Isolate the actual GNSS factor's loss well outside the Huber cutoff.
+      const double expected_loss =
+          robust ? params.huber_k_gps * (10 - .5 * params.huber_k_gps) : 50.0;
+      EXPECT_NEAR(seed->source_position->error(displaced), expected_loss, 1e-10);
+    }
+}
+
+TEST(SourceBootstrap, RetimedHeadingMissingOrInvalidProofLeavesAllPendingStateUntouched)
+{
+  for (int scenario = 0; scenario < 7; ++scenario)
+  {
+    SCOPED_TRACE(scenario);
+    auto params = Params(true);
+    if (scenario == 5)
+      params.prior_sigma_theta = std::numeric_limits<double>::quiet_NaN();
+    fg::GraphManager manager(params);
+    Support(manager, true);
+    if (scenario != 0)
+      Admit(manager, .9, kSource + 30000000);
+    if (scenario == 6)
+      Access::InvalidateQueuedPositionSigma(manager);
+    const auto before = Access::Capture(manager);
+    const auto result = manager.InitializeSourcePositionWithRetimedHeading(
+        kSource,
+        scenario == 3 ? kTail + 1 : kSource,
+        scenario == 2 ? 2 : 1,
+        scenario == 1 ? 999 : kGnss,
+        scenario == 4 ? std::numeric_limits<double>::quiet_NaN() : kTrueYaw);
+    EXPECT_EQ(result,
+              scenario < 4 ? fg::SourceBootstrapResult::PendingProofUnavailable
+                           : fg::SourceBootstrapResult::Failed);
+    Unchanged(before, Access::Capture(manager));
+    EXPECT_FALSE(manager.IsInitialized());
+    EXPECT_FALSE(manager.OriginalHeadingSeed());
+  }
+}
+
+TEST(SourceBootstrap, RetimedHeadingRecoveryRefusesSyntheticFamilyWithoutMutation)
+{
+  for (const int order : {-1, 1})
+  {
+    fg::GraphManager manager(Params(false));
+    Support(manager);
+    Admit(manager, .9, kSource + order * 30000000);
+    ASSERT_EQ(
+        manager.InitializeSourcePositionWithRetimedHeading(kSource, kSource, 1, kGnss, kTrueYaw),
+        fg::SourceBootstrapResult::Applied);
+    const auto seed = manager.OriginalHeadingSeed();
+    ASSERT_TRUE(seed);
+    const auto before = Access::Capture(manager);
+    EXPECT_EQ(manager.RecoverInvalidSeedHeading(seed, true, {1, kSource, 30, .8, .1, false}),
+              fg::HeadingRecoveryResult::UnsupportedFamily);
+    Unchanged(before, Access::Capture(manager));
+    EXPECT_EQ(manager.OriginalHeadingSeed(), seed);
+    EXPECT_TRUE(seed->source_position);
+    EXPECT_FALSE(seed->source_heading_id);
   }
 }
 }  // namespace

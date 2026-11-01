@@ -161,6 +161,11 @@ public:
   /// covariance. Solver failure never falls back to a data-derived pose prior.
   SourceBootstrapResult InitializeSourceObservations(
       int64_t schedule_ns, int64_t source_ns, uint64_t epoch, uint64_t gnss_id, uint64_t yaw_id);
+  /// Different-source bootstrap retains the admitted GNSS likelihood once and
+  /// the legacy retimed yaw prior. Raw yaw observations remain pending; this
+  /// does not model their cross-time process/tail correlation.
+  SourceBootstrapResult InitializeSourcePositionWithRetimedHeading(
+      int64_t schedule_ns, int64_t source_ns, uint64_t epoch, uint64_t gnss_id, double yaw);
   std::optional<TickOutput> TickSource(int64_t schedule_ns, int64_t source_ns, uint64_t epoch);
   bool QueueGnssAtEpoch(double x,
                         double y,
@@ -415,6 +420,12 @@ private:
 
   std::shared_ptr<GraphMotionState> motion_;
   std::shared_ptr<HeadingSeedState> heading_seed_;
+  SourceBootstrapResult InitializeSourceObservationsLocked(int64_t schedule_ns,
+                                                           int64_t source_ns,
+                                                           uint64_t epoch,
+                                                           uint64_t gnss_id,
+                                                           std::optional<uint64_t> yaw_id,
+                                                           double retimed_yaw = 0.0);
   void PrepareSourceInitializationLocked(GraphMotionState& state,
                                          Accumulator& accumulator,
                                          int64_t schedule_ns,

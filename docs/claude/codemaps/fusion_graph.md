@@ -9,7 +9,11 @@ tuple from its two original likelihoods, once each, with actual marginal and
 lever-arm cross-covariance. It stages pending-tail binding through
 `PrepareSourceInitializationLocked`, also used by legacy explicit-pose source
 initialization. `TrySeedInitialPose` selects this path only with matching source
-and producer identity; different-source retiming and explicit/dock/clear-carried
+and producer identity. For a sensor heading at another source, it uses
+`InitializeSourcePositionWithRetimedHeading`: the admitted GNSS likelihood once
+plus the unchanged legacy retimed yaw prior. That path consumes no raw yaw ID;
+its queued yaw, source timing and retained process tail remain. This removes the
+extra XY prior, not cross-time heading/tail correlation. Explicit/dock/clear-carried
 prior paths remain. Node heading candidates retain original payload/noise across
 pre-baseline replay; admission identity is separate from candidate identity.
 
@@ -22,6 +26,9 @@ and read-only queries. Default families remain frozen affine until promotion.
 Unknown/marginalized prefixes and uncommitted tails reject without mutation;
 unsupported local branch observations stay pending. Solver pointer ownership
 permits non-allocating atomic publication and stale-rebase cancellation.
+`HeadingSeedState` distinguishes independent pose, raw same-source heading and
+synthetic retimed heading provenance. Retimed families return `UnsupportedFamily`
+without mutation; retiring their related raw yaw requires separate ownership.
 
 Tests: `test_source_bootstrap`, `test_heading_recovery`,
 `test_relative_conditional` and the real `test_sensor_input_node` cases. The

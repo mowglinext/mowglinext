@@ -126,12 +126,40 @@ bool FusionGraphNode::TrySeedInitialPose()
       return true;
     }
     // Only missing queued provenance can use the existing derived-prior path.
-    // Different source epochs retain their existing retiming model below.
+    // Different source epochs retain their existing yaw retiming model below.
   }
   // Absolute heading and antenna position can arrive from different source
   // epochs. Undo only the rotation actually consumed between those epochs;
   // later replay must not integrate that same turn a second time.
   const double yaw_at_position = *seed_yaw_ + dr_at_heading->between(*dr_at_position).theta();
+  if (*seed_source_ns_ != *seed_yaw_source_ns_ && seed_yaw_candidate_)
+  {
+    // Keep the legacy retimed yaw prior and queued raw yaw behavior, but do
+    // not turn the admitted GNSS into an additional independent XY prior.
+    const auto result =
+        graph_->InitializeSourcePositionWithRetimedHeading(this->now().nanoseconds(),
+                                                           *seed_source_ns_,
+                                                           integration_epoch_,
+                                                           static_cast<uint64_t>(*seed_source_ns_),
+                                                           yaw_at_position);
+    if (result == SourceBootstrapResult::Failed)
+      RCLCPP_ERROR_THROTTLE(get_logger(),
+                            *get_clock(),
+                            5000,
+                            "fusion_graph: different-source initialization failed; admitted "
+                            "observations remain pending");
+    if (result != SourceBootstrapResult::Applied)
+      return false;
+    t_map_odom_anchor_valid_ = false;
+    const auto initialized = graph_->LatestSnapshot();
+    RCLCPP_INFO(get_logger(),
+                "fusion_graph: initialized at (%.3f, %.3f, %.3f rad) from GNSS and "
+                "retimed heading prior",
+                initialized->pose.x(),
+                initialized->pose.y(),
+                initialized->pose.theta());
+    return true;
+  }
   const double c = std::cos(yaw_at_position);
   const double s = std::sin(yaw_at_position);
   const gtsam::Pose2 base_seed(seed_xy_->x() - c * lever_arm_x_m_ + s * lever_arm_y_m_,
