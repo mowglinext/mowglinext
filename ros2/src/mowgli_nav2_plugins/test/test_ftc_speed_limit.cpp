@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include <nav2_core/controller_exceptions.hpp>
 #include <nav2_costmap_2d/cost_values.hpp>
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <nav2_ros_common/lifecycle_node.hpp>
@@ -37,6 +38,26 @@ struct FTCSpeedLimitTestAccess
   static bool TurnFallbackReversing(const FTCController& controller)
   {
     return controller.turnFallbackReversing();
+  }
+
+  static bool PreRotating(const FTCController& controller)
+  {
+    return controller.current_state_ == FTCController::PlannerState::PRE_ROTATE;
+  }
+
+  static bool Crashed(const FTCController& controller)
+  {
+    return controller.is_crashed_;
+  }
+
+  static bool ReverseEscaping(const FTCController& controller)
+  {
+    return controller.reverse_escape_active_;
+  }
+
+  static bool ObstacleWaiting(const FTCController& controller)
+  {
+    return controller.obstacle_waiting_;
   }
 
   static bool Stalled(const FTCController& controller)
@@ -170,7 +191,7 @@ protected:
     ASSERT_TRUE(node_->set_parameter({std::string(kPlugin) + "." + key, value}).successful);
   }
 
-  double Tick()
+  geometry_msgs::msg::Twist TickCommand()
   {
     time_ns_ += 100000000;
     SetTime();
@@ -179,7 +200,27 @@ protected:
     measured.linear.x = measured_speed_;
     return controller_
         .computeVelocityCommands(Pose{}, measured, nullptr, nav_msgs::msg::Path{}, Pose{})
-        .twist.linear.x;
+        .twist;
+  }
+
+  double Tick()
+  {
+    return TickCommand().linear.x;
+  }
+
+  void ExpectTerminalFailure()
+  {
+    try
+    {
+      const auto command = TickCommand();
+      ADD_FAILURE() << "Terminal failure returned a recovery command: linear=" << command.linear.x
+                    << " angular=" << command.angular.z;
+    }
+    catch (const nav2_core::ControllerException& error)
+    {
+      EXPECT_STREQ(error.what(), "FTCController: terminal failure in planner state machine.");
+    }
+    EXPECT_TRUE(mowgli_nav2_plugins::FTCSpeedLimitTestAccess::Crashed(controller_));
   }
 
   double PeakForward(int ticks = 30)
@@ -219,7 +260,9 @@ protected:
     transform.header.frame_id = parent;
     transform.child_frame_id = child;
     transform.transform.translation.x = x;
-    transform.transform.rotation.w = 1.0;
+    const double yaw = child == "base_footprint" ? robot_yaw_ : 0.0;
+    transform.transform.rotation.z = std::sin(yaw / 2.0);
+    transform.transform.rotation.w = std::cos(yaw / 2.0);
     ASSERT_TRUE(tf_->setTransform(transform, "test", fixed));
   }
 
@@ -230,6 +273,7 @@ protected:
   mowgli_nav2_plugins::FTCController controller_;
   std::int64_t time_ns_{1000000000000};
   double robot_x_{0.0};
+  double robot_yaw_{0.0};
   double measured_speed_{0.20};
 };
 
@@ -347,6 +391,109 @@ TEST_F(FtcSpeedLimit, HealthyMotionAtALowCapIsNotMistakenForAStall)
     robot_x_ += command * 0.10;
   }
   EXPECT_GT(robot_x_, 0.20);
+}
+
+TEST_F(FtcSpeedLimit, PreRotateTimeoutPreemptsActiveReverseEscape)
+{
+  using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  robot_x_ = 2.0;
+  robot_yaw_ = M_PI / 2.0;
+  measured_speed_ = -0.05;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  controller_.newPathReceived(StraightPlan(robot_x_));
+  const auto started = time_ns_;
+  Wall(3.0);
+  ASSERT_LT(Tick(), 0.0);
+  ASSERT_TRUE(Access::PreRotating(controller_));
+  ASSERT_TRUE(Access::ReverseEscaping(controller_));
+
+  // The configured 30 s timeout is unchanged. The reverse budget remains
+  // unspent, and the controller still permits recovery exactly at the bound.
+  time_ns_ = started + 29900000000;
+  ASSERT_LT(Tick(), 0.0);
+  ASSERT_TRUE(Access::PreRotating(controller_));
+  ASSERT_FALSE(Access::Crashed(controller_));
+  ExpectTerminalFailure();  // 30.1 s: dev returns reverse instead of throwing
+
+  costmap_->getCostmap()->resetMapToValue(0, 0, 400, 400, nav2_costmap_2d::FREE_SPACE);
+  robot_yaw_ = 0.0;
+  measured_speed_ = 0.20;
+  controller_.newPathReceived(StraightPlan(robot_x_));
+  EXPECT_FALSE(Access::Crashed(controller_));
+  EXPECT_FALSE(Access::ReverseEscaping(controller_));
+  EXPECT_GT(PeakForward(5), 0.0);
+}
+
+TEST_F(FtcSpeedLimit, PreRotateTimeoutPreemptsBodyContactHold)
+{
+  using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  robot_yaw_ = M_PI / 2.0;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  controller_.newPathReceived(StraightPlan());
+  const auto started = time_ns_;
+  time_ns_ = started + 29800000000;
+  const auto rotating = TickCommand();  // 29.9 s: legal pre-timeout rotation
+  ASSERT_EQ(rotating.linear.x, 0.0);
+  ASSERT_GT(std::abs(rotating.angular.z), 0.05);
+  ASSERT_TRUE(Access::PreRotating(controller_));
+
+  Wall(0.1);  // current footprint; start the obstacle wait only at 30.0 s
+  const auto hold = TickCommand();
+  ASSERT_EQ(hold.linear.x, 0.0);
+  ASSERT_EQ(hold.angular.z, 0.0);
+  ASSERT_TRUE(Access::ObstacleWaiting(controller_));
+  ASSERT_FALSE(Access::Crashed(controller_));
+  ExpectTerminalFailure();  // obstacle wait has run only 0.1 s, not its 2.5 s bound
+
+  costmap_->getCostmap()->resetMapToValue(0, 0, 400, 400, nav2_costmap_2d::FREE_SPACE);
+  controller_.newPathReceived(StraightPlan());
+  EXPECT_FALSE(Access::Crashed(controller_));
+  EXPECT_FALSE(Access::ObstacleWaiting(controller_));
+  const auto reset_rotation = TickCommand();
+  EXPECT_EQ(reset_rotation.linear.x, 0.0);
+  EXPECT_GT(std::abs(reset_rotation.angular.z), 0.05);
+}
+
+TEST_F(FtcSpeedLimit, TransientBodyContactHoldReleasesBeforeTimeout)
+{
+  using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  ASSERT_GT(PeakForward(5), 0.0);
+  Wall(0.1);
+  ASSERT_EQ(Tick(), 0.0);
+  ASSERT_TRUE(Access::ObstacleWaiting(controller_));
+  costmap_->getCostmap()->resetMapToValue(0, 0, 400, 400, nav2_costmap_2d::FREE_SPACE);
+  EXPECT_GT(PeakForward(20), 0.0);
+  EXPECT_FALSE(Access::ObstacleWaiting(controller_));
+  EXPECT_FALSE(Access::Crashed(controller_));
+}
+
+TEST_F(FtcSpeedLimit, NonexpiredReverseEscapeReleasesOnClearProfile)
+{
+  using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  robot_x_ = 2.0;
+  measured_speed_ = -0.05;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  controller_.newPathReceived(StraightPlan(robot_x_));
+  Wall(3.0);
+  ASSERT_LT(Tick(), 0.0);
+  ASSERT_TRUE(Access::ReverseEscaping(controller_));
+  costmap_->getCostmap()->resetMapToValue(0, 0, 400, 400, nav2_costmap_2d::FREE_SPACE);
+  double forward = 0.0;
+  for (int i = 0; i < 20; ++i)
+  {
+    forward = std::max(forward, Tick());
+  }
+  EXPECT_GT(forward, 0.0);
+  EXPECT_FALSE(Access::ReverseEscaping(controller_));
+  EXPECT_FALSE(Access::Crashed(controller_));
 }
 
 TEST_F(FtcSpeedLimit, ReverseEscapeObeysTheSignedExternalCap)
