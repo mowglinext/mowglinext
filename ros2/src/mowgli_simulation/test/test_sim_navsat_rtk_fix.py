@@ -208,15 +208,17 @@ def test_relay_outputs_quality_cycle_and_fixed_control(monkeypatch, pattern):
         monkeypatch.setattr(
             node, '_status_pub', SimpleNamespace(publish=statuses.append)
         )
-        truth = PoseStamped()
-        truth.pose.orientation.w = 1.0
-        node._on_ground_truth(truth)
         regimes = (['RTK_FIXED'] * 4 if not pattern else
                    ['RTK_FIXED', 'RTK_FLOAT', 'NO_FIX', 'RTK_FIXED'])
         for seconds, regime in zip([10, 11, 13, 16], regimes):
             monkeypatch.setattr(node, 'get_clock', lambda: SimpleNamespace(
                 now=lambda: SimpleNamespace(nanoseconds=seconds * 10**9)
             ))
+            truth = PoseStamped()
+            truth.header.frame_id = 'map'
+            truth.pose.orientation.w = 1.0
+            truth.header.stamp.sec = seconds
+            node._on_ground_truth(truth)
             raw = NavSatFix()
             raw.header.stamp.sec = seconds
             node._on_fix(raw)
