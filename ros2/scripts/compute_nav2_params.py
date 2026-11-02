@@ -114,8 +114,9 @@ BOARD_DEFAULTS = {
 }
 
 # hardware_bridge_node clamps (declared params, not board.h):
-#   min_linear_vel  default 0.05 — |vx| below this is zeroed (sub-deadband
-#                   guard; the firmware PID tracks ≥0.05 cleanly)
+#   min_linear_vel  default 0.05 — soft deadband outside fresh BT AUTONOMOUS.
+#                   Autonomous precision requests bypass it, retaining slew.
+#                   This derivation stays conservative; physical creep is uncalibrated.
 # 2026-07-17 Option C (task #34): the gyro rate-loop output cap used to be a
 # host param (angular_rate_max_cmd, active only when angular_rate_loop_enabled
 # — both removed). The loop now runs in firmware (task #33) unconditionally;

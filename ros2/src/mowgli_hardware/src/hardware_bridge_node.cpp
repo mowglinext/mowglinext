@@ -428,10 +428,14 @@ private:
     // Helper for declaring doubles with a floating_point_range descriptor so
     // ros2 param set rejects out-of-bounds values at the framework level before
     // the set-parameters callback fires. Ranges mirror the firmware validation.
-    auto bounded_double =
-        [this](const std::string& name, double default_val, double min, double max) -> double
+    auto bounded_double = [this](const std::string& name,
+                                 double default_val,
+                                 double min,
+                                 double max,
+                                 const std::string& description = "") -> double
     {
       rcl_interfaces::msg::ParameterDescriptor desc;
+      desc.description = description;
       desc.floating_point_range.resize(1);
       desc.floating_point_range[0].from_value = min;
       desc.floating_point_range[0].to_value = max;
@@ -538,10 +542,15 @@ private:
                                          kMaxRuntimeYawTrimLimitMps);
     yaw_loop_enabled_ = declare_parameter<bool>("yaw_loop_enabled", true);
     yaw_gyro_sign_ = declare_parameter<int>("yaw_gyro_sign", 1);
-    // Sub-deadband forward-velocity clamp threshold (see min_linear_vel_).
+    // Manual/input soft-deadband threshold (see min_linear_vel_).
     // Default 0.05 (was a hardcoded 0.15) — the PX4 PID firmware can track
     // slow setpoints now. Live-tunable via the callback below.
-    min_linear_vel_ = bounded_double("min_linear_vel", 0.05, 0.0, 1.0);
+    min_linear_vel_ = bounded_double(
+        "min_linear_vel",
+        0.05,
+        0.0,
+        1.0,
+        "Linear soft deadband outside fresh BT AUTONOMOUS; precision commands retain slew limits.");
     cmd_vel_linear_accel_limit_ = startup_double(
         "cmd_vel_linear_accel_limit",
         0.30,
@@ -1074,25 +1083,7 @@ private:
         rclcpp::QoS(10),
         [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
         {
-          const uint8_t previous_mode = current_mode_;
-          const std::string previous_state_name = current_mode_state_name_;
-          current_mode_ = msg->state;
-          current_mode_state_name_ = msg->state_name;
-          have_high_level_status_ = true;
-          last_high_level_status_steady_ns_ = steadyNowNs();
-          if (previous_mode != current_mode_ || previous_state_name != current_mode_state_name_)
-          {
-            RCLCPP_INFO(get_logger(),
-                        "hardware_bridge received HighLevelStatus: state=%u (%s), state_name='%s'",
-                        current_mode_,
-                        high_level_mode_name(current_mode_),
-                        current_mode_state_name_.c_str());
-            send_high_level_state();
-          }
-          RCLCPP_DEBUG(get_logger(),
-                       "High-level mode updated to %u (%s)",
-                       msg->state,
-                       msg->state_name.c_str());
+          on_high_level_status(msg);
         });
 
     // GNSS-anchored fused pose is the dig detector's primary reference and
@@ -1330,6 +1321,8 @@ private:
     have_odometry_ = false;
     have_blade_status_ = false;
     have_host_velocity_target_ = false;
+    have_cmd_vel_ = false;
+    cmd_vel_pipeline_.reset();
     have_param_store_status_ = false;
   }
 
@@ -3117,7 +3110,7 @@ private:
   {
     constexpr int64_t kSerialFreshNs = 1'000'000'000;
     constexpr int64_t kBoardStatusFreshNs = 1'500'000'000;
-    constexpr int64_t kHighLevelFreshNs = 2'000'000'000;
+
     constexpr int64_t kOdometryFreshNs = 500'000'000;
     constexpr int64_t kBladeFreshNs = 1'500'000'000;
     constexpr int64_t kCommandWatchdogFreshNs = 500'000'000;
@@ -3134,8 +3127,9 @@ private:
         steady_receipt_is_fresh(now_ns, last_board_status_steady_ns_, kBoardStatusFreshNs);
     state.board_initialized = board_initialized_;
     state.high_level_status_fresh =
-        have_high_level_status_ &&
-        steady_receipt_is_fresh(now_ns, last_high_level_status_steady_ns_, kHighLevelFreshNs);
+        have_high_level_status_ && steady_receipt_is_fresh(now_ns,
+                                                           last_high_level_status_steady_ns_,
+                                                           mowgli_interfaces::kHighLevelFreshNs);
     state.idle = current_mode_ == HL_MODE_IDLE;
     state.odometry_fresh =
         have_odometry_ &&
@@ -3450,6 +3444,34 @@ private:
   // cmd_vel subscriber
   // ---------------------------------------------------------------------------
 
+  void on_high_level_status(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
+  {
+    const uint8_t previous_mode = current_mode_;
+    const std::string previous_state_name = current_mode_state_name_;
+    if (previous_mode != msg->state)
+    {
+      cmd_vel_pipeline_.restart_from_applied();
+    }
+    bt_reported_mode_ = msg->state;
+    current_mode_ = msg->state;
+    current_mode_state_name_ = msg->state_name;
+    have_high_level_status_ = true;
+    last_high_level_status_steady_ns_ = steadyNowNs();
+    if (previous_mode != current_mode_ || previous_state_name != current_mode_state_name_)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "hardware_bridge received HighLevelStatus: state=%u (%s), state_name='%s'",
+                  current_mode_,
+                  high_level_mode_name(current_mode_),
+                  current_mode_state_name_.c_str());
+      send_high_level_state();
+    }
+    RCLCPP_DEBUG(get_logger(),
+                 "High-level mode updated to %u (%s)",
+                 msg->state,
+                 msg->state_name.c_str());
+  }
+
   void on_cmd_vel(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
   {
     double vx = msg->twist.linear.x;
@@ -3517,114 +3539,35 @@ private:
       send_high_level_state();
     }
 
-    // Sub-deadband forward-velocity guard.
-    //
-    // A previous closed-loop deadband compensator BOOSTED sub-deadband
-    // commands to ~0.85 rad/s (or 0.13 m/s) to break through the
-    // firmware's PWM static friction. The boost produced motor pulses
-    // strong enough to register on the gyro but too short to generate
-    // measurable wheel encoder ticks. The wheel between-factor in
-    // fusion_graph then saw "stationary" while the IMU integrated real
-    // rotation, and the wheel/IMU disagreement piled up as
-    // stationary_hand_push spikes and σ_yaw drift during PRE_ROTATE
-    // and headland pivots.
-    //
-    // Policy: clamp any |vx| below min_linear_vel_ to zero. This was a
-    // hardcoded 0.15 m/s written for the old hand-rolled wheel-PI, whose
-    // PWM static friction couldn't move the chassis below ~0.15 — so
-    // commanding a sub-deadband forward velocity only produced motor buzz
-    // and a wheel/IMU mismatch (the boost approach pulsed the motors enough
-    // for the gyro to see rotation but too little for encoder ticks).
-    // Now the vendored PX4 PID firmware tracks slow setpoints, so the
-    // threshold is a runtime PARAM defaulting to 0.05: MPPI's regulated
-    // slow-creep (frequently < 0.15 near goals / on alignment) reaches the
-    // wheels and drives smoothly instead of a 0↔0.15 stop-go. Set
-    // min_linear_vel:=0.0 to disable the guard entirely, or raise it back
-    // toward 0.15 if a given chassis still can't execute slow forward.
-    //
-    // wz handling — Option C (task #34): the closed-loop yaw-rate control
-    // that used to live here (Option B, task #24 — a host-side PI closing
-    // on the gyro to absorb the firmware's nonlinear PWM→rotation response)
-    // has moved INTO FIRMWARE (task #33), which now runs the same closed
-    // loop without the ~50-90 ms USB round-trip latency that limited the
-    // host-side gains. See the firmware's own yaw_kp/yaw_ki (tuned via
-    // SET_YAW_PID, send_yaw_pid()) for the loop that used to be
-    // angular_rate_controller.hpp here. The common open-loop slew cap below
-    // only limits how quickly the requested setpoint changes; it does not
-    // close another yaw feedback loop.
-    //
-    // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
-    // host-side rate feedback — encoders slip; leave it to Nav2's loops).
-    constexpr double kMinCmdToConsider = 1.0e-3;  // ignore floating-point dust
-    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_linear_vel_)
-    {
-      vx = 0.0;
-    }
-
+    // The manual soft deadband must not erase deliberate autonomous precision
+    // targets (including starts from rest). Only fresh BT status grants the
+    // exception; the unchanged NULL fallback above cannot grant it. All mux
+    // lanes still inherit this mode policy. Firmware safety is unchanged.
     // While escaping a dig, WE own the wire. Drop the incoming command
     // entirely instead of forwarding it or advancing the slew state: the
     // controller that dug the hole is still asking to drive forward into it.
     if (dig_escaping_)
     {
+      cmd_vel_pipeline_.reset();
       return;
     }
 
-    // Every motion lane has now passed through twist_mux, so this is the only
-    // host-side point that can prevent a one-cycle speed or steering reversal
-    // regardless of whether FTC, RPP, docking, or teleop produced it. A
-    // reversal decelerates through zero; explicit zero commands remain
-    // immediate for obstacle and operator stops.
-    const std::int64_t command_now_ns = steadyNowNs();
-    double slew_dt_s = kCmdVelSlewNominalDtSec;
-    if (have_shaped_cmd_vel_)
-    {
-      const double elapsed_s =
-          static_cast<double>(command_now_ns - last_shaped_cmd_vel_ns_) * 1.0e-9;
-      if (elapsed_s > 0.0 && elapsed_s <= kCmdVelSlewResetTimeoutSec)
-      {
-        slew_dt_s = std::min(elapsed_s, kCmdVelSlewMaxDtSec);
-      }
-      else
-      {
-        last_shaped_cmd_vx_ = 0.0;
-        last_shaped_cmd_wz_ = 0.0;
-      }
-    }
-    vx = mowgli_hardware::limit_motion_command_slew(vx,
-                                                    last_shaped_cmd_vx_,
-                                                    slew_dt_s,
-                                                    cmd_vel_linear_accel_limit_,
-                                                    cmd_vel_linear_decel_limit_);
-    wz = mowgli_hardware::limit_motion_command_slew(wz,
-                                                    last_shaped_cmd_wz_,
-                                                    slew_dt_s,
-                                                    cmd_vel_angular_accel_limit_,
-                                                    cmd_vel_angular_decel_limit_);
-    last_shaped_cmd_vx_ = vx;
-    last_shaped_cmd_wz_ = wz;
-    last_shaped_cmd_vel_ns_ = command_now_ns;
-    have_shaped_cmd_vel_ = true;
-
-    // Let the ramp accumulate continuously through the sub-deadband region,
-    // while still preserving the bridge's existing wire-level deadband guard.
-    // Otherwise each zeroed first step would reset the next ramp to zero and a
-    // low acceleration limit could prevent forward motion forever.
-    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_linear_vel_)
-    {
-      vx = 0.0;
-    }
-
-    // Remember what we actually forward; the dig monitor compares
-    // this against real-world progress (see dig_monitor_tick). Stamped
-    // because a command that stopped ARRIVING must not keep counting as a
-    // command: when a Nav2 goal aborts, cmd_vel simply goes silent, and a
-    // stale non-zero value here would let the detector accumulate evidence
-    // against a robot that is no longer being asked to move at all.
-    last_cmd_vx_ = vx;
-    last_cmd_wz_ = wz;
-    last_cmd_vel_time_ = now();
-    have_cmd_vel_ = true;
-
+    const auto command_now_ns = steadyNowNs();
+    const bool autonomous_precision =
+        mowgli_interfaces::autonomous_precision_allowed(bt_reported_mode_ == HL_MODE_AUTONOMOUS,
+                                                        have_high_level_status_,
+                                                        command_now_ns,
+                                                        last_high_level_status_steady_ns_);
+    const auto command = cmd_vel_pipeline_.shape({vx, wz},
+                                                 autonomous_precision,
+                                                 min_linear_vel_,
+                                                 {cmd_vel_linear_accel_limit_,
+                                                  cmd_vel_linear_decel_limit_,
+                                                  cmd_vel_angular_accel_limit_,
+                                                  cmd_vel_angular_decel_limit_},
+                                                 command_now_ns);
+    vx = command.vx;
+    wz = command.wz;
     send_cmd_vel_packet(vx, wz);
   }
 
@@ -3847,6 +3790,8 @@ private:
                 dig_gnss_acc_m_,
                 last_map_sigma_);
 
+    cmd_vel_pipeline_.reset();
+
     // 1. Hard stop, immediately and on the wire — not a request to whichever
     //    controller is driving, which is the one that just dug the hole.
     send_cmd_vel_packet(0.0, 0.0);
@@ -4015,6 +3960,7 @@ private:
   {
     if (mowgli_interfaces::updateMaintenanceActive())
     {
+      cmd_vel_pipeline_.reset();
       vx = 0.0;
       wz = 0.0;
     }
@@ -4055,6 +4001,17 @@ private:
       last_host_velocity_target_vx_ = wire_vx;
       last_host_velocity_target_wz_ = wire_wz;
       last_host_velocity_target_steady_ns_ = sent_ns;
+      cmd_vel_pipeline_.record_applied(wire_vx, wire_wz);
+      // Dig evidence follows the actual final packet, including direct escape
+      // and maintenance stops, never a suppressed ramp or failed write.
+      last_cmd_vx_ = wire_vx;
+      last_cmd_wz_ = wire_wz;
+      last_cmd_vel_time_ = now();
+      have_cmd_vel_ = true;
+    }
+    else
+    {
+      return;
     }
 
     // Exact host command represented by the packet above. The firmware keeps
@@ -4313,9 +4270,8 @@ private:
   double dig_escalation_x_{0.0};
   double dig_escalation_y_{0.0};
 
-  /// Latest differential-drive command, captured in on_cmd_vel, with the time
-  /// it arrived. Both components are required: a pure pivot has vx == 0 while
-  /// its tyres are still moving across the ground.
+  /// Latest successfully written differential-drive packet, with its send time. Both components are
+  /// required: a pure pivot has vx == 0 while its tyres are still moving across the ground.
   double last_cmd_vx_{0.0};
   double last_cmd_wz_{0.0};
   bool have_cmd_vel_{false};
@@ -4324,21 +4280,13 @@ private:
   /// Controllers publish at 10-20 Hz, so this is many missed cycles.
   static constexpr double dig_cmd_timeout_s_ = 0.5;
 
-  // Last command produced by the continuous slew calculation. This is kept
-  // separate from the wire value because the existing linear deadband guard
-  // can suppress an intermediate ramp step. A stale stream resets the next
-  // ramp to rest, matching the firmware watchdog's physical state.
-  double last_shaped_cmd_vx_{0.0};
-  double last_shaped_cmd_wz_{0.0};
-  std::int64_t last_shaped_cmd_vel_ns_{0};
-  bool have_shaped_cmd_vel_{false};
+  // Continuous ramp and successfully written output are distinct: manual
+  // policy may suppress a ramp step. Reset on disconnect/dig ownership.
+  mowgli_hardware::CmdVelPipeline cmd_vel_pipeline_;
   double cmd_vel_linear_accel_limit_{0.30};
   double cmd_vel_linear_decel_limit_{0.60};
   double cmd_vel_angular_accel_limit_{1.0};
   double cmd_vel_angular_decel_limit_{2.0};
-  static constexpr double kCmdVelSlewNominalDtSec = 0.1;
-  static constexpr double kCmdVelSlewMaxDtSec = 0.2;
-  static constexpr double kCmdVelSlewResetTimeoutSec = 0.6;
 
   /// Fused-pose (map-frame) tracking.
   bool have_map_pose_{false};
@@ -4526,12 +4474,8 @@ private:
   bool firmware_debug_requested_{false};
   bool firmware_debug_enabled_{false};
 
-  // Host-side sub-deadband forward-velocity clamp (on_cmd_vel): any |vx| below
-  // this is zeroed before reaching the firmware. Lowered from the legacy 0.15
-  // (hand-rolled wheel-PI breakaway) to 0.05 now the vendored PX4 PID can track
-  // slow setpoints — lets MPPI's regulated slow-creep actually drive instead of
-  // a 0↔0.15 stop-go. Runtime-tunable (add_on_set_parameters_callback) for live
-  // field iteration without a rebuild.
+  // Manual/input soft deadband; AUTONOMOUS precision commands bypass both
+  // linear filters, retaining the finite slew and firmware safety envelope.
   double min_linear_vel_{0.05};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr min_lin_vel_cb_handle_;
   bool mow_enabled_{false};
@@ -4548,6 +4492,8 @@ private:
   bool board_initialized_{false};
   std::int64_t last_board_status_steady_ns_{0};
   bool have_high_level_status_{false};
+  // Written only by HighLevelStatus, never by the cmd_vel mode fallback.
+  uint8_t bt_reported_mode_{HL_MODE_NULL};
   std::int64_t last_high_level_status_steady_ns_{0};
   bool have_odometry_{false};
   std::int64_t last_odometry_steady_ns_{0};
