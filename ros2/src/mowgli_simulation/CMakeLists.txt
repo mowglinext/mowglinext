@@ -135,6 +135,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_webots_controller_remaps
     test/test_webots_controller_remaps.py
   )
+  ament_add_pytest_test(test_webots_scene_assets
+    test/test_webots_scene_assets.py
+  )
 
   ament_add_pytest_test(test_kinematic_wheel_feedback
     test/test_kinematic_wheel_feedback.py

@@ -46,6 +46,15 @@ one:
 **Geometry lives in A only.** The URDF is *device + plugin wiring* — it does
 not spawn a body (see § 7).
 
+The garden ground uses native `Solid`/`Plane` nodes so it also loads in the
+stripped offline SDK. It preserves [R2025a Floor's collision semantics](https://github.com/cyberbotics/webots/blob/R2025a/projects/objects/floors/protos/Floor.proto):
+a static, locked solid at z=0 with the default contact material. The visible
+lawn is 20×20 m; the collision plane is **infinite**, as in the upstream
+Floor (Webots ignores `Plane.size` for collision). Its plain green appearance
+needs no texture tiling. `protos/webots/` bundles the unmodified R2025a
+TireRubber appearance and texture maps, with provenance and license, so wheel
+appearance resolution needs neither SDK assets nor a runtime download.
+
 ### Signal chain (current topic names)
 
 `sim_actuation_node` owns the firmware motor model. It sends `/cmd_vel_wheels`

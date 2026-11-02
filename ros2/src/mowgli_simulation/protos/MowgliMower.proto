@@ -87,7 +87,7 @@
 # casters. The simulator only needs to reproduce the diff-drive
 # response, not the visual fidelity — Nav2 doesn't see the casters.
 
-EXTERNPROTO "webots://projects/appearances/protos/TireRubber.proto"
+EXTERNPROTO "webots/TireRubber.proto"
 
 PROTO MowgliMower [
   field SFVec3f    translation     0 0 0
