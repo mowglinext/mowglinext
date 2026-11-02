@@ -18,16 +18,16 @@ def test_kinematic_drive_publishes_simulator_pose_truth() -> None:
     assert "gt.header.frame_id = 'map'" in source
 
 
-def test_chassis_and_wheel_odom_share_one_actuation_model() -> None:
+def test_chassis_observes_actual_wheels_without_another_actuation_model() -> None:
     package = Path(__file__).resolve().parents[1]
     source = (package / 'mowgli_simulation' / 'kinematic_drive.py').read_text()
-    urdf = (package / 'urdf_webots' / 'mowgli_webots.urdf').read_text()
+    actuation = (package / 'src' / 'sim_actuation_node.cpp').read_text()
 
-    assert '<cmdVelTopic>/cmd_vel_wheels</cmdVelTopic>' in urdf
-    assert '<applyFirmwareModel>false</applyFirmwareModel>' in urdf
-    assert "properties.get('applyFirmwareModel', 'true')" in source
-    assert 'if self.__apply_firmware_model:' in source
-    assert 'vx, wz = cmd_vx, cmd_wz' in source
+    assert 'step_firmware_wheel_model(' in actuation
+    assert 'step_firmware_wheel_model(' not in source
+    assert "('left_wheel_sensor', 'right_wheel_sensor')" in source
+    assert 'motor.setVelocity(' not in source
+    assert 'motor.setPosition(' not in source
 
 
 def test_minimal_webots_launch_owns_shared_actuation_node() -> None:
@@ -60,8 +60,8 @@ def test_full_sim_gyro_uses_authoritative_achievable_twist() -> None:
         / 'sim_full_system.launch.py'
     ).read_text()
 
-    assert '"synthesize_from_cmd_vel": True' in launch
-    assert '"cmd_vel_topic": "/cmd_vel_wheels"' in launch
+    assert '"synthesize_from_applied_twist": True' in launch
+    assert '"applied_twist_topic": "/sim/applied_twist"' in launch
 
 
 def test_full_sim_reads_datum_and_lever_arm_from_scenario_config() -> None:

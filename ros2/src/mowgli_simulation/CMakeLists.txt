@@ -136,6 +136,36 @@ if(BUILD_TESTING)
     test/test_webots_controller_remaps.py
   )
 
+  ament_add_pytest_test(test_kinematic_wheel_feedback
+    test/test_kinematic_wheel_feedback.py
+    TIMEOUT 60
+  )
+  ament_add_pytest_test(test_sim_imu_provenance
+    test/test_sim_imu_provenance.py
+    TIMEOUT 60
+  )
+  ament_add_pytest_test(test_sim_gnss_provenance
+    test/test_sim_gnss_provenance.py
+    TIMEOUT 60
+  )
+
+  ament_add_pytest_test(test_sim_source_transport
+    test/test_sim_source_transport.py
+    ENV ROS_DOMAIN_ID=179
+    TIMEOUT 60
+  )
+
+  find_package(diff_drive_controller REQUIRED)
+  find_package(yaml_cpp_vendor REQUIRED)
+  find_package(yaml-cpp REQUIRED)
+  ament_add_gtest(test_wheel_odom_interval test/test_wheel_odom_interval.cpp TIMEOUT 60)
+  target_link_libraries(test_wheel_odom_interval
+    diff_drive_controller::diff_drive_controller yaml-cpp
+  )
+  target_compile_definitions(test_wheel_odom_interval PRIVATE
+    WHEEL_ODOM_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config_webots/ros2_control.yaml"
+  )
+
   # ---- test_firmware_wheel_model ----
   # firmware_wheel_model.hpp is header-only and ROS-free; no ROS deps needed.
   ament_add_gtest(test_firmware_wheel_model

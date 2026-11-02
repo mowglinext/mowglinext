@@ -2,18 +2,39 @@
 
 > Webots R2025a simulation of the mower: the garden world + `MowgliMower` PROTO, the `webots_ros2_driver`
 > URDF that wires Webots devices to ROS topics, the in-process `KinematicDrive` plugin that teleports the
-> chassis through a mirror of the firmware wheel loop, and the sim-only helper nodes (fake hardware bridge,
+> chassis from native measured wheel increments, and the sim-only helper nodes (fake hardware bridge,
 > firmware actuation model, IMU noise, RTK-quality relay, wheel-slip injector). The full stack is composed by
 > `ros2/src/mowgli_bringup/launch/sim_full_system.launch.py` (outside this package, indexed here). ODE
 > quirks and their history live in `docs/WEBOTS_SIM.md` — this map points there instead of repeating it.
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
+## Native observation contract
+
+`sim_actuation_node` retains the firmware model and ros2_control retains the sole
+motor writer, limits and watchdog. `KinematicDrive` observes native wheel
+PositionSensors after physics, then publishes `/sim/ground_truth_pose` and
+`/sim/applied_twist` with the completed interval's ending Webots epoch. It keeps
+planar teleport + `setVelocity` and init-only `resetPhysics`. Invalid feedback
+requires rebaselining; duplicate epochs do not create observations.
+
+The full-launch synthetic IMU uses applied value + epoch directly. Future packets
+wait for `/clock` in a bounded queue and a ROS timer drains a final zero without
+new input. The GNSS relay selects new eligible truth, uses its acquisition stamp
+for generated coordinates and paired status, and emits a nonzero lifetime
+`position_observation_sequence`. Neither helper invents epochs on callback receipt.
+`velocity_rolling_window_size: 1` makes wheel twist describe its pose interval.
+See `docs/WEBOTS_SIM.md` for the workarounds and remaining model limitations.
+
+Focused tests: `test_kinematic_wheel_feedback.py`, `test_sim_imu_provenance.py`,
+`test_sim_gnss_provenance.py`, `test_sim_source_transport.py` (real executor/clock),
+and `test_wheel_odom_interval.cpp` (upstream odometry component).
+
 ## Where to look
 | Task | Start here |
 |------|------------|
-| Robot stalls / creeps / won't pivot on a small `cmd_vel` | `ros2/src/mowgli_simulation/mowgli_simulation/kinematic_drive.py` `__simulate_firmware_motor_model` (:292–409) and `ros2/src/mowgli_simulation/src/sim_actuation_node.cpp` `tick()` (:110–155); the deadband is intentional |
-| Change a firmware gain the sim mirrors (PWM/m/s, deadband, PI) | THREE copies: `include/mowgli_simulation/firmware_wheel_model.hpp` `FirmwareWheelModelParams` (:60–72), `kinematic_drive.py` `FIRMWARE_*` (:147–155), `ros2/src/mowgli_bringup/launch/sim_full_system.launch.py` `sim_actuation` params (:491–502) |
+| Robot stalls / creeps / won't pivot on a small `cmd_vel` | `src/sim_actuation_node.cpp` `tick()`, `firmware_wheel_model.hpp`, then controller limits and native wheel PositionSensors; `KinematicDrive` observes measured motion |
+| Change a firmware gain the sim mirrors (PWM/m/s, deadband, PI) | `include/mowgli_simulation/firmware_wheel_model.hpp` and the parameters in `launch/webots_minimal.launch.py`; the plugin has no motor model |
 | Add / move a sensor | `worlds_webots/mowgli_garden.wbt` `extensionSlot` (:82–125) + `urdf_webots/mowgli_webots.urdf` frame joints (:126–158) + `<webots>` device block (:161–204) |
 | Change chassis geometry, mass, wheels | `protos/MowgliMower.proto` — chassis (:119–131), `LEFT_JOINT` (:143–199), `RIGHT_JOINT` (:202–238), casters (:246–275), mass/COM (:294–298) |
 | Add a world or a static obstacle | `worlds_webots/mowgli_garden.wbt` (`test_obstacle` Solid :46–60); `world` launch arg in `launch/webots_minimal.launch.py:50` and `sim_full_system.launch.py:73` |
@@ -24,7 +45,7 @@
 | Wheel-slip injection / `/wheel_odom` covariance | `scripts/sim_wheel_slip.py` (:59–67 params, :131–138 covariance override); launch `sim_full_system.launch.py:406–412` |
 | Fake charging / dock detection / firmware handshake | `src/fake_hardware_bridge_node.cpp` — dock params (:83–90), `near_dock` (:151–166), `Status` field parity (:168–200) |
 | Webots "Gives up" at boot, spawners never start | `launch/webots_minimal.launch.py:114–125` (`respawn=True`), `:132` (90 s spawner timeout), `ros2/scripts/sim-stop.sh` (stale IPC socket) |
-| Robot stutters under `mode:=fast` | `kinematic_drive.py:160–170` (`CMD_VEL_TIMEOUT_S` is wall-clock) and `:419–428` |
+| Robot stutters under `mode:=fast` | `sim_actuation_node.cpp` timing and `diffdrive_controller` command expiry; the chassis has no separate command cache |
 | Need the true chassis pose (not the localizer belief) | `/sim/ground_truth_pose` — `kinematic_drive.py:252–254`, `:462–470` |
 | Wheel-odom chain (`/wheel_odom_raw` → `/wheel_odom`) | `webots_minimal.launch.py:111–112` (remaps) → `scripts/sim_wheel_slip.py` |
 | diff_drive limits / controller_manager rate | `config_webots/ros2_control.yaml` |
@@ -42,11 +63,11 @@
 | `package.xml` | 58 | Deps: `webots_ros2_driver`, `controller_manager`, `diff_drive_controller`, `joint_state_broadcaster`, `mowgli_interfaces`, `mowgli_bringup` |
 | `launch/webots_minimal.launch.py` | 193 | Webots + `WebotsController` + RSP + a standalone `sim_actuation_node` instance + ros2_control spawners (unconditional in the `LaunchDescription`, no `WaitForControllerConnection` gate — removed by PR #507); the only launch file in the package |
 | `mowgli_simulation/__init__.py` | 6 | Python package loaded in-process by `webots_ros2_driver` |
-| `mowgli_simulation/kinematic_drive.py` | 574 | `KinematicDrive` plugin: `/cmd_vel_wheels` (the post-firmware-model twist, `applyFirmwareModel=false` in the current URDF) → teleport + `setVelocity`; publishes ground truth. Since PR #507 (2026-09-05) `sim_actuation_node` is the SOLE firmware-model authority — the plugin's own firmware-model code (`FIRMWARE_DEADBAND_PWM_*`) still exists but is disabled by that property in the shipped URDF |
+| `mowgli_simulation/kinematic_drive.py` | — | Reads native wheel sensors after each physics step, integrates an exact differential-drive increment, teleports the planar body, sets ODE velocity and publishes native-epoch truth + applied twist; no motor writes or command subscription |
 | `src/fake_hardware_bridge_node.cpp` | 280 | Stand-in for `hardware_bridge_node`: status/power/emergency/battery/dock-heading publishers + 2 services |
 | `src/sim_actuation_node.cpp` | 183 | `/cmd_vel` → per-wheel firmware model → `/cmd_vel_wheels` (the wheels' input) |
 | `include/mowgli_simulation/firmware_wheel_model.hpp` | 170 | Header-only, ROS-free per-wheel PI + stiction model (`step_firmware_wheel_model`) |
-| `scripts/sim_imu_noise.py` | 269 | `/imu/data_sim` → `/imu/data` with white noise + bias walk (optional cmd_vel-synthesised IMU) |
+| `scripts/sim_imu_noise.py` | — | Raw IMU noise mode or native applied-twist synthesis; source stamps, bounded clock-eligibility queue and rewind handling |
 | `scripts/sim_navsat_rtk_fix.py` | 274 | `/gps/fix_raw` → `/gps/fix`; rewrites `status`/covariance per `RTK_FIXED`/`RTK_FLOAT`/`NO_FIX` regime |
 | `scripts/sim_wheel_slip.py` | 162 | `/wheel_odom_raw` → `/wheel_odom`; periodic vx over-report + production twist covariance |
 | `config_webots/ros2_control.yaml` | 60 | `controller_manager` 50 Hz, `diffdrive_controller` (0.325 m / 0.093 m, `use_stamped_vel`, `enable_odom_tf: false`) |
@@ -74,13 +95,12 @@
 ### Nodes
 | Node | Executable / plugin | Launched by | Kind |
 |------|---------------------|-------------|------|
-| `MowgliMower_kinematic_drive` (name derived at `kinematic_drive.py:234`) | `mowgli_simulation.kinematic_drive.KinematicDrive`, in-process in `webots_controller_MowgliMower` (`mowgli_webots.urdf:201`), fed `/cmd_vel_wheels` per `urdf:205–206` | `webots_minimal.launch.py:88` `WebotsController(robot_name='MowgliMower')` | rclpy node inside the driver |
+| `MowgliMower_kinematic_drive` | `mowgli_simulation.kinematic_drive.KinematicDrive`, in-process in the Webots driver; observes native wheel PositionSensors | `webots_minimal.launch.py` | rclpy publisher node |
 | Webots driver + `Ros2IMU` + `webots_ros2_control::Ros2Control` | `webots_ros2_driver` (`mowgli_webots.urdf:182–193`) | `webots_minimal.launch.py:88–126` (`respawn=True`) | plain |
 | `controller_manager` / `diffdrive_controller` / `joint_state_broadcaster` | ros2_control inside the driver; spawners `webots_minimal.launch.py:120–145` (`diffdrive_spawner`, `joint_state_spawner`) | launched unconditionally in the `LaunchDescription` list — no readiness gate (`WaitForControllerConnection` was deleted entirely by PR #507, 2026-09-05) | ros2_control lifecycle |
-| `sim_actuation` (standalone instance) | `sim_actuation_node` (`webots_minimal.launch.py:156–177`); a SECOND instance also runs under `sim_full_system.launch.py` (see below) | `webots_minimal.launch.py` `LaunchDescription` | plain, sole firmware-model authority (PR #507) — feeds both `diffdrive_controller` and `kinematic_drive` the same `/cmd_vel_wheels` |
+| `sim_actuation` | `sim_actuation_node` | `webots_minimal.launch.py`, also included by the full launch | sole firmware-model owner; publishes `/cmd_vel_wheels` to ros2_control |
 | `robot_state_publisher` | `robot_state_publisher` with URDF text (`webots_minimal.launch.py:79–86`); driver-internal RSP disabled (:99) | `webots_minimal.launch.py` | plain |
 | `fake_hardware_bridge` | `fake_hardware_bridge_node` (`fake_hardware_bridge_node.cpp:50`) | `sim_full_system.launch.py:297` | plain, 10 Hz wall timer (:137) |
-| `sim_actuation` | `sim_actuation_node` (`sim_actuation_node.cpp:59`) | `sim_full_system.launch.py:483` | plain, `control_hz` 50 Hz wall timer (:93) |
 | `sim_imu_noise` | `sim_imu_noise.py` (:65) | `sim_full_system.launch.py:424` | plain |
 | `sim_navsat_rtk_fix` | `sim_navsat_rtk_fix.py` (:107) | `sim_full_system.launch.py:313` | plain |
 | `sim_wheel_slip` | `sim_wheel_slip.py` (:51) | `sim_full_system.launch.py:396` | plain |
@@ -91,8 +111,8 @@ Every node gets `use_sim_time: True` (`sim_full_system.launch.py`); `webots_mini
 ### Topics
 | Topic | Type | Dir (from this area) | QoS | Other end |
 |-------|------|----------------------|-----|-----------|
-| `/cmd_vel` | `geometry_msgs/TwistStamped` | sub — `sim_actuation_node.cpp:82` (SystemDefaults). `kinematic_drive` does NOT subscribe to this topic in the current wiring — see `/cmd_vel_wheels` below (PR #507, 2026-09-05) | | pub: `twist_mux` (`sim_full_system.launch.py:381`) |
-| `/cmd_vel_wheels` | `geometry_msgs/TwistStamped` | pub — `sim_actuation_node.cpp:80` | SystemDefaults | sub: `diffdrive_controller` via remap `webots_minimal.launch.py:111`, AND `kinematic_drive` (`urdf:205` `<cmdVelTopic>/cmd_vel_wheels</cmdVelTopic>`) — both get the identical post-firmware-model twist so ground truth and wheel odometry cannot diverge |
+| `/cmd_vel` | `geometry_msgs/TwistStamped` | sub — `sim_actuation_node.cpp` | SystemDefaults | pub: twist_mux; not subscribed by `KinematicDrive` |
+| `/cmd_vel_wheels` | `geometry_msgs/TwistStamped` | pub — `sim_actuation_node.cpp` | SystemDefaults | sub: `diffdrive_controller` through the minimal-launch remap; actual measured wheel increments drive the chassis |
 | `/wheel_odom_raw` | `nav_msgs/Odometry` | pub — `diffdrive_controller` remap `webots_minimal.launch.py:112`; sub — `sim_wheel_slip.py:94` | reliable | internal to the sim chain |
 | `/wheel_odom` | `nav_msgs/Odometry` | pub — `sim_wheel_slip.py:93` (covariance :131–138: vx 0.01, vy 1e-4, wz 9e-4) | reliable | `fusion_graph_node`, `controller_server.odom_topic` (CLAUDE.md "What NOT to Do") |
 | `/imu/data_sim` | `sensor_msgs/Imu` | pub — `Ros2IMU` plugin 100 Hz (`mowgli_webots.urdf:182–191`); sub — `sim_imu_noise.py:143` | best-effort | raw Webots gyro/accel/inertial unit |
@@ -102,7 +122,8 @@ Every node gets `use_sim_time: True` (`sim_full_system.launch.py`); `webots_mini
 | `/scan` | `sensor_msgs/LaserScan` | pub — Webots `Lidar` 10 Hz (`mowgli_webots.urdf:162–170`; noise/resolution `mowgli_garden.wbt:122–123`) | driver default | `costmap_scan_filter_node` (→ `/scan_costmap` costmaps + `/scan_collision` collision_monitor), `scan_deskew_node` (→ `/scan_deskewed`, `fusion_graph` persistent map anchor) |
 | `/joint_states` | `sensor_msgs/JointState` | pub — `joint_state_broadcaster` | | `robot_state_publisher` (wheel TFs) |
 | `/robot_description` | `std_msgs/String` | pub — RSP only (`webots_minimal.launch.py:71–86`, driver copy disabled :99) | transient_local | `controller_manager` |
-| `/sim/ground_truth_pose` | `geometry_msgs/PoseStamped` (`frame_id: map`) | pub — `kinematic_drive.py:252`, every physics tick; sub — `fake_hardware_bridge_node.cpp:120` (SensorDataQoS) | depth 10 | sim-only truth; nothing production reads it |
+| `/sim/ground_truth_pose` | `geometry_msgs/PoseStamped`, frame `map` | pub — `KinematicDrive` | depth 10 | completed native wheel-interval endpoint; fake charging + GNSS adapter |
+| `/sim/applied_twist` | `geometry_msgs/TwistStamped`, frame `base_footprint` | pub — `KinematicDrive` | depth 10 | completed native wheel-interval twist; synthetic IMU |
 | `/hardware_bridge/status` | `mowgli_interfaces/Status` | pub — `fake_hardware_bridge_node.cpp:93` | QoS(10) | BT, map_server, diagnostics, `calibrate_imu_yaw_node`, `costmap_scan_filter_node`, `fusion_graph` (same names the real bridge is remapped to, `mowgli.launch.py:260–266`) |
 | `/hardware_bridge/power` | `mowgli_interfaces/Power` | pub — :95 (28 V; 1.5 A + `charger_enabled` when `near_dock`) | QoS(10) | BT battery filter, diagnostics |
 | `/hardware_bridge/emergency` | `mowgli_interfaces/Emergency` | pub — :97 (`active_emergency`/`latched_emergency` = service state) | QoS(10) | BT, LED ring, diagnostics |
@@ -130,12 +151,10 @@ No actions are defined in this package.
 | `sim_imu_noise.input_topic` / `output_topic` | `/imu/data_gz` / `/imu/data` (`sim_imu_noise.py:68,71`) | `:437` `/imu/data_sim`, `:438` | startup |
 | `sim_imu_noise.gyro_white_std` / `gyro_bias_walk_std` / `gyro_bias_init_std` | 0.005 / 1e-4 / 1e-3 (`:76–83`) | `:445–447` (same) | startup |
 | `sim_imu_noise.accel_white_std` / `accel_bias_walk_std` / `accel_bias_init_std` | 0.05 / 1e-3 / 0.05 (`:87–94`) | `:448–450` (same) | startup |
-| `sim_imu_noise.synthesize_from_cmd_vel` / `cmd_vel_topic` / `noise_seed` | false / `/cmd_vel` / 42 (`:119,122,98`) | `:460` `False`, `:461`, `:451` | startup |
+| `sim_imu_noise.synthesize_from_applied_twist` / `applied_twist_topic` / `noise_seed` | false / `/sim/applied_twist` / 42 | full launch selects applied-twist synthesis | startup |
 | `sim_navsat_rtk_fix.quality_pattern` | `""` = always `RTK_FIXED` (`sim_navsat_rtk_fix.py:117`; grammar `"30,RTK_FIXED;15,RTK_FLOAT;5,NO_FIX"`) | `:330` `""` | startup |
 | `sim_navsat_rtk_fix.input_topic` / `output_topic` / `noise_seed` | `/gps/fix_raw` / `/gps/fix` / 42 (`:110,113,122`) | `:321–322`, `:331` | startup |
 | `sim_wheel_slip.slip_period_s` / `slip_duration_s` / `slip_vx_bias` | 30 / 1.0 / 0.05 (`sim_wheel_slip.py:60,63,66`) | `:406–412` (same; `0.0` bias = slip-free baseline) | startup |
-| `KinematicDrive` `cmdVelTopic` (URDF plugin property) | `/cmd_vel` (`mowgli_webots.urdf:202`; fallback `kinematic_drive.py:158`) | — | plugin init |
-| `KinematicDrive` `FIRMWARE_*`, `CMD_VEL_TIMEOUT_S` | class constants `kinematic_drive.py:147–170` — **not ROS params** | — | import time |
 | Webots `mode` | `realtime` (`webots_minimal.launch.py:45–49`, `sim_full_system.launch.py:109–113`) | pass `mode:=fast` for E2E only | launch |
 | `fusion_graph_tf_lead_s` / `fusion_graph_node_period_s` (into `navigation.launch.py`) | hardware 0.05 s (`navigation.launch.py:216`) / from `mowgli_robot.yaml`, fallback 0.04 s (`:221`) | `:182–183` → 0.1 s / 0.02 s | launch |
 | `map_server_node.area_names` / `area_polygons` / `area_is_navigation` / `area_obstacles` | absent in `map_server.yaml` (deliberate) | `:219–224` `main_mow` 9×6 m rectangle | lifecycle configure |

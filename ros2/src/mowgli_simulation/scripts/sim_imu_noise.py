@@ -32,6 +32,12 @@ Wiring
   Webots URDF (urdf_webots/mowgli_webots.urdf): InertialUnit -> /imu/data_sim
   this node:          /imu/data_sim -> /imu/data    (with noise + bias)
 
+  With synthesize_from_applied_twist=true, each /sim/applied_twist sample
+  instead supplies both the synthesized gyro value and its native step epoch.
+  Raw IMU messages and independently delivered commands are not used in that mode.
+  Up to ten source-ordered samples can wait for /clock; overflow drops the
+  oldest, matching the transport's KEEP_LAST history depth.
+
   NOTE: the `input_topic` default below is the stale Gazebo-era
   '/imu/data_gz', which nothing publishes. sim_full_system.launch.py
   always overrides it with '/imu/data_sim'; running this node without
@@ -39,16 +45,19 @@ Wiring
 
 Production code stays unchanged. This is sim-side plumbing.
 
-Safety: read-only consumer of one sim sensor topic, publishes a
+Safety: read-only consumer of one sim observation topic, publishes a
 single sensor topic. No drive commands, no TF, no safety topic.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_left
+from copy import deepcopy
 import math
 import random
 from typing import Optional
 
+from geometry_msgs.msg import TwistStamped
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import (
@@ -58,6 +67,9 @@ from rclpy.qos import (
     ReliabilityPolicy,
 )
 from sensor_msgs.msg import Imu
+
+
+_APPLIED_HISTORY_DEPTH = 10
 
 
 def _stamp_to_float(stamp) -> float:
@@ -110,46 +122,41 @@ class SimImuNoise(Node):
         ]
         self._prev_t: Optional[float] = None
 
-        # Optional kinematic-IMU mode (sim only). When enabled, the script
-        # ignores the Webots-side gyro/accel readings entirely and emits
-        # an IMU synthesized from a configured achievable-twist topic:
-        # gyro_z = twist.az, gx/gy = 0, accel = (0, 0, g) in IMU frame,
-        # orientation = identity.
-        # Webots' kinematic teleport leaks ODE physics noise (~0.03 rad/s
-        # gyro_z drift) between teleport ticks; with EKF process noise on
-        # yaw at 0.06, this bias accumulates into a 5°/s yaw drift on
-        # /odometry/filtered_map even when the robot is stationary, which
-        # makes obstacles drift on the map and FTC PRE_ROTATE diverge.
-        # The full-system launch points this at /cmd_vel_wheels, the
-        # post-firmware-model twist KinematicDrive actually integrates.
-        self._synth_from_cmd = bool(
-            self.declare_parameter('synthesize_from_cmd_vel', False).value
+        # KinematicDrive reports the exact twist it integrated, with that
+        # step's native epoch. A separately cached command and raw IMU header
+        # do not identify the same observation, even when both streams are live.
+        self._synth_from_applied = bool(
+            self.declare_parameter('synthesize_from_applied_twist', False).value
         )
-        self._cmd_vel_topic = str(
-            self.declare_parameter('cmd_vel_topic', '/cmd_vel').value
+        self._applied_twist_topic = str(
+            self.declare_parameter('applied_twist_topic', '/sim/applied_twist').value
         )
-        self._cmd_az = 0.0  # latest commanded yaw rate (rad/s)
-        if self._synth_from_cmd:
-            from geometry_msgs.msg import TwistStamped
-
-            def _on_cmd(msg: TwistStamped) -> None:
-                self._cmd_az = float(msg.twist.angular.z)
-
-            self.create_subscription(TwistStamped, self._cmd_vel_topic, _on_cmd, 10)
+        self._last_applied_stamp_ns: Optional[int] = None
+        self._last_applied_ros_now_ns: Optional[int] = None
+        self._pending_applied: list[tuple[int, TwistStamped]] = []
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10,
+            depth=_APPLIED_HISTORY_DEPTH,
             durability=DurabilityPolicy.VOLATILE,
         )
 
         self._pub = self.create_publisher(
             Imu, self._output_topic, sensor_qos
         )
-        self._sub = self.create_subscription(
-            Imu, self._input_topic, self._on_imu, sensor_qos
-        )
+        if self._synth_from_applied:
+            self._sub = self.create_subscription(
+                TwistStamped, self._applied_twist_topic, self._on_applied_twist, sensor_qos
+            )
+            # Native samples may precede delivery of the matching /clock tick.
+            # Eligibility polling flushes pending samples without
+            # changing its epoch or imposing a guessed future tolerance.
+            self._eligibility_timer = self.create_timer(0.01, self._flush_pending_applied)
+        else:
+            self._sub = self.create_subscription(
+                Imu, self._input_topic, self._on_imu, sensor_qos
+            )
 
         self._published = 0
         self.create_timer(15.0, self._log_stats)
@@ -159,7 +166,7 @@ class SimImuNoise(Node):
             'gyro white=%.4f rad/s walk=%.5f init_bias=(%.4f, %.4f, %.4f) | '
             'accel white=%.3f m/s^2 walk=%.4f init_bias=(%.3f, %.3f, %.3f)'
             % (
-                self._input_topic,
+                self._applied_twist_topic if self._synth_from_applied else self._input_topic,
                 self._output_topic,
                 self._gyro_white,
                 self._gyro_walk,
@@ -171,6 +178,8 @@ class SimImuNoise(Node):
         )
 
     def _on_imu(self, msg: Imu) -> None:
+        if self._synth_from_applied:
+            return
         t = _stamp_to_float(msg.header.stamp)
         if self._prev_t is None:
             dt = 0.01  # first sample: assume ~100 Hz
@@ -186,46 +195,93 @@ class SimImuNoise(Node):
                 self._gyro_bias[i] += self._rng.gauss(0.0, gyro_step)
                 self._accel_bias[i] += self._rng.gauss(0.0, accel_step)
 
-        if self._synth_from_cmd:
-            # Perfect IMU from cmd_vel — see comment in __init__.
-            gx = 0.0
-            gy = 0.0
-            gz = self._cmd_az
-            ax = 0.0
-            ay = 0.0
-            az = 9.80665  # gravity in IMU body Z (robot is upright)
-        else:
-            gw = self._gyro_white
-            gx = msg.angular_velocity.x + self._gyro_bias[0] + self._rng.gauss(0.0, gw)
-            gy = msg.angular_velocity.y + self._gyro_bias[1] + self._rng.gauss(0.0, gw)
-            gz = msg.angular_velocity.z + self._gyro_bias[2] + self._rng.gauss(0.0, gw)
+        gw = self._gyro_white
+        gx = msg.angular_velocity.x + self._gyro_bias[0] + self._rng.gauss(0.0, gw)
+        gy = msg.angular_velocity.y + self._gyro_bias[1] + self._rng.gauss(0.0, gw)
+        gz = msg.angular_velocity.z + self._gyro_bias[2] + self._rng.gauss(0.0, gw)
 
-            aw = self._accel_white
-            ax = msg.linear_acceleration.x + self._accel_bias[0] + self._rng.gauss(0.0, aw)
-            ay = msg.linear_acceleration.y + self._accel_bias[1] + self._rng.gauss(0.0, aw)
-            az = msg.linear_acceleration.z + self._accel_bias[2] + self._rng.gauss(0.0, aw)
+        aw = self._accel_white
+        ax = msg.linear_acceleration.x + self._accel_bias[0] + self._rng.gauss(0.0, aw)
+        ay = msg.linear_acceleration.y + self._accel_bias[1] + self._rng.gauss(0.0, aw)
+        az = msg.linear_acceleration.z + self._accel_bias[2] + self._rng.gauss(0.0, aw)
 
         out = Imu()
         out.header = msg.header
-        if self._synth_from_cmd:
-            # Identity orientation — robot is perfectly upright in sim.
-            out.orientation.x = 0.0
-            out.orientation.y = 0.0
-            out.orientation.z = 0.0
-            out.orientation.w = 1.0
-            # Zero covariance on roll/pitch so EKF trusts them; loose
-            # yaw cov per the existing /imu/data convention.
-            out.orientation_covariance = [
-                1e-6, 0.0, 0.0,
-                0.0, 1e-6, 0.0,
-                0.0, 0.0, 99.0,  # yaw — keep loose, EKF uses gyro_z
-            ]
-        else:
-            out.orientation = msg.orientation
-            out.orientation_covariance = msg.orientation_covariance
+        out.orientation = msg.orientation
+        out.orientation_covariance = msg.orientation_covariance
         out.angular_velocity.x = gx
         out.angular_velocity.y = gy
         out.angular_velocity.z = gz
+        out.linear_acceleration.x = ax
+        out.linear_acceleration.y = ay
+        out.linear_acceleration.z = az
+        self._publish_sample(out)
+
+    def _check_applied_epoch(self) -> int:
+        now_ns = self.get_clock().now().nanoseconds
+        if self._last_applied_ros_now_ns is not None and now_ns < self._last_applied_ros_now_ns:
+            self._last_applied_stamp_ns = None
+            self._pending_applied.clear()
+            self._prev_t = None
+        self._last_applied_ros_now_ns = now_ns
+        return now_ns
+
+    def _flush_pending_applied(self) -> None:
+        self._publish_pending_applied(self._check_applied_epoch())
+
+    def _publish_pending_applied(self, now_ns: int) -> None:
+        while self._pending_applied and self._pending_applied[0][0] <= now_ns:
+            stamp_ns, pending = self._pending_applied[0]
+            if self._last_applied_stamp_ns is None or stamp_ns > self._last_applied_stamp_ns:
+                self._publish_applied(pending, stamp_ns)
+            self._pending_applied.pop(0)
+
+    def _on_applied_twist(self, msg: TwistStamped) -> None:
+        now_ns = self._check_applied_epoch()
+        self._publish_pending_applied(now_ns)
+        stamp = msg.header.stamp
+        stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+        values = (
+            msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z,
+            msg.twist.angular.x, msg.twist.angular.y, msg.twist.angular.z,
+        )
+        if (stamp_ns <= 0 or stamp.nanosec >= 1_000_000_000
+                or msg.header.frame_id != 'base_footprint'
+                or not all(math.isfinite(value) for value in values)
+                or (self._last_applied_stamp_ns is not None
+                    and stamp_ns <= self._last_applied_stamp_ns)):
+            return
+        if stamp_ns > now_ns:
+            # Match the DDS KEEP_LAST depth. Preserve distinct source samples
+            # in epoch order, including a final applied zero. On overflow,
+            # discard the oldest just as the bounded transport history does;
+            # retain the newest observations without inventing timestamps.
+            position = bisect_left([stamp for stamp, _ in self._pending_applied], stamp_ns)
+            if (position == len(self._pending_applied)
+                    or self._pending_applied[position][0] != stamp_ns):
+                self._pending_applied.insert(position, (stamp_ns, deepcopy(msg)))
+                if len(self._pending_applied) > _APPLIED_HISTORY_DEPTH:
+                    self._pending_applied.pop(0)
+            return
+        self._publish_applied(msg, stamp_ns)
+
+    def _publish_applied(self, msg: TwistStamped, stamp_ns: int) -> None:
+        out = Imu()
+        out.header.stamp = deepcopy(msg.header.stamp)
+        out.header.frame_id = 'imu_link'
+        out.orientation.w = 1.0
+        out.orientation_covariance = [
+            1e-6, 0.0, 0.0,
+            0.0, 1e-6, 0.0,
+            0.0, 0.0, 99.0,
+        ]
+        out.angular_velocity.z = msg.twist.angular.z
+        out.linear_acceleration.z = 9.80665
+        self._publish_sample(out)
+        self._last_applied_stamp_ns = stamp_ns
+        self._prev_t = stamp_ns * 1e-9
+
+    def _publish_sample(self, out: Imu) -> None:
         # Inflate gyro covariance to reflect the added noise so
         # robot_localization weights it appropriately.
         var_g = self._gyro_white * self._gyro_white
@@ -234,9 +290,6 @@ class SimImuNoise(Node):
             0.0, var_g, 0.0,
             0.0, 0.0, var_g,
         ]
-        out.linear_acceleration.x = ax
-        out.linear_acceleration.y = ay
-        out.linear_acceleration.z = az
         var_a = self._accel_white * self._accel_white
         out.linear_acceleration_covariance = [
             var_a, 0.0, 0.0,
