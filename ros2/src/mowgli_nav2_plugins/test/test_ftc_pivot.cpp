@@ -177,9 +177,11 @@ TEST(FtcPivot, PlanOpeningOnACornerStartsAtItsOutgoingPose)
 
 TEST(FtcPivot, ArrivalAndAlignment)
 {
-  EXPECT_FALSE(PivotArrived(0.10, kPivotArrivalToleranceM));
-  EXPECT_TRUE(PivotArrived(0.015, kPivotArrivalToleranceM));
-  EXPECT_TRUE(PivotArrived(-0.03, kPivotArrivalToleranceM)) << "overshoot still pivots";
+  EXPECT_FALSE(PivotArrived(0.10, 0, kPivotArrivalToleranceM));
+  EXPECT_TRUE(PivotArrived(0.015, 0, kPivotArrivalToleranceM));
+  EXPECT_FALSE(PivotArrived(-0.03, 0, kPivotArrivalToleranceM));
+  EXPECT_FALSE(PivotArrived(0.0, 0.125, kPivotArrivalToleranceM));
+  EXPECT_TRUE(PivotArrived(0.012, -0.016, kPivotArrivalToleranceM));
   const double tol = 10.0 * M_PI / 180.0;
   EXPECT_FALSE(PivotAligned(0.5, tol));
   EXPECT_TRUE(PivotAligned(0.1, tol));

@@ -1808,3 +1808,13 @@ def test_fleet_peer_node_is_respawned_and_gets_the_chassis_footprint() -> None:
     assert re.search(r"fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint\(robot_params\)", src)
     for key in ("chassis_front_m", "chassis_rear_m", "chassis_half_width_m"):
         assert key in block, f"{key} must be injected into fleet_peer_obstacles"
+
+
+@pytest.mark.parametrize("overlay", ["nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"])
+def test_ftc_pivot_coast_assumption_is_loaded_in_both_overlays(overlay: str) -> None:
+    params = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml(overlay))
+    ftc = _controller_section(params)["FollowCoveragePath"]
+    assert ftc["pivot_coast_time_bound_s"] == 0.5
+    # Private Nav2 tuning is read from the merged params file; it needs no
+    # operator template / GUI projection or launch-time physics estimate.
+    assert ftc["plugin"] == "mowgli_nav2_plugins/FTCController"

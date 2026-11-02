@@ -11,6 +11,19 @@ Global fixed-grid geometry and mandatory authorization are owned by `GardenKeepo
 current observation buffers. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md)
 for geometry synchronization, recovery toggles, budgets and hardware acceptance.
 
+Explicit internal pivot arrival uses planar distance within the existing 20 mm
+radius. A local forward-monotone approach steers at the actual tip and bounds
+positive output below the ordinary minimum speed using `pivot_coast_time_bound_s`
+(default 0.5 s, range 0.01–2.0 s), a declared response assumption that still needs
+physical calibration. Approach/cap/arrival share a supported current map/base TF
+epoch; unsupported, stale or mismatched path frames refuse the pivot approach.
+Deviation, obstacle wait, reverse and turn fallback retain output ownership.
+PRE_ROTATE and PIVOT hold angular output until measured planar translation is
+at most 0.01 m/s, without resetting their deadlines. Eligible pinned approaches
+also use the existing goal timeout. This establishes local arrival/stopping
+behavior; outgoing path containment and public goal checking are separate.
+Regressions use the actual FTC in `test_ftc_speed_limit.cpp`.
+
 ## Where to look
 
 Normal transit planning is now `include/mowgli_nav2_plugins/authorized_transit_planner.hpp`
