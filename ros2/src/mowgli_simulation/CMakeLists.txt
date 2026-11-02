@@ -117,6 +117,10 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
 
+  ament_add_gtest(test_sim_actuation_clock test/test_sim_actuation_clock.cpp TIMEOUT 60)
+  target_include_directories(test_sim_actuation_clock PRIVATE include)
+  target_link_libraries(test_sim_actuation_clock ${rclcpp_TARGETS} ${geometry_msgs_TARGETS})
+
   ament_add_pytest_test(test_sim_navsat_rtk_fix
     test/test_sim_navsat_rtk_fix.py
   )
