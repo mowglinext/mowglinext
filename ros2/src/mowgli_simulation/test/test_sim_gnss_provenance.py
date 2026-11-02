@@ -220,3 +220,46 @@ def test_invalid_truth_identity_does_not_replace_current_truth(invalid):
     _fix(node, 1)
     assert fixes[0].header.stamp.sec == 1
     assert node._pending_ground_truth is None
+
+
+def test_full_native_quaternion_uses_projected_yaw_for_planar_antenna():
+    node, clock, fixes, statuses = _relay()
+    truth = PoseStamped()
+    truth.header.stamp.sec = 1
+    truth.header.frame_id = 'map'
+    # Rz(0.7) Ry(-0.4) Rx(0.3); with nonzero roll and pitch,
+    # 2*atan2(q.z,q.w) differs from the actual projected body-X yaw.
+    roll, pitch, yaw = 0.3, -0.4, 0.7
+    cr, sr = math.cos(roll/2), math.sin(roll/2)
+    cp, sp = math.cos(pitch/2), math.sin(pitch/2)
+    cy, sy = math.cos(yaw/2), math.sin(yaw/2)
+    q = truth.pose.orientation
+    q.x, q.y = sr*cp*cy-cr*sp*sy, cr*sp*cy+sr*cp*sy
+    q.z, q.w = cr*cp*sy-sr*sp*cy, cr*cp*cy+sr*sp*sy
+    sim_navsat.SimNavSatRtkFix._on_ground_truth(node, truth)
+    _fix(node, 1)
+    projected_x = ((fixes[0].longitude - node._datum_lon)
+                   * math.cos(math.radians(node._datum_lat)) * sim_navsat.METERS_PER_DEG)
+    projected_y = (fixes[0].latitude - node._datum_lat) * sim_navsat.METERS_PER_DEG
+    assert projected_x == pytest.approx(0.3*math.cos(yaw), rel=0.0, abs=1e-15)
+    assert projected_y == pytest.approx(0.3*math.sin(yaw), rel=0.0, abs=1e-15)
+    assert statuses[0].header == fixes[0].header == truth.header.__class__(
+        stamp=truth.header.stamp, frame_id='gps_link')
+
+
+@pytest.mark.parametrize('component', ['x', 'y'])
+def test_nonfinite_full_quaternion_cannot_poison_truth_identity(component):
+    node, clock, fixes, statuses = _relay()
+    bad = PoseStamped()
+    bad.header.stamp.sec = 1
+    bad.header.frame_id = 'map'
+    bad.pose.orientation.w = 1.0
+    setattr(bad.pose.orientation, component, math.nan)
+    sim_navsat.SimNavSatRtkFix._on_ground_truth(node, bad)
+    _fix(node, 1)
+    assert fixes == statuses == []
+    assert node._last_truth_stamp_ns is None
+    assert node._last_fix_stamp_ns is None
+    _truth(node, 1)
+    _fix(node, 1)
+    assert statuses[0].position_observation_sequence == 1

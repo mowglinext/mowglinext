@@ -18,14 +18,20 @@ def test_kinematic_drive_publishes_simulator_pose_truth() -> None:
     assert "gt.header.frame_id = 'map'" in source
 
 
-def test_chassis_observes_actual_wheels_without_another_actuation_model() -> None:
+def test_chassis_observes_native_body_without_another_actuation_model() -> None:
     package = Path(__file__).resolve().parents[1]
     source = (package / 'mowgli_simulation' / 'kinematic_drive.py').read_text()
     actuation = (package / 'src' / 'sim_actuation_node.cpp').read_text()
 
     assert 'step_firmware_wheel_model(' in actuation
     assert 'step_firmware_wheel_model(' not in source
-    assert "('left_wheel_sensor', 'right_wheel_sensor')" in source
+    assert 'self.__robot_node.getPosition()' in source
+    assert 'self.__robot_node.getOrientation()' in source
+    assert 'setSFVec3f(' not in source
+    assert 'setSFRotation(' not in source
+    assert 'setVelocity(' not in source
+    assert 'resetPhysics(' not in source
+    assert 'getDevice(' not in source
     assert 'motor.setVelocity(' not in source
     assert 'motor.setPosition(' not in source
 

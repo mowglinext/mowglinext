@@ -1,4 +1,4 @@
-# Webots Simulation — ODE Quirks and Load-Bearing Workarounds
+# Webots Simulation — Native Plant and Observation Contracts
 
 ## 1. Scope
 
@@ -12,11 +12,12 @@
 - the package index (files, nodes, topics, parameters, tests) — see
   [`docs/claude/codemaps/mowgli_simulation.md`](claude/codemaps/mowgli_simulation.md).
 
-It exists because the Webots/ODE sim carries five non-obvious workarounds that
-each cost days to find and each look like dead code or a mistake to a reader
-who does not know the history. Removing any one of them silently breaks the
-sim in a way that presents as a *Nav2 bug*, not a sim bug. Every quirk below
-is stated as **RULE → ANCHOR → SYMPTOM IF REINTRODUCED**.
+The current plant uses native motor/contact physics. KinematicDrive retains
+its name for URDF compatibility but only observes native body pose intervals.
+The old per-step teleport/velocity workaround is retired: grounded native
+controls identified the teleport path as necessary for accumulating child-joint
+deformation in that fixture. Historical observations below remain specific to
+their baseline; they are not requirements for the current plant.
 
 **On commit references:** issue #201 quotes `a5a4ff6e`, `c25f22b7`, `57324f54`
 and `940d9d9f`. **None of those SHAs resolve in this repository** — the branch
@@ -41,7 +42,7 @@ one:
 |---|---|---|---|
 | **A — world + body** | `worlds_webots/mowgli_garden.wbt` | The world, and the physical robot instance. `EXTERNPROTO "../protos/MowgliMower.proto"` (`:11`), the `MowgliMower { … }` instance (`:71`–`:82`), `WorldInfo.basicTimeStep 20` (`:16`, matching controller_manager 50 Hz), sensor nodes in `extensionSlot` (`:82`+) | ROS topic names |
 | **B — device wiring** | `urdf_webots/mowgli_webots.urdf` | Which Webots device maps to which ROS topic, and which plugins load. `<webots>` block `:161`–`:204`, `<ros2_control>` joints `:206`–`:220` | Any geometry, mass, or joint physics |
-| **C — body motion** | `mowgli_simulation/kinematic_drive.py` | native wheel-position increments → Supervisor teleport of the chassis, plus the chassis ODE velocity for sensor sampling | Wheel motor commands (owned by `diff_drive_controller`); the firmware motor model itself |
+| **C — body observations** | `mowgli_simulation/kinematic_drive.py` | native Solid-origin pose + full orientation → paired native-epoch truth/planar interval twist | Wheel motor commands (owned by `diff_drive_controller`); the firmware motor model itself |
 
 **Geometry lives in A only.** The URDF is *device + plugin wiring* — it does
 not spawn a body (see § 7).
@@ -57,29 +58,49 @@ appearance resolution needs neither SDK assets nor a runtime download.
 
 ### Signal chain (current topic names)
 
-`sim_actuation_node` owns the firmware motor model. It sends `/cmd_vel_wheels`
-to `diffdrive_controller`, the sole motor writer, which retains its velocity,
-acceleration and command-timeout limits. After the native physics step,
-`KinematicDrive` reads the same wheel PositionSensors as ros2_control and
-integrates their measured differential-drive increment. Sharing a command
-alone did not account for those limits or the wheel joints' actual motion.
+`sim_actuation_node` owns the firmware motor model. ros2_control is the sole
+native motor writer, retaining its limits and command timeout. Native physics
+determines body motion; KinematicDrive reads the completed Solid pose. Wheel
+odometry independently reads PositionSensors and can disagree with body truth
+due to native slip/contact response. Do not restore wheel-derived truth or
+another command-to-body model.
 
-```
-/cmd_vel → sim_actuation_node → /cmd_vel_wheels → diffdrive_controller → motors
-                                                        ↑                  ↓
-                                                  PositionSensors ← physics step
-                                                        ↓
-                                                 KinematicDrive
-                                                        ↓
-                                            planar chassis pose + ODE velocity
+```text
+/cmd_vel -> sim_actuation_node -> /cmd_vel_wheels -> diffdrive_controller
+                                                        |
+                                                 native motors
+                                                   /         \
+                                     native body pose    PositionSensors
+                                            |                  |
+                                     KinematicDrive      joint odometry
+                                     GT + interval       /wheel_odom_raw
+                                     applied twist             |
+                                                         sim_wheel_slip
+                                                               |
+                                                          /wheel_odom
 ```
 
-`/sim/ground_truth_pose` and `/sim/applied_twist` describe one completed native
-wheel interval and carry its ending Webots epoch. Initial offsets and rewinds
-establish a baseline; nonfinite acquisitions hold the body without publishing
-until a new finite baseline and positive interval exist. Repeated epochs cannot
-publish another acquisition. Residual measured wheel motion during braking is
-still body motion; this model provides no physical stopping evidence.
+The observation plugin has no command subscription, motor/device access, body
+field writes, velocity setter, or physics reset. Braking, collisions and slip
+remain native motion; expired commands do not authorize reporting false zero.
+A first finite pose establishes an interval baseline. Invalid acquisitions emit
+no packet and clear that baseline; recovery needs a finite baseline followed by
+a new positive interval. A repeated native epoch cannot replace a payload, and
+rewind starts a new baseline at the actual native location.
+
+`/sim/ground_truth_pose` is the completed native Solid-origin XYZ and full
+world-from-body quaternion at `Supervisor.getTime()`, in the garden ENU/map
+frame with forward/left/up body axes. When level, the origin coincides with
+`base_footprint`. `/sim/applied_twist` has the same ending epoch and describes
+the constant SE(2) interval twist reconstructing the consecutive native XY and
+projected body-X yaw observations. Linear x/y are in the moving yaw-only
+`base_footprint` frame, including lateral slip; angular.z is the shortest signed
+yaw increment divided by interval duration. Turns beyond pi within one interval
+are not identifiable from these endpoints. Roll/pitch are preserved in truth,
+but this planar twist and synthetic IMU are not a full 3D dynamics model.
+`getVelocity()` is deliberately unused: it reports ODE **COM** velocity, while
+`getPosition()` reports the **Solid origin**. With the current offset COM,
+the two linear velocities differ during rotation.
 
 The synthetic IMU consumes the applied observation directly, including its
 stamp. It waits for asynchronous `/clock` delivery with a bounded ten-sample
@@ -87,8 +108,9 @@ queue matching its DDS history and a ROS timer that can drain a final zero
 without another input packet. Clock rewind clears accepted and pending epochs.
 Raw IMU noise mode remains available independently.
 
-The GNSS relay uses raw GPS as a cadence trigger. Generated coordinates and
-fix/status stamps belong to the selected new truth pose; the raw antenna frame
+The GNSS relay uses raw GPS as a cadence trigger. Its planar antenna lever arm
+uses yaw extracted from the full native quaternion; this is not a 3D antenna
+model. Generated coordinates and fix/status stamps belong to the selected new truth pose; the raw antenna frame
 is preserved. Each generated observation has a nonzero lifetime sequence, even
 at rest. Future truth waits for clock eligibility without advancing authority;
 clock rewind clears the pending/accepted stamps but preserves sequence identity.
@@ -121,64 +143,70 @@ which sends Z → +Y.
 cylinder standing on end while the *visual* still looks perfect. This is the
 silent failure mode: nothing looks wrong in the Webots viewport.
 
-**SYMPTOM IF REINTRODUCED.** Phase 2.1's pathology: ~90 % wheel-floor slip and
+**Historical symptom.** Phase 2.1 reported: ~90 % wheel-floor slip and
 a chassis settling at 12–13° forward pitch. The full historical record — and
 the list of knobs that did *not* fix it — is preserved at
 `protos/MowgliMower.proto:19`–`:49`.
 
-Because `kinematic_drive` now teleports the body (§ 5), a broken
-`boundingObject` no longer stops the robot from moving; it just makes the
-chassis sit wrong and the wheels contact the floor incorrectly. That makes it
-*harder* to notice, not easier.
+Native physics makes correct wheel geometry and an actual collision floor
+necessary for motion. A visually present floor without a boundingObject is not
+a physical contact surface.
 
-## 4. Quirk 2 — the HingeJoint axis is deliberately `(0, -1, 0)`
+## 4. Physical hinge axes match the positive-forward ROS convention
 
-**RULE.** `diff_drive_controller` commands **positive** ω for **forward**
-motion. Under the right-hand rule about **+Y**, positive ω drives the wheel
-bottom toward −X — i.e. the body *backward*. The PROTO therefore uses
-`axis 0 -1 0`, which is intentional and must not be "corrected".
+Both wheel HingeJointParameters use **`axis 0 1 0`**, matching the two ROS URDF
+joint axes. Positive angular velocity about +Y moves the wheel bottom toward
+-X **relative to the axle**; rolling on stationary ground therefore moves the
+body toward +X. The old -Y rationale reversed contact-point and body velocity.
 
-**ANCHORS** (`protos/MowgliMower.proto`):
+Grounded R2025a motor-only controls at #1063 `cc4e40c8` plus ground `91f130ff`
+showed the distinction: removing body writes stabilized native mechanics, but
+with -Y axes the body moved +0.552875 m at 15 s while wheel integration claimed
+-0.554931 m. Changing only both physical axes to +Y produced -0.552739 m body
+motion with the same wheel-model value and the correct pivot sign. These are
+native mechanical controls, not a full-driver mission or hardware validation.
+Do not invert encoder feedback to mask a physical axis error.
 
-- rationale comment `:78`–`:85`, including the empirical check: with
-  `(0, +1, 0)` and `vx=+0.10`, the GPS reading moved **westward** (backward);
-  flipping to `(0, -1, 0)` reversed it;
-- `DEF LEFT_JOINT` → `HingeJointParameters` `axis 0 -1 0` at `:143`–`:146`;
-- `DEF RIGHT_JOINT` → `axis 0 -1 0` at `:202`–`:204`.
+## 5. No Supervisor body actuation in the observation plugin
 
-**SYMPTOM IF REINTRODUCED.** Flipping to the ROS-looking `(0, 1, 0)` makes the
-robot drive *away* from every Nav2 goal while `/wheel_odom_raw` still looks
-entirely plausible (the encoders count the same magnitude). Every Nav2
-behaviour then diverges instead of converging, and the first suspicion falls on
-the controller, not on the PROTO.
+The native motor/contact plant owns body translation, rotation and velocity.
+The plugin must never call field setters, setVelocity or resetPhysics, nor
+write motors or add a second firmware loop. `supervisor TRUE` remains required
+for `getSelf()` and native pose observations.
 
-## 5. Quirk 3 — a field-set teleport does not update ODE velocity
+Grounded controls of the unchanged #1063 plugin, using the same recorded motor
+input trace, reached 2326 m maximum child-anchor error and 177 degrees tilt.
+Omitting only the two per-step translation/rotation writes held maximum anchor
+error to 0.000100008 m and tilt to 0.7935 degrees over the same 200 sim seconds.
+Removing all body writes and correcting both axes also remained stable. These
+measurements isolate the teleport path for that native fixture; they do not
+claim full-system, navigation or physical acceptance.
 
-This is the core of the plugin and the easiest thing to "simplify" into
-breakage.
+In R2025a, a Supervisor teleport recursively moves children and refreshes joint
+anchors. ODE recomputes local anchors from the current bodies, which can retain
+deformation. `setVelocity()` changes only the root ODE body; it cannot repair
+child geometry. Per-step `resetPhysics()` recursively disables motors and is
+not a repair either. Publish native body observations, leaving wheel odometry
+independent; never hide abnormal wheel increments with clamps or fake truth.
 
-### 5a Keep planar teleport and ODE velocity together
+### Historical workaround record (superseded)
 
-`KinematicDrive.__place_body` sets `translation` and `rotation` to the integrated
-planar pose, then calls `setVelocity([vx_world, vy_world, 0, 0, 0, wz])` using
-the measured interval twist. A teleport alone leaves ODE velocity unchanged.
-Without zero vertical velocity, gravity accumulates between steps and attached
-sensors can sink below the floor, causing `/scan` to become all `inf`.
-Without angular velocity, the native gyro reports zero during a visible turn.
-Velocity alone also fails: historical trials retained the chassis pitch because
-wheel contact forces still act during ODE integration. Both writes are required.
+The earlier workarounds below predate the grounded controls and must not be
+restored as current rules. An incomplete world without physical ground can
+invalidate conclusions previously attributed to ODE quirks.
 
-### 5b Reset physics exactly once, and never write motors
+| Revision | Historical approach | Historical observation |
+|---|---|---|
+| 1 | Root setVelocity only | Claimed 70% commanded travel and 13-degree pitch. |
+| 2 | Teleport plus per-step resetPhysics | Claimed 95% travel and level body; wheel motors stopped. |
+| 3 | Teleport plus per-step planar setVelocity and one init reset | Claimed to solve gravity/sunken lidar and zero gyro sampling. Later native controls expose accumulating joint deformation. |
+| #1063 | Derive teleport and velocity from actual wheel increments | Fixed command/wheel-model disagreement, source epochs and helper clock eligibility; could still faithfully integrate corrupt native wheels while missing native body failure. |
 
-`resetPhysics()` recurses into wheel HingeJoints and zeroes their velocities.
-Calling it each step defeats motor commands and freezes wheel odometry. The
-plugin calls it only at initialization to clear startup impulses.
-`setVelocity()` affects only the chassis Solid, so it can run each step.
-
-The plugin reads `left_wheel_sensor` and `right_wheel_sensor`; it never writes
-either motor. `diffdrive_controller` owns motor initialization and setpoints.
-A second writer races controller initialization and can leave the wheels at zero.
-`supervisor TRUE` remains required for `getSelf()` and pose-field writes.
+The historical two-plant and wheel-interval evidence remains in
+[`MOTION_AUTHORIZATION_IMPLEMENTATION.md`](MOTION_AUTHORIZATION_IMPLEMENTATION.md).
+It establishes the behavior of those exact models, not native body truth or
+current mission acceptance. Helper identity, clock eligibility and wheel
+odometry rolling window of one remain in force.
 
 ## 6. Quirk 4 — `mode:=realtime` is the default on purpose
 
@@ -196,17 +224,16 @@ default in both launch files.
   (the full rationale comment plus the arg).
 
 The actuator and controller own command expiry; `KinematicDrive` has no
-independent command cache or timeout. It follows measured wheel motion through
-braking until the wheels actually stop. Their clock/timer behavior is a separate
+independent command cache or timeout. It observes native body motion through
+braking until the body actually stops. Their clock/timer behavior is a separate
 actuation contract.
 
 Fast mode remains legitimate for E2E runs whose timing budget allows it — the
 plugin paces fine either way; the bottleneck is the Nav2 controller loop.
 
 **SYMPTOM IF REINTRODUCED** (defaulting to fast): `PRE_ROTATE` never converges
-and `FollowStrip` reports `goal_timeout` on every dispatch. Switching
-`CMD_VEL_TIMEOUT_S` to sim time instead produces a robot that stutters and
-stops repeatedly under fast mode.
+and `FollowStrip` reports `goal_timeout` on every dispatch. Mechanical
+controls in fast mode do not establish full-stack realtime behavior.
 
 ## 7. Quirk 5 — an `<extern>` controller needs a body that already exists
 
@@ -239,14 +266,14 @@ succeeds. See `webots_minimal.launch.py:114`–`:125`.
 
 | Symptom | Check |
 |---|---|
-| `/scan` is all `inf` | zero z velocity in `KinematicDrive.__place_body` |
+| `/scan` is all `inf` | native sensor height/orientation, physical ground and scene assets |
 | Wheels never spin | a second motor writer or per-step `resetPhysics()` |
-| Chassis pitches forward | wheel Cylinder collision rotations (§ 3) |
+| Chassis pitches forward | wheel Cylinder collision rotations (§ 3), physical ground, native child geometry |
 | Positive wheel increments drive backward | HingeJoint axis (§ 4) |
-| Body holds without truth packets | plugin warning for nonfinite native acquisitions |
+| No truth packets | plugin warning for invalid native body acquisitions; finite baseline and new interval required |
 | Synthetic IMU pauses | pending native samples waiting for `/clock` |
 | Controller prints "Gives up" | external-controller boot retry (§ 7) |
-| Body passes through obstacles | accepted kinematic collision-response limitation |
+| Wheel odom differs from native truth | native slip/contact response; wheel integration is not body truth |
 
 ## 9. Smoke test
 
@@ -257,7 +284,7 @@ ros2 launch mowgli_simulation webots_minimal.launch.py mode:=realtime
 ```
 
 Command a forward creep. Note the type is **`TwistStamped`**, not `Twist`
-(`kinematic_drive.py:241`–`:242`, matching twist_mux and
+(matching twist_mux and
 `diff_drive_controller`'s `use_stamped_vel: true`):
 
 ```bash
@@ -269,9 +296,11 @@ The minimal launch starts `sim_actuation_node`, so `/cmd_vel` drives the wheels
 and measured chassis together. Inspect `/wheel_odom_raw`, `/joint_states`,
 `/sim/ground_truth_pose`, `/sim/applied_twist`, `/imu/data_sim` and `/scan`.
 The full launch additionally starts the synthetic IMU and GNSS helpers.
-Expect straight, pivot, arc and braking increments to agree with the measured
-wheels; a new stationary interval must carry zero applied twist and unchanged
-pose. The native body workaround retains finite scan returns above the floor.
+Expect signed straight/pivot/arc and braking motion from native physics.
+Truth must equal the native Solid pose; applied planar twist reconstructs its
+completed interval. Wheel odom may differ due to slip. A stationary body interval
+must carry zero applied twist and unchanged pose. Check native sensor height and
+scan returns directly; no body workaround enforces them.
 
 ## 10. Known drift / follow-ups
 
@@ -292,10 +321,12 @@ defaults `input_topic` to `/imu/data_gz`. Only the launch override
 (`sim_full_system.launch.py:437`, `"input_topic": "/imu/data_sim"`) makes it
 correct — running the node standalone silently produces nothing.
 
-**(d) Proposed CI guard.** Quirks 1 and 2 are pure prose today. A pytest in
-`ros2/src/mowgli_simulation/test/` that parses `MowgliMower.proto` and asserts
-(i) every wheel `Cylinder` geometry/`boundingObject` sits under a `Pose` with
-`rotation 1 0 0 -1.5708`, and (ii) both `HingeJointParameters` carry
-`axis 0 -1 0`, would turn them into enforced checks — the way
-`ros2/scripts/check_config_drift.py` enforces Invariant 15. Not part of this
-docs change.
+**(d) Focused native-observation regression guards.**
+`test_kinematic_wheel_feedback.py` retains its existing CI registration but
+now supplies actual native pose/orientation fixtures: truth independence from
+wheel/control history, signed straight/pivot/curved intervals, lateral slip,
+full orientation, no body/motor writes and invalid/duplicate/rewind recovery.
+It also pins both physical and ROS URDF joint axes to +Y. The separate real
+upstream wheel-odom interval test still checks encoder pose/velocity coherence;
+no equality to native body truth is assumed. The wheel-cylinder rotation guard
+proposed earlier remains a possible follow-up.

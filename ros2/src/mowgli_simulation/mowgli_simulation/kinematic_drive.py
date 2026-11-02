@@ -3,32 +3,26 @@
 # Licensed under the GNU GPL v3.
 
 """
-Kinematic chassis driven by actual Webots wheel-position acquisitions.
+Observe completed native body intervals (legacy plugin name retained).
 
-ODE wheel-floor coupling on this PROTO pitches the chassis and loses most of
-its forward motion. We retain the kinematic body workaround, but derive each
-body increment from the actual wheel PositionSensors after the native physics
-step. Command-derived body motion previously bypassed ros2_control's limits
-and the wheel joints' dynamics, despite sharing /cmd_vel_wheels with them.
+Native motors driven by ros2_control and sim_actuation_node are the sole plant
+actuation path. No Supervisor body writes, encoder integration or second motor
+writer belongs here. Native slip/contact response can differ from wheel odom.
 
-sim_actuation_node remains the sole firmware-model owner. ros2_control remains
-the sole motor writer and owns command timeout, acceleration and velocity
-limits. This plugin observes the resulting wheels; it neither writes motors
-nor substitutes command-derived encoder observations. Measured residual wheel
-motion during braking therefore remains body motion, even after a command has
-expired. This is a kinematic no-slip chassis model, not physical stop evidence.
+Truth is the Solid origin and full world-from-body orientation in the garden's
+ENU/map frame (body axes forward/left/up). When level, this origin coincides
+with base_footprint. Applied twist is the SE(2) logarithm of consecutive XY and
+projected body-X yaw observations, divided by their native interval. Its x/y
+components are in the moving yaw-only base_footprint frame, including lateral
+slip; angular.z is the shortest signed yaw increment per second. This constant
+interval twist reconstructs the observed planar displacement. It is neither
+an endpoint instantaneous velocity nor a full 3D IMU model. In particular,
+getVelocity() reports ODE COM velocity, not Solid-origin velocity, and is unused.
 
-Ground truth and applied twist describe the same completed native interval.
-The first finite wheel pair establishes an offset baseline without replaying
-initial wheel angles. Invalid acquisitions hold the body and emit no packet;
-a finite baseline followed by a positive native interval is required to resume.
-Repeated native epochs cannot integrate or publish another observation.
-
-The teleport, planar setVelocity and init-only resetPhysics safeguards remain
-necessary: per-step resetPhysics recursively clears wheel velocities, while
-omitting planar setVelocity lets gravity accumulate between teleports and
-corrupts sensor sampling. Wheel-floor slip and collision response are not
-modeled by this kinematic body; the joints retain their actual motor dynamics.
+Both packets use the native epoch ending that interval. First acquisition,
+rewind and recovery after invalid data need a finite pose baseline then a new
+positive interval; duplicates cannot replace an observation. Invalid data emits
+no packets and never changes the plant. No physical stop evidence is implied.
 """
 
 from __future__ import annotations
@@ -39,17 +33,44 @@ from geometry_msgs.msg import PoseStamped, TwistStamped
 import rclpy
 
 
-class KinematicDrive:
-    """Integrate native wheel acquisitions into one coherent kinematic body."""
+def _quaternion(r):
+    """Convert a native row-major world-from-body rotation to ROS x/y/z/w."""
+    # Reject malformed rotations instead of manufacturing a plausible attitude.
+    # Native rotation roundoff is allowed; this is numeric validity, not a
+    # motion/tilt limit. Reflections and degenerate matrices are not rotations.
+    for i in range(3):
+        for j in range(i, 3):
+            dot = sum(r[3*i+k] * r[3*j+k] for k in range(3))
+            if not math.isclose(dot, float(i == j), rel_tol=0.0, abs_tol=1e-9):
+                raise ValueError('non-orthonormal native orientation')
+    determinant = (r[0]*(r[4]*r[8]-r[5]*r[7]) - r[1]*(r[3]*r[8]-r[5]*r[6])
+                   + r[2]*(r[3]*r[7]-r[4]*r[6]))
+    if determinant <= 0.0:
+        raise ValueError('reflected native orientation')
 
-    # Must match the shipped PROTO and config_webots/ros2_control.yaml.
-    # Positive PositionSensor increments on axis (0, -1, 0) mean forward.
-    WHEEL_SEPARATION = 0.325
-    WHEEL_RADIUS = 0.093
+    # Choose the largest quaternion component to avoid cancellation near pi.
+    trace = r[0] + r[4] + r[8]
+    if trace > 0.0:
+        s = 2.0 * math.sqrt(1.0 + trace)
+        q = ((r[7]-r[5])/s, (r[2]-r[6])/s, (r[3]-r[1])/s, s/4.0)
+    else:
+        i = max(range(3), key=lambda k: r[4*k])
+        j, k = (i+1) % 3, (i+2) % 3
+        s = 2.0 * math.sqrt(1.0 + r[4*i] - r[4*j] - r[4*k])
+        q = [0.0] * 4
+        q[i] = s / 4.0
+        q[j] = (r[3*j+i] + r[3*i+j]) / s
+        q[k] = (r[3*k+i] + r[3*i+k]) / s
+        q[3] = (r[3*k+j] - r[3*j+k]) / s
+    norm = math.hypot(*q)
+    return tuple(value / norm for value in q)
+
+
+class KinematicDrive:
+    """Publish native body observations without actuating the simulated plant."""
 
     def init(self, webots_node, properties):
         self.__supervisor = webots_node.robot
-        self.__timestep_ms = int(self.__supervisor.getBasicTimeStep())
         self.__robot_node = self.__supervisor.getSelf()
         if self.__robot_node is None or self.__robot_node._ref is None:
             raise RuntimeError(
@@ -57,32 +78,9 @@ class KinematicDrive:
                 'The Robot must be supervisor=TRUE in both the PROTO and the '
                 'world instantiation.'
             )
-
-        self.__translation_field = self.__robot_node.getField('translation')
-        self.__rotation_field = self.__robot_node.getField('rotation')
-        if self.__translation_field is None or self.__rotation_field is None:
-            raise RuntimeError(
-                'KinematicDrive: failed to resolve translation/rotation '
-                'fields on the Robot node.'
-            )
-
-        init_xyz = self.__translation_field.getSFVec3f()
-        init_axis_angle = self.__rotation_field.getSFRotation()
-        sign = 1.0 if init_axis_angle[2] >= 0 else -1.0
-        self.__x, self.__y, self.__z = init_xyz
-        self.__yaw = sign * init_axis_angle[3]
-
-        # These are the PROTO's actual hinge sensors, also read by
-        # webots_ros2_control. Never obtain or write the wheel motors here.
-        self.__wheel_sensors = []
-        for name in ('left_wheel_sensor', 'right_wheel_sensor'):
-            sensor = self.__supervisor.getDevice(name)
-            if sensor is None or sensor.getType() != sensor.ROTATIONAL:
-                raise RuntimeError(f'KinematicDrive: missing rotational PositionSensor {name!r}')
-            sensor.enable(self.__timestep_ms)
-            self.__wheel_sensors.append(sensor)
-        self.__wheel_baseline = None
-        self.__wheel_fault = False
+        self.__pose_baseline = None
+        self.__native_epoch = None
+        self.__pose_fault = False
 
         if not rclpy.ok():
             rclpy.init(args=None)
@@ -94,94 +92,78 @@ class KinematicDrive:
         self.__applied_twist_pub = self.__node.create_publisher(
             TwistStamped, '/sim/applied_twist', 10
         )
-
-        # ONCE only: repeated resetPhysics recursively zeroes the wheel
-        # HingeJoint velocities and silently defeats the motor controller.
-        self.__robot_node.resetPhysics()
         self.__node.get_logger().info(
-            f"KinematicDrive initialised. Robot='{self.__supervisor.getName()}', "
-            f'actual wheel feedback, timestep={self.__timestep_ms} ms, '
-            f'wheel_separation={self.WHEEL_SEPARATION} m, '
-            f'wheel_radius={self.WHEEL_RADIUS} m, '
-            f'initial_pose=(x={self.__x:.3f}, y={self.__y:.3f}, '
-            f'z={self.__z:.3f}, yaw={self.__yaw:.3f}).'
+            f"KinematicDrive observing native body. Robot='{self.__supervisor.getName()}'."
         )
 
-    def __place_body(self, vx, wz):
-        self.__translation_field.setSFVec3f([self.__x, self.__y, self.__z])
-        self.__rotation_field.setSFRotation([0.0, 0.0, 1.0, self.__yaw])
-        # Zero vertical velocity prevents accumulated gravity from sinking
-        # the attached sensors below the floor between teleports. Unlike
-        # resetPhysics, setVelocity does not zero child hinge velocities.
-        self.__robot_node.setVelocity([
-            vx * math.cos(self.__yaw), vx * math.sin(self.__yaw),
-            0.0, 0.0, 0.0, wz,
-        ])
+    def __invalid_acquisition(self):
+        self.__pose_baseline = None
+        if not self.__pose_fault:
+            self.__node.get_logger().warning(
+                'KinematicDrive: invalid native body acquisition; no observation '
+                'until a finite pose baseline and new native interval are available.'
+            )
+        self.__pose_fault = True
 
     def step(self):
-        # The driver has already performed robot.step() and ros2_control's
-        # read/update/write before this plugin runs. Both read the same native
-        # position acquisition; motor writes take effect in the next physics
-        # interval. No ROS callback or command receipt defines body motion.
+        # robot.step() has completed. Controller motor writes affect the next
+        # interval; neither their command nor wheel history defines body truth.
         native_s = self.__supervisor.getTime()
-        left, right = (sensor.getValue() for sensor in self.__wheel_sensors)
-        if not all(math.isfinite(value) for value in (native_s, left, right)) or native_s < 0:
-            self.__wheel_baseline = None
-            if not self.__wheel_fault:
-                self.__node.get_logger().warning(
-                    'KinematicDrive: invalid native wheel acquisition; holding body '
-                    'without publishing until wheel feedback is rebaselined.'
-                )
-            self.__wheel_fault = True
-            self.__place_body(0.0, 0.0)
+        if not math.isfinite(native_s) or native_s < 0 or not math.isfinite(native_s * 1e9):
+            self.__invalid_acquisition()
             return
-
         native_ns = round(native_s * 1_000_000_000)
-        previous = self.__wheel_baseline
-        if previous is not None and native_ns == previous[2]:
-            # One native epoch is one acquisition. Do not replace its payload
-            # or change the modeled velocity due to a repeated step call.
+        if native_ns == self.__native_epoch:
             return
-        self.__wheel_baseline = (left, right, native_ns)
-        self.__wheel_fault = False
-        if previous is None or native_ns < previous[2]:
-            # Initial offset / clock rewind is not measured traveled distance.
-            self.__place_body(0.0, 0.0)
+        if self.__native_epoch is not None and native_ns < self.__native_epoch:
+            self.__pose_baseline = None
+        self.__native_epoch = native_ns
+
+        position = tuple(self.__robot_node.getPosition())
+        rotation = tuple(self.__robot_node.getOrientation())
+        if (len(position) != 3 or len(rotation) != 9
+                or not all(math.isfinite(value) for value in (*position, *rotation))):
+            self.__invalid_acquisition()
+            return
+        try:
+            quaternion = _quaternion(rotation)
+        except ValueError:
+            self.__invalid_acquisition()
+            return
+        yaw = math.atan2(rotation[3], rotation[0])
+        previous = self.__pose_baseline
+        self.__pose_baseline = (position, yaw, native_ns)
+        self.__pose_fault = False
+        if previous is None:
             return
 
         dt = (native_ns - previous[2]) / 1_000_000_000
-        left_distance = (left - previous[0]) * self.WHEEL_RADIUS
-        right_distance = (right - previous[1]) * self.WHEEL_RADIUS
-        distance = 0.5 * (left_distance + right_distance)
-        turn = (right_distance - left_distance) / self.WHEEL_SEPARATION
-        # Exact differential-drive SE(2) increment, including the sinc term
-        # absent from command-based midpoint integration. The zero-turn limit
-        # is continuous and needs no widened comparison tolerance.
+        dx, dy = position[0] - previous[0][0], position[1] - previous[0][1]
+        c, s = math.cos(previous[1]), math.sin(previous[1])
+        local_x, local_y = c*dx + s*dy, -s*dx + c*dy
+        turn = math.atan2(math.sin(yaw - previous[1]), math.cos(yaw - previous[1]))
         half = 0.5 * turn
-        sinc = math.sin(half) / half if half else 1.0
-        self.__x += distance * sinc * math.cos(self.__yaw + half)
-        self.__y += distance * sinc * math.sin(self.__yaw + half)
-        self.__yaw += turn
-        if self.__yaw > math.pi or self.__yaw < -math.pi:
-            self.__yaw = math.atan2(math.sin(self.__yaw), math.cos(self.__yaw))
-        vx, wz = distance / dt, turn / dt
-        self.__place_body(vx, wz)
+        # Inverse SE(2) left Jacobian, continuous at zero turn. Retain native
+        # lateral motion instead of imposing the wheel model's no-slip rule.
+        a = half / math.tan(half) if half else 1.0
+        vx, vy = (a*local_x + half*local_y) / dt, (-half*local_x + a*local_y) / dt
+        wz = turn / dt
+        if not all(math.isfinite(value) for value in (vx, vy, wz)):
+            self.__invalid_acquisition()
+            return
 
         gt = PoseStamped()
         gt.header.stamp.sec = native_ns // 1_000_000_000
         gt.header.stamp.nanosec = native_ns % 1_000_000_000
         gt.header.frame_id = 'map'
-        gt.pose.position.x = self.__x
-        gt.pose.position.y = self.__y
-        gt.pose.position.z = self.__z
-        gt.pose.orientation.z = math.sin(self.__yaw * 0.5)
-        gt.pose.orientation.w = math.cos(self.__yaw * 0.5)
+        gt.pose.position.x, gt.pose.position.y, gt.pose.position.z = position
+        (gt.pose.orientation.x, gt.pose.orientation.y,
+         gt.pose.orientation.z, gt.pose.orientation.w) = quaternion
         self.__gt_pose_pub.publish(gt)
 
-        # Actual interval twist, not a command or another actuation authority.
         applied = TwistStamped()
         applied.header.stamp = gt.header.stamp
         applied.header.frame_id = 'base_footprint'
-        applied.twist.linear.x = vx
+        applied.twist.linear.x, applied.twist.linear.y = vx, vy
         applied.twist.angular.z = wz
         self.__applied_twist_pub.publish(applied)

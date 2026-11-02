@@ -192,10 +192,10 @@
 
     <plugin type="webots_ros2_control::Ros2Control" />
 
-    <!-- Observe measured wheel increments after the native physics step.
-         ros2_control remains the sole motor writer and retains its command
-         timeout and velocity/acceleration limits. The planar body follows
-         those actual wheels instead of independently integrating commands. -->
+    <!-- Observe completed native body pose and planar interval twist.
+         The legacy plugin name remains for compatibility. Native motors
+         driven by ros2_control are the sole body actuation path; wheel
+         odometry stays independent and may differ due to native slip. -->
     <plugin type="mowgli_simulation.kinematic_drive.KinematicDrive" />
   </webots>
 

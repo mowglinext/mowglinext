@@ -122,7 +122,7 @@ class SimImuNoise(Node):
         ]
         self._prev_t: Optional[float] = None
 
-        # KinematicDrive reports the exact twist it integrated, with that
+        # KinematicDrive reports native body interval twist, with that
         # step's native epoch. A separately cached command and raw IMU header
         # do not identify the same observation, even when both streams are live.
         self._synth_from_applied = bool(

@@ -7,7 +7,7 @@ sim_navsat_rtk_fix.py — SIMULATION ONLY.
 
 Programmable GPS-quality controller for the simulator. Uses the raw
 Webots NavSatFix as a clock/header source, but derives antenna position
-from the kinematic simulator's authoritative ground-truth chassis pose.
+from the simulator's authoritative native ground-truth chassis pose.
 It republishes on the production topic with status, covariance, and
 position noise consistent with one of three quality regimes. It also
 publishes the matching typed GnssStatus used
@@ -359,6 +359,7 @@ class SimNavSatRtkFix(Node):
                 or msg.header.frame_id != 'map'
                 or not all(math.isfinite(value) for value in (
                 pose.position.x, pose.position.y,
+                pose.orientation.x, pose.orientation.y,
                 pose.orientation.z, pose.orientation.w))
                 or (self._last_truth_stamp_ns is not None
                     and stamp_ns <= self._last_truth_stamp_ns)):
@@ -401,8 +402,12 @@ class SimNavSatRtkFix(Node):
         self._regime_counts[regime] += 1
 
         pose = truth.pose
-        yaw = 2.0 * math.atan2(
-            pose.orientation.z, pose.orientation.w
+        # Project the full native orientation onto yaw for this planar antenna
+        # model. 2*atan2(z,w) is valid only for a yaw-only quaternion.
+        q = pose.orientation
+        yaw = math.atan2(
+            2.0 * (q.w*q.z + q.x*q.y),
+            1.0 - 2.0 * (q.y*q.y + q.z*q.z),
         )
         lat, lon = _antenna_wgs84(
             pose.position.x,
