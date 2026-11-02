@@ -143,6 +143,11 @@ if(BUILD_TESTING)
     test/test_kinematic_wheel_feedback.py
     TIMEOUT 60
   )
+  ament_add_pytest_test(test_native_truth_shutdown
+    test/test_native_truth_shutdown.py
+    ENV ROS_DOMAIN_ID=180
+    TIMEOUT 30
+  )
   ament_add_pytest_test(test_sim_imu_provenance
     test/test_sim_imu_provenance.py
     TIMEOUT 60

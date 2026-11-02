@@ -105,7 +105,20 @@ class KinematicDrive:
             )
         self.__pose_fault = True
 
+    def __publish(self, publisher, message):
+        try:
+            publisher.publish(message)
+        except RuntimeError:
+            # rclpy RCLError and InvalidHandle both derive from RuntimeError.
+            # Context shutdown can race either publish after step's entry check.
+            if self.__node.context.ok():
+                raise
+            return False
+        return True
+
     def step(self):
+        if not self.__node.context.ok():
+            return
         # robot.step() has completed. Controller motor writes affect the next
         # interval; neither their command nor wheel history defines body truth.
         native_s = self.__supervisor.getTime()
@@ -159,11 +172,12 @@ class KinematicDrive:
         gt.pose.position.x, gt.pose.position.y, gt.pose.position.z = position
         (gt.pose.orientation.x, gt.pose.orientation.y,
          gt.pose.orientation.z, gt.pose.orientation.w) = quaternion
-        self.__gt_pose_pub.publish(gt)
+        if not self.__publish(self.__gt_pose_pub, gt):
+            return
 
         applied = TwistStamped()
         applied.header.stamp = gt.header.stamp
         applied.header.frame_id = 'base_footprint'
         applied.twist.linear.x, applied.twist.linear.y = vx, vy
         applied.twist.angular.z = wz
-        self.__applied_twist_pub.publish(applied)
+        self.__publish(self.__applied_twist_pub, applied)

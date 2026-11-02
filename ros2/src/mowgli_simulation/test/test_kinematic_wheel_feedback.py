@@ -112,6 +112,7 @@ def plant(monkeypatch):
         return SimpleNamespace(publish=pubs[topic].append)
 
     node = SimpleNamespace(
+        context=SimpleNamespace(ok=lambda: True),
         create_subscription=lambda *args: callbacks.append(args[2]), create_publisher=publisher,
         get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(
             to_msg=lambda: Time(sec=1_793_000_000))),
