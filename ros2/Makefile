@@ -88,7 +88,7 @@ sim: sim-stop
 	export DISPLAY=:99 && \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
 	  headless:=true use_rviz:=false \
-	  'gps_quality_pattern:=$(GPS_QUALITY_PATTERN)'
+	  $(if $(strip $(GPS_QUALITY_PATTERN)),'gps_quality_pattern:=$(GPS_QUALITY_PATTERN)',)
 
 e2e-test: sim-stop build
 	@echo "Starting simulation + E2E test..."
@@ -102,7 +102,7 @@ e2e-test: sim-stop build
 	: > "$$SIM_LOG"; \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
 	  headless:=true use_rviz:=false \
-	  'gps_quality_pattern:=$(GPS_QUALITY_PATTERN)' > >(tee "$$SIM_LOG") 2>&1 & \
+	  $(if $(strip $(GPS_QUALITY_PATTERN)),'gps_quality_pattern:=$(GPS_QUALITY_PATTERN)',) > >(tee "$$SIM_LOG") 2>&1 & \
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
 	echo "Waiting for Nav2 lifecycle activation..."; \
@@ -134,7 +134,7 @@ e2e-test-no-lidar: sim-stop build
 	: > "$$SIM_LOG"; \
 	ros2 launch mowgli_bringup sim_full_system.launch.py \
 	  headless:=true use_rviz:=false use_lidar:=false \
-	  'gps_quality_pattern:=$(GPS_QUALITY_PATTERN)' > >(tee "$$SIM_LOG") 2>&1 & \
+	  $(if $(strip $(GPS_QUALITY_PATTERN)),'gps_quality_pattern:=$(GPS_QUALITY_PATTERN)',) > >(tee "$$SIM_LOG") 2>&1 & \
 	SIM_PID=$$!; \
 	echo "Simulation PID: $$SIM_PID"; \
 	echo "Waiting for Nav2 lifecycle activation..."; \
