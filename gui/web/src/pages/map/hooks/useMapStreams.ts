@@ -426,16 +426,20 @@ export function useMapStreams({
 
     // Ownership changes affect only the legacy joy publisher.
     useEffect(() => {
+        if (controllerOwnsInput) {
+            clearTimeout(joyStopTimerRef.current);
+            joyStopTimerRef.current = undefined;
+            joyStop();
+            return;
+        }
         if (stateName === "RECORDING" || stateName === "MANUAL_MOWING") {
             clearTimeout(joyStopTimerRef.current);
             joyStopTimerRef.current = undefined;
-            if (controllerOwnsInput) joyStop();
-            else joyStart("/api/mowglinext/publish/joy");
+            joyStart("/api/mowglinext/publish/joy");
             return;
         }
-        // Leaving a joy-eligible state: DEBOUNCE the joy teardown so a single
-        // stray guard frame (EMERGENCY/battery/boundary blip) can't kill teleop
-        // mid-drive.
+        // Keep the socket through short telemetry blips; useManualMode still
+        // invalidates motion immediately and requires a fresh pointer gesture.
         if (joyStopTimerRef.current === undefined) {
             joyStopTimerRef.current = setTimeout(() => {
                 joyStopTimerRef.current = undefined;
@@ -453,7 +457,7 @@ export function useMapStreams({
         }
         if (stateName === "MANUAL_MOWING") return;
         recordingStop();
-        // Clear trajectory feature when leaving recording mode
+        // Clear trajectory feature when leaving recording mode.
         setFeatures((oldFeatures) => {
             if (!oldFeatures["recording-trajectory"]) return oldFeatures;
             const newFeatures = { ...oldFeatures };

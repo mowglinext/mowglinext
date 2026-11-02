@@ -547,6 +547,10 @@ func (c *Client) writeMessage(messageType int, data []byte) error {
 	return c.writeMessageOnContext(context.Background(), nil, messageType, data)
 }
 
+func (c *Client) writeMessageOn(expected *websocket.Conn, messageType int, data []byte) error {
+	return c.writeMessageOnContext(context.Background(), expected, messageType, data)
+}
+
 func (c *Client) writeMessageContext(ctx context.Context, messageType int, data []byte) error {
 	return c.writeMessageOnContext(ctx, nil, messageType, data)
 }

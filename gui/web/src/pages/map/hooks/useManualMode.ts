@@ -8,6 +8,7 @@ const JOY_SEND_INTERVAL_MS = 100;
 // Keep the existing UI latch through short telemetry blips. Motion itself is
 // invalidated immediately on a mode change and requires a new pointer gesture.
 const MANUAL_EXIT_DEBOUNCE_MS = 1200;
+
 interface UseManualModeOptions {
     mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
     joyStream: {
@@ -26,7 +27,6 @@ const neutralTwist = (): TwistStamped => ({
 
 export function useManualMode({mowerAction, joyStream, stateName, controllerOwnsInput = false}: UseManualModeOptions) {
     const controllerOwnsRef = useRef(controllerOwnsInput);
-    useLayoutEffect(() => { controllerOwnsRef.current = controllerOwnsInput; });
     const [manualMode, setManualMode] = useState(() => stateName === "MANUAL_MOWING");
     const exitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const lastTwistRef = useRef<TwistStamped | null>(null);
@@ -51,6 +51,13 @@ export function useManualMode({mowerAction, joyStream, stateName, controllerOwns
         // Never queue a Twist for a later WebSocket reconnection.
         try { sendJsonMessage(neutralTwist(), false); } catch { /* stream unavailable */ }
     }, [sendJsonMessage]);
+
+    // Revoke before passive socket teardown and controller polling. Returning
+    // ownership never restores the old touch gesture or its repeat timer.
+    useLayoutEffect(() => {
+        controllerOwnsRef.current = controllerOwnsInput;
+        if (controllerOwnsInput) neutralizeMotion();
+    }, [controllerOwnsInput, neutralizeMotion]);
 
     useLayoutEffect(() => {
         eligibleRef.current = stateName === "MANUAL_MOWING" || stateName === "RECORDING" ||
@@ -121,20 +128,20 @@ export function useManualMode({mowerAction, joyStream, stateName, controllerOwns
 
     const gestureAllowed = useCallback(() => {
         const session = motionSession?.();
-        return mountedRef.current && eligibleRef.current && !stopBlockedRef.current &&
+        return mountedRef.current && eligibleRef.current && !controllerOwnsRef.current && !stopBlockedRef.current &&
             (!session || (session.connected && session.generation === gestureGenerationRef.current));
     }, [motionSession]);
 
     const handleJoyStart = useCallback(() => {
         neutralizeMotion();
         const session = motionSession?.();
-        if (!mountedRef.current || !eligibleRef.current || stopBlockedRef.current || (session && !session.connected)) return;
+        if (!mountedRef.current || !eligibleRef.current || controllerOwnsRef.current || stopBlockedRef.current || (session && !session.connected)) return;
         gestureGenerationRef.current = session?.generation;
         gestureRef.current = true;
     }, [motionSession, neutralizeMotion]);
 
     const handleJoyMove = useCallback((event: IJoystickUpdateEvent) => {
-        if (controllerOwnsRef.current || !gestureRef.current) return;
+        if (!gestureRef.current) return;
         if (!gestureAllowed()) { neutralizeMotion(); return; }
         const msg: TwistStamped = {
             header: {stamp: {sec: 0, nanosec: 0}, frame_id: ""},
@@ -156,10 +163,6 @@ export function useManualMode({mowerAction, joyStream, stateName, controllerOwns
     }, [gestureAllowed, neutralizeMotion, sendJsonMessage]);
 
     const handleJoyStop = useCallback(() => neutralizeMotion(), [neutralizeMotion]);
-
-    useLayoutEffect(() => {
-        if (controllerOwnsInput) neutralizeMotion();
-    }, [controllerOwnsInput, neutralizeMotion]);
 
     return {manualMode, handleManualMode, handleStopManualMode, handleStopIntent, handleJoyStart, handleJoyMove, handleJoyStop};
 }

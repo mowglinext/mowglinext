@@ -204,21 +204,8 @@ func TestCallServiceDoesNotWriteAfterContextExpiresBehindWriter(t *testing.T) {
 	defer cancel()
 	result := make(chan error, 1)
 	go func() { _, err := client.CallService(ctx, "/stop", struct{}{}); result <- err }()
-	// Observe registration to establish that CallService has reached its send
-	// path before allowing the context to expire behind the held writer lock.
-	deadline := time.Now().Add(time.Second)
-	for {
-		client.svcMu.Lock()
-		pending := len(client.pendingSvc)
-		client.svcMu.Unlock()
-		if pending == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("service never reached pending send")
-		}
-		time.Sleep(time.Millisecond)
-	}
+	// The connection snapshot now acquires the writer mutex before service
+	// registration. Expire while it is held and verify that no stale frame is sent.
 	<-ctx.Done()
 	client.connMu.Unlock()
 	locked = false
@@ -420,4 +407,19 @@ func (c *publishContextBarrier) Err() error {
 		<-c.proceed
 	}
 	return err
+}
+
+// A service that has already captured its connection must still check its
+// deadline after waiting behind another writer.
+func TestWriteMessageOnContextRejectsExpiredWriter(t *testing.T) {
+	client := NewClient("")
+	client.connMu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- client.writeMessageOnContext(ctx, nil, websocket.BinaryMessage, []byte("expired")) }()
+	cancel()
+	client.connMu.Unlock()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("expired writer returned %v, want context cancellation", err)
+	}
 }
