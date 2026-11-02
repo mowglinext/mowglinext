@@ -41,9 +41,11 @@
 // topic. Never runs on real hardware (the real hardware_bridge owns this loop).
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <stdexcept>
 
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -79,6 +81,15 @@ public:
     min_linear_vel_ = declare_parameter<double>("min_linear_vel", 0.05);
 
     control_hz_ = declare_parameter<double>("control_hz", 50.0);
+    if (!std::isfinite(control_hz_) || control_hz_ <= 0.0)
+    {
+      throw std::invalid_argument("control_hz must be finite and positive");
+    }
+    control_period_ = rclcpp::Duration::from_seconds(1.0 / control_hz_);
+    if (control_period_.nanoseconds() <= 0)
+    {
+      throw std::invalid_argument("control_hz period must be at least one nanosecond");
+    }
 
     pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel_wheels",
                                                               rclcpp::SystemDefaultsQoS());
@@ -97,7 +108,20 @@ public:
           on_high_level_status(status);
         });
     last_tick_ = this->now();
-    last_cmd_stamp_ = this->now();
+    last_observed_time_ = last_tick_;
+    last_cmd_stamp_ = last_tick_;
+    rcl_jump_threshold_t threshold{};
+    threshold.on_clock_change = true;
+    threshold.min_backward.nanoseconds = -1;
+    clock_jump_ = get_clock()->create_jump_callback(
+        nullptr,
+        [this](const rcl_time_jump_t&)
+        {
+          // The clock may rewind and catch up between wall callbacks. Record
+          // that discontinuity even if the next sampled time is later.
+          reset_epoch_.store(true);
+        },
+        threshold);
     timer_ = create_wall_timer(std::chrono::duration<double>(1.0 / control_hz_),
                                [this]()
                                {
@@ -119,9 +143,12 @@ private:
 
   void on_cmd_vel(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
   {
+    // Retain the virtual-time receipt ordering from the clock repair.
+    const auto t = now();
+    advance(t);
     last_vx_ = msg->twist.linear.x;
     last_wz_ = msg->twist.angular.z;
-    last_cmd_stamp_ = now();
+    last_cmd_stamp_ = t;
   }
 
   void on_high_level_status(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr status)
@@ -139,21 +166,61 @@ private:
 
   void tick()
   {
-    const rclcpp::Time t = this->now();
-    double dt = (t - last_tick_).seconds();
-    last_tick_ = t;
-    if (dt <= 0.0 || dt > 0.5)
-    {
-      dt = 1.0 / control_hz_;
-    }
+    advance(this->now());
+  }
 
+  void advance(const rclcpp::Time& t)
+  {
+    if (reset_epoch_.exchange(false) || t < last_observed_time_)
+    {
+      // A rewind starts a new simulation epoch. Neither PI history nor a
+      // command received in the old epoch is eligible in the new one.
+      wheel_state_ = {};
+      last_vx_ = last_wz_ = 0.0;
+      last_cmd_stamp_ = last_tick_ = t;
+      last_observed_time_ = t;
+      publish(t, 0.0, 0.0);
+      return;
+    }
+    last_observed_time_ = t;
+
+    // Wall time only wakes this node. Integrate on the ROS-time control grid,
+    // retaining fractional periods and catching up missed periods. In
+    // particular, a pause neither steps the PI nor republishes its setpoint.
+    bool stepped = false;
+    double wheel_vx = 0.0;
+    double wheel_wz = 0.0;
+    while ((t - last_tick_) >= control_period_)
+    {
+      last_tick_ = last_tick_ + control_period_;
+      step(last_tick_, wheel_vx, wheel_wz);
+      stepped = true;
+
+      // Once a stopped model is at rest, further zero-command steps are
+      // identical. Skip them arithmetically so a long forward jump remains
+      // bounded without substituting a fictitious dt or extending freshness.
+      if (wheel_vx == 0.0 && wheel_wz == 0.0 && last_vx_ == 0.0 && last_wz_ == 0.0)
+      {
+        const auto remaining = (t - last_tick_).nanoseconds();
+        last_tick_ = last_tick_ + rclcpp::Duration::from_nanoseconds(
+                                      remaining - remaining % control_period_.nanoseconds());
+      }
+    }
+    if (stepped)
+    {
+      publish(t, wheel_vx, wheel_wz);
+    }
+  }
+
+  void step(const rclcpp::Time& t, double& wheel_vx, double& wheel_wz)
+  {
     // Stale command (nav stopped publishing) → stop.
     double target_vx = last_vx_;
     double target_wz = last_wz_;
     if ((t - last_cmd_stamp_).seconds() > 0.5)
     {
-      target_vx = 0.0;
-      target_wz = 0.0;
+      target_vx = last_vx_ = 0.0;
+      target_wz = last_wz_ = 0.0;
     }
 
     // wz passthrough (Option C, task #34) — the yaw-rate loop runs in
@@ -179,13 +246,17 @@ private:
     // PIs in PWM space → per-wheel static/kinetic stiction → forward
     // kinematics, giving the ACHIEVABLE body twist. Disabled → passthrough
     // (ideal-actuation baseline).
-    double wheel_vx = cmd_vx;
-    double wheel_wz = cmd_wz;
+    wheel_vx = cmd_vx;
+    wheel_wz = cmd_wz;
     if (deadband_enabled_)
     {
-      step_firmware_wheel_model(cmd_vx, cmd_wz, dt, wheel_, wheel_state_, wheel_vx, wheel_wz);
+      step_firmware_wheel_model(
+          cmd_vx, cmd_wz, control_period_.seconds(), wheel_, wheel_state_, wheel_vx, wheel_wz);
     }
+  }
 
+  void publish(const rclcpp::Time& t, double wheel_vx, double wheel_wz)
+  {
     geometry_msgs::msg::TwistStamped out;
     out.header.stamp = t;
     out.header.frame_id = "base_link";
@@ -199,6 +270,7 @@ private:
   FirmwareWheelModelParams wheel_;
   double min_linear_vel_ = 0.05;
   double control_hz_ = 50.0;
+  rclcpp::Duration control_period_{0, 0};
 
   // ── State
   FirmwareWheelState wheel_state_;
@@ -208,6 +280,9 @@ private:
   double last_wz_ = 0.0;
   rclcpp::Time last_cmd_stamp_;
   rclcpp::Time last_tick_;
+  rclcpp::Time last_observed_time_;
+  std::atomic<bool> reset_epoch_{false};
+  rclcpp::JumpHandler::SharedPtr clock_jump_;
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_;
