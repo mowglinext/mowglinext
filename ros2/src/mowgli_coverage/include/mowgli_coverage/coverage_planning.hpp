@@ -692,6 +692,28 @@ f2c::types::Cell removeNarrowBoundaryTongues(const f2c::types::Cell& in,
                                              double min_width,
                                              double* removed_area = nullptr);
 
+// A forbidden ring (already grown by its margin) applied to a field's exterior:
+// the charging station, which an operator typically records the lawn right up to.
+struct FieldWithKeepout
+{
+  f2c::types::LinearRing shell;
+  // Set when the ring lies wholly inside the field.
+  std::optional<f2c::types::LinearRing> hole;
+  // Field area lost because the ring cut the field apart (only the largest piece
+  // is kept: a coverage plan is one cell). 0 in every other case.
+  double dropped_area{0.0};
+};
+
+// Disjoint: the shell comes back UNCHANGED (same vertices, so the plan and its
+// resume fingerprint stay bit-identical on a lawn the station is not part of).
+// Wholly inside: a hole. Crossing the exterior: a notch, cut here rather than
+// left to the planner's hole repair, so every planning branch sees one valid
+// field and the outermost ring rides the notch at the keepout's full margin.
+// An invalid shell (a recorded line crossing itself) or a difference GEOS cannot
+// compute falls back to a hole: never drop the keepout. Pure function — testable.
+FieldWithKeepout subtractKeepoutFromField(const f2c::types::LinearRing& shell,
+                                          const f2c::types::LinearRing& keepout);
+
 }  // namespace mowgli_coverage
 
 #endif  // MOWGLI_COVERAGE__COVERAGE_PLANNING_HPP_

@@ -1033,3 +1033,22 @@ def test_preset_upgrade_geometry_preserves_explicit_offsets(tmp_path, model, off
     assert actual["wheel_track"] == 0.371
     assert actual["gps_z"] == 0.287
     assert path.read_bytes() == before  # No migration write on load.
+
+
+def test_dock_body_sits_on_the_station_and_follows_the_chassis():
+    # Shipped chassis: rear bumper 0.12 m behind the docked pose, nose 0.48 m ahead.
+    assert _util.dock_body_extents({}) == pytest.approx((0.12, 0.80))
+    # A longer chassis keeps the station head inside the body: never a hardcoded length.
+    rear, length = _util.dock_body_extents({"chassis_length": 0.90, "chassis_center_x": 0.30})
+    assert rear == pytest.approx(0.15)
+    assert length - rear == pytest.approx(0.75 + _util.DOCK_HEAD_DEPTH_M)
+    # A site with a longer station can lengthen it, not shorten it below the robot.
+    assert _util.dock_body_extents({"dock_body_length_m": 1.20})[1] == pytest.approx(1.20)
+    assert _util.dock_body_extents({"dock_body_length_m": 0.30})[1] == pytest.approx(0.80)
+
+
+def test_dock_no_pivot_zone_covers_the_planner_refusal():
+    # Planner: refuses x > front - 0.10 - sweep = -0.167 m (shipped). The BT must take over first.
+    assert _util.dock_no_pivot_distance({}) == pytest.approx(0.217, abs=0.002)
+    # Longer nose reach, longer sweep: it follows the chassis.
+    assert _util.dock_no_pivot_distance({"chassis_width": 0.70}) > _util.dock_no_pivot_distance({})

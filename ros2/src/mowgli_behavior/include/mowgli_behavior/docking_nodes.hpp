@@ -33,6 +33,27 @@
 namespace mowgli_behavior
 {
 
+/// The robot stands on the station's approach line, nose toward it, too close to
+/// pivot (IsFacingStationInNoPivotZone). False without a pose or a dock pose.
+bool RobotIsAtDockStation(BTContext& ctx);
+
+/// Condition form of RobotIsAtDockStation, for the undock branch of main_tree.xml.
+class IsAtDockStation : public BT::ConditionNode
+{
+public:
+  IsAtDockStation(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
 // ---------------------------------------------------------------------------
 // DockRobot
 // ---------------------------------------------------------------------------

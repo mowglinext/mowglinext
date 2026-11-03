@@ -33,6 +33,7 @@
 #include "mowgli_behavior/blade_ready.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
+#include "mowgli_behavior/dock_alignment.hpp"
 #include "mowgli_behavior/fleet_yield.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_behavior/transit_avoidance.hpp"
@@ -946,6 +947,9 @@ struct BTContext
   double dock_x{0.0};
   double dock_y{0.0};
   double dock_yaw{0.0};
+  /// False until map_server's latched /map_server_node/docking_pose arrives.
+  bool dock_pose_known{false};
+  DockStationZone dock_station_zone;
 
   // -----------------------------------------------------------------------
   // Legacy coverage path components (retained for potential future use).
