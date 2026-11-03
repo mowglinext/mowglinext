@@ -62,6 +62,7 @@ from robot_config_util import (  # noqa: E402
     chassis_footprint,
     dig_proposal_radius,
     dig_skip_radius,
+    dock_body_extents,
     keepout_obstacle_margin,
     load_robot_params,
     resolve_lidar_enabled,
@@ -560,7 +561,8 @@ def generate_launch_description() -> LaunchDescription:
             {"dock_pose_x": float(robot_params.get("dock_pose_x", 0.0))},
             {"dock_pose_y": float(robot_params.get("dock_pose_y", 0.0))},
             {"dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0))},
-            {"dock_body_length_m": float(robot_params.get("dock_body_length_m", 0.80))},
+            {"dock_body_rear_m": dock_body_extents(robot_params)[0]},
+            {"dock_body_length_m": dock_body_extents(robot_params)[1]},
             {"dock_body_width_m": float(robot_params.get("dock_body_width_m", 0.55))},
             # Bypass-arc planner geometry — lifted from physical/operational
             # sections of mowgli_robot.yaml so the cleaning-robot detour

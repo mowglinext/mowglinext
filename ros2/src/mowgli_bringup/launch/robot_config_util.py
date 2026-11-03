@@ -316,6 +316,30 @@ def keepout_obstacle_margin(
     return min(OBSTACLE_MARGIN_MAX_M, max(0.0, half_width, follow))
 
 
+# The station head: from the docked robot's nose to the end of the dock body.
+DOCK_HEAD_DEPTH_M = 0.20
+DEFAULT_DOCK_BODY_LENGTH_M = 0.80
+
+
+def dock_body_extents(params):
+    """map_server dock body, as (rear_m, length_m) along the dock axis.
+
+    The dock pose is the docked robot's base_footprint and it docks nose-first,
+    so the physical station lies on the +x side of that pose. The body starts at
+    the docked rear bumper and reaches past the nose by the station head;
+    `dock_body_length_m` can only lengthen it, because a chassis that outgrows
+    the shipped station still needs its head inside the ring.
+
+    Uses the BARE chassis (margin 0): this is where the object is, and the body
+    margin is added by each consumer exactly once.
+    """
+    params = params or {}
+    front, rear, _half_width = chassis_footprint(params, margin=0.0)
+    rear_m = max(-rear, 0.0)
+    length = float(params.get("dock_body_length_m", DEFAULT_DOCK_BODY_LENGTH_M))
+    return rear_m, max(length, front + DOCK_HEAD_DEPTH_M + rear_m)
+
+
 def dig_skip_radius(params):
     """behavior_tree_node.dig_skip_radius_m: coverage poses skipped around a dig.
 

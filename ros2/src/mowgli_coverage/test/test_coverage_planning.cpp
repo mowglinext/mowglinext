@@ -1149,6 +1149,80 @@ TEST(CoveragePlanning, ConcaveFieldIsCovered)
 
 // Tiny field: insets consume everything → empty plan (the server reports
 // failure instead of retry-storming F2C).
+// A charging station on the lawn (mowgli_coverage::subtractKeepoutFromField).
+f2c::types::LinearRing rectangleRing(double x0, double y0, double x1, double y1)
+{
+  f2c::types::LinearRing ring;
+  ring.addPoint(f2c::types::Point(x0, y0));
+  ring.addPoint(f2c::types::Point(x1, y0));
+  ring.addPoint(f2c::types::Point(x1, y1));
+  ring.addPoint(f2c::types::Point(x0, y1));
+  ring.addPoint(f2c::types::Point(x0, y0));
+  return ring;
+}
+
+bool ringHolds(const f2c::types::LinearRing& ring, double x, double y)
+{
+  std::vector<std::pair<double, double>> points;
+  for (std::size_t i = 0; i < ring.size(); ++i)
+  {
+    points.emplace_back(ring.getGeometry(i).getX(), ring.getGeometry(i).getY());
+  }
+  return pointInRing(x, y, points);
+}
+
+TEST(CoverageKeepout, StationOffTheFieldLeavesItBitIdentical)
+{
+  const auto field = rectangleRing(0, 0, 10, 10);
+  const auto edited = mowgli_coverage::subtractKeepoutFromField(field, rectangleRing(12, 2, 13, 3));
+  EXPECT_FALSE(edited.hole.has_value());
+  EXPECT_DOUBLE_EQ(edited.dropped_area, 0.0);
+  ASSERT_EQ(edited.shell.size(), field.size());
+  for (std::size_t i = 0; i < field.size(); ++i)
+  {
+    EXPECT_DOUBLE_EQ(edited.shell.getGeometry(i).getX(), field.getGeometry(i).getX());
+    EXPECT_DOUBLE_EQ(edited.shell.getGeometry(i).getY(), field.getGeometry(i).getY());
+  }
+}
+
+TEST(CoverageKeepout, StationInsideTheFieldIsAHole)
+{
+  const auto edited = mowgli_coverage::subtractKeepoutFromField(rectangleRing(0, 0, 10, 10),
+                                                                rectangleRing(4, 4, 5, 5));
+  ASSERT_TRUE(edited.hole.has_value());
+  EXPECT_DOUBLE_EQ(edited.dropped_area, 0.0);
+}
+
+TEST(CoverageKeepout, StationAcrossTheBoundaryIsANotchAndNeverDriven)
+{
+  const auto keepout = rectangleRing(4, -1, 6, 2);
+  const auto edited =
+      mowgli_coverage::subtractKeepoutFromField(rectangleRing(0, 0, 10, 10), keepout);
+  EXPECT_FALSE(edited.hole.has_value());
+  EXPECT_DOUBLE_EQ(edited.dropped_area, 0.0);
+  EXPECT_FALSE(ringHolds(edited.shell, 5.0, 1.0)) << "the notch";
+  EXPECT_TRUE(ringHolds(edited.shell, 5.0, 3.0)) << "the lawn behind it";
+
+  const auto plan = planDefault(f2c::types::Cell(edited.shell));
+  ASSERT_FALSE(plan.swaths.empty());
+  for (const auto& swath : plan.swaths)
+  {
+    const double mid_x = (swath.first.first + swath.second.first) / 2.0;
+    const double mid_y = (swath.first.second + swath.second.second) / 2.0;
+    EXPECT_FALSE(ringHolds(keepout, mid_x, mid_y)) << mid_x << ", " << mid_y;
+  }
+}
+
+TEST(CoverageKeepout, StationCuttingTheFieldInTwoKeepsTheLargestAndReportsTheRest)
+{
+  const auto edited = mowgli_coverage::subtractKeepoutFromField(rectangleRing(0, 0, 10, 4),
+                                                                rectangleRing(2, -1, 3, 5));
+  EXPECT_FALSE(edited.hole.has_value());
+  EXPECT_NEAR(edited.dropped_area, 8.0, 1e-6);
+  EXPECT_TRUE(ringHolds(edited.shell, 6.0, 2.0));
+  EXPECT_FALSE(ringHolds(edited.shell, 1.0, 2.0));
+}
+
 TEST(CoveragePlanning, TooSmallFieldGivesEmptyPlan)
 {
   const auto plan = planDefault(makeSquare(0.4));

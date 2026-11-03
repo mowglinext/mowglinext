@@ -167,6 +167,40 @@ TEST_F(MapServerTest, GridMapHasAllRequiredLayers)
   EXPECT_TRUE(m.exists(std::string(mowgli_map::layers::CLASSIFICATION)));
 }
 
+// Operator report 2026-11-03: the transit plan ran under the charging station. The body lies ON the
+// station (+x of the dock pose, the robot docks nose-first), is lethal in the keepout mask even
+// inside a mowing area, and the approach corridor directly behind it stays open.
+TEST_F(MapServerTest, DockBodyIsOnTheStationAndLethalInsideAnArea)
+{
+  node_.reset();
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("resolution", 0.05);
+  options.append_parameter_override("areas_file_path", "");
+  options.append_parameter_override("dock_pose_x", 0.0);
+  options.append_parameter_override("dock_pose_y", 0.0);
+  options.append_parameter_override("dock_pose_yaw", 0.0);
+  node_ = std::make_shared<mowgli_map::MapServerNode>(options);
+  auto request = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+  request->area.name = "lawn";
+  for (const auto& xy : std::vector<std::pair<float, float>>{{-4, -4}, {4, -4}, {4, 4}, {-4, 4}})
+  {
+    geometry_msgs::msg::Point32 point;
+    point.x = xy.first;
+    point.y = xy.second;
+    request->area.area.points.push_back(point);
+  }
+  auto added = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+  node_->add_area_for_test(request, added);
+  ASSERT_TRUE(added->success);
+  const auto mask = node_->build_keepout_mask_for_test();
+  EXPECT_EQ(mask_at(mask, 0.3, 0.0), 100) << "under the docked robot";
+  EXPECT_EQ(mask_at(mask, 0.6, 0.0), 100) << "the station head";
+  EXPECT_EQ(mask_at(mask, 0.3, 0.45), 100) << "the body band beside the station";
+  EXPECT_EQ(mask_at(mask, -0.5, 0.0), 0) << "the approach corridor";
+  EXPECT_EQ(mask_at(mask, -0.2, 0.0), 0) << "the corridor reaches the body";
+  EXPECT_EQ(mask_at(mask, 2.0, 2.0), 0) << "the rest of the lawn";
+}
+
 TEST_F(MapServerTest, GuiAreaReplacementPreservesCalibratedDockGeometry)
 {
   node_.reset();
@@ -227,12 +261,14 @@ TEST_F(MapServerTest, GuiAreaReplacementPreservesCalibratedDockGeometry)
   EXPECT_EQ(node_->docking_pose_for_test().position.y, -4.0);
   ASSERT_EQ(latest->markers.size(), dock_before.size());
   // The dock body travels in its own namespace so the transit planner can let a start inside it
-  // plan its way out, while goals and paths keep it forbidden.
+  // plan its way out, while goals and paths keep it forbidden, like any obstacle with its body
+  // margin. scale.y locates the dock pose inside it.
   ASSERT_EQ(dock_before.size(), 3U);
   EXPECT_EQ(dock_before[0].ns, "area");
   EXPECT_EQ(dock_before[1].ns, "dock_corridor");
   EXPECT_EQ(dock_before[2].ns, "dock_body");
-  EXPECT_EQ(dock_before[2].scale.x, 0.0);
+  EXPECT_GT(dock_before[2].scale.x, 0.0);
+  EXPECT_DOUBLE_EQ(dock_before[2].scale.y, 0.12);
   for (std::size_t i = 0; i < dock_before.size(); ++i)
   {
     EXPECT_EQ(latest->markers[i].ns, dock_before[i].ns);

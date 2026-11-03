@@ -13,8 +13,9 @@ an obstacle while the costmap catches up.
 `visualization_msgs/MarkerArray` containing one complete snapshot. Marker
 namespaces `area` and `dock_corridor` are authorized outer rings; `obstacle`
 rings are forbidden and `scale.x` is their explicit clearance margin in metres.
-`dock_body` is forbidden in the same way (margin zero) but is the one ring a
-START may lie inside, see below. An empty array invalidates transit during map
+`dock_body` is forbidden in the same way, with the same margin, but is the one
+ring a START may lie inside, see below; its `scale.y` says how far the dock pose
+lies ahead of the ring's rear edge. An empty array invalidates transit during map
 replacement; the debounced keepout rebuild publishes the complete snapshot.
 No timestamp is used as a freshness timeout or an observation identity.
 Replacing the area list retains the separately calibrated dock pose, corridor
@@ -32,31 +33,44 @@ Starts/goals on polygon edges connect to an interior grid anchor even when
 grid alignment puts the endpoint cell centre outside. Obstacles still block
 these legs. A missing connection fails planning without unrestricted fallback.
 
-A start inside the dock body is not refused. The robot ends coverage units in
-front of the dock more often than not, which is inside that 0.80 x 0.55 m
-rectangle, and refusing there stranded it (field 2026-10-16: every transit
-`START_OCCUPIED` until the operator pressed Play, whose first act is driving 1 m
-out). Such a start is judged without the dock body and connected to the nearest
-clear, authorized, obstacle-free cell within 1.0 m by an exit leg that obeys every
-other obstacle, the authorized union and the obstacle costs. With no such cell the
-start stays `START_OCCUPIED`.
+The dock body is the physical station: from the docked rear bumper to past the
+docked nose (`robot_config_util.dock_body_extents`, -0.12 to +0.68 m along the
+dock axis with the shipped chassis, 0.55 m wide), lethal in the keepout mask with
+the obstacle body band. Until 2026-11 it lay on the lawn BEHIND the docked robot
+(-0.80 to 0), so transit routed under the real station.
 
-The exit never closes on the charging station. The planner recovers the dock
-frame from the body ring and the `dock_corridor` ring directly behind it (+x from
-the corridor through the body toward the station; x = 0 is the body's
-station-side edge, the line through the dock pose). With not exactly one body and
-one adjacent corridor in the snapshot the start stays `START_OCCUPIED`. The exit
-cell must lie no further along +x than the start, so the leg goes backwards
-(toward the corridor) or sideways, never past the station-side edge. The
+A start in the dock body or its margin is not refused: a failed docking stops
+there, and refusing it strands the robot (field 2026-10-16: every transit
+`START_OCCUPIED` until the operator pressed Play). Such a start is judged without
+the dock body and without the mask's lethal cells for it, and connected to the
+nearest clear, authorized, obstacle-free cell within 1.0 m by an exit leg that obeys every
+other obstacle, the authorized union and the obstacle costs beyond the dock zone. With no such
+cell the start stays `START_OCCUPIED`.
+
+The exit never closes on the station head. The planner recovers the dock
+frame from the body ring, the `dock_corridor` ring directly behind it (+x from
+the corridor through the body toward the station) and `scale.y` (x = 0 is the
+dock pose). With not exactly one body and one adjacent corridor in the snapshot
+the start stays `START_OCCUPIED`. From anywhere up to the head the exit cell must
+lie no further along +x than the start, so the leg goes backwards (toward the
+corridor) or sideways; from beyond the head it must lie no nearer to it. The
 transit controller may pivot in place before the leg, to a heading sampled along
-the path rather than the leg, so the bound is heading-independent: the disc the
-footprint sweeps around the start (radius = farthest footprint vertex) must end
-`kStationClearance` (0.10 m) short of the station, taken to begin at the docked
+the path rather than the leg, so on the approach axis (within the body's width,
+short of its far end) the bound is heading-independent: the disc the footprint
+sweeps around the start (radius = farthest footprint vertex) must end
+`kStationClearance` (0.10 m) short of the head, taken to begin at the docked
 robot's nose (footprint front reach ahead of the dock pose). With the shipped
 footprint (front 0.53 m, sweep radius 0.597 m) that admits starts at least
-0.167 m behind the dock pose; nearer starts stay `START_OCCUPIED`. Goals inside the dock body, the search grid and every
-path segment after the exit leg keep the whole ring forbidden, so a transit can
-leave the dock body but never enter or cross it.
+0.167 m behind the dock pose; nearer starts, the docked pose included, stay
+`START_OCCUPIED` (the undock is a BackUp, not a transit). Goals in the dock zone,
+the search grid and every path segment after the exit leg keep the whole ring and
+its margin forbidden, so a transit can leave the dock zone but never enter or
+cross it.
+
+Coverage plans around the same ring: `coverage_server` reads `dock_body` from this
+snapshot and grows it by `obstacle_margin`, as a hole when it lies inside the area
+and a notch when it crosses the recorded line (an area with no overlap plans
+bit-identically). It fails a plan rather than guess if no snapshot ever arrived.
 
 Each search edge and every final path segment is checked against exact polygon
 crossings and crossed obstacle-cost cells. Smoothing that leaves the union

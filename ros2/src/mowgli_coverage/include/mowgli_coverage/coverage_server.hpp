@@ -16,9 +16,12 @@
 #ifndef MOWGLI_COVERAGE__COVERAGE_SERVER_HPP_
 #define MOWGLI_COVERAGE__COVERAGE_SERVER_HPP_
 
+#include <chrono>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/srv/correct_recorded_obstacle.hpp"
@@ -27,6 +30,7 @@
 #include "nav2_ros_common/lifecycle_node.hpp"
 #include "nav2_ros_common/simple_action_server.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace mowgli_coverage
 {
@@ -104,6 +108,16 @@ private:
       const std::shared_ptr<rmw_request_id_s> request_header,
       const std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Request> request,
       std::shared_ptr<mowgli_interfaces::srv::CorrectRecordedObstacle::Response> response);
+
+  // The map's charging stations (map_server's `dock_body` rings), planned around
+  // like drawn obstacles. nullopt until map_server's first snapshot arrives.
+  std::optional<std::vector<geometry_msgs::msg::Polygon>> dockKeepouts();
+  std::optional<std::vector<geometry_msgs::msg::Polygon>> waitForDockKeepouts(
+      std::chrono::milliseconds timeout);
+  static constexpr std::chrono::seconds kDockGeometryWait{5};
+  nav2::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr dock_geometry_sub_;
+  std::mutex dock_keepouts_mutex_;
+  std::optional<std::vector<geometry_msgs::msg::Polygon>> dock_keepouts_;
 
   std::unique_ptr<ActionServer> action_server_;
   // nav2::LifecycleNode::create_service returns a nav2::ServiceServer<T>

@@ -1057,12 +1057,14 @@ private:
   /// shape via Minimum Bounding Rectangle. 0 = north-south, 90 = east-west.
   double mow_angle_override_deg_{std::numeric_limits<double>::quiet_NaN()};
 
-  /// Dock body extent in dock local frame (m). The body is the physical
-  /// dock structure the robot cannot drive through. Cells inside the body
-  /// rectangle are marked OBSTACLE_PERMANENT — strips stop here, and Smac
-  /// treats it as lethal. Defaults match the YardForce500 dock.
+  /// Dock body extent in dock local frame (m): the physical station, from
+  /// dock_body_rear_m_ behind the dock pose to length - rear ahead of it.
+  /// Lethal in the keepout mask and forbidden in the transit geometry, and
+  /// coverage_server plans around the same ring. Defaults match the YardForce500
+  /// dock and the shipped chassis.
   double dock_body_length_m_{0.80};
   double dock_body_width_m_{0.55};
+  double dock_body_rear_m_{0.12};
 
   /// Dock approach corridor in dock local frame (m). Rectangle behind the
   /// dock body along -X used by opennav_docking for final alignment. Cells
@@ -1311,9 +1313,9 @@ private:
 
   /// Three coupled dock polygons in map frame, all derived from
   /// docking_pose_ + dock_body/corridor parameters. Built once at startup.
-  ///   * dock_body_polygon_     — physical dock body (0.80×0.55 m default).
-  ///                              Marks OBSTACLE_PERMANENT in classification;
-  ///                              strips stop here, Smac treats as lethal.
+  ///   * dock_body_polygon_     — physical station (0.80×0.55 m default), on
+  ///                              the +X side of the dock pose. Lethal in the
+  ///                              keepout mask, forbidden in transit geometry.
   ///   * dock_corridor_polygon_ — approach lane behind dock (1.5×0.80 m).
   ///                              Marks DOCKING_AREA in classification
   ///                              (mowable); explicitly carved out of the

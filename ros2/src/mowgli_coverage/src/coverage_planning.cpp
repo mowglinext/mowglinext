@@ -3170,6 +3170,65 @@ std::vector<const OGRPolygon*> polygonParts(const OGRGeometry* g)
 
 }  // namespace
 
+FieldWithKeepout subtractKeepoutFromField(const f2c::types::LinearRing& shell,
+                                          const f2c::types::LinearRing& keepout)
+{
+  const auto to_polygon = [](const f2c::types::LinearRing& ring)
+  {
+    OGRLinearRing ogr_ring;
+    for (std::size_t i = 0; i < ring.size(); ++i)
+    {
+      const auto p = ring.getGeometry(i);
+      ogr_ring.addPoint(p.getX(), p.getY());
+    }
+    ogr_ring.closeRings();
+    OGRPolygon poly;
+    poly.addRing(&ogr_ring);
+    return poly;
+  };
+  const OGRPolygon field = to_polygon(shell);
+  const OGRPolygon forbidden = to_polygon(keepout);
+  if (field.IsValid() && forbidden.IsValid() && field.Disjoint(&forbidden))
+  {
+    return {shell, std::nullopt, 0.0};
+  }
+  const FieldWithKeepout as_hole{shell, keepout, 0.0};
+  if (!field.IsValid() || !forbidden.IsValid() || field.Contains(&forbidden))
+  {
+    return as_hole;
+  }
+  std::unique_ptr<OGRGeometry> rest(field.Difference(&forbidden));
+  if (!rest || rest->IsEmpty())
+  {
+    return as_hole;
+  }
+  const auto parts = polygonParts(rest.get());
+  const OGRPolygon* largest = nullptr;
+  double kept_area = 0.0;
+  double total_area = 0.0;
+  for (const OGRPolygon* part : parts)
+  {
+    const double area = ogrArea(part);
+    total_area += area;
+    if (area > kept_area)
+    {
+      kept_area = area;
+      largest = part;
+    }
+  }
+  if (largest == nullptr || largest->getExteriorRing() == nullptr)
+  {
+    return as_hole;
+  }
+  const OGRLinearRing* ext = largest->getExteriorRing();
+  f2c::types::LinearRing ring;
+  for (int i = 0; i < ext->getNumPoints(); ++i)
+  {
+    ring.addPoint(f2c::types::Point(ext->getX(i), ext->getY(i)));
+  }
+  return {dedupClosedRing(ring), std::nullopt, total_area - kept_area};
+}
+
 f2c::types::Cell removeNarrowBoundaryTongues(const f2c::types::Cell& in,
                                              double min_width,
                                              double* removed_area)
