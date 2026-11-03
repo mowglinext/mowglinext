@@ -70,6 +70,7 @@ void OpenMowerBridgeNode::lowlevel_read_tick()
                            ll_serial_port_.c_str());
       return;
     }
+    bt_status_receipt_ns_ = 0;
     ll_packets_.reset_receive_state();
     ll_last_rx_ = now();
     ll_initialized_ = false;
@@ -90,6 +91,7 @@ void OpenMowerBridgeNode::lowlevel_read_tick()
                            2000,
                            "LowLevel board: read error — reopening %s",
                            ll_serial_port_.c_str());
+      bt_status_receipt_ns_ = 0;
       ll_serial_->close();
       return;
     }
@@ -107,6 +109,7 @@ void OpenMowerBridgeNode::lowlevel_read_tick()
                 "LowLevel board: no data for %.1f s — reopening %s",
                 ll_rx_timeout_s_,
                 ll_serial_port_.c_str());
+    bt_status_receipt_ns_ = 0;
     ll_serial_->close();
   }
 }
@@ -124,6 +127,7 @@ bool OpenMowerBridgeNode::lowlevel_send(const uint8_t* payload, std::size_t len)
     RCLCPP_WARN(get_logger(),
                 "LowLevel board: short write — reopening %s",
                 ll_serial_port_.c_str());
+    bt_status_receipt_ns_ = 0;
     ll_serial_->close();
     return false;
   }
