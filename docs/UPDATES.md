@@ -146,6 +146,15 @@ shown for review; a date alone never proves that source code is newer.
 
 Verification reports the failing component or check, such as an unhealthy GPS
 container, missing LiDAR scans, an unexpected image, or incompatible firmware.
+The GUI container's bounded HTTP healthcheck uses `/api/health/live`, which
+answers locally even while ROS is unavailable. `/api/health/ros` reports the
+separate Foxglove transport connection and heartbeat evidence (503 until both
+are healthy); it does not establish sensor freshness or mower safety readiness.
+Diagnostics snapshots and `/api/system/update-readiness` include this transport
+status alongside their existing checks. Updater runtime components expose
+`health_status`: `not_configured` means a legacy container has no application
+probe, even when its running-process compatibility verdict is healthy. A failed
+Docker healthcheck reports unhealthy; it does not restart any service.
 When only an optional component is already unhealthy, review shows its exact
 service/check identity and offers an explicit forced installation. The updater
 samples those checks again immediately before maintenance and accepts after the

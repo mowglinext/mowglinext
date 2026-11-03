@@ -9,7 +9,7 @@ import en from '../i18n/locales/en.json';
 const mock = vi.hoisted(() => {
     const values: SettingsValues = {datum_lat: 12, datum_lon: 34, mower_model: 'YardForce500'};
     return {
-        values, fetch: vi.fn<typeof fetch>(), save: vi.fn<(values: SettingsValues) => Promise<void>>(),
+        values, fetch: vi.fn<typeof fetch>(), save: vi.fn<(values: SettingsValues) => Promise<boolean>>(),
         partial: vi.fn(), restart: vi.fn(), error: vi.fn(), success: vi.fn(), warning: vi.fn(),
     };
 });
@@ -46,7 +46,7 @@ import OnboardingPage from './OnboardingPage';
 const scrollDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollTo');
 beforeEach(() => {
     vi.clearAllMocks();
-    mock.save.mockResolvedValue(undefined);
+    mock.save.mockResolvedValue(true);
     mock.fetch.mockImplementation(() => Promise.resolve(new Response(JSON.stringify({message: '48.123456789,-1.987654321'}))));
     Object.defineProperty(HTMLElement.prototype, 'scrollTo', {configurable: true, value: vi.fn()});
 });

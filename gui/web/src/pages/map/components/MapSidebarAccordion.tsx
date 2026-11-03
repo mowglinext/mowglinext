@@ -28,13 +28,14 @@ interface MapSidebarAccordionProps {
 /// The map's right-hand sidebar on desktop: a stack of collapsible sections where
 /// at most ONE is open. Opening a section closes the one that was open; clicking
 /// the open section folds it again. Only the open section's content is rendered,
-/// and it scrolls inside the sidebar when it is taller than the space left.
+/// and the sidebar scrolls when taller than the space left, keeping every
+/// collapsed section header reachable on short screens.
 export const MapSidebarAccordion = ({sections, openKey, onOpenChange}: MapSidebarAccordionProps) => {
     const {colors} = useThemeMode();
     const {t} = useTranslation();
 
     return (
-        <div style={{display: 'flex', flexDirection: 'column', minHeight: 0, flex: '1 1 auto'}}>
+        <div style={{display: 'flex', flexDirection: 'column', minHeight: 0, flex: '0 0 auto'}}>
             {sections.map((section, index) => {
                 const open = section.key === openKey;
                 const headerId = `map-sidebar-header-${section.key}`;
@@ -96,7 +97,7 @@ export const MapSidebarAccordion = ({sections, openKey, onOpenChange}: MapSideba
                                 role="region"
                                 aria-labelledby={headerId}
                                 className="scrollbar-thin"
-                                style={{overflowY: 'auto', minHeight: 0, flex: '1 1 auto'}}
+                                style={{overflowY: 'auto', minHeight: 0, flex: '0 0 auto'}}
                             >
                                 {section.content}
                             </div>
