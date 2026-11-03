@@ -157,6 +157,16 @@ if(BUILD_TESTING)
     TIMEOUT 60
   )
 
+  ament_add_pytest_test(test_sim_gnss_delivery
+    test/test_sim_gnss_delivery.py
+    TIMEOUT 60
+  )
+  ament_add_pytest_test(test_sim_gnss_delivery_transport
+    test/test_sim_gnss_delivery_transport.py
+    ENV ROS_DOMAIN_ID=178
+    TIMEOUT 60
+  )
+
   ament_add_pytest_test(test_sim_source_transport
     test/test_sim_source_transport.py
     ENV ROS_DOMAIN_ID=179

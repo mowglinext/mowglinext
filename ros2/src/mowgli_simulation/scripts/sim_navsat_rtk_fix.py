@@ -46,6 +46,7 @@ single sensor topic. No drive commands, no TF, no safety topic.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import math
 import random
@@ -53,7 +54,10 @@ from typing import List, Optional, Tuple
 
 from geometry_msgs.msg import PoseStamped
 from mowgli_interfaces.msg import GnssStatus
+from rcl_interfaces.msg import ParameterDescriptor
 import rclpy
+from rclpy.clock import JumpThreshold
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -204,6 +208,17 @@ class SimNavSatRtkFix(Node):
         self._lever_arm_y = float(
             self.declare_parameter('lever_arm_y', 0.0).value
         )
+        latency_s = float(self.declare_parameter(
+            'delivery_latency_s', 0.0,
+            ParameterDescriptor(read_only=True),
+        ).value)
+        if not math.isfinite(latency_s) or latency_s < 0.0:
+            self.destroy_node()
+            raise ValueError('delivery_latency_s must be finite and nonnegative')
+        seconds, fractional_s = divmod(latency_s, 1.0)
+        self._delivery_latency_ns = int(seconds) * 1_000_000_000 + round(
+            fractional_s * 1_000_000_000
+        )
         # Programmable cycle. Empty means always RTK_FIXED (legacy mode).
         pattern_spec = str(
             self.declare_parameter('quality_pattern', '').value
@@ -262,10 +277,23 @@ class SimNavSatRtkFix(Node):
         self._ground_truth: Optional[PoseStamped] = None
         self._pending_ground_truth: Optional[PoseStamped] = None
         self._last_truth_stamp_ns: Optional[int] = None
-        self._last_published_truth_stamp_ns: Optional[int] = None
+        self._last_generated_truth_stamp_ns: Optional[int] = None
         self._last_fix_stamp_ns: Optional[int] = None
         self._last_ros_now_ns: Optional[int] = None
         self._position_observation_sequence = 0
+        self._pending_deliveries = deque()
+        self._delivery_overflow_count = 0
+        # The executable uses a SingleThreadedExecutor. Input, timer and /clock
+        # callbacks therefore serialize state and pair publication. The jump
+        # callback must not read the clock or wait while rcl is changing it.
+        self._clock_jump_handle = self.get_clock().create_jump_callback(
+            JumpThreshold(min_forward=None, min_backward=Duration(nanoseconds=-1),
+                          on_clock_change=True),
+            post_callback=self._on_clock_jump,
+        )
+        self._delivery_timer = self.create_timer(
+            0.020, self._drain_deliveries, clock=self.get_clock(),
+        )
 
         # Diagnostics — surface the regime distribution observed.
         self._regime_counts: dict[str, int] = dict.fromkeys(QUALITY_REGIMES, 0)
@@ -325,13 +353,30 @@ class SimNavSatRtkFix(Node):
     def _check_clock_epoch(self) -> int:
         now_ns = self.get_clock().now().nanoseconds
         if self._last_ros_now_ns is not None and now_ns < self._last_ros_now_ns:
-            self._ground_truth = None
-            self._pending_ground_truth = None
-            self._last_truth_stamp_ns = None
-            self._last_fix_stamp_ns = None
-            self._last_published_truth_stamp_ns = None
+            self._reset_clock_epoch()
         self._last_ros_now_ns = now_ns
         return now_ns
+
+    def _reset_clock_epoch(self) -> None:
+        self._ground_truth = None
+        self._pending_ground_truth = None
+        self._last_truth_stamp_ns = None
+        self._last_fix_stamp_ns = None
+        self._last_generated_truth_stamp_ns = None
+        self._last_ros_now_ns = None
+        self._pending_deliveries.clear()
+
+    def _on_clock_jump(self, _jump) -> None:
+        # A notification catches rewind-and-catch-up even with no sensor/timer
+        # callback in between. Lifetime identity and quality origin survive.
+        self._reset_clock_epoch()
+
+    def _drain_deliveries(self) -> None:
+        now_ns = self._check_clock_epoch()
+        while self._pending_deliveries and self._pending_deliveries[0][0] <= now_ns:
+            _, fix, status = self._pending_deliveries.popleft()
+            self._pub.publish(fix)
+            self._status_pub.publish(status)
 
     def _accept_ground_truth(self, msg: PoseStamped) -> None:
         self._last_truth_stamp_ns = (
@@ -379,7 +424,7 @@ class SimNavSatRtkFix(Node):
         ros_now_ns = self._check_clock_epoch()
         self._promote_pending_truth(ros_now_ns)
         if (self._ground_truth is None
-                or self._last_truth_stamp_ns == self._last_published_truth_stamp_ns):
+                or self._last_truth_stamp_ns == self._last_generated_truth_stamp_ns):
             return
 
         stamp_ns = msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
@@ -393,7 +438,7 @@ class SimNavSatRtkFix(Node):
                     and stamp_ns <= self._last_fix_stamp_ns)):
             return
         self._last_fix_stamp_ns = stamp_ns
-        self._last_published_truth_stamp_ns = self._last_truth_stamp_ns
+        self._last_generated_truth_stamp_ns = self._last_truth_stamp_ns
         self._position_observation_sequence += 1
         truth = self._ground_truth
         truth_stamp_ns = truth.header.stamp.sec * 1_000_000_000 + truth.header.stamp.nanosec
@@ -443,10 +488,21 @@ class SimNavSatRtkFix(Node):
         out.position_covariance_type = (
             NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
         )
-        self._pub.publish(out)
         status = _build_gnss_status(out.header, regime, sigma_xy, sigma_z)
         status.position_observation_sequence = self._position_observation_sequence
-        self._status_pub.publish(status)
+        self._drain_deliveries()
+        if len(self._pending_deliveries) >= 10:
+            # Consume this generated identity rather than retrying/replacing it.
+            self._delivery_overflow_count += 1
+            self.get_logger().warning(
+                'GNSS delivery queue full; dropping generated observation '
+                f'{self._position_observation_sequence}'
+            )
+            return
+        self._pending_deliveries.append((
+            truth_stamp_ns + self._delivery_latency_ns, out, status,
+        ))
+        self._drain_deliveries()
 
     def _log_stats(self) -> None:
         total = sum(self._regime_counts.values())
