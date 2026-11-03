@@ -1,0 +1,11 @@
+--- a/webots_ros2_driver/webots_ros2_driver/ros2_supervisor.py
++++ b/webots_ros2_driver/webots_ros2_driver/ros2_supervisor.py
+@@ -271,7 +271,7 @@
+             self.get_logger().info('Ros2Supervisor is shutting down...')
+         else:
+             clock_message = Clock()
+-            clock_message.clock = Time(seconds=self.__robot.getTime()).to_msg()
++            clock_message.clock = Time(nanoseconds=round(self.__robot.getTime() * 1_000_000_000)).to_msg()
+             self.__clock_publisher.publish(clock_message)
+ 
+ 

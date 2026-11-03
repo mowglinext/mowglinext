@@ -527,11 +527,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-lyrical-controller-manager
 WORKDIR /webots_ws
 RUN mkdir src && chown -R ubuntu:ubuntu /webots_ws
+# Round the upstream simulation epoch to nanoseconds; float-second truncation
+# can leave TF exactly 1 ns behind the next clock tick and cause false stops.
+COPY --chown=ubuntu:ubuntu ros2/patches/webots-supervisor-clock.patch /tmp/webots-supervisor-clock.patch
 USER ubuntu
 RUN git init -q src/webots_ros2 \
  && git -C src/webots_ros2 fetch --depth 1 https://github.com/cyberbotics/webots_ros2.git db4a77c84ee91445d39de9a631e5b57a888814e2 \
  && git -C src/webots_ros2 checkout -q --detach FETCH_HEAD \
  && git -C src/webots_ros2 submodule update --init --recursive \
+ && git -C src/webots_ros2 apply /tmp/webots-supervisor-clock.patch \
  && sed -i 's/CMAKE_CXX_STANDARD 17/CMAKE_CXX_STANDARD 20/' src/webots_ros2/webots_ros2_driver/CMakeLists.txt
 RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash && MAKEFLAGS=-j3 colcon build \
     --merge-install --packages-up-to webots_ros2_control --parallel-workers 2 \
