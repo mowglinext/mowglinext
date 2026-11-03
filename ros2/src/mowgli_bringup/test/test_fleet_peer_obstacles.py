@@ -220,7 +220,7 @@ def test_a_reverse_that_would_close_on_the_neighbour_is_still_refused() -> None:
     dock = fleet.Pose2D(0.0, 0.0, 0.0)
     peer = _pose_on_dock_axes(dock, 0.0, -0.48, 0.0)
     tail_in = fleet.Pose2D(0.0, 0.0, math.radians(10.0))
-    assert fleet.reversing_closes_on(peer, tail_in)
+    assert fleet.reversing_closes_on(peer, tail_in, GEO.body)
     assert fleet.classify_docked_peer(peer, tail_in, dock, GEO) is fleet.DockNeighbour.TOO_CLOSE
 
 
@@ -252,3 +252,17 @@ def test_is_listed_docked_matches_the_same_pose_only() -> None:
     assert fleet.is_listed_docked(peer, [fleet.Pose2D(1.02, 2.0, 0.52)])
     assert not fleet.is_listed_docked(peer, [fleet.Pose2D(1.2, 2.0, 0.5)])  # another robot
     assert not fleet.is_listed_docked(peer, [fleet.Pose2D(1.0, 2.0, 0.9)])  # same spot, other heading
+
+
+def test_a_reverse_straight_at_a_peer_behind_us_is_still_refused() -> None:
+    # Same heading, peer right behind: its axis distance never changes, the gap does.
+    dock = fleet.Pose2D(0.0, 0.0, 0.0)
+    close_behind = fleet.Pose2D(-0.61, 0.0, 0.0)
+    assert fleet.reversing_closes_on(close_behind, dock, GEO.body)
+
+
+def test_the_too_close_guard_needs_fresh_odometry_to_stand_down() -> None:
+    assert not fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=9.9, hold_until=5.0)
+    assert fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=9.9, hold_until=12.0), "held after motion"
+    assert fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=8.0, hold_until=5.0), "stale"
+    assert fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=-math.inf, hold_until=-math.inf), "never seen"
