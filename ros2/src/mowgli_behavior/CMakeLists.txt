@@ -33,6 +33,9 @@ find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
+find_package(mowgli_localization REQUIRED)
+find_library(NAVSAT_STATUS_ASSOCIATION_LIBRARY navsat_status_association
+  PATHS "${mowgli_localization_DIR}/../../../lib" NO_DEFAULT_PATH REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 
 
@@ -60,6 +63,7 @@ add_executable(behavior_tree_node
 target_include_directories(behavior_tree_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${mowgli_localization_INCLUDE_DIRS}
 )
 
 target_link_libraries(behavior_tree_node
@@ -78,6 +82,7 @@ target_link_libraries(behavior_tree_node
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${mowgli_interfaces_TARGETS}
+  ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
   ${rcl_interfaces_TARGETS}
 )
 
@@ -1139,6 +1144,11 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
+
+  ament_add_gtest(test_precision_coverage_support test/test_precision_coverage_support.cpp)
+  target_include_directories(test_precision_coverage_support PRIVATE include ${mowgli_localization_INCLUDE_DIRS})
+  target_link_libraries(test_precision_coverage_support ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
+    ${mowgli_interfaces_TARGETS} ${sensor_msgs_TARGETS})
 
   ament_add_gtest(test_blade_ready test/test_blade_ready.cpp)
   target_include_directories(test_blade_ready PRIVATE include)

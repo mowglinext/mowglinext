@@ -183,6 +183,10 @@ protected:
   void SetUp() override
   {
     ctx = std::make_shared<BTContext>();
+    ctx->coverage_precision_ready = []
+    {
+      return true;
+    };  // mocked precision-support module
     ctx->node = rclcpp::Node::make_shared("test_cancel_on_halt");
     server_node = rclcpp::Node::make_shared("fake_docking_server");
     dock = std::make_unique<FakeDockServer>(server_node, "/dock_robot");

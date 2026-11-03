@@ -30,6 +30,8 @@
 #include <string>
 #include <vector>
 
+#include <geometry_msgs/msg/twist_stamped.hpp>
+
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -374,6 +376,13 @@ public:
 private:
   friend struct FollowStripOutcomeTestAccess;
   void setBladeEnabled(bool enabled);
+  bool stepPrecisionPause(const std::shared_ptr<BTContext>& ctx);
+  void publishPrecisionStop(const std::shared_ptr<BTContext>& ctx);
+  void requestPrecisionBladeOff();
+  bool precision_paused_ = false;
+  bool precision_had_goal_ = false;
+  std::chrono::steady_clock::time_point precision_last_blade_off_{};
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr precision_stop_pub_;
   bool bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx);
   void beginBladeReadyWait(const std::shared_ptr<BTContext>& ctx);
   // Cancel every in-flight follow / transit goal, reset the transit state

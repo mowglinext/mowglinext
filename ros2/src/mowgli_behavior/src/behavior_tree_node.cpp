@@ -42,6 +42,7 @@
 #include "mowgli_behavior/external_rain_state.hpp"
 #include "mowgli_behavior/fleet_yield_service.hpp"
 #include "mowgli_behavior/localization_health.hpp"
+#include "mowgli_behavior/precision_coverage_support.hpp"
 #include "mowgli_behavior/recording_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
 #include "mowgli_behavior/stop_reason.hpp"
@@ -51,6 +52,7 @@
 #include "mowgli_interfaces/msg/coverage_session.hpp"
 #include "mowgli_interfaces/msg/dig_event.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
+#include "mowgli_interfaces/msg/gnss_fusion_update.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
 #include "mowgli_interfaces/msg/power.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
@@ -66,6 +68,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
+#include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/int32.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -182,6 +185,29 @@ public:
                   context_->resume_after_incomplete_end ? "true" : "false");
     }
 
+    precision_support_ = std::make_shared<PrecisionCoverageSupport>();
+    context_->coverage_precision_ready = [this]()
+    {
+      const auto ros_now = now();
+      return precision_support_->Ready(
+          ros_now.nanoseconds(),
+          steadyNowNs(),
+          [this, &ros_now](int64_t support_ns)
+          {
+            if (!context_->tf_buffer)
+              return false;
+            try
+            {
+              const rclcpp::Time support(support_ns, get_clock()->get_clock_type());
+              return context_->tf_buffer->canTransform("map", "base_footprint", support) &&
+                     context_->tf_buffer->canTransform("map", "base_footprint", ros_now);
+            }
+            catch (const std::exception&)
+            {
+              return false;
+            }
+          });
+    };
     setupSubscribers();
     setupServiceServer();
     setupBehaviorTree();
@@ -215,6 +241,7 @@ public:
     blackboard_.reset();
     // Break node -> context -> node before main returns. Otherwise the TF
     // listener and DDS participant survive into shared-library finalization.
+    context_->coverage_precision_ready = {};
     context_->node.reset();
   }
 
@@ -640,11 +667,26 @@ private:
           }
         });
 
+    raw_gnss_fix_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
+        "/gps/fix",
+        rclcpp::SensorDataQoS(),
+        [this](sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
+        {
+          precision_support_->AddFix(*msg, now().nanoseconds(), steadyNowNs());
+        });
+    gnss_update_sub_ = create_subscription<mowgli_interfaces::msg::GnssFusionUpdate>(
+        "/fusion_graph/gnss_update",
+        rclcpp::QoS(10).reliable().transient_local(),
+        [this](mowgli_interfaces::msg::GnssFusionUpdate::ConstSharedPtr msg)
+        {
+          precision_support_->AddReport(*msg, now().nanoseconds(), steadyNowNs());
+        });
     gnss_status_sub_ = create_subscription<mowgli_interfaces::msg::GnssStatus>(
         "/gps/status",
         10,
         [this](mowgli_interfaces::msg::GnssStatus::ConstSharedPtr msg)
         {
+          precision_support_->AddStatus(*msg, now().nanoseconds(), steadyNowNs());
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           has_authoritative_gnss_status_ = true;
           loc_obs_.gnss_seen = true;
@@ -1685,6 +1727,9 @@ private:
   // ------------------------------------------------------------------
 
   std::shared_ptr<BTContext> context_;
+  std::shared_ptr<PrecisionCoverageSupport> precision_support_;
+  rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr raw_gnss_fix_sub_;
+  rclcpp::Subscription<mowgli_interfaces::msg::GnssFusionUpdate>::SharedPtr gnss_update_sub_;
   std::unique_ptr<FleetYieldService> fleet_yield_service_;
   std::unique_ptr<BladeControlService> blade_control_service_;
   std::unique_ptr<CoverageOrientationService> coverage_orientation_service_;

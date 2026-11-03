@@ -1,0 +1,291 @@
+// Copyright 2026 Mowgli Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include <limits>
+
+#include "mowgli_behavior/precision_coverage_support.hpp"
+#include <gtest/gtest.h>
+using mowgli_behavior::PrecisionCoverageSupport;
+using Status = PrecisionCoverageSupport::Status;
+using Fix = PrecisionCoverageSupport::Fix;
+using Report = PrecisionCoverageSupport::Report;
+namespace
+{
+constexpr int64_t S = 1000000000LL;
+auto Stamp(int64_t ns)
+{
+  builtin_interfaces::msg::Time t;
+  t.sec = ns / S;
+  t.nanosec = ns % S;
+  return t;
+}
+Status Fixed(int64_t t, uint64_t seq)
+{
+  Status s;
+  s.header.stamp = Stamp(t);
+  s.fix_valid = true;
+  s.fix_type = Status::FIX_TYPE_RTK_FIXED;
+  s.position_observation_sequence = seq;
+  return s;
+}
+Fix Gps(int64_t t)
+{
+  Fix f;
+  f.header.stamp = Stamp(t);
+  f.header.frame_id = "gps_link";
+  f.status.status = sensor_msgs::msg::NavSatStatus::STATUS_GBAS_FIX;
+  f.latitude = 48.0;
+  f.longitude = 11.0;
+  f.altitude = std::numeric_limits<double>::quiet_NaN();
+  f.position_covariance[0] = .000009;
+  f.position_covariance_type = Fix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+  return f;
+}
+Report Commit(const Fix& f, int64_t support, uint64_t rev = 1)
+{
+  Report r;
+  r.producer_incarnation = "producer-a";
+  r.graph_epoch = 1;
+  r.estimate_revision = r.applied_revision = rev;
+  r.pose_published = r.has_applied_fix = true;
+  r.applied_fix = f;
+  r.tf_support_stamp = Stamp(support);
+  return r;
+}
+}  // namespace
+TEST(PrecisionCoverage, RawPairClosesBeforeDelayedCommitAndNeedsTf)
+{
+  PrecisionCoverageSupport p;
+  auto s = Fixed(S, 1);
+  auto f = Gps(S);
+  p.AddStatus(s, S, S);
+  p.AddFix(f, S + 5000000, S + 5000000);
+  auto r = Commit(f, S + 80000000);
+  p.AddReport(r, S + 70000000, S + 70000000);
+  EXPECT_FALSE(p.Ready(3 * S,
+                       3 * S,
+                       [](int64_t)
+                       {
+                         return false;
+                       }));
+  EXPECT_TRUE(p.Ready(3 * S,
+                      3 * S,
+                      [](int64_t)
+                      {
+                        return true;
+                      }));
+}
+TEST(PrecisionCoverage, LossRequiresNewAppliedFixDespiteStableRawFixed)
+{
+  PrecisionCoverageSupport p;
+  auto s = Fixed(S, 1);
+  auto f = Gps(S);
+  p.AddFix(f, S, S);
+  p.AddStatus(s, S, S);
+  p.AddReport(Commit(f, S), S, S);
+  EXPECT_TRUE(p.Ready(3 * S,
+                      3 * S,
+                      [](int64_t)
+                      {
+                        return true;
+                      }));
+  auto lost = Fixed(3 * S, 1);
+  lost.fix_type = Status::FIX_TYPE_RTK_FLOAT;
+  p.AddStatus(lost, 3 * S, 3 * S);
+  EXPECT_FALSE(p.Ready(3 * S,
+                       3 * S,
+                       [](int64_t)
+                       {
+                         return true;
+                       }));
+  auto fresh = Fixed(4 * S, 2);
+  auto nf = Gps(4 * S);
+  p.AddStatus(fresh, 4 * S, 4 * S);
+  p.AddFix(nf, 4 * S + 10000000, 4 * S + 10000000);
+  p.AddReport(Commit(f, S, 2), 4 * S + 20000000, 4 * S + 20000000);
+  EXPECT_FALSE(p.Ready(6 * S,
+                       6 * S,
+                       [](int64_t)
+                       {
+                         return true;
+                       }));
+  p.AddReport(Commit(nf, 6 * S + 100000000, 3), 6 * S + 1000000, 6 * S + 1000000);
+  EXPECT_FALSE(p.Ready(6 * S + 2000000,
+                       6 * S + 2000000,
+                       [](int64_t)
+                       {
+                         return true;
+                       }));
+  EXPECT_TRUE(p.Ready(6 * S + 100000000,
+                      6 * S + 100000000,
+                      [](int64_t)
+                      {
+                        return true;
+                      }));
+}
+
+TEST(PrecisionCoverage, AmbiguousPairAndClockRewindDeny)
+{
+  PrecisionCoverageSupport p;
+  auto s = Fixed(S, 1);
+  auto f = Gps(S);
+  p.AddStatus(s, S, S);
+  p.AddFix(f, S + 1000000, S + 1000000);
+  auto conflict = s;
+  conflict.position_observation_sequence = 2;
+  p.AddStatus(conflict, S + 2000000, S + 2000000);
+  p.AddReport(Commit(f, S), S + 3000000, S + 3000000);
+  EXPECT_FALSE(p.Ready(3 * S,
+                       3 * S,
+                       [](int64_t)
+                       {
+                         return true;
+                       }));
+  EXPECT_FALSE(p.Ready(S / 2,
+                       4 * S,
+                       [](int64_t)
+                       {
+                         return true;
+                       }));
+}
+
+TEST(PrecisionCoverage, FutureNewerRevisionDoesNotEvictEarlierUsableSupport)
+{
+  PrecisionCoverageSupport p;
+  auto s = Fixed(S, 1);
+  auto f = Gps(S);
+  p.AddStatus(s, S, S);
+  p.AddFix(f, S + 1000000, S + 1000000);
+  p.AddReport(Commit(f, S), S + 2000000, S + 2000000);
+  p.AddReport(Commit(f, 4 * S, 2), S + 3000000, S + 3000000);
+  EXPECT_TRUE(p.Ready(3 * S,
+                      3 * S,
+                      [](int64_t)
+                      {
+                        return true;
+                      }));
+}
+
+TEST(PrecisionCoverage, InvalidationAndOldProducerCannotResurrectOldFix)
+{
+  PrecisionCoverageSupport p;
+  auto status = Fixed(S, 1);
+  auto fix = Gps(S);
+  auto old = Commit(fix, S);
+  p.AddStatus(status, S, S);
+  p.AddFix(fix, S + 1000000, S + 1000000);
+  p.AddReport(old, S + 2000000, S + 2000000);
+  EXPECT_TRUE(p.Ready(3 * S,
+                      3 * S,
+                      [](int64_t)
+                      {
+                        return true;
+                      }));
+  auto invalid = old;
+  invalid.pose_published = false;
+  invalid.has_applied_fix = false;
+  invalid.graph_epoch = 2;
+  p.AddReport(invalid, 3 * S, 3 * S);
+  old.graph_epoch = 2;
+  p.AddReport(old, 3 * S + 1000000, 3 * S + 1000000);
+  EXPECT_FALSE(p.Ready(3 * S + 2000000,
+                       3 * S + 2000000,
+                       [](int64_t)
+                       {
+                         return true;
+                       }));
+  auto restart = invalid;
+  restart.producer_incarnation = "producer-b";
+  restart.graph_epoch = 1;
+  p.AddReport(restart, 3 * S + 3000000, 3 * S + 3000000);
+  p.AddReport(old, 3 * S + 4000000, 3 * S + 4000000);
+  EXPECT_FALSE(p.Ready(3 * S + 5000000,
+                       3 * S + 5000000,
+                       [](int64_t)
+                       {
+                         return true;
+                       }));
+}
+
+TEST(PrecisionCoverage, NewerFixedStatusDoesNotRequireNewestAppliedSequence)
+{
+  PrecisionCoverageSupport p;
+  auto s = Fixed(S, 1);
+  auto f = Gps(S);
+  p.AddStatus(s, S, S);
+  p.AddFix(f, S + 1000000, S + 1000000);
+  p.AddReport(Commit(f, S), S + 2000000, S + 2000000);
+  auto next = Fixed(3 * S, 2);
+  p.AddStatus(next, 3 * S, 3 * S);
+  EXPECT_TRUE(p.Ready(3 * S + 1000000,
+                      3 * S + 1000000,
+                      [](int64_t)
+                      {
+                        return true;
+                      }));
+}
+
+TEST(PrecisionCoverage, InvalidProvenanceAndChangedSourceDenyOldEvidence)
+{
+  PrecisionCoverageSupport p;
+  auto status = Fixed(S, 1);
+  status.source_id = "receiver";
+  status.source_incarnation = "one";
+  auto fix = Gps(S);
+  p.AddStatus(status, S, S);
+  p.AddFix(fix, S + 1000000, S + 1000000);
+  p.AddReport(Commit(fix, S), S + 2000000, S + 2000000);
+  ASSERT_TRUE(p.Ready(3 * S,
+                      3 * S,
+                      [](int64_t)
+                      {
+                        return true;
+                      }));
+  auto invalid = status;
+  invalid.header.stamp = Stamp(0);
+  p.AddStatus(invalid, 3 * S, 3 * S);
+  EXPECT_FALSE(p.Ready(3 * S,
+                       3 * S,
+                       [](int64_t)
+                       {
+                         return true;
+                       }));
+  auto changed = Fixed(4 * S, 2);
+  changed.source_id = "receiver";
+  changed.source_incarnation = "two";
+  p.AddStatus(changed, 4 * S, 4 * S);
+  auto newest = Gps(4 * S);
+  p.AddFix(newest, 4 * S + 1000000, 4 * S + 1000000);
+  p.AddReport(Commit(fix, S), 4 * S + 2000000, 4 * S + 2000000);
+  EXPECT_FALSE(p.Ready(6 * S,
+                       6 * S,
+                       [](int64_t)
+                       {
+                         return true;
+                       }));
+}
+
+TEST(PrecisionCoverage, FreshRawFixedCannotRefreshOldAppliedFixSteadyAge)
+{
+  PrecisionCoverageSupport p;
+  auto status = Fixed(S, 1);
+  auto fix = Gps(S);
+  p.AddFix(fix, S, S);
+  p.AddStatus(status, S + 1000000, S + 1000000);
+  p.AddReport(Commit(fix, S + 100000000), S + 2000000, S + 2000000);
+  const auto tf = [](int64_t)
+  {
+    return true;
+  };
+  EXPECT_FALSE(p.Ready(S + 60000000, S + 60000000, tf));  // close raw association
+  ASSERT_TRUE(p.Ready(3 * S + 10000000, 3 * S + 10000000, tf));
+  // Raw receiver observations remain fresh while graph rejects all new fixes.
+  // Slow simulated ROS time must not extend the old applied fix's steady age.
+  for (int i = 0; i < 8; ++i)
+  {
+    const int64_t ros = 3 * S + (i + 1) * 20000000LL;
+    const int64_t steady = (4 + i) * S;
+    p.AddFix(Gps(ros), ros, steady);
+    p.AddStatus(Fixed(ros, i + 2), ros + 1000000, steady + 1000000);
+  }
+  EXPECT_FALSE(p.Ready(3 * S + 200000000, 11 * S + 60000000, tf));
+}
