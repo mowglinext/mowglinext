@@ -74,6 +74,15 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
   clock_ = node->get_clock();
 
   declareParameters(node);
+  corner_geometry_sub_ = node->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      [this](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+      {
+        auto geometry = std::make_shared<const CornerGeometry>(CornerGeometry::parse(*message));
+        std::lock_guard lock(corner_geometry_mutex_);
+        corner_geometry_ = std::move(geometry);
+      },
+      rclcpp::QoS(1).transient_local());
 
   // Publishers (created as lifecycle-aware, activated/deactivated with the node).
   global_point_pub_ =
@@ -161,6 +170,12 @@ void FTCController::cleanup()
   global_plan_pub_.reset();
   progress_plan_pub_.reset();
   obstacle_marker_pub_.reset();
+  corner_geometry_sub_.reset();
+  {
+    std::lock_guard lock(corner_geometry_mutex_);
+    corner_geometry_.reset();
+  }
+  pivot_pose_epoch_.reset();
   boundary_costmap_sub_.reset();
   blade_status_sub_.reset();
   cm_state_sub_.reset();
@@ -1126,21 +1141,60 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   cmd_vel.header.frame_id = "base_link";
   cmd_vel.header.stamp = clock_->now();
 
+  // Keep the chosen approach certificate and output selection ordered before
+  // a complete geometry replacement. Missing/invalid geometry retains the
+  // original path-only stopping bounds.
+  std::unique_lock geometry_lock(corner_geometry_mutex_, std::defer_lock);
+
   // Apply the hard linear cap at every output boundary, after movement floors
   // and including reverse escape / turn-fallback commands that bypass the PID.
-  const auto bounded_command = [this, &cmd_vel]()
+  const auto bounded_command = [this, &cmd_vel, &geometry_lock]()
   {
     const double max_speed = maxLinearSpeed();
     cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
-    if (cmd_vel.twist.linear.x > 0.0 && stopCornerApproach())
+    const auto approach = stopCornerApproach();
+    if (cmd_vel.twist.linear.x > 0.0 && approach)
     {
       // Obstacles can release ownership after errors were projected. Wait one
       // tick for a coherent point/cap instead of emitting an uncapped restart.
-      if (!pivot_approach_speed_limit_ || !pivot_approach_response_limit_ ||
-          !(std::abs(last_measured_fwd_speed_) <= *pivot_approach_response_limit_))
+      if (!pivot_approach_speed_limit_ || !pivot_approach_response_limit_)
         cmd_vel.twist = geometry_msgs::msg::Twist{};
       else
-        cmd_vel.twist.linear.x = std::min(cmd_vel.twist.linear.x, *pivot_approach_speed_limit_);
+      {
+        double speed_limit = *pivot_approach_speed_limit_;
+        double response_limit = *pivot_approach_response_limit_;
+        const auto pose = pivotMapPose();
+        const auto& tip = global_plan_[*approach].pose.position;
+        const double radius = std::hypot(tip.x - pose.position.x, tip.y - pose.position.y);
+        transit::Ring body;
+        for (const auto& p : costmap_ros_->getRobotFootprint())
+          body.push_back({p.x, p.y});
+        if (!geometry_lock.owns_lock())
+          geometry_lock.lock();
+        // A certified disk can provide more stopping travel than either
+        // outgoing coordinate plane. Keep B's cached bounds and exact fallback.
+        if (corner_geometry_)
+        {
+          const auto budget =
+              corner_geometry_->stoppingBudget({pose.position.x, pose.position.y}, radius, body);
+          if (budget)
+          {
+            const double certified_speed =
+                *budget / (config_.pivot_coast_time_bound_s + 3 * kIntendedCommandHorizonSec);
+            const double certified_response =
+                *budget / (config_.pivot_coast_time_bound_s + 2 * kIntendedCommandHorizonSec);
+            if (certified_speed > speed_limit && certified_response > response_limit)
+            {
+              speed_limit = certified_speed;
+              response_limit = certified_response;
+            }
+          }
+        }
+        if (!(std::abs(last_measured_fwd_speed_) <= response_limit))
+          cmd_vel.twist = geometry_msgs::msg::Twist{};
+        else
+          cmd_vel.twist.linear.x = std::min(cmd_vel.twist.linear.x, speed_limit);
+      }
     }
     last_cmd_fwd_speed_ = cmd_vel.twist.linear.x;
     return cmd_vel;
@@ -1189,6 +1243,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   (void)goal_checker;
 
   // 1. Advance the carrot; compute lat/lon/angle errors in base_link.
+  pivot_pose_epoch_.reset();
   update_control_point(safe_dt);
 
   RCLCPP_INFO_THROTTLE(logger_,
@@ -1916,6 +1971,7 @@ void FTCController::update_control_point(double dt)
       if ((now - epoch).seconds() > kMaxControlIntervalSec)
         throw nav2_core::ControllerException("FTCController: stale pivot pose.");
       map_to_base = tf_buffer_->lookupTransform("base_link", "map", epoch);
+      pivot_pose_epoch_ = epoch;
     }
     else
       map_to_base = tf_buffer_->lookupTransform("base_link",
@@ -2307,6 +2363,24 @@ void FTCController::leavePivot()
   i_lat_error_ = 0.0;
   i_lon_error_ = 0.0;
   i_angle_error_ = 0.0;
+}
+
+geometry_msgs::msg::Pose FTCController::pivotMapPose() const
+{
+  if (!pivot_pose_epoch_ || plan_header_.frame_id != "map")
+    throw nav2_core::ControllerException("FTCController: no supported pivot pose");
+  const auto tf = tf_buffer_->lookupTransform("map", "base_link", *pivot_pose_epoch_);
+  const auto& t = tf.transform;
+  const auto& q = t.rotation;
+  const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+  if (!std::isfinite(t.translation.x) || !std::isfinite(t.translation.y) ||
+      !std::isfinite(t.translation.z) || !std::isfinite(norm) || std::abs(norm - 1) > 1e-3)
+    throw nav2_core::ControllerException("FTCController: invalid pivot pose");
+  geometry_msgs::msg::Pose pose;
+  pose.position.x = t.translation.x;
+  pose.position.y = t.translation.y;
+  pose.orientation = q;
+  return pose;
 }
 
 bool FTCController::pivotSweepBlocked()

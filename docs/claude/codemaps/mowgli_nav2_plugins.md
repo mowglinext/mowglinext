@@ -67,6 +67,16 @@ See `docs/TRANSIT_AUTHORIZATION.md` for terminal exceptions and recovery. A star
 | Add a unit test | `CMakeLists.txt` `if(BUILD_TESTING)` block — pure helpers use `ament_add_gtest`; real-controller/node tests use `ament_add_ros_isolated_gtest` for DDS isolation |
 | Diagnose "strip aborted" (ControllerException) | throw sites: `ftc_controller.cpp:835` (crashed latch), `:957` (deviation TF), `:965` (legacy collision), `:973` (crash latched during PID), `:1357` (carrot TF), `:1717` (wait timeout) |
 
+Approach stopping can use `ftc_corner_geometry.{hpp,cpp}`'s sufficient disk
+certificate from the complete `/map_server_node/transit_geometry` publication.
+Only explicit `mowing` area roles authorize the axle disk; raw obstacle/dock rings
+must remain beyond that disk plus the filled body's maximum reach. The budget
+uses one containing MOW ring, existing epsilon and a final whole-disk recheck.
+Missing/invalid geometry or a failed certificate keeps the path-only bound. The
+supported pose epoch is shared with arrival, and a mutex orders certificate use
+and output against complete geometry replacement. This does not qualify pivot
+rotation/departure or create a general per-command geofence gate.
+
 ## Files
 
 | File | Lines | Purpose |

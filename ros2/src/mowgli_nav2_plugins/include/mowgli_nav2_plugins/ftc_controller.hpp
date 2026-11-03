@@ -47,6 +47,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_nav2_plugins/ftc_blade_load.hpp"
 #include "mowgli_nav2_plugins/ftc_collision_monitor_hold.hpp"
+#include "mowgli_nav2_plugins/ftc_corner_geometry.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
@@ -146,6 +147,14 @@ private:
   std::optional<double> pivot_approach_speed_limit_;
   std::optional<double> pivot_approach_response_limit_;
   std::optional<std::pair<std::size_t, rclcpp::Time>> pivot_approach_start_;
+
+  // A geometry-qualified approach uses the same supported TF epoch as the
+  // point-bearing control. Complete replacements are ordered with output.
+  geometry_msgs::msg::Pose pivotMapPose() const;
+  std::optional<rclcpp::Time> pivot_pose_epoch_;
+  std::mutex corner_geometry_mutex_;
+  std::shared_ptr<const CornerGeometry> corner_geometry_;
+  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr corner_geometry_sub_;
 
   // ── Pivot corners (ftc_pivot.hpp) ─────────────────────────────────────────
 
