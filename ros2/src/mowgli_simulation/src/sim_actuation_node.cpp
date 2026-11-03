@@ -153,6 +153,9 @@ private:
 
   void on_high_level_status(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr status)
   {
+    // Finish elapsed virtual steps under the previous mode, just as command
+    // receipt finishes them under the previous command.
+    advance(now());
     bt_reported_mode_ = status->state;
     bt_status_receipt_ns_ = steady_now_ns();
   }
