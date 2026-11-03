@@ -494,6 +494,22 @@ void MapServerNode::publish_keepout_mask()
   {
     stamp_window_cells(dock_body_polygon_, obstacle_band, 100, cell_hits_obstacle);
   }
+  // Other fleet members' stations, before the carve-out: our corridor stays ours.
+  for (const auto& peer : peer_dock_rings_)
+  {
+    stamp_window_cells(peer.polygon,
+                       peer.margin_m,
+                       100,
+                       [margin = peer.margin_m](const geometry_msgs::msg::Point32& pt,
+                                                const geometry_msgs::msg::Polygon& ring)
+                       {
+                         return point_in_polygon(pt, ring) ||
+                                (margin > 0.0 &&
+                                 point_to_polygon_distance(static_cast<double>(pt.x),
+                                                           static_cast<double>(pt.y),
+                                                           ring) <= margin);
+                       });
+  }
 
   // Dock corridor carve-out: force every cell inside the corridor polygon
   // back to free (0), no matter what the previous passes set. Smac needs
@@ -557,7 +573,7 @@ void MapServerNode::publish_transit_geometry()
     // cannot recover from the rings.
     marker.scale.y = kind == "dock_body" ? dock_body_rear_m_ : 0.0;
     marker.color.a = 1;
-    const bool forbidden = kind == "obstacle" || kind == "dock_body";
+    const bool forbidden = kind == "obstacle" || kind == "dock_body" || kind == "peer_dock";
     marker.color.g = forbidden ? 0 : 1;
     marker.color.r = forbidden ? 1 : 0;
     for (const auto& p : polygon.points)
@@ -585,6 +601,8 @@ void MapServerNode::publish_transit_geometry()
     // way out (a failed docking stops next to the station). coverage_server reads it too.
     append(dock_body_polygon_, "dock_body", std::max(0.0, keepout_obstacle_margin_m_));
   }
+  for (const auto& peer : peer_dock_rings_)
+    append(peer.polygon, "peer_dock", peer.margin_m);
   transit_geometry_pub_->publish(snapshot);
 }
 

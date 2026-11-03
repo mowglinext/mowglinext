@@ -32,6 +32,7 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <nav2_msgs/msg/costmap_filter_info.hpp>
@@ -156,6 +157,11 @@ public:
 
   /// Test-only: report whether a current mow-progress grid is cached.
   bool mow_progress_cache_valid_for_test() const;
+
+  void on_peer_docks_for_test(geometry_msgs::msg::PoseArray::ConstSharedPtr msg)
+  {
+    on_peer_docks(std::move(msg));
+  }
 
   /// Clear all layers to their default values.
   void clear_map_layers();
@@ -1325,6 +1331,19 @@ private:
   ///                              the planner directly; body and corridor
   ///                              polygons drive all real behavior.
   geometry_msgs::msg::Polygon dock_body_polygon_;
+  /// The other fleet members' stations, from the GUI feed (/fleet/peer_docks),
+  /// sized like our own and judged against it (peer_dock_rings.hpp).
+  struct PeerDockRing
+  {
+    geometry_msgs::msg::Polygon polygon;
+    double margin_m{0.0};
+  };
+  std::vector<geometry_msgs::msg::Pose> peer_dock_poses_;
+  std::vector<PeerDockRing> peer_dock_rings_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr peer_docks_sub_;
+  void on_peer_docks(geometry_msgs::msg::PoseArray::ConstSharedPtr msg);
+  /// Call with map_mutex_ held.
+  void rebuild_peer_dock_rings();
   geometry_msgs::msg::Polygon dock_corridor_polygon_;
   geometry_msgs::msg::Polygon dock_exclusion_polygon_;
   bool has_dock_exclusion_{false};

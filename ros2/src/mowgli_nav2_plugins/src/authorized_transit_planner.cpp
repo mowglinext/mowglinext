@@ -126,11 +126,12 @@ void AuthorizedTransitPlanner::onGeometry(
     }
     if (marker.ns == "area" || marker.ns == "dock_corridor")
       next.allowed.push_back(std::move(ring));
-    else if (marker.ns == "obstacle" || marker.ns == "dock_body")
+    else if (marker.ns == "obstacle" || marker.ns == "dock_body" || marker.ns == "peer_dock")
     {
       valid &= std::isfinite(marker.scale.x) && marker.scale.x >= 0;
       next.blocked_margins.push_back(marker.scale.x);
       next.start_exempt.push_back(marker.ns == "dock_body");
+      next.margin_start_exempt.push_back(marker.ns == "peer_dock");
       next.blocked.push_back(std::move(ring));
     }
     else
@@ -163,7 +164,7 @@ bool AuthorizedTransitPlanner::costClearOutsideStartExempt(transit::Point a,
   for (int i = 0; i <= steps; ++i)
   {
     const auto p = transit::interpolate(a, b, static_cast<double>(i) / steps);
-    if (!geometry.insideStartExempt(p))
+    if (!geometry.insideStartExempt(p) && !geometry.insideMarginStartExempt(p))
       return costSegmentClear(p, b);
   }
   return true;
@@ -252,41 +253,47 @@ geometry_msgs::msg::PoseStamped AuthorizedTransitPlanner::dockExitAnchor(
     const transit::Geometry& relaxed,
     const std::function<void()>& check) const
 {
-  if (!geometry.dock)
+  const auto p = point(start);
+  // Only our own station has a head to keep off: a start in a peer station's margin just takes the
+  // nearest way out, and `relaxed` still keeps that station's object blocked.
+  const bool in_own_zone = geometry.insideStartExempt(p);
+  if (in_own_zone && !geometry.dock)
     throw nav2_core::StartOccupied(
         "Transit start inside the dock body, but the dock orientation is unknown");
-  const auto& dock = *geometry.dock;
-  const auto p = point(start);
-  const auto start_local = dock.local(p);
-  // The station head sits where the DOCKED robot's nose is: footprint front reach ahead of the dock
-  // pose (x = 0). Before taking its exit leg, the transit controller (RotationShim) may pivot in
-  // place about base_footprint to any heading, so on the approach axis the whole disc swept by the
-  // footprint around the start must stay short of the head by kStationClearance. This is
-  // heading-independent on purpose: the heading the shim pivots to is sampled along the path, not
-  // along the exit leg. A start BESIDE the body or BEYOND the head (it only got there by driving
-  // around the station) has no such line: refusing it would strand the robot, and it leaves
-  // sideways or away from the head below.
-  double front_reach = 0, sweep_radius = 0;
-  for (const auto& vertex : _costmap_ros->getRobotFootprint())
+  const auto start_local = in_own_zone ? geometry.dock->local(p) : transit::Point{0, 0};
+  const bool beyond_head = in_own_zone && start_local.x > geometry.dock->body_front;
+  if (in_own_zone)
   {
-    front_reach = std::max(front_reach, vertex.x);
-    sweep_radius = std::max(sweep_radius, std::hypot(vertex.x, vertex.y));
+    const auto& dock = *geometry.dock;
+    // The station head sits where the DOCKED robot's nose is: footprint front reach ahead of the
+    // dock pose (x = 0). Before taking its exit leg, the transit controller (RotationShim) may
+    // pivot in place about base_footprint to any heading, so on the approach axis the whole disc
+    // swept by the footprint around the start must stay short of the head by kStationClearance.
+    // This is heading-independent on purpose: the heading the shim pivots to is sampled along the
+    // path, not along the exit leg. A start BESIDE the body or BEYOND the head (it only got there
+    // by driving around the station) has no such line: refusing it would strand the robot, and it
+    // leaves sideways or away from the head below.
+    double front_reach = 0, sweep_radius = 0;
+    for (const auto& vertex : _costmap_ros->getRobotFootprint())
+    {
+      front_reach = std::max(front_reach, vertex.x);
+      sweep_radius = std::max(sweep_radius, std::hypot(vertex.x, vertex.y));
+    }
+    if (sweep_radius <= 0)
+      front_reach = sweep_radius = _costmap_ros->getRobotRadius();
+    const bool on_approach_axis = std::abs(start_local.y) <= dock.body_half_width && !beyond_head;
+    // Rear to the station (parked backwards on the tray): the exit leg lies straight ahead, nothing
+    // to pivot. A robot FACING it stays refused; the BT reverses it out (IsAtDockStation) and
+    // docking skips the staging leg, so neither ever needs this plan.
+    const double start_yaw = 2 * std::atan2(start.pose.orientation.z, start.pose.orientation.w);
+    const bool facing_away =
+        std::cos(start_yaw - std::atan2(dock.axis.y, dock.axis.x)) < -std::sqrt(0.5);
+    if (!std::isfinite(start_local.x) || !std::isfinite(start_local.y) ||
+        (on_approach_axis && !facing_away &&
+         start_local.x + sweep_radius > front_reach - kStationClearance))
+      throw nav2_core::StartOccupied(
+          "Transit start inside the dock body too close to the charging station to pivot out");
   }
-  if (sweep_radius <= 0)
-    front_reach = sweep_radius = _costmap_ros->getRobotRadius();
-  const bool beyond_head = start_local.x > dock.body_front;
-  const bool on_approach_axis = std::abs(start_local.y) <= dock.body_half_width && !beyond_head;
-  // Rear to the station (parked backwards on the tray): the exit leg lies straight ahead, nothing
-  // to pivot. A robot FACING it stays refused; the BT reverses it out (IsAtDockStation) and docking
-  // skips the staging leg, so neither ever needs this plan.
-  const double start_yaw = 2 * std::atan2(start.pose.orientation.z, start.pose.orientation.w);
-  const bool facing_away =
-      std::cos(start_yaw - std::atan2(dock.axis.y, dock.axis.x)) < -std::sqrt(0.5);
-  if (!std::isfinite(start_local.x) || !std::isfinite(start_local.y) ||
-      (on_approach_axis && !facing_away &&
-       start_local.x + sweep_radius > front_reach - kStationClearance))
-    throw nav2_core::StartOccupied(
-        "Transit start inside the dock body too close to the charging station to pivot out");
   unsigned mx, my;
   if (!private_map_.worldToMap(p.x, p.y, mx, my))
     throw nav2_core::StartOccupied("Transit start inside the dock body, outside the costmap");
@@ -310,10 +317,14 @@ geometry_msgs::msg::PoseStamped AuthorizedTransitPlanner::dockExitAnchor(
       // The exit leg never closes on the station head: from anywhere up to the head, the exit cell
       // lies no further along the dock axis than the start, which leaves backwards (the undock
       // direction) or sideways. From beyond the head it lies no nearer to it.
-      const double exit_x = dock.local(q).x;
-      if (d >= best || d > kDockExitLimit ||
-          (beyond_head ? exit_x < start_local.x : exit_x > start_local.x))
+      if (d >= best || d > kDockExitLimit)
         continue;
+      if (in_own_zone)
+      {
+        const double exit_x = geometry.dock->local(q).x;
+        if (beyond_head ? exit_x < start_local.x : exit_x > start_local.x)
+          continue;
+      }
       // The exit cell must be clear of EVERYTHING, the dock body included. Only the leg from the
       // start to it is judged without the dock body: every other obstacle and the authorized union
       // still apply to it, and so do the obstacle costs.
@@ -330,7 +341,7 @@ geometry_msgs::msg::PoseStamped AuthorizedTransitPlanner::dockExitAnchor(
   if (!std::isfinite(best))
     throw nav2_core::StartOccupied("Transit start inside the dock body without a clear way out");
   RCLCPP_INFO(_logger,
-              "Transit starts in the dock body zone at (%.2f, %.2f), %.2f m behind the dock pose: "
+              "Transit starts in a dock zone at (%.2f, %.2f), %.2f m behind our dock pose: "
               "leaving it through (%.2f, %.2f), %.2f m away",
               p.x,
               p.y,
@@ -436,9 +447,11 @@ nav_msgs::msg::Path AuthorizedTransitPlanner::createPlan(
   // is judged without that ring and without the mask's lethal cells for it, and connected to clear
   // ground by a bounded exit leg that never closes on the station (dockExitAnchor); a GOAL in it
   // stays refused, and the search and every path segment keep the whole ring blocked.
-  const bool start_in_dock_body = geometry.insideStartExempt(point(start));
+  // A start in a peer station's margin takes the same bounded way out.
+  const bool start_in_dock_body =
+      geometry.insideStartExempt(point(start)) || geometry.insideMarginStartExempt(point(start));
   const transit::Geometry relaxed =
-      start_in_dock_body ? geometry.withoutStartExempt() : transit::Geometry{};
+      start_in_dock_body ? geometry.relaxedForStart(point(start)) : transit::Geometry{};
   if (start_in_dock_body ? !relaxed.clear(point(start)) : occupied(start, geometry))
     throw nav2_core::StartOccupied("Transit start occupied by an obstacle");
   if (occupied(goal, geometry))

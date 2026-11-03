@@ -225,6 +225,10 @@ struct Geometry
   // and a start there must plan its way OUT. Goals, search cells and every path segment still
   // treat the ring as blocked.
   std::vector<bool> start_exempt;
+  // Parallel to `blocked`: a START in such a ring's margin (not in the ring) may leave. Another
+  // fleet member's station: its object stays blocked even for that leg, since we have no reason to
+  // drive onto it, and a margin must not strand a robot that a lateral skirt put there.
+  std::vector<bool> margin_start_exempt;
   // Set only when the snapshot carries exactly one dock body and one approach corridor; without
   // it a start inside the dock body cannot be oriented and stays START_OCCUPIED.
   std::optional<DockFrame> dock;
@@ -239,6 +243,18 @@ struct Geometry
   {
     return i < start_exempt.size() && start_exempt[i];
   }
+  bool marginStartExempt(std::size_t i) const
+  {
+    return i < margin_start_exempt.size() && margin_start_exempt[i];
+  }
+  bool insideMarginStartExempt(Point p) const
+  {
+    for (std::size_t i = 0; i < blocked.size(); ++i)
+      if (marginStartExempt(i) && !inside(p, blocked[i]) &&
+          ringDistance(p, blocked[i]) <= margin(i) + kEpsilon)
+        return true;
+    return false;
+  }
   bool insideStartExempt(Point p) const
   {
     for (std::size_t i = 0; i < blocked.size(); ++i)
@@ -246,24 +262,25 @@ struct Geometry
         return true;
     return false;
   }
-  // The same geometry without the start-exempt rings: what a start inside one of them is judged
-  // and connected against.
-  Geometry withoutStartExempt() const
+  // What a start at `p` inside an exempt zone is judged and connected against: the dock body is
+  // gone only if `p` is in its zone, and every peer station keeps its object but loses its margin.
+  Geometry relaxedForStart(Point p) const
   {
+    const bool in_own_zone = insideStartExempt(p);
     Geometry result;
     result.allowed = allowed;
     result.dock = dock;
     result.obstacle_margin = obstacle_margin;
     for (std::size_t i = 0; i < blocked.size(); ++i)
     {
-      if (startExempt(i))
+      if (startExempt(i) && in_own_zone)
       {
         // The ring itself is ground the leg may cross, even where no area covers the station.
         result.allowed.push_back(blocked[i]);
         continue;
       }
       result.blocked.push_back(blocked[i]);
-      result.blocked_margins.push_back(margin(i));
+      result.blocked_margins.push_back(marginStartExempt(i) ? 0.0 : margin(i));
     }
     return result;
   }

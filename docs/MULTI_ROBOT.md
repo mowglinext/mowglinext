@@ -223,6 +223,21 @@ scanner still sees the neighbour's real body and the LOCAL `obstacle_layer`
 keeps old fleet marks until a scan raytraces them away; both are unverified
 on hardware.
 
+**Stations of the other mowers.** A docked peer is only visible while its robot is
+on it, and an empty station is an object too. So each robot advertises its dock pose
+in its fleet identity, the registry persists it with the peer's datum (it stays
+known while the peer is offline), and the feed publishes `/fleet/peer_docks`, every
+peer's station in our map frame, every tick, once empty when the last peer is removed.
+`map_server` builds a ring sized like our own station (one body model per robot; a
+peer with a very different station is approximated). Lethal in the mask, forbidden in
+the transit geometry, a hole or notch in coverage, re-projected per robot, and never in
+`areas.dat` or the map push. It can never block our own dock (`peer_dock_rings.hpp`):
+overlapping our dock or corridor = ignored with a warning, margin reaching the corridor
+= object only. This complements `/fleet/peer_obstacles`, which still follows the robot.
+A peer's pose changing, or the first list after a restart, rebuilds the mask (transit
+pauses for the settle time, about 1.5 s) and changes the plan fingerprint of any area
+the station touches, so an interrupted mow of that area restarts.
+
 **Yield rule** (the coordinator, only while coordination is ON): when a peer
 WITH PRIORITY (smaller `robot_id`) is autonomous within `yield_distance_m`
 (3.0 m) of us while we are mowing, planning or in transit, the coordinator

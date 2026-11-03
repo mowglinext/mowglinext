@@ -714,6 +714,11 @@ struct FieldWithKeepout
 FieldWithKeepout subtractKeepoutFromField(const f2c::types::LinearRing& shell,
                                           const f2c::types::LinearRing& keepout);
 
+// Union of the rings that overlap; rings that touch nothing come back untouched,
+// so a lone station stays bit-identical. Pure function — testable.
+std::vector<f2c::types::LinearRing> mergeOverlappingRings(
+    const std::vector<f2c::types::LinearRing>& rings);
+
 }  // namespace mowgli_coverage
 
 #endif  // MOWGLI_COVERAGE__COVERAGE_PLANNING_HPP_

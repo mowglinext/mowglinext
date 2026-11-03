@@ -3170,24 +3170,70 @@ std::vector<const OGRPolygon*> polygonParts(const OGRGeometry* g)
 
 }  // namespace
 
+namespace
+{
+OGRPolygon ringToPolygon(const f2c::types::LinearRing& ring)
+{
+  OGRLinearRing ogr_ring;
+  for (std::size_t i = 0; i < ring.size(); ++i)
+  {
+    const auto p = ring.getGeometry(i);
+    ogr_ring.addPoint(p.getX(), p.getY());
+  }
+  ogr_ring.closeRings();
+  OGRPolygon poly;
+  poly.addRing(&ogr_ring);
+  return poly;
+}
+
+f2c::types::LinearRing exteriorToRing(const OGRPolygon& polygon)
+{
+  const OGRLinearRing* ext = polygon.getExteriorRing();
+  f2c::types::LinearRing ring;
+  for (int i = 0; i < ext->getNumPoints(); ++i)
+  {
+    ring.addPoint(f2c::types::Point(ext->getX(i), ext->getY(i)));
+  }
+  return dedupClosedRing(ring);
+}
+}  // namespace
+
+std::vector<f2c::types::LinearRing> mergeOverlappingRings(
+    const std::vector<f2c::types::LinearRing>& rings)
+{
+  std::vector<f2c::types::LinearRing> merged = rings;
+  for (bool changed = true; changed;)
+  {
+    changed = false;
+    for (std::size_t i = 0; i < merged.size() && !changed; ++i)
+    {
+      for (std::size_t j = i + 1; j < merged.size() && !changed; ++j)
+      {
+        const OGRPolygon a = ringToPolygon(merged[i]);
+        const OGRPolygon b = ringToPolygon(merged[j]);
+        if (!a.IsValid() || !b.IsValid() || !a.Intersects(&b))
+        {
+          continue;
+        }
+        const std::unique_ptr<OGRGeometry> joined(a.Union(&b));
+        const auto parts = joined ? polygonParts(joined.get()) : std::vector<const OGRPolygon*>{};
+        if (parts.size() == 1 && parts.front()->getExteriorRing() != nullptr)
+        {
+          merged[i] = exteriorToRing(*parts.front());
+          merged.erase(merged.begin() + static_cast<std::ptrdiff_t>(j));
+          changed = true;
+        }
+      }
+    }
+  }
+  return merged;
+}
+
 FieldWithKeepout subtractKeepoutFromField(const f2c::types::LinearRing& shell,
                                           const f2c::types::LinearRing& keepout)
 {
-  const auto to_polygon = [](const f2c::types::LinearRing& ring)
-  {
-    OGRLinearRing ogr_ring;
-    for (std::size_t i = 0; i < ring.size(); ++i)
-    {
-      const auto p = ring.getGeometry(i);
-      ogr_ring.addPoint(p.getX(), p.getY());
-    }
-    ogr_ring.closeRings();
-    OGRPolygon poly;
-    poly.addRing(&ogr_ring);
-    return poly;
-  };
-  const OGRPolygon field = to_polygon(shell);
-  const OGRPolygon forbidden = to_polygon(keepout);
+  const OGRPolygon field = ringToPolygon(shell);
+  const OGRPolygon forbidden = ringToPolygon(keepout);
   // Envelopes first: a recorded line crossing itself must not turn a station that
   // is nowhere near it into a hole, which would change the plan for nothing.
   OGREnvelope field_box, forbidden_box;
@@ -3226,13 +3272,7 @@ FieldWithKeepout subtractKeepoutFromField(const f2c::types::LinearRing& shell,
   {
     return as_hole;
   }
-  const OGRLinearRing* ext = largest->getExteriorRing();
-  f2c::types::LinearRing ring;
-  for (int i = 0; i < ext->getNumPoints(); ++i)
-  {
-    ring.addPoint(f2c::types::Point(ext->getX(i), ext->getY(i)));
-  }
-  return {dedupClosedRing(ring), std::nullopt, total_area - kept_area};
+  return {exteriorToRing(*largest), std::nullopt, total_area - kept_area};
 }
 
 f2c::types::Cell removeNarrowBoundaryTongues(const f2c::types::Cell& in,
