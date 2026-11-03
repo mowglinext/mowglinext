@@ -1293,7 +1293,13 @@ BT::NodeStatus FollowStrip::onRunning()
       checkCoveragePlausibility(ctx);
       saveCoverageResumeState(*ctx);
     }
-    if (swaths_skipped_ >= swaths_.size())
+    // Units already mowed on an earlier pass are never dispatched, so they cannot count as skipped:
+    // comparing against swaths_.size() alone hid a blocked pose from the recovery and from the
+    // exemption below as soon as one unit of the area was done, and the area was retired for it.
+    const bool every_dispatched_unit_refused = swaths_skipped_ > 0 &&
+                                               swaths_mowed_this_pass_ == 0 &&
+                                               swaths_skipped_start_occupied_ == swaths_skipped_;
+    if (swaths_skipped_ >= swaths_.size() || every_dispatched_unit_refused)
     {
       // Issue #487. Two very different reasons land here; only one of them is
       // "this area cannot be mowed".
@@ -1309,18 +1315,17 @@ BT::NodeStatus FollowStrip::onRunning()
       //     spot, so reversing again drives deeper, and picking a direction is
       //     a maintainer decision (see the proposal in the PR for #487).
       // (b) anything else: genuinely unreachable goals this pass.
-      const bool start_pose_blocked = swaths_skipped_ > 0 && swaths_mowed_this_pass_ == 0 &&
-                                      swaths_skipped_start_occupied_ == swaths_skipped_;
-      if (start_pose_blocked)
+      if (every_dispatched_unit_refused)
       {
         ctx->coverage_start_blocked = true;
         ctx->start_blocked_area = area_idx_;
         RCLCPP_WARN(ctx->node->get_logger(),
-                    "FollowStrip: all %zu sub-path transits were refused with START_OCCUPIED and "
-                    "0 swaths were mowed — the ROBOT'S OWN POSE is blocked (standing on a lethal "
+                    "FollowStrip: all %zu dispatched sub-path transits were refused with "
+                    "START_OCCUPIED and 0 swaths were mowed — the ROBOT'S OWN POSE is blocked "
+                    "(standing on a lethal "
                     "or keepout cell), NOT area %u. Keeping the area for a retry instead of "
                     "declaring it unmowable (issue #487)",
-                    swaths_.size(),
+                    swaths_skipped_,
                     area_idx_);
         return BT::NodeStatus::FAILURE;
       }
@@ -1817,6 +1822,34 @@ BT::NodeStatus FollowStrip::onRunning()
                 reached_idx,
                 path_progress_idx_,
                 kNonObstacleAbortSkipM);
+    // Re-dispatch the REST of this unit from the stepped cursor instead of moving
+    // on: the cursor is one scalar over all units, so completing a later unit
+    // would book everything left behind here as mowed (unit_resume.hpp).
+    UnitResumeDecision resume;
+    if (swath_idx_ < swaths_.size())
+    {
+      const auto& unit = swaths_[swath_idx_].poses;
+      resume = DecideUnitResume(unit.size(),
+                                reached_idx,
+                                path_progress_idx_,
+                                unit_resumes_without_progress_);
+      if (UnitResumeBudgetSpent(resume))
+      {
+        // One bad stretch must not cost the rest of the unit, which can be the whole zone.
+        const std::size_t leap_idx = forwardSkipIndex(unit, path_progress_idx_, kUnitResumeLeapM);
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "FollowStrip: unit %zu/%zu — %zu resumes in a row drove nowhere; leaving this "
+                    "stretch behind: resume cursor %zu→%zu poses (~%.0fm)",
+                    swath_idx_ + 1,
+                    swaths_.size(),
+                    resume.consecutive,
+                    path_progress_idx_,
+                    leap_idx,
+                    kUnitResumeLeapM);
+        path_progress_idx_ = leap_idx;
+        resume = DecideUnitResume(unit.size(), reached_idx, leap_idx, 0);
+      }
+    }
     // Persist the (advanced) cursor so the next dispatch resumes past the abort
     // feature instead of re-mowing from the start or re-aborting in place, and so
     // the partial coverage_percent keeps GetNextUnmowedArea from abandoning a
@@ -1824,16 +1857,9 @@ BT::NodeStatus FollowStrip::onRunning()
     persistResumeCursor(ctx);
     follow_handle_.reset();
 
-    // Re-dispatch the REST of this unit from the stepped cursor instead of moving
-    // on: the cursor is one scalar over all units, so completing a later unit
-    // would book everything left behind here as mowed (unit_resume.hpp).
     if (swath_idx_ < swaths_.size())
     {
       const std::size_t unit_poses = swaths_[swath_idx_].poses.size();
-      const UnitResumeDecision resume = DecideUnitResume(unit_poses,
-                                                         reached_idx,
-                                                         path_progress_idx_,
-                                                         unit_resumes_without_progress_);
       unit_resumes_without_progress_ = resume.consecutive;
       if (resume.resume)
       {
