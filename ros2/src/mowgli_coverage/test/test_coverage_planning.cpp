@@ -1211,6 +1211,18 @@ TEST(CoverageKeepout, StationOnAnInvalidFieldIsStillKept)
   EXPECT_TRUE(edited.hole.has_value());
 }
 
+TEST(CoverageKeepout, StationsSideBySideMergeAndALoneOneStaysUntouched)
+{
+  const auto lone = rectangleRing(20, 20, 21, 21);
+  const auto merged = mowgli_coverage::mergeOverlappingRings(
+      {rectangleRing(4, 4, 5, 5), lone, rectangleRing(4.5, 4, 5.5, 5)});
+  ASSERT_EQ(merged.size(), 2u);
+  EXPECT_TRUE(ringHolds(merged[0], 4.2, 4.5));
+  EXPECT_TRUE(ringHolds(merged[0], 5.3, 4.5));
+  ASSERT_EQ(merged[1].size(), lone.size());
+  EXPECT_DOUBLE_EQ(merged[1].getGeometry(1).getX(), lone.getGeometry(1).getX());
+}
+
 TEST(CoverageKeepout, StationInsideTheFieldIsAHole)
 {
   const auto edited = mowgli_coverage::subtractKeepoutFromField(rectangleRing(0, 0, 10, 10),

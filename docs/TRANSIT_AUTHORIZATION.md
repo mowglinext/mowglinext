@@ -72,6 +72,13 @@ the search grid and every path segment after the exit leg keep the whole ring an
 its margin forbidden, so a transit can leave the dock zone but never enter or
 cross it.
 
+Other fleet members' stations arrive as `peer_dock` rings (`/fleet/peer_docks`, see
+`docs/MULTI_ROBOT.md`), forbidden with the body margin even while their robot is away.
+They can never block our own dock: a ring overlapping our dock body or corridor is
+ignored with a warning, and one whose margin would reach our corridor keeps only the
+object (`peer_dock_rings.hpp`). A start in a peer's margin leaves by the same bounded
+leg, but the object itself stays blocked for it.
+
 Coverage plans around the same ring: `coverage_server` reads `dock_body` from this
 snapshot and grows it by `obstacle_margin`, as a hole when it lies inside the area
 and a notch when it crosses the recorded line (an area with no overlap plans

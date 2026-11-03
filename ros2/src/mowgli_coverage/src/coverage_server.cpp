@@ -143,7 +143,7 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
         std::vector<geometry_msgs::msg::Polygon> next;
         for (const auto& marker : msg->markers)
         {
-          if (marker.ns != "dock_body")
+          if (marker.ns != "dock_body" && marker.ns != "peer_dock")
           {
             continue;
           }
@@ -360,14 +360,18 @@ f2c::types::Cell buildCellFromGoal(const mowgli_interfaces::action::PlanCoverage
 
   f2c::types::LinearRing shell = make_ring(goal.outer_boundary);
   std::vector<f2c::types::LinearRing> keepout_holes;
+  std::vector<f2c::types::LinearRing> grown_keepouts;
   for (const auto& keepout : keepouts)
   {
-    if (keepout.points.size() < 3)
+    if (keepout.points.size() >= 3)
     {
-      continue;
+      grown_keepouts.push_back(bufferRingOutward(make_ring(keepout), obstacle_margin));
     }
-    auto edited =
-        subtractKeepoutFromField(shell, bufferRingOutward(make_ring(keepout), obstacle_margin));
+  }
+  // Stations side by side overlap once grown, and overlapping holes are not a valid cell.
+  for (const auto& grown : mergeOverlappingRings(grown_keepouts))
+  {
+    auto edited = subtractKeepoutFromField(shell, grown);
     if (edited.dropped_area > 0.0)
     {
       RCLCPP_WARN(rclcpp::get_logger("coverage_server"),

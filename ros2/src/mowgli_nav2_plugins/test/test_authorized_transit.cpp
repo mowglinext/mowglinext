@@ -91,7 +91,7 @@ TEST(TransitGeometry, StartExemptRingsAreBlockedUntilTheyAreLeftOut)
   EXPECT_TRUE(geometry.insideStartExempt({0.5, 0.5}));
   EXPECT_FALSE(geometry.insideStartExempt({3.5, 0.5}));
   EXPECT_FALSE(geometry.clear({0.5, 0.5}));
-  const auto relaxed = geometry.withoutStartExempt();
+  const auto relaxed = geometry.relaxedForStart({0.5, 0.5});
   EXPECT_TRUE(relaxed.clear({0.5, 0.5}));
   EXPECT_FALSE(relaxed.clear({3.5, 0.5}));
   EXPECT_FALSE(relaxed.clear({3.05, 1.05}));  // the other ring keeps its own margin
@@ -347,7 +347,8 @@ protected:
                 const std::vector<Ring>& obstacles = {},
                 double obstacle_margin = 0,
                 const std::vector<Ring>& dock_bodies = {},
-                const std::vector<Ring>& dock_corridors = {})
+                const std::vector<Ring>& dock_corridors = {},
+                const std::vector<Ring>& peer_docks = {})
   {
     auto message = std::make_shared<visualization_msgs::msg::MarkerArray>();
     const auto add = [&](const Ring& ring, const char* ns, double scale, double scale_y = 0)
@@ -375,6 +376,8 @@ protected:
       add(ring, "dock_corridor", 0.01);
     for (const auto& ring : dock_bodies)
       add(ring, "dock_body", kDockBodyMargin, kDockBodyRear);
+    for (const auto& ring : peer_docks)
+      add(ring, "peer_dock", kDockBodyMargin);
     planner_.onGeometry(message);
   }
   // A dock at (x, y, yaw) inside the 8 x 4 m test area, laid out as map_server publishes it.
@@ -633,6 +636,45 @@ TEST_F(DockedTransitPlannerTest, TrayOutsideEveryAreaStillLetsABackwardsRobotOut
   geometry({rectangle(-4, 0, 0.5, 4)}, {}, 0, {dockBody(1, 2, 0)}, {dockCorridor(1, 2, 0)});
   const Point start = dockPoint(1, 2, 0, 0, 0);
   EXPECT_NO_THROW(plan(start, M_PI, {-3, 2}));
+}
+TEST_F(DockedTransitPlannerTest, TransitRoutesAroundAPeerStation)
+{
+  const Ring peer = dockBody(0, 2, 0);
+  geometry({rectangle(-4, 0, 4, 4)}, {}, 0, {}, {}, {peer});
+  const auto path = plan({-2, 2}, 0, {2.5, 2});
+  Geometry peer_only;
+  peer_only.blocked = {peer};
+  peer_only.blocked_margins = {kDockBodyMargin};
+  for (const auto& pose : path.poses)
+    EXPECT_TRUE(peer_only.clear({pose.pose.position.x, pose.pose.position.y}));
+  EXPECT_THROW(plan({-2, 2}, 0, dockPoint(0, 2, 0, 0.3, 0)), nav2_core::GoalOccupied);
+}
+// A lateral skirt can leave the robot in a peer station's margin: it must not be stranded there.
+TEST_F(DockedTransitPlannerTest, StartInAPeerStationMarginLeavesWithoutCrossingIt)
+{
+  const Ring peer = dockBody(0, 2, 0);
+  geometry({rectangle(-4, 0, 4, 4)}, {}, 0, {}, {}, {peer});
+  stampLethal(dockPoint(0, 2, 0, -0.395, -0.55), dockPoint(0, 2, 0, 0.955, 0.55));
+  const auto path = plan(dockPoint(0, 2, 0, 0.3, 0.4), 0, {-3, 1});
+  ASSERT_GE(path.poses.size(), 3U);
+  Geometry object_only;
+  object_only.blocked = {peer};
+  object_only.blocked_margins = {0.0};
+  for (std::size_t i = 1; i < path.poses.size(); ++i)
+    EXPECT_TRUE(
+        object_only.segmentClear({path.poses[i - 1].pose.position.x,
+                                  path.poses[i - 1].pose.position.y},
+                                 {path.poses[i].pose.position.x, path.poses[i].pose.position.y}));
+}
+// A start in our dock zone must not be released from a neighbour's object.
+TEST_F(DockedTransitPlannerTest, LeavingOurDockZoneStillAvoidsAPeerStationBeside)
+{
+  // The side-by-side site: map_server publishes such a neighbour with margin 0.
+  const std::vector<Ring> message{dockBody(1, 2.53, 0)};
+  geometry({rectangle(-4, 0, 4, 4)}, {}, 0, {dockBody(1, 2, 0)}, {dockCorridor(1, 2, 0)}, message);
+  const Point start = dockPoint(1, 2, 0, -0.3, 0);
+  const auto path = plan(start, M_PI, {-3, 2});
+  EXPECT_DOUBLE_EQ(path.poses.back().pose.position.x, -3);
 }
 // Beside the station is not on its approach line: refusing there would strand the robot.
 TEST_F(DockedTransitPlannerTest, StartBesideTheStationLeavesWithoutClosingOnIt)

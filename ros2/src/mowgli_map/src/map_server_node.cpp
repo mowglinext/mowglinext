@@ -38,6 +38,7 @@
 
 #include "mowgli_interfaces/wgs84_projection.hpp"
 #include "mowgli_map/internal_helpers.hpp"
+#include "mowgli_map/peer_dock_rings.hpp"
 #include <grid_map_core/GridMap.hpp>
 #include <grid_map_core/GridMapMath.hpp>
 #include <grid_map_core/iterators/CircleIterator.hpp>
@@ -281,6 +282,14 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   invalidate_keepout_mask();
 
   // ── Subscribers ──────────────────────────────────────────────────────────
+  peer_docks_sub_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/fleet/peer_docks",
+      rclcpp::QoS(5),
+      [this](geometry_msgs::msg::PoseArray::ConstSharedPtr msg)
+      {
+        on_peer_docks(std::move(msg));
+      });
+
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
       "/map",
       rclcpp::QoS(1),
@@ -733,6 +742,7 @@ void MapServerNode::rebuild_dock_polygons()
               body_front,
               std::max(body_half_width, corridor_half_width));
   has_dock_exclusion_ = true;
+  rebuild_peer_dock_rings();
   RCLCPP_INFO(get_logger(),
               "Dock polygons: pose=(%.2f, %.2f) yaw=%.2f rad — "
               "body %.2fm × %.2fm (forbidden, %.2fm behind the pose to %.2fm ahead), "
@@ -746,6 +756,83 @@ void MapServerNode::rebuild_dock_polygons()
               body_front,
               corridor_back - body_rear,
               2.0 * corridor_half_width);
+}
+
+void MapServerNode::rebuild_peer_dock_rings()
+{
+  peer_dock_rings_.clear();
+  const double margin = std::max(keepout_obstacle_margin_m_, 0.0);
+  const double half_width = 0.5 * dock_body_width_m_;
+  for (const auto& pose : peer_dock_poses_)
+  {
+    const double yaw = 2.0 * std::atan2(pose.orientation.z, pose.orientation.w);
+    const double c = std::cos(yaw);
+    const double s = std::sin(yaw);
+    geometry_msgs::msg::Polygon ring;
+    const double corners[][2] = {
+        {dock_body_length_m_ - dock_body_rear_m_, half_width},
+        {dock_body_length_m_ - dock_body_rear_m_, -half_width},
+        {-dock_body_rear_m_, -half_width},
+        {-dock_body_rear_m_, half_width},
+    };
+    for (const auto& corner : corners)
+    {
+      geometry_msgs::msg::Point32 point;
+      point.x = static_cast<float>(pose.position.x + c * corner[0] - s * corner[1]);
+      point.y = static_cast<float>(pose.position.y + s * corner[0] + c * corner[1]);
+      ring.points.push_back(point);
+    }
+    ring.points.push_back(ring.points.front());
+
+    switch (classify_peer_dock(ring, dock_body_polygon_, dock_corridor_polygon_, margin))
+    {
+      case PeerDockUse::kIgnored:
+        RCLCPP_WARN(get_logger(),
+                    "Peer station at (%.2f, %.2f) overlaps this robot's own dock or approach "
+                    "corridor: ignored, so it cannot block docking. Check both dock poses.",
+                    pose.position.x,
+                    pose.position.y);
+        break;
+      case PeerDockUse::kBareRing:
+        peer_dock_rings_.push_back({std::move(ring), 0.0});
+        break;
+      case PeerDockUse::kFull:
+        peer_dock_rings_.push_back({std::move(ring), margin});
+        break;
+    }
+  }
+}
+
+void MapServerNode::on_peer_docks(geometry_msgs::msg::PoseArray::ConstSharedPtr msg)
+{
+  // Sent at 5 Hz and stable in normal operation; rebuilding pauses transit for
+  // the settle time, so only a real move counts.
+  constexpr double kMovedM = 0.02;
+  constexpr double kMovedQuat = 0.01;
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    const bool same =
+        msg->poses.size() == peer_dock_poses_.size() &&
+        std::equal(msg->poses.begin(),
+                   msg->poses.end(),
+                   peer_dock_poses_.begin(),
+                   [](const geometry_msgs::msg::Pose& a, const geometry_msgs::msg::Pose& b)
+                   {
+                     return std::hypot(a.position.x - b.position.x, a.position.y - b.position.y) <
+                                kMovedM &&
+                            std::abs(a.orientation.z - b.orientation.z) < kMovedQuat &&
+                            std::abs(a.orientation.w - b.orientation.w) < kMovedQuat;
+                   });
+    if (same)
+    {
+      return;
+    }
+    peer_dock_poses_.assign(msg->poses.begin(), msg->poses.end());
+    rebuild_peer_dock_rings();
+    masks_dirty_ = true;
+  }
+  RCLCPP_INFO(get_logger(), "Peer stations: %zu", msg->poses.size());
+  defer_mask_rebuild();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
