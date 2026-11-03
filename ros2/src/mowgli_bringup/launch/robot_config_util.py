@@ -340,6 +340,24 @@ def dock_body_extents(params):
     return rear_m, max(length, front + DOCK_HEAD_DEPTH_M + rear_m)
 
 
+# The transit planner's kStationClearance (authorized_transit_planner), plus slack.
+DOCK_STATION_PIVOT_CLEARANCE_M = 0.10
+DOCK_STATION_ZONE_SLACK_M = 0.05
+
+
+def dock_no_pivot_distance(params):
+    """behavior_tree_node.dock_no_pivot_distance_m.
+
+    How far behind the dock pose a robot facing the station can no longer pivot
+    without swinging its nose into the head, so the planner refuses it. Inside,
+    the BT docks straight in or reverses out instead, so it must be at least the
+    planner's own limit: the slack makes the BT take over first.
+    """
+    front, _rear, _half_width = chassis_footprint(params)
+    reach = chassis_circumscribed_radius(params) - front + DOCK_STATION_PIVOT_CLEARANCE_M
+    return max(reach + DOCK_STATION_ZONE_SLACK_M, 0.0)
+
+
 def dig_skip_radius(params):
     """behavior_tree_node.dig_skip_radius_m: coverage poses skipped around a dig.
 

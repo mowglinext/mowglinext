@@ -123,6 +123,8 @@ private:
       observations_->context->undock_start_recorded = true;
     if (tag_ == "CalibrateHeadingFromUndock")
       observations_->context->undock_start_recorded = false;
+    if (tag_ == "IsAtDockStation")
+      return Status::FAILURE;
     if (tag_ == "IsUndockInterrupted")
       return observations_->context->undock_start_recorded ? Status::SUCCESS : Status::FAILURE;
     if (tag_ == "IsCharging")

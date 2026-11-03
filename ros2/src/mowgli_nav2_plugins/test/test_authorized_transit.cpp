@@ -621,6 +621,19 @@ TEST_F(DockedTransitPlannerTest, StartTooCloseToTheStationToPivotIsStillOccupied
   // On the tray itself, where the charger put it.
   EXPECT_THROW(plan(dockPoint(1, 2, yaw, 0, 0), yaw, {-3, 1}), nav2_core::StartOccupied);
 }
+TEST_F(DockedTransitPlannerTest, ParkedBackwardsOnTheTrayDrivesStraightOut)
+{
+  dockGeometry(1, 2, 0);
+  const Point start = dockPoint(1, 2, 0, 0, 0);
+  const auto path = plan(start, M_PI, {-3, 2});
+  expectLeavesTheBodyAwayFromTheStation(path, 1, 2, 0, start);
+}
+TEST_F(DockedTransitPlannerTest, TrayOutsideEveryAreaStillLetsABackwardsRobotOut)
+{
+  geometry({rectangle(-4, 0, 0.5, 4)}, {}, 0, {dockBody(1, 2, 0)}, {dockCorridor(1, 2, 0)});
+  const Point start = dockPoint(1, 2, 0, 0, 0);
+  EXPECT_NO_THROW(plan(start, M_PI, {-3, 2}));
+}
 // Beside the station is not on its approach line: refusing there would strand the robot.
 TEST_F(DockedTransitPlannerTest, StartBesideTheStationLeavesWithoutClosingOnIt)
 {

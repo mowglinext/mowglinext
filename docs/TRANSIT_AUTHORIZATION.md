@@ -61,8 +61,13 @@ sweeps around the start (radius = farthest footprint vertex) must end
 `kStationClearance` (0.10 m) short of the head, taken to begin at the docked
 robot's nose (footprint front reach ahead of the dock pose). With the shipped
 footprint (front 0.53 m, sweep radius 0.597 m) that admits starts at least
-0.167 m behind the dock pose; nearer starts, the docked pose included, stay
-`START_OCCUPIED` (the undock is a BackUp, not a transit). Goals in the dock zone,
+0.167 m behind the dock pose; nearer starts facing the station stay
+`START_OCCUPIED`. Neither docking nor undocking ever needs that plan, so the
+refusal blocks nothing: within `dock_no_pivot_distance_m` (slightly wider than the
+planner's limit) `DockRobot` skips the staging leg and drives straight in, with
+docking_server reversing to staging for its retry, and the `BackOutOfStation`
+branch reverses out on a start without charge. A robot with its rear to the
+station has no pivot to make and leaves straight ahead. Goals in the dock zone,
 the search grid and every path segment after the exit leg keep the whole ring and
 its margin forbidden, so a transit can leave the dock zone but never enter or
 cross it.

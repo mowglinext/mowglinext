@@ -63,6 +63,7 @@ from robot_config_util import (  # noqa: E402
     dig_proposal_radius,
     dig_skip_radius,
     dock_body_extents,
+    dock_no_pivot_distance,
     keepout_obstacle_margin,
     load_robot_params,
     resolve_lidar_enabled,
@@ -410,6 +411,12 @@ def generate_launch_description() -> LaunchDescription:
             # replaces the pending dig KEEPOUT, which blocked planning from the
             # robot's own pose (START_OCCUPIED, 2026-09-17).
             {"dig_skip_radius_m": dig_skip_radius(robot_params)},
+            {"dock_no_pivot_distance_m": dock_no_pivot_distance(robot_params)},
+            {"dock_body_half_width_m": float(robot_params.get("dock_body_width_m", 0.55)) / 2.0},
+            {
+                "dock_body_front_m": dock_body_extents(robot_params)[1]
+                - dock_body_extents(robot_params)[0]
+            },
             # Area-recording boundary resolution. Both were hardcoded in
             # main_tree.xml (0.2 m Douglas-Peucker tolerance, 2 Hz sampling),
             # which cost a field recording all but 24 vertices of a 38 m

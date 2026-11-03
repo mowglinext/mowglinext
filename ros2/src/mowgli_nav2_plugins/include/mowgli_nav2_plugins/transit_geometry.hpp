@@ -257,7 +257,11 @@ struct Geometry
     for (std::size_t i = 0; i < blocked.size(); ++i)
     {
       if (startExempt(i))
+      {
+        // The ring itself is ground the leg may cross, even where no area covers the station.
+        result.allowed.push_back(blocked[i]);
         continue;
+      }
       result.blocked.push_back(blocked[i]);
       result.blocked_margins.push_back(margin(i));
     }

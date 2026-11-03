@@ -276,8 +276,15 @@ geometry_msgs::msg::PoseStamped AuthorizedTransitPlanner::dockExitAnchor(
     front_reach = sweep_radius = _costmap_ros->getRobotRadius();
   const bool beyond_head = start_local.x > dock.body_front;
   const bool on_approach_axis = std::abs(start_local.y) <= dock.body_half_width && !beyond_head;
+  // Rear to the station (parked backwards on the tray): the exit leg lies straight ahead, nothing
+  // to pivot. A robot FACING it stays refused; the BT reverses it out (IsAtDockStation) and docking
+  // skips the staging leg, so neither ever needs this plan.
+  const double start_yaw = 2 * std::atan2(start.pose.orientation.z, start.pose.orientation.w);
+  const bool facing_away =
+      std::cos(start_yaw - std::atan2(dock.axis.y, dock.axis.x)) < -std::sqrt(0.5);
   if (!std::isfinite(start_local.x) || !std::isfinite(start_local.y) ||
-      (on_approach_axis && start_local.x + sweep_radius > front_reach - kStationClearance))
+      (on_approach_axis && !facing_away &&
+       start_local.x + sweep_radius > front_reach - kStationClearance))
     throw nav2_core::StartOccupied(
         "Transit start inside the dock body too close to the charging station to pivot out");
   unsigned mx, my;

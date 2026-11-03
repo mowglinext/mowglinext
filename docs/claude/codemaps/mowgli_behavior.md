@@ -247,6 +247,10 @@ Publishes none. `ctx->tf_buffer` (`behavior_tree_node.cpp` :82) is used to look 
 - Topic names consumed here are hard-coded absolute: `map_server_node` `~/boundary_violation` etc. (`map_server_node.cpp` :363-367), `hardware_bridge` `~/status|emergency|power|mower_control|emergency_stop` (`hardware_bridge_node.cpp` :704-818), `fusion_graph_node` `~/set_pose` (`fusion_graph_node_setup_comms.cpp` :196). Renaming a node name on either side breaks the guard silently (see the `/map_server/…` regression note at `behavior_tree_node.cpp` :242-246).
 - `EscapeStartBlocked` ceilings (`start_blocked_escape.hpp` :99-105) and `dig_*` in `hardware_bridge` are independent safety envelopes — CLAUDE.md Invariant 16 / What NOT to Do.
 
+## Station without charge
+
+`docking_nodes.cpp::RobotIsAtDockStation` (pure test `dock_alignment.hpp::IsFacingStationInNoPivotZone`, dock pose from the latched `/map_server_node/docking_pose`, zone from `dock_no_pivot_distance_m` / `dock_body_half_width_m` / `dock_body_front_m`): nose toward the station, too close to pivot. The transit planner refuses such a start, so `DockRobot` skips the staging leg there and `main_tree.xml`'s `BackOutOfStation` reverses as an undock, ahead of the forward `SeedYawFromMotion` that would otherwise push into the head. A production-tree fixture must register `IsAtDockStation`.
+
 ## Pitfalls
 - The Root is a `ReactiveSequence`: every guard handler MUST terminate with `<AlwaysFailure/>` or a `SUCCESS` wait lets MainLogic run one tick per cycle (livelock #459/#445; `main_tree.xml` :282-299). `test_guard_fallthrough` enforces it.
 - `IsEmergency` returns SUCCESS when `/hardware_bridge/emergency` is >2 s stale (`condition_nodes.cpp` :41-46) — a dead bridge looks like an emergency, by design.

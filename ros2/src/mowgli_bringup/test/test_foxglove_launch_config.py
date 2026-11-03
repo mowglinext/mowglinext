@@ -79,6 +79,8 @@ def _build(filename, **overrides):
             "chassis_footprint",
             "dig_proposal_radius",
             "dig_skip_radius",
+            "dock_body_extents",
+            "dock_no_pivot_distance",
             "keepout_obstacle_margin",
             "resolve_lidar_enabled",
             "warn_lidar_key_absent",

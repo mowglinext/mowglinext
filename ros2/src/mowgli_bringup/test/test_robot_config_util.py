@@ -1045,3 +1045,10 @@ def test_dock_body_sits_on_the_station_and_follows_the_chassis():
     # A site with a longer station can lengthen it, not shorten it below the robot.
     assert _util.dock_body_extents({"dock_body_length_m": 1.20})[1] == pytest.approx(1.20)
     assert _util.dock_body_extents({"dock_body_length_m": 0.30})[1] == pytest.approx(0.80)
+
+
+def test_dock_no_pivot_zone_covers_the_planner_refusal():
+    # Planner: refuses x > front - 0.10 - sweep = -0.167 m (shipped). The BT must take over first.
+    assert _util.dock_no_pivot_distance({}) == pytest.approx(0.217, abs=0.002)
+    # Longer nose reach, longer sweep: it follows the chassis.
+    assert _util.dock_no_pivot_distance({"chassis_width": 0.70}) > _util.dock_no_pivot_distance({})

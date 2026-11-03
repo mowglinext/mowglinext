@@ -694,6 +694,23 @@
           <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
           <WaitForDuration duration_sec="1.0"/>
           <Fallback name="UndockOrSkip">
+            <!-- On the station without charge (contact lost, #515): a transit
+                 is refused from here (a pivot would hit the head) and the seed
+                 below would drive forward INTO it. Reverse out as an undock.
+                 A failed reverse takes ResumeInterruptedUndock / UndockFailed,
+                 never the forward seed. -->
+            <Sequence name="BackOutOfStation">
+              <Inverter><IsCharging/></Inverter>
+              <IsAtDockStation/>
+              <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
+              <RecordUndockStart/>
+              <ClearCostmap/>
+              <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
+              <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
+              <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
+              <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
+              <ClearCostmap/>
+            </Sequence>
             <!-- Not on dock: the dock_yaw injection (hardware_bridge →
                  /gnss/heading → dock_yaw_to_set_pose.py) never fired, so
                  the global EKF has a random initial yaw. Drive forward 1 m
@@ -706,6 +723,7 @@
                    then still faces the dock, and this 1 m FORWARD drive
                    would push it back onto it (ResumeInterruptedUndock). -->
               <Inverter><IsUndockInterrupted/></Inverter>
+              <Inverter><IsAtDockStation/></Inverter>
               <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
               <SeedYawFromMotion distance_m="1.0" speed_ms="0.2" timeout_sec="30.0"/>
               <!-- Drop stale obstacle marks projected during the pre-seed
