@@ -1185,6 +1185,32 @@ TEST(CoverageKeepout, StationOffTheFieldLeavesItBitIdentical)
   }
 }
 
+TEST(CoverageKeepout, StationOffAnInvalidFieldLeavesItUnchangedToo)
+{
+  f2c::types::LinearRing bow_tie;
+  bow_tie.addPoint(f2c::types::Point(0, 0));
+  bow_tie.addPoint(f2c::types::Point(10, 10));
+  bow_tie.addPoint(f2c::types::Point(10, 0));
+  bow_tie.addPoint(f2c::types::Point(0, 10));
+  bow_tie.addPoint(f2c::types::Point(0, 0));
+  const auto edited =
+      mowgli_coverage::subtractKeepoutFromField(bow_tie, rectangleRing(12, 2, 13, 3));
+  EXPECT_FALSE(edited.hole.has_value());
+  EXPECT_EQ(edited.shell.size(), bow_tie.size());
+}
+
+TEST(CoverageKeepout, StationOnAnInvalidFieldIsStillKept)
+{
+  f2c::types::LinearRing bow_tie;
+  bow_tie.addPoint(f2c::types::Point(0, 0));
+  bow_tie.addPoint(f2c::types::Point(10, 10));
+  bow_tie.addPoint(f2c::types::Point(10, 0));
+  bow_tie.addPoint(f2c::types::Point(0, 10));
+  bow_tie.addPoint(f2c::types::Point(0, 0));
+  const auto edited = mowgli_coverage::subtractKeepoutFromField(bow_tie, rectangleRing(1, 4, 2, 6));
+  EXPECT_TRUE(edited.hole.has_value());
+}
+
 TEST(CoverageKeepout, StationInsideTheFieldIsAHole)
 {
   const auto edited = mowgli_coverage::subtractKeepoutFromField(rectangleRing(0, 0, 10, 10),

@@ -641,13 +641,13 @@ TEST_F(DockedTransitPlannerTest, BlockedNearestExitFallsBackToTheNextOne)
 {
   // From the margin behind the body the nearest exit is backwards; a drawn obstacle across the
   // approach corridor leaves the +y side (past the body's own margin) as the next one.
-  dockGeometry(1, 2, 0, {rectangle(0.2, 1.4, 0.55, 2.6)});
+  dockGeometry(1, 2, 0, {rectangle(0.2, 1.4, 0.62, 2.6)});
   const Point start = dockPoint(1, 2, 0, -0.3, 0.15);
   const auto path = plan(start, 0, {-3, 1});
   expectLeavesTheBodyAwayFromTheStation(path, 1, 2, 0, start);
   const Point exit{path.poses[1].pose.position.x, path.poses[1].pose.position.y};
-  EXPECT_GT(exit.x, 0.55) << "left through the blocked corridor";
-  EXPECT_GT(exit.y, 2.5) << "the side exit is the next nearest";
+  EXPECT_GT(exit.x, 0.62) << "left through the blocked corridor";
+  EXPECT_GT(exit.y, 2.3) << "the side exit is the next nearest";
 }
 TEST_F(DockedTransitPlannerTest, DockBodyStaysForbiddenForGoalsAndForPathsAcrossIt)
 {

@@ -711,7 +711,9 @@ void CoverageServer::planCoverage()
     if (!keepouts)
     {
       result->success = false;
-      result->message = "charging station geometry not received from map_server yet";
+      result->message =
+          "no map geometry from map_server yet (map edit in progress, or see its "
+          "~/planning_grid_error): cannot place the charging station";
       RCLCPP_ERROR(get_logger(), "PlanCoverage: %s", result->message.c_str());
       action_server_->terminate_current(result);
       return;
@@ -1224,7 +1226,9 @@ void CoverageServer::previewCoverage(
     if (!keepouts)
     {
       response->success = false;
-      response->message = "charging station geometry not received from map_server yet";
+      response->message =
+          "no map geometry from map_server yet (map edit in progress, or see its "
+          "~/planning_grid_error): cannot place the charging station";
       return;
     }
     const f2c::types::Cell cell = buildCellFromGoal(goal, *keepouts, live.obstacle_margin);

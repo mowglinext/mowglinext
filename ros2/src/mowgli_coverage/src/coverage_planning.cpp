@@ -3188,7 +3188,13 @@ FieldWithKeepout subtractKeepoutFromField(const f2c::types::LinearRing& shell,
   };
   const OGRPolygon field = to_polygon(shell);
   const OGRPolygon forbidden = to_polygon(keepout);
-  if (field.IsValid() && forbidden.IsValid() && field.Disjoint(&forbidden))
+  // Envelopes first: a recorded line crossing itself must not turn a station that
+  // is nowhere near it into a hole, which would change the plan for nothing.
+  OGREnvelope field_box, forbidden_box;
+  field.getEnvelope(&field_box);
+  forbidden.getEnvelope(&forbidden_box);
+  if (!field_box.Intersects(forbidden_box) ||
+      (field.IsValid() && forbidden.IsValid() && field.Disjoint(&forbidden)))
   {
     return {shell, std::nullopt, 0.0};
   }
