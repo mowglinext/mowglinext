@@ -35,7 +35,8 @@
 // consecutive poses at the same position, first with the incoming heading,
 // second with the outgoing one; nothing else in a coverage plan has a
 // zero-length step, so ordinary curvature (turn-around arcs, fillets, ring
-// corners) can never trigger a pivot.
+// corners) can never trigger a pivot. A twin requires a stop, not permission to
+// rotate: the actual body, raw holes and local costmap must clear the signed arc.
 //
 // Everything here is pure (no ROS), unit-tested in test_ftc_pivot.cpp.
 
@@ -177,12 +178,13 @@ inline std::size_t ClipWindowToCorner(std::size_t start,
   return std::min(end, *corner + 1);
 }
 
-/// Headings at which to probe the footprint for the rotation from `from` to
-/// `to` (radians, shortest direction), at most `max_step` apart, both ends
-/// included. A non-positive step probes the two ends only.
-inline std::vector<double> PivotSweepYaws(double from, double to, double max_step)
+/// Probe a finite directed turn of at most one revolution without wrapping it.
+/// Both ends are included, at most max_step apart. A non-positive step probes
+/// the two ends only; invalid angles return no probes.
+inline std::vector<double> DirectedPivotSweepYaws(double from, double delta, double max_step)
 {
-  const double delta = WrapPivotAngle(to - from);
+  if (!std::isfinite(from) || !std::isfinite(delta) || std::abs(delta) > 2 * M_PI)
+    return {};
   std::size_t n = 1;
   if (max_step > 0.0)
   {
@@ -195,6 +197,12 @@ inline std::vector<double> PivotSweepYaws(double from, double to, double max_ste
     yaws.push_back(from + delta * static_cast<double>(i) / static_cast<double>(n));
   }
   return yaws;
+}
+
+/// Existing shortest-direction sweep, including across the +/-pi seam.
+inline std::vector<double> PivotSweepYaws(double from, double to, double max_step)
+{
+  return DirectedPivotSweepYaws(from, WrapPivotAngle(to - from), max_step);
 }
 
 }  // namespace mowgli_nav2_plugins

@@ -148,14 +148,6 @@ private:
   std::optional<double> pivot_approach_response_limit_;
   std::optional<std::pair<std::size_t, rclcpp::Time>> pivot_approach_start_;
 
-  // A geometry-qualified approach uses the same supported TF epoch as the
-  // point-bearing control. Complete replacements are ordered with output.
-  geometry_msgs::msg::Pose pivotMapPose() const;
-  std::optional<rclcpp::Time> pivot_pose_epoch_;
-  std::mutex corner_geometry_mutex_;
-  std::shared_ptr<const CornerGeometry> corner_geometry_;
-  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr corner_geometry_sub_;
-
   // ── Pivot corners (ftc_pivot.hpp) ─────────────────────────────────────────
 
   /// Plan indices of the pivot corners' FIRST (incoming-heading) poses, found
@@ -173,14 +165,22 @@ private:
   /// PIVOT -> FOLLOWING from the corner's outgoing pose.
   void leavePivot();
 
-  /// True when the chassis footprint, rotated in place from the current
-  /// heading to the pivot target, overlaps a TRUE-lethal local-costmap cell.
-  bool pivotSweepBlocked();
-
-  /// Obstacle gate of a pivot: holds (and eventually aborts, like every other
-  /// obstacle hold) while pivotSweepBlocked(); returns true when the pivot may
-  /// rotate this tick.
-  bool pivotSweepGate(double dt);
+  // Per-compute rotation/departure checks. Map and filled local-body queries
+  // use the same supported epoch; no certificate survives into another call.
+  bool rotationDeparturePermitted(const CornerGeometry& geometry);
+  bool rotationRestartPermitted(const geometry_msgs::msg::Pose& pose,
+                                const CornerGeometry& geometry) const;
+  bool cornerRotationGate(double dt);
+  bool localRotationBlocked(double turn);
+  geometry_msgs::msg::Pose pivotMapPose() const;
+  std::optional<rclcpp::Time> pivot_pose_epoch_;
+  std::mutex corner_geometry_mutex_;
+  std::shared_ptr<const CornerGeometry> corner_geometry_;
+  std::shared_ptr<const CornerGeometry> checked_corner_geometry_;
+  // Per-tick directed permission; separate from the geometric error used by
+  // handoff tolerances and I/D bookkeeping. Never reused after a new check.
+  std::optional<double> checked_corner_turn_;
+  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr corner_geometry_sub_;
 
   std::vector<geometry_msgs::msg::PoseStamped> global_plan_;
   Eigen::Affine3d current_control_point_;  ///< Carrot pose in map frame.

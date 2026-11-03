@@ -287,7 +287,9 @@ std::optional<double> longestValidSwathAngle(const f2c::types::Swaths& swaths);
 //                (pivotSharpCorners). A fillet cuts the corner off and leaves
 //                the tip uncut. Corners where the sweep does not fit (beside a
 //                drawn obstacle, too far past the recorded line) and corners
-//                between 30° and 60° keep today's arc.
+//                between 30° and 60° try today's arc. A retained corner that
+//                cannot be filleted is marked as a required stop by the final
+//                classifier; runtime must check its executable signed arc.
 BoustrophedonPlan planBoustrophedon(
     const f2c::types::Cell& field_cell,
     double op_width,
@@ -490,18 +492,25 @@ struct PivotJoinLimits
 bool pivotSweepFits(double x, double y, const PivotJoinLimits& limits);
 
 // Turn every zero-radius corner of `pts` sharper than `min_turn_rad` into a
-// pivot corner (a bit-exact twin, see coverage_geometry.hpp) where
-// pivotSweepFits() allows it. Existing twins and every other pose are kept
+// required stopped reorientation (a bit-exact twin, see coverage_geometry.hpp).
+// This marker is not a clearance certificate: FTC must check the actual signed
+// rotation arc, even when the nominal full pivot disc does not fit. Existing
+// twins and every other pose are kept
 // unchanged; with pivots disabled (sweep_radius <= 0) `pts` is returned as is.
 // Used on finished sub-paths, after fillets: a corner left sharp there is one
 // FTC would otherwise drive as a curve, sweeping the chassis nose wide.
+// With min_turn_radius > 0, also classify concentrated same-direction turns
+// whose aggregate exceeds min_turn_rad across sub-minimum-radius chords.
+// Their existing vertices receive the same required-stop markers. Creating new
+// pivot joins still requires pivotSweepFits(); classification adds no geometry.
 // `is_twin`, when given with one flag per pose, is kept in step (new twins
 // flagged true) for enforcePivotCornerContract.
 std::vector<std::pair<double, double>> pivotSharpCorners(
     const std::vector<std::pair<double, double>>& pts,
     double min_turn_rad,
     const PivotJoinLimits& limits,
-    std::vector<bool>* is_twin = nullptr);
+    std::vector<bool>* is_twin = nullptr,
+    double min_turn_radius = 0.0);
 
 // Yaw of every pose of a drivable sub-path, honouring the pivot corner
 // contract: a pose followed by a pose at the SAME position (a pivot corner)
