@@ -331,6 +331,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_estimate_publication test/test_estimate_publication.cpp)
   target_link_libraries(test_estimate_publication fusion_graph_node_objects)
 
+  ament_add_gtest(test_sensor_input_node test/test_sensor_input_node.cpp TIMEOUT 60)
+  target_link_libraries(test_sensor_input_node fusion_graph_node_objects)
+  set_tests_properties(test_sensor_input_node PROPERTIES ENVIRONMENT "ROS_DOMAIN_ID=187")
+
   ament_add_gtest(test_gnss_timestamp
     test/test_gnss_timestamp.cpp
   )
