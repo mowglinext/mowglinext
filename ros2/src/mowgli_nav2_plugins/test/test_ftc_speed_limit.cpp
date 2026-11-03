@@ -77,6 +77,23 @@ struct FTCSpeedLimitTestAccess
   {
     return controller.pivot_approach_start_.has_value();
   }
+
+  static bool SpliceApproachFallback(FTCController& controller)
+  {
+    TurnFallbackPlan plan;
+    plan.rejoin = 21;
+    plan.connector_m = 0.925;
+    return controller.spliceTurnFallback(plan, 0);
+  }
+
+  static void LeaveFallbackInitialPivot(FTCController& controller)
+  {
+    controller.current_state_ = FTCController::PlannerState::FOLLOWING;
+    controller.current_index_ = 1;
+    tf2::fromMsg(controller.global_plan_[1].pose, controller.current_control_point_);
+    controller.local_control_point_.setIdentity();
+    controller.local_control_point_.translation().x() = 0.925;
+  }
 };
 }  // namespace mowgli_nav2_plugins
 
@@ -639,6 +656,29 @@ TEST_P(FtcPivotArrival, ApproachTimerUsesBodyAndCannotBeResetByRetreat)
   Access::ApproachStateTick(controller_);
   ASSERT_TRUE(Access::ApproachTimerArmed(controller_));
   controller_.newPathReceived(CornerPlan());
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+}
+
+TEST_P(FtcPivotArrival, FallbackReplacementCannotInheritSameIndexApproachDeadline)
+{
+  SetParameter("goal_timeout", 10.0);
+  auto plan = CornerPlan();
+  for (auto& pose : plan.poses)
+    pose.pose.position.x *= .925;
+  yaw_ = -M_PI / 2;
+  RobotTransform();
+  controller_.newPathReceived(plan);
+  Access::ApproachFixture(controller_, .23);
+  Access::ApproachStateTick(controller_);
+  ASSERT_TRUE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 9000000000LL;
+  SetTime();
+  ASSERT_TRUE(Access::SpliceApproachFallback(controller_));
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 2000000000LL;
+  SetTime();
+  Access::LeaveFallbackInitialPivot(controller_);
+  EXPECT_NO_THROW(Access::ApproachStateTick(controller_));
   EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
 }
 

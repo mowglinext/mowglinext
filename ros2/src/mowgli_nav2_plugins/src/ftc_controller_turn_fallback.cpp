@@ -342,6 +342,9 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
                  global_plan_.end());
 
   global_plan_ = std::move(spliced);
+  // Corner indices now belong to a different path, even when their numeric
+  // values match. Its own approach must not inherit the replaced leg's age.
+  pivot_approach_start_.reset();
   {
     std::vector<PlanPose2D> poses;
     poses.reserve(global_plan_.size());
