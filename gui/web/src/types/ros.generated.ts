@@ -105,6 +105,21 @@ export type LaserScan = {
   intensities?: number[];
 };
 
+export type NavSatFix = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  status?: NavSatStatus;
+  latitude?: number;
+  longitude?: number;
+  altitude?: number;
+  position_covariance?: number[];
+  position_covariance_type?: number;
+};
+
+export type NavSatStatus = {
+  status?: number;
+  service?: number;
+};
+
 export type Marker = {
   ns?: string;
   id?: number;
