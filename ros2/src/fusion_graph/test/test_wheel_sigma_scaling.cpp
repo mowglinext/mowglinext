@@ -287,3 +287,84 @@ TEST(WheelSigmaScaling, PivotReleaseStillOverridesTheTravelTerm)
   EXPECT_GE(sigma_x, gp.pivot_wheel_sigma_x);
   EXPECT_LT(0.05 * std::sqrt(kPhantomVx * kSampleDt + 0.04 * kSampleDt), 0.01);
 }
+
+// The same straight forward/reverse intervals must retain their random-walk
+// travel noise when both land inside one edge. This checks the declared noise
+// policy, without changing coefficients, fault releases or motion gates.
+namespace
+{
+struct WheelTravelNoiseRun
+{
+  int nodes = 0;
+  double variance = 0;
+  fg::TickOutput final;
+};
+WheelTravelNoiseRun ReplayWheelTravelNoise(bool split, double first_speed, double second_speed)
+{
+  fg::GraphParams p;
+  p.node_period_s = (split ? 0.1 : 0.2) - 1e-9;
+  // Same throttle override as existing wheel-noise tests: expose both requested edges.
+  p.cov_update_every_n = 1;
+  p.stationary_node_period_s = 0;
+  p.stationary_motion_thresh_m = 0;
+  p.stationary_motion_thresh_theta = 0;
+  fg::GraphManager gm(p);
+  gm.Initialize(gtsam::Pose2(), 0);
+  WheelTravelNoiseRun r;
+  for (int i = 0; i < 2; ++i)
+  {
+    gm.AddWheelTwist(i == 0 ? first_speed : second_speed, 0, 0, 0.1);
+    gm.AddGyroDelta(0, 0.1);
+    if (auto out = gm.Tick((i + 1) * 0.1))
+    {
+      ++r.nodes;
+      r.final = *out;
+      const double sigma = gm.Stats().wheel_sigma_x_eff;
+      r.variance += sigma * sigma;
+    }
+  }
+  return r;
+}
+void CheckWheelTravelNoise(double first_speed, double second_speed)
+{
+  const auto coarse = ReplayWheelTravelNoise(false, first_speed, second_speed);
+  const auto split = ReplayWheelTravelNoise(true, first_speed, second_speed);
+  const double expected =
+      0.05 * 0.05 * (0.1 * (std::abs(first_speed) + std::abs(second_speed)) + 0.04 * 0.2);
+  std::printf(
+      "second_speed=%+.1f coarse_nodes=%d split_nodes=%d coarse_var=%.12g split_var=%.12g "
+      "expected=%.12g coarse_x=%.12g split_x=%.12g coarse_covxx=%.12g split_covxx=%.12g\n",
+      second_speed,
+      coarse.nodes,
+      split.nodes,
+      coarse.variance,
+      split.variance,
+      expected,
+      coarse.final.pose.x(),
+      split.final.pose.x(),
+      coarse.final.covariance(0, 0),
+      split.final.covariance(0, 0));
+  ASSERT_EQ(coarse.nodes, 1);
+  ASSERT_EQ(split.nodes, 2);
+  EXPECT_NEAR(coarse.final.pose.x(), split.final.pose.x(), 1e-12);
+  EXPECT_NEAR(split.variance, expected, 1e-12);
+  EXPECT_NEAR(coarse.variance, expected, 1e-12);
+  EXPECT_NEAR(coarse.final.covariance(0, 0), split.final.covariance(0, 0), 1e-10);
+}
+}  // namespace
+TEST(WheelTravelNoise, ForwardReverse)
+{
+  CheckWheelTravelNoise(0.2, -0.2);
+}
+TEST(WheelTravelNoise, ForwardForwardControl)
+{
+  CheckWheelTravelNoise(0.2, 0.2);
+}
+TEST(WheelTravelNoise, ReverseReverseControl)
+{
+  CheckWheelTravelNoise(-0.2, -0.2);
+}
+TEST(WheelTravelNoise, StationaryCreepControl)
+{
+  CheckWheelTravelNoise(0.0, 0.0);
+}
