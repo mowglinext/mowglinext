@@ -9,6 +9,7 @@ A ROS-only build can collect these tests but needs that optional driver to run.
 """
 
 import importlib.util
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,6 +26,7 @@ def clock_callback(request):
         # The upstream install uses this same source both for its importable
         # package and for the executable selected by the launch file.
         assert path.read_bytes() == Path(module.__file__).read_bytes()
+        assert os.access(path, os.X_OK), f'{path}: supervisor is not executable'
         spec = importlib.util.spec_from_file_location('supervisor_entrypoint_under_test', path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
