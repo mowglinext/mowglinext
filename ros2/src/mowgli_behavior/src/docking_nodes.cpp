@@ -18,6 +18,8 @@
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/dock_alignment.hpp"
+#include "tf2/exceptions.hpp"
+#include "tf2/time.hpp"
 
 namespace mowgli_behavior
 {
@@ -72,6 +74,51 @@ void DockRobot::log_contact_delta(const std::shared_ptr<BTContext>& ctx, uint16_
               d.range_m);
 }
 
+bool RobotIsAtDockStation(BTContext& ctx)
+{
+  if (!ctx.tf_buffer)
+  {
+    return false;
+  }
+  double dock_x, dock_y, dock_yaw;
+  DockStationZone zone;
+  {
+    std::lock_guard<std::mutex> lock(ctx.context_mutex);
+    if (!ctx.dock_pose_known)
+    {
+      return false;
+    }
+    dock_x = ctx.dock_x;
+    dock_y = ctx.dock_y;
+    dock_yaw = ctx.dock_yaw;
+    zone = ctx.dock_station_zone;
+  }
+  try
+  {
+    const auto tf = ctx.tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    const auto& q = tf.transform.rotation;
+    const double yaw =
+        std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+    return IsFacingStationInNoPivotZone(tf.transform.translation.x,
+                                        tf.transform.translation.y,
+                                        yaw,
+                                        dock_x,
+                                        dock_y,
+                                        dock_yaw,
+                                        zone);
+  }
+  catch (const tf2::TransformException&)
+  {
+    return false;  // no pose: the ordinary paths apply
+  }
+}
+
+BT::NodeStatus IsAtDockStation::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  return RobotIsAtDockStation(*ctx) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
 BT::NodeStatus DockRobot::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
@@ -111,7 +158,16 @@ BT::NodeStatus DockRobot::onStart()
   DockAction::Goal goal_msg;
   goal_msg.dock_id = dock_id;
   goal_msg.dock_type = dock_type;
-  goal_msg.navigate_to_staging_pose = true;
+  // Already on the approach line, too close to pivot: the transit planner would
+  // refuse the leg to the staging pose, and it is not needed. docking_server
+  // drives straight in and, if that fails, reverses to staging for its retry.
+  const bool at_station = RobotIsAtDockStation(*ctx);
+  goal_msg.navigate_to_staging_pose = !at_station;
+  if (at_station)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "DockRobot: already at the station without charge, skipping the staging leg");
+  }
 
   last_feedback_state_ = DockAction::Feedback::NONE;
 
