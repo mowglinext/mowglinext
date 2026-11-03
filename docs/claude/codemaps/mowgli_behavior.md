@@ -249,7 +249,7 @@ Publishes none. `ctx->tf_buffer` (`behavior_tree_node.cpp` :82) is used to look 
 
 ## Station without charge
 
-`docking_nodes.cpp::RobotIsAtDockStation` (pure test `dock_alignment.hpp::IsFacingStationInNoPivotZone`, dock pose from the latched `/map_server_node/docking_pose`, zone from `dock_no_pivot_distance_m` / `dock_body_half_width_m` / `dock_body_front_m`): nose toward the station, too close to pivot. The transit planner refuses such a start, so `DockRobot` skips the staging leg there and `main_tree.xml`'s `BackOutOfStation` reverses as an undock, ahead of the forward `SeedYawFromMotion` that would otherwise push into the head. A production-tree fixture must register `IsAtDockStation`.
+`docking_nodes.cpp::RobotIsAtDockStation` (pure test `dock_alignment.hpp::IsFacingStationInNoPivotZone`, dock pose from the latched `/map_server_node/docking_pose`, zone from `dock_no_pivot_distance_m` / `dock_body_half_width_m` / `dock_body_front_m`): nose toward the station, too close to pivot. The transit planner refuses such a start, so `DockRobot` skips the staging leg there and `main_tree.xml`'s `BackOutOfStation` reverses as an undock, while the forward `SeedYawFromMotion` that would push into the head stands down. A production-tree fixture must register `IsAtDockStation`.
 
 ## Pitfalls
 - The Root is a `ReactiveSequence`: every guard handler MUST terminate with `<AlwaysFailure/>` or a `SUCCESS` wait lets MainLogic run one tick per cycle (livelock #459/#445; `main_tree.xml` :282-299). `test_guard_fallthrough` enforces it.
