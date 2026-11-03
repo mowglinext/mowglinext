@@ -8,14 +8,26 @@ The simulator image applies the clock patch before installing the driver.
 A ROS-only build can collect these tests but needs that optional driver to run.
 """
 
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 
-@pytest.fixture
-def clock_callback():
+@pytest.fixture(params=['module', 'executable'])
+def clock_callback(request):
     module = pytest.importorskip('webots_ros2_driver.ros2_supervisor')
+    if request.param == 'executable':
+        from ament_index_python.packages import get_package_prefix
+        path = Path(get_package_prefix('webots_ros2_driver')) / (
+            'lib/webots_ros2_driver/ros2_supervisor.py')
+        # The upstream install uses this same source both for its importable
+        # package and for the executable selected by the launch file.
+        assert path.read_bytes() == Path(module.__file__).read_bytes()
+        spec = importlib.util.spec_from_file_location('supervisor_entrypoint_under_test', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
     # Avoid Node/Supervisor construction and native physics. The actual method
     # uses only step/getTime and the clock publisher on its successful path.
     node = object.__new__(module.Ros2Supervisor)
