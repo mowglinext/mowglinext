@@ -312,6 +312,7 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
     return;
   }
   isam_ = std::move(fresh);
+  InvalidateGnssSupportLocked();
   estimate_dirty_ = true;
 
   // Cancel any in-flight async rebase (D2 race, field 2026-06-10 dock walk).

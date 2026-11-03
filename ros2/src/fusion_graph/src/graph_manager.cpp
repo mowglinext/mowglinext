@@ -159,15 +159,20 @@ void GraphManager::AddGyroDelta(double wz, double dt)
   }
 }
 
-bool GraphManager::QueueGnss(
-    double x, double y, double sigma_xy, bool robust, std::optional<uint64_t> target_node)
+bool GraphManager::QueueGnss(double x,
+                             double y,
+                             double sigma_xy,
+                             bool robust,
+                             std::optional<uint64_t> target_node,
+                             uint64_t ingestion_token)
 {
   std::lock_guard<std::mutex> lock(mu_);
   if (target_node && !HasPoseAt(*target_node))
     return false;
   if (sigma_xy < params_.gps_sigma_floor)
     sigma_xy = params_.gps_sigma_floor;
-  queue_.gnss = UnaryQueue::Gnss{gtsam::Vector2(x, y), sigma_xy, robust, target_node};
+  queue_.gnss =
+      UnaryQueue::Gnss{gtsam::Vector2(x, y), sigma_xy, robust, target_node, ingestion_token};
   return true;
 }
 
@@ -205,6 +210,7 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
   if (initialized_)
     return;
 
+  InvalidateGnssSupportLocked();
   const double sigma_xy = sigma_xy_override.value_or(params_.prior_sigma_xy);
 
   auto prior_noise = MakeDiagonal({
@@ -248,6 +254,7 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
   out.node_index = 0;
   out.timestamp = timestamp;
   out.estimate_revision = ++estimate_revision_;
+  out.graph_epoch = graph_epoch_;
   latest_ = out;
 }
 
@@ -357,6 +364,7 @@ void GraphManager::ForceAnchor(uint64_t node_index,
     return;  // ill-posed reset; latest_ is now null, nothing to anchor
   }
   estimate_dirty_ = true;
+  InvalidateGnssSupportLocked();
   // A historical anchor can also revise the head. Publication tracks estimate
   // revisions, so no DR recapture or special invalidation is needed here.
   if (latest_)
