@@ -69,6 +69,14 @@
 #ifndef MIN_DOCKED_VOLTAGE
 #define MIN_DOCKED_VOLTAGE 20.0f
 #endif
+/* Charger-input voltage at which the charge controller leaves IDLE and
+ * starts the connect sequence (current-offset calibration, then CC). The
+ * 500/500B dock holds ~32 V whenever the contacts touch, hence 30 V. Boards
+ * whose dock only offers a low current-limited probe voltage until the mower
+ * connects its battery bus (NX100i: ~14 V) override this in board.h. */
+#ifndef CHARGER_CONNECT_VOLTAGE
+#define CHARGER_CONNECT_VOLTAGE 30.0f
+#endif
 #ifndef MIN_BATTERY_VOLTAGE
 #define MIN_BATTERY_VOLTAGE 5.0f
 #endif

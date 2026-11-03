@@ -45,7 +45,10 @@ DIRTY_FLAG = 0x80
 # new prebuilt permutation — NOT by hand-editing rendered binaries. Panel/board
 # strings are lowercased, stripped tokens taken from board.h.template's
 # PANEL_TYPE_* / BOARD_* names so the selection map (Phase 2) can resolve them
-# deterministically.
+# deterministically. An optional "variant" is appended to the artifact stem
+# when two permutations share a board/panel pair (the NX100i is a 500B board
+# with 500B-classic panel wiring plus a pull-up on the hood stop contact), so
+# their binaries never overwrite each other.
 PERMUTATIONS = [
     {
         "key": "yardforce500",
@@ -64,6 +67,13 @@ PERMUTATIONS = [
         "env": "BiltemaRM1000",
         "board": "BOARD_YARDFORCE500B",
         "panel": "PANEL_TYPE_YARDFORCE_900_ECO",
+    },
+    {
+        "key": "yardforce-nx100i",
+        "env": "YardforceNX100i",
+        "board": "BOARD_YARDFORCE500B",
+        "panel": "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+        "variant": "nx100i",
     },
 ]
 
@@ -144,9 +154,10 @@ def main():
         if not bin_src.exists():
             sys.exit(f"ERROR: {bin_src} missing — did `pio run -e {env}` run?")
 
+        variant = f"_{perm['variant']}" if perm.get("variant") else ""
         stem = (
             f"mowgli-fw_{board_token(perm['board'])}_{panel_token(perm['panel'])}"
-            f"_p{protocol}_v{version}_{short}"
+            f"{variant}_p{protocol}_v{version}_{short}"
         )
         bin_name = f"{stem}.bin"
         (out_dir / bin_name).write_bytes(bin_src.read_bytes())

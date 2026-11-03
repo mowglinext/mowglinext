@@ -24,6 +24,7 @@ window.MOWGLI_MANUAL = {
       options: [
         { id: "yf500", label: { en: "YardForce Classic 500", fr: "YardForce Classic 500" } },
         { id: "yf500b", label: { en: "YardForce 500B", fr: "YardForce 500B" } },
+        { id: "nx100i", label: { en: "YardForce NX100i", fr: "YardForce NX100i" } },
         { id: "other", label: { en: "SA650 / 900 ECO / other", fr: "SA650 / 900 ECO / autre" } },
       ],
     },

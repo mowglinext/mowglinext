@@ -46,6 +46,16 @@ export const FIRMWARE_MODEL_DEFAULTS: Readonly<Record<string, FirmwareModelDefau
         panelType: "PANEL_TYPE_YARDFORCE_900_ECO",
         firmwareTarget: "BiltemaRM1000",
     },
+    YardForceNX100i: {
+        // Same GForce STM32F401 mainboard and panel as the Classic 500B. The
+        // only firmware difference is a pull-up on the white stop-button
+        // contact (PC8), so the NX100i binary is unsafe on a plain 500B
+        // (white contact reads as permanently pressed) and vice versa (dead
+        // white contact): the model always pins its own explicit target.
+        boardType: "BOARD_YARDFORCE500B",
+        panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+        firmwareTarget: "YardforceNX100i",
+    },
     LUV1000RI: {
         // The firmware names both the board and the panel after this model.
         // There is no prebuilt (and no PlatformIO env yet), so the flash

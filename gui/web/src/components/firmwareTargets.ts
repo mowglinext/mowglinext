@@ -36,21 +36,26 @@ export const PREBUILT_BOARDS: ReadonlySet<string> = new Set<string>([
 
 export const VERMUT_BOARD = "BOARD_VERMUT_YARDFORCE500";
 
-// The Biltema RM1000 ships the 500B mainboard; with that model selected the
-// board is named after the mower the operator actually owns.
-const RM1000_MODEL = "BiltemaRM1000";
-const RM1000_BOARD = "BOARD_YARDFORCE500B";
+// Mowers that ship the 500B mainboard under another name; with such a model
+// selected the board is labelled after the mower the operator actually owns.
+// Keyed by mower model, valued by the i18n key of the board label.
+const MODEL_BOARD_LABEL_KEYS: Readonly<Record<string, Readonly<{board: string; labelKey: string}>>> = {
+    BiltemaRM1000: {board: "BOARD_YARDFORCE500B", labelKey: "flashBoard.boardBiltemaRM1000"},
+    YardForceNX100i: {board: "BOARD_YARDFORCE500B", labelKey: "flashBoard.boardYardForceNX100i"},
+};
 
 /** Board options as shown for a given mower model (same values, model-aware labels). */
 export const boardOptionsForModel = (
     mowerModel: string | undefined,
     t: (key: string) => string,
-): FirmwareTargetOption[] =>
-    BOARD_OPTIONS.map((o) =>
-        mowerModel === RM1000_MODEL && o.value === RM1000_BOARD
-            ? {...o, label: t("flashBoard.boardBiltemaRM1000")}
+): FirmwareTargetOption[] => {
+    const modelLabel = mowerModel ? MODEL_BOARD_LABEL_KEYS[mowerModel] : undefined;
+    return BOARD_OPTIONS.map((o) =>
+        modelLabel && o.value === modelLabel.board
+            ? {...o, label: t(modelLabel.labelKey)}
             : o,
     );
+};
 
 const labelOf = (options: readonly FirmwareTargetOption[], value: string | undefined): string | undefined =>
     options.find((o) => o.value === value)?.label;

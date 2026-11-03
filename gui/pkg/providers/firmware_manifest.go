@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -224,17 +225,28 @@ func fetchFirmwareManifest(url string) (*firmwareManifest, error) {
 }
 
 // resolveManifestEntry picks the prebuilt permutation for a hardware selection.
-// It matches on BoardType (the irreducible compile-time axis — MCU family), and
-// when a panel is given and more than one entry shares the board, disambiguates
-// on PanelType. When target is set it additionally requires an exact manifest
-// environment match and verifies the panel, so related board profiles never
-// silently select each other's binaries. Returns an error when nothing matches
-// so the caller can steer the user to the expert build path instead of flashing
-// a wrong or absent binary.
+// It matches on BoardType (the irreducible compile-time axis — MCU family).
+// When target is set it additionally requires an exact manifest environment
+// match and verifies the panel, so related board profiles never silently
+// select each other's binaries. Without a target (legacy configs that predate
+// variant targets) it prefers the board's native environment — the one
+// firmwareEnvironment picks for a targetless custom build — and only then
+// disambiguates on PanelType among entries that are not explicit-only
+// variants: a variant such as YardforceNX100i or BiltemaRM1000 shares the
+// 500B board (and, for NX100i, the 500B panel), so a panel match alone must
+// never hand a plain 500B the NX100i binary. Candidates are visited in key
+// order so the pick never depends on Go's randomized map iteration. Returns an
+// error when nothing matches so the caller can steer the user to the expert
+// build path instead of flashing a wrong or absent binary.
 func resolveManifestEntry(m *firmwareManifest, board, panel, target string) (firmwareManifestEntry, error) {
+	keys := make([]string, 0, len(m.Permutations))
+	for key := range m.Permutations {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
 	var matches []firmwareManifestEntry
-	for _, entry := range m.Permutations {
-		if entry.Board == board {
+	for _, key := range keys {
+		if entry := m.Permutations[key]; entry.Board == board {
 			matches = append(matches, entry)
 		}
 	}
@@ -247,20 +259,47 @@ func resolveManifestEntry(m *firmwareManifest, board, panel, target string) (fir
 		return firmwareManifestEntry{}, xerrors.Errorf(
 			"no prebuilt firmware published for board %q and target %q", board, target)
 	}
-	switch len(matches) {
-	case 0:
+	if len(matches) == 0 {
 		return firmwareManifestEntry{}, xerrors.Errorf("no prebuilt firmware published for board %q", board)
-	case 1:
-		return matches[0], nil
-	default:
-		for _, entry := range matches {
-			if entry.Panel == panel {
-				return entry, nil
-			}
-		}
-		return firmwareManifestEntry{}, xerrors.Errorf(
-			"multiple prebuilt binaries for board %q but none match panel %q", board, panel)
 	}
+	native, err := firmwareEnvironment(board, "")
+	if err != nil {
+		return firmwareManifestEntry{}, xerrors.Errorf("resolving native firmware environment for board %q: %w", board, err)
+	}
+	for _, entry := range matches {
+		if entry.Env == native && (panel == "" || entry.Panel == panel) {
+			return entry, nil
+		}
+	}
+	var legacy []firmwareManifestEntry
+	for _, entry := range matches {
+		if explicitOnlyFirmwareEnvironment(board, entry.Env, native) {
+			continue
+		}
+		legacy = append(legacy, entry)
+	}
+	if len(legacy) == 1 {
+		return legacy[0], nil
+	}
+	for _, entry := range legacy {
+		if entry.Panel == panel {
+			return entry, nil
+		}
+	}
+	return firmwareManifestEntry{}, xerrors.Errorf(
+		"no prebuilt firmware for board %q matches panel %q without an explicit firmware target", board, panel)
+}
+
+// explicitOnlyFirmwareEnvironment reports whether env is a known firmware
+// target for board other than the board's native one, i.e. a variant that a
+// config may only reach through an explicit FirmwareTarget. Environments the
+// GUI does not know at all are left to the legacy panel matching.
+func explicitOnlyFirmwareEnvironment(board, env, native string) bool {
+	if env == "" || env == native {
+		return false
+	}
+	_, err := firmwareEnvironment(board, env)
+	return err == nil
 }
 
 // downloadAndVerify streams the entry's binary to dst and asserts its sha256
