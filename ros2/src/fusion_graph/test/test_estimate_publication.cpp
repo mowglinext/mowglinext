@@ -337,6 +337,28 @@ TEST_F(PublicationTest, DedicatedTfThreadPublishesOnlyAfterActualSend)
   ASSERT_TRUE(g.QueueGnss(.3, 0., .3, true, 0, 99));
   fg::FusionGraphNodeTestAccess::StartTfThread(*node);
   fg::FusionGraphNodeTestAccess::Timer(*node, 1.04);
+  // The dedicated broadcaster follows ROS time. Wait until its timer exists,
+  // then advance the real source clock rather than expecting a paused clock
+  // to trigger a wall-time broadcast. Keep every publication assertion below.
+  bool timer_ready = false;
+  const auto timer_setup = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!timer_ready && std::chrono::steady_clock::now() < timer_setup)
+  {
+    node->get_node_base_interface()->for_each_callback_group(
+        [&timer_ready](rclcpp::CallbackGroup::SharedPtr group)
+        {
+          if (!group->automatically_add_to_executor_with_node() && group->find_timer_ptrs_if(
+                                                                       [](const auto&)
+                                                                       {
+                                                                         return true;
+                                                                       }))
+            timer_ready = true;
+        });
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_TRUE(timer_ready);
+  ASSERT_EQ(rcl_set_ros_time_override(node->get_clock()->get_clock_handle(), 1100000000),
+            RCL_RET_OK);
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   while (std::chrono::steady_clock::now() < deadline)
   {
