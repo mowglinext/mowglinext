@@ -2230,6 +2230,12 @@ void FTCController::calculate_velocity_commands(double dt,
       // stall_crawl_speed, which still clears the firmware wheel deadband.
       cmd_vel.twist.linear.x =
           ClampForwardToMovementRamp(lin_speed, current_movement_speed_, config_.min_speed_mps);
+      // Point-bearing corner approach must be able to rotate toward an aside
+      // target without the normal driving floor forcing a pursuit orbit.
+      if (cmd_vel.twist.linear.x > 0.0 && stopCornerApproach())
+      {
+        cmd_vel.twist.linear.x = std::min(cmd_vel.twist.linear.x, lin_speed);
+      }
     }
   }
   else

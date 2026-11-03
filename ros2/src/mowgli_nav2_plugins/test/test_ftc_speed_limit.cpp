@@ -1233,6 +1233,45 @@ protected:
   double x_{0}, y_{0}, yaw_{0}, v_{0}, w_{0};
 };
 
+// A resumed FOLLOWING state can leave the stop point beside the body. The
+// ordinary driving floor must not sustain an orbit outside the arrival radius.
+TEST_P(FtcPivotArrival, AsideCornerConvergesWithoutDrivingFloorOrbit)
+{
+  SetParameter("goal_timeout", 12.0);
+  SetParameter("acceleration", .2);
+  SetParameter("kp_ang_following", 1.0);
+  SetParameter("kp_lat", .8);
+  SetParameter("kd_lat", .5);
+  SetParameter("derivative_filter_tau", .2);
+  x_ = 1;
+  y_ = -.06;
+  yaw_ = M_PI;
+  RobotTransform();
+  controller_.newPathReceived(CornerPlan());
+  Access::ApproachFixture(controller_, .06);
+  bool pivoted = false, departed = false;
+  for (int tick = 0; tick < 121; ++tick)
+  {
+    auto command = Command();
+    EXPECT_GE(command.linear.x, 0);
+    EXPECT_LE(command.linear.x, .3);
+    if (Access::State(controller_) == 5)
+    {
+      EXPECT_LE(std::hypot(x_ - 1, y_), .02);
+      pivoted = true;
+    }
+    if (pivoted && Access::State(controller_) == 1 && Access::Index(controller_) > 20)
+    {
+      departed = true;
+      break;
+    }
+    command.angular.z = std::clamp(command.angular.z, -.7, .7);
+    Advance(command, GetParam());
+  }
+  EXPECT_TRUE(pivoted);
+  EXPECT_TRUE(departed);
+}
+
 TEST_P(FtcPivotArrival, RequiredHolePivotAndOpeningTwinRestartCheckTheOppositeArc)
 {
   for (double reflection : {-1.0, 1.0})
@@ -1496,15 +1535,19 @@ TEST_P(FtcPivotArrival, CapturedInteriorTangentMicrometresUseRadialReserve)
   Access::Geometry(controller_, MowingBox(-3, -1, -1, 1));
   controller_.newPathReceived(plan);
   Access::ApproachFixture(controller_, std::hypot(gx - x_, gy - y_));
+  // kp_lon=1 and I/D=0: preserve the unfloored body-longitudinal request.
+  const double request = std::max(0.0, (gx - x_) * std::cos(yaw_) + (gy - y_) * std::sin(yaw_));
+  const double allowed = std::min(request, std::hypot(gx - x_, gy - y_) / .8);
   const auto command = Command();
-  EXPECT_NEAR(command.linear.x, std::hypot(gx - x_, gy - y_) / .8, 1e-12);
+  EXPECT_NEAR(command.linear.x, allowed, 1e-12);
+  EXPECT_LE(command.linear.x, std::hypot(gx - x_, gy - y_) / .8);
   EXPECT_EQ(Access::State(controller_), 1);
   const auto cached = Access::ApproachLimits(controller_);
   EXPECT_NEAR(cached.first, .0015178746472512962, 1e-12);
   EXPECT_NEAR(cached.second, .0017347138825729101, 1e-12);
   // Select the matching radial response reserve before testing feedback.
   v_ = .01;
-  EXPECT_NEAR(Command().linear.x, std::hypot(gx - x_, gy - y_) / .8, 1e-12);
+  EXPECT_NEAR(Command().linear.x, allowed, 1e-12);
   v_ = .05;
   EXPECT_DOUBLE_EQ(Command().linear.x, 0);
   v_ = 0;
@@ -1594,14 +1637,16 @@ TEST_P(FtcPivotArrival, CapturedOuterChamferUsesCertifiedClearanceReserve)
   Access::Geometry(controller_, MowingBox(-3, -1, -1, 1));
   controller_.newPathReceived(plan);
   Access::ApproachFixture(controller_, std::hypot(gx - x_, gy - y_));
+  const double request = std::max(0.0, (gx - x_) * std::cos(yaw_) + (gy - y_) * std::sin(yaw_));
   const auto command = Command();
   const double budget = std::nextafter(1 - y_ - mowgli_nav2_plugins::transit::kEpsilon, 0);
-  EXPECT_NEAR(command.linear.x, budget / .8, 1e-12);
+  EXPECT_NEAR(command.linear.x, std::min(request, budget / .8), 1e-12);
+  EXPECT_LE(command.linear.x, budget / .8);
   EXPECT_EQ(Access::State(controller_), 1);
   const auto cached = Access::ApproachLimits(controller_);
   EXPECT_NEAR(cached.first, .0071761130929037797, 1e-12);
   v_ = .01;  // above B's reserve, below the new matching reserve
-  EXPECT_NEAR(Command().linear.x, budget / .8, 1e-12);
+  EXPECT_NEAR(Command().linear.x, std::min(request, budget / .8), 1e-12);
   v_ = .03;
   EXPECT_DOUBLE_EQ(Command().linear.x, 0);
   v_ = 0;
@@ -1619,7 +1664,9 @@ TEST_P(FtcPivotArrival, CapturedOuterChamferUsesCertifiedClearanceReserve)
   controller_.newPathReceived(plan);
   Access::ApproachFixture(controller_, std::hypot(gx - x_, gy - y_));
   const double early_budget = std::nextafter(1 - y_ - mowgli_nav2_plugins::transit::kEpsilon, 0);
-  EXPECT_NEAR(Command().linear.x, early_budget / .8, 1e-12);
+  const double early_request =
+      std::max(0.0, (gx - x_) * std::cos(yaw_) + (gy - y_) * std::sin(yaw_));
+  EXPECT_NEAR(Command().linear.x, std::min(early_request, early_budget / .8), 1e-12);
 }
 
 TEST_P(FtcPivotArrival, ApproachTimerUsesBodyAndCannotBeResetByRetreat)
@@ -2137,8 +2184,8 @@ TEST_P(FtcPivotArrival, FutureTfDoesNotForecastTheApproachCap)
                                                     nav_msgs::msg::Path{},
                                                     Pose{})
                            .twist;
-  // Current distance .04 / declared .8 s horizon, rather than future .001.
-  EXPECT_NEAR(command.linear.x, .05, 1e-12);
+  // Current longitudinal request .04, below the .05 response cap; not future .001.
+  EXPECT_NEAR(command.linear.x, .04, 1e-12);
 }
 
 TEST_P(FtcPivotArrival, TranslationSettlingRetainsPivotDeadline)
