@@ -305,6 +305,28 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
+  ament_add_gtest(test_cog_motion_history
+    test/test_cog_motion_history.cpp
+  )
+  target_include_directories(test_cog_motion_history PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  ament_add_gtest(test_cog_source_motion_node
+    test/test_cog_source_motion_node.cpp
+  )
+  target_include_directories(test_cog_source_motion_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  target_link_libraries(test_cog_source_motion_node
+    ${rclcpp_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    yaml-cpp
+  )
+
   ament_add_gtest(test_cog_observation_timing
     test/test_cog_observation_timing.cpp
   )

@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "geometry_msgs/msg/quaternion.hpp"
+#include "mowgli_localization/cog_motion_history.hpp"
 #include "mowgli_localization/cog_observation_timing.hpp"
 #include "mowgli_localization/cog_yaw_math.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -146,9 +147,9 @@ public:
     // dragged position around the gps_x lever-arm circle). Track absolute
     // rotation accumulated since the latch was set and drop the latch once it
     // exceeds this; a real pivot trips it immediately. We do NOT reuse
-    // abs_dtheta_since_anchor_ — that integrates |gyro_z| with no deadband and
-    // resets every GPS fix, so over a multi-second stationary dwell its noise
-    // floor would falsely invalidate a good latch. latch_rotation_deadband_rps
+    // the source-baseline rotation integral: it has no deadband, so over a
+    // multi-second stationary dwell its noise floor would falsely invalidate
+    // a good latch. latch_rotation_deadband_rps
     // is the per-sample floor below which |gyro_z| is treated as noise and not
     // accumulated. 0.26 rad ≈ 15°.
     latch_max_rotation_rad_ = declare_parameter<double>("latch_max_rotation_rad", 0.26);
@@ -260,44 +261,13 @@ public:
     // IMU sees the start of a pivot ~20 ms before /wheel_odom (50 Hz)
     // does, which is exactly the window in which a stale on_fix would
     // otherwise publish a wrong COG yaw.
-    imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
-        "/imu/data",
-        qos,
-        [this](sensor_msgs::msg::Imu::ConstSharedPtr msg)
-        {
-          gyro_z_ = msg->angular_velocity.z;
-          // Integrate |gyro_z| since the anchor for the straight-baseline gate
-          // in on_fix(). Reset happens on anchor (re)seed there.
-          const double t = this->now().seconds();
-          const double prev = last_imu_t_.exchange(t);
-          const double dt = t - prev;
-          if (prev > 0.0 && dt > 0.0 && dt < 0.5)
-          {
-            // CAS add (not a plain load+store) so a concurrent on_fix() reset
-            // to 0 under a MultiThreadedExecutor can't be lost to a stale add.
-            const double inc = std::abs(msg->angular_velocity.z) * dt;
-            double cur = abs_dtheta_since_anchor_.load(std::memory_order_relaxed);
-            while (!abs_dtheta_since_anchor_.compare_exchange_weak(cur, cur + inc))
-            {
-            }
-            // Deadbanded rotation since the stationary latch was set. Unlike
-            // abs_dtheta_since_anchor_ this ignores sub-deadband samples, so a
-            // long stationary dwell doesn't accumulate gyro noise into a false
-            // staleness trip. Drives the latch-invalidation in
-            // republish_latched_when_stationary().
-            const double linc =
-                mowgli_localization::cog_latch_rotation_increment(msg->angular_velocity.z,
-                                                                  dt,
-                                                                  latch_rotation_deadband_rps_);
-            if (linc > 0.0)
-            {
-              double lcur = abs_dtheta_since_latch_.load(std::memory_order_relaxed);
-              while (!abs_dtheta_since_latch_.compare_exchange_weak(lcur, lcur + linc))
-              {
-              }
-            }
-          }
-        });
+    imu_sub_ =
+        create_subscription<sensor_msgs::msg::Imu>("/imu/data",
+                                                   qos,
+                                                   [this](sensor_msgs::msg::Imu::ConstSharedPtr msg)
+                                                   {
+                                                     on_imu(*msg);
+                                                   });
     pub_ = create_publisher<sensor_msgs::msg::Imu>("/imu/cog_heading", qos);
 
     if (enable_mag_cal_)
@@ -358,10 +328,58 @@ public:
   }
 
 private:
+  friend class CogToImuInputTest;
+
+  void observe_motion_clock()
+  {
+    if (motion_history_.ObserveClock(now().nanoseconds()))
+    {
+      reset_cog_temporal_state();
+      observation_timing_->Reset();
+      rotation_quiet_count_ = 0;
+      wheel_vx_ = wheel_omega_ = gyro_z_ = 0.0;
+      last_imu_t_ = 0.0;
+    }
+  }
+
   void on_wheel(const nav_msgs::msg::Odometry& msg)
   {
+    observe_motion_clock();
+    if (msg.header.stamp.sec < 0 || msg.header.stamp.nanosec >= 1000000000u ||
+        !motion_history_.AddWheel(stamp_to_nanoseconds(msg.header.stamp),
+                                  msg.twist.twist.linear.x,
+                                  msg.twist.twist.angular.z))
+      return;
     wheel_vx_ = msg.twist.twist.linear.x;
     wheel_omega_ = msg.twist.twist.angular.z;
+  }
+
+  void on_imu(const sensor_msgs::msg::Imu& msg)
+  {
+    observe_motion_clock();
+    if (msg.header.stamp.sec < 0 || msg.header.stamp.nanosec >= 1000000000u ||
+        !motion_history_.AddGyro(stamp_to_nanoseconds(msg.header.stamp), msg.angular_velocity.z))
+      return;
+    gyro_z_ = msg.angular_velocity.z;
+    // The stationary latch retains its current-motion/receipt-clock policy.
+    // COG baseline rotation is queried separately in source time below.
+    const double t = this->now().seconds();
+    const double prev = last_imu_t_.exchange(t);
+    const double dt = t - prev;
+    if (prev > 0.0 && dt > 0.0 && dt < 0.5)
+    {
+      const double increment =
+          mowgli_localization::cog_latch_rotation_increment(msg.angular_velocity.z,
+                                                            dt,
+                                                            latch_rotation_deadband_rps_);
+      if (increment > 0.0)
+      {
+        double current = abs_dtheta_since_latch_.load(std::memory_order_relaxed);
+        while (!abs_dtheta_since_latch_.compare_exchange_weak(current, current + increment))
+        {
+        }
+      }
+    }
   }
 
   void on_mag_raw(const sensor_msgs::msg::MagneticField& msg)
@@ -374,6 +392,7 @@ private:
 
   void on_fix(const sensor_msgs::msg::NavSatFix& msg)
   {
+    observe_motion_clock();
     using sensor_msgs::msg::NavSatStatus;
     if (msg.status.status < NavSatStatus::STATUS_GBAS_FIX)
     {
@@ -447,6 +466,14 @@ private:
     const double t = static_cast<double>(receipt_time_ns) / kNanosecondsPerSecond;
     pos_acc = std::max(pos_acc, 0.002);
 
+    const auto motion = motion_history_.At(receipt_time_ns);
+    if (!motion)
+    {
+      ++rejected_motion_source_;
+      have_anchor_ = false;
+      return;
+    }
+
     // Rotation gate. During in-place pivots (PRE_ROTATE, headland turns)
     // the GPS antenna swings on a lever-arm arc around base_link. Each
     // arrival sees a 1–3 cm displacement in a direction perpendicular
@@ -463,8 +490,8 @@ private:
     // pivot first. The latch also stays asserted for one extra cycle
     // (rotation_quiet_count_ debounce) so a single low gyro sample
     // doesn't unlatch us during the rotation.
-    const bool rotating_wheels = std::abs(wheel_omega_) >= min_omega_for_anchor_;
-    const bool rotating_imu = std::abs(gyro_z_) >= min_omega_for_anchor_;
+    const bool rotating_wheels = std::abs(motion->wheel_omega) >= min_omega_for_anchor_;
+    const bool rotating_imu = std::abs(motion->gyro_z) >= min_omega_for_anchor_;
     if (rotating_wheels || rotating_imu)
     {
       rotation_quiet_count_ = 0;
@@ -487,7 +514,7 @@ private:
     // Stationary samples don't extend the baseline (GPS noise would just
     // pollute the integrated displacement). Drop the anchor so we don't
     // bake a stationary segment into the next yaw computation.
-    if (std::abs(wheel_vx_) < min_abs_wheel_)
+    if (std::abs(motion->vx) < min_abs_wheel_)
     {
       ++rejected_stationary_;
       have_anchor_ = false;
@@ -503,27 +530,35 @@ private:
     // approach the wrong way (field 2026-05-27). Use the larger of the
     // wheel/IMU rotation rate so a wheel-encoder lag at the rotation onset
     // doesn't let a sample through.
-    const double rot_rate = std::max(std::abs(wheel_omega_.load()), std::abs(gyro_z_.load()));
+    const double rot_rate = std::max(std::abs(motion->wheel_omega), std::abs(motion->gyro_z));
     const double lever_radius = std::hypot(lever_arm_x_, lever_arm_y_);
-    if (cog_sweep_dominates(rot_rate, lever_radius, wheel_vx_, cog_sweep_dominance_ratio_))
+    if (cog_sweep_dominates(rot_rate, lever_radius, motion->vx, cog_sweep_dominance_ratio_))
     {
       ++rejected_sweep_;
       have_anchor_ = false;
       return;
     }
 
-    const int wheel_sign = (wheel_vx_ >= 0.0) ? 1 : -1;
+    const int wheel_sign = (motion->vx >= 0.0) ? 1 : -1;
 
-    // Anchor seeding / direction-change reset.
-    if (!have_anchor_ || (anchor_wheel_sign_ != 0 && anchor_wheel_sign_ != wheel_sign))
+    // Every recorded direction/rest transition inside the source baseline
+    // invalidates it, even when direction has changed back before this fix.
+    const auto baseline =
+        have_anchor_ ? motion_history_.Between(anchor_source_ns_, receipt_time_ns, min_abs_wheel_)
+                     : std::nullopt;
+    if (have_anchor_ && !baseline)
+    {
+      ++rejected_motion_source_;
+      have_anchor_ = false;
+    }
+    if (!have_anchor_ || !baseline->direction_consistent)
     {
       anchor_t_ = t;
+      anchor_source_ns_ = receipt_time_ns;
       anchor_x_ = x;
       anchor_y_ = y;
       anchor_pa_ = pos_acc;
-      anchor_wheel_sign_ = wheel_sign;
       have_anchor_ = true;
-      abs_dtheta_since_anchor_ = 0.0;  // fresh straight baseline starts here
       return;
     }
 
@@ -542,7 +577,7 @@ private:
     // that slipped under the instantaneous rotation/sweep gates), the GPS
     // displacement no longer points along the body axis — the COG heading
     // would be garbage. Drop the anchor and restart on a fresh straight run.
-    if (abs_dtheta_since_anchor_.load() > cog_max_baseline_rotation_rad_)
+    if (baseline->absolute_rotation > cog_max_baseline_rotation_rad_)
     {
       ++rejected_baseline_rotation_;
       have_anchor_ = false;
@@ -574,12 +609,12 @@ private:
     // between-factor in fusion_graph. compute_cog_body_yaw() handles both
     // cases (signed v_x) — see cog_yaw_math.hpp. Forward path unchanged.
     //
-    // Time-averaged ω is approximated by the latest gyro/wheel rate;
+    // Time-averaged ω is approximated by the source-qualified gyro/wheel rate;
     // the resulting model error is folded into σ_yaw via omega_noise_rps_.
-    const double omega_avg = 0.5 * (wheel_omega_.load() + gyro_z_.load());
+    const double omega_avg = 0.5 * (motion->wheel_omega + motion->gyro_z);
     const double dt_baseline = std::max(t - anchor_t_, 1e-3);
-    const double v_eff = std::max(std::abs(wheel_vx_.load()), min_abs_wheel_);
-    const double vx_signed = wheel_vx_.load();
+    const double v_eff = std::max(std::abs(motion->vx), min_abs_wheel_);
+    const double vx_signed = motion->vx;
 
     const double yaw = compute_cog_body_yaw(
         dx, dy, wheel_sign, omega_avg, dt_baseline, vx_signed, lever_arm_x_, lever_arm_y_);
@@ -609,11 +644,10 @@ private:
     // fresh — keeps each published yaw independent and bounds the temporal
     // window over which wheel direction is assumed constant.
     anchor_t_ = t;
+    anchor_source_ns_ = receipt_time_ns;
     anchor_x_ = x;
     anchor_y_ = y;
     anchor_pa_ = pos_acc;
-    anchor_wheel_sign_ = wheel_sign;
-    abs_dtheta_since_anchor_ = 0.0;  // next baseline starts fresh
 
     // Stamp the heading with the GPS fix time, not wall-clock now(). The COG
     // yaw is derived from this fix's position; stamping it with arrival time
@@ -623,18 +657,29 @@ private:
     publish_imu(rclcpp::Time(msg.header.stamp), yaw, yaw_var);
 
     const rclcpp::Time latch_ros_now = now();
-    if (stationary_latch_clock_->Latch(receipt_time_ns,
+    // A delayed source-qualified heading is valid at the fix, not necessarily
+    // now. Preserve rotation already observed between that source and arrival
+    // instead of making an old heading a fresh stationary latch after a pivot.
+    const auto intervening_rotation =
+        motion_history_.AbsoluteRotation(receipt_time_ns,
+                                         latch_ros_now.nanoseconds(),
+                                         latch_rotation_deadband_rps_);
+    if (intervening_rotation && *intervening_rotation <= latch_max_rotation_rad_ &&
+        stationary_latch_clock_->Latch(receipt_time_ns,
                                        latch_ros_now.nanoseconds(),
                                        steady_now_nanoseconds()))
     {
       latched_yaw_ = LatchedYaw{yaw, yaw_var};
+      abs_dtheta_since_latch_ = *intervening_rotation;
+      // Source-to-arrival rotation is already carried above. Future receipt
+      // increments must start here, not at the last pre-arrival IMU callback.
+      last_imu_t_ = latch_ros_now.seconds();
     }
     else
     {
       latched_yaw_.reset();
+      stationary_latch_clock_->Reset();
     }
-    // Fresh latch — start counting rotation away from this heading from zero.
-    abs_dtheta_since_latch_ = 0.0;
 
     // Online mag-cal sample collection — only fit against COG that
     // survives the inflated-σ test (positional + drift + lever).
@@ -650,6 +695,7 @@ private:
 
   void republish_latched_when_stationary()
   {
+    observe_motion_clock();
     if (!latched_yaw_)
     {
       return;
@@ -721,8 +767,6 @@ private:
   void reset_cog_temporal_state()
   {
     have_anchor_ = false;
-    anchor_wheel_sign_ = 0;
-    abs_dtheta_since_anchor_ = 0.0;
     latched_yaw_.reset();
     stationary_latch_clock_->Reset();
     abs_dtheta_since_latch_ = 0.0;
@@ -754,7 +798,7 @@ private:
     RCLCPP_INFO(get_logger(),
                 "cog_to_imu stats: published fwd=%d rev=%d seed=%d, "
                 "rejected fix=%d accuracy=%d stationary=%d rotating=%d sweep=%d "
-                "displacement=%d baseline_rot=%lu latch_invalid_rot=%lu, "
+                "displacement=%d baseline_rot=%lu motion_source=%lu latch_invalid_rot=%lu, "
                 "mag_cal samples=%zu (writes=%d)",
                 published_fwd_,
                 published_rev_,
@@ -766,6 +810,7 @@ private:
                 rejected_sweep_,
                 rejected_displacement_,
                 static_cast<unsigned long>(rejected_baseline_rotation_),
+                static_cast<unsigned long>(rejected_motion_source_),
                 static_cast<unsigned long>(latch_invalidated_rotation_),
                 mag_samples_.size(),
                 mag_fit_count_);
@@ -1061,32 +1106,14 @@ private:
   // CogObservationTiming reports a physical receipt gap exceeding max_dt_.
   bool have_anchor_{false};
   double anchor_t_{}, anchor_x_{}, anchor_y_{}, anchor_pa_{};
-  // Wheel sign at the anchor sample: +1 forward, -1 reverse, 0 unknown.
-  // A change in sign during the baseline invalidates the anchor.
-  int anchor_wheel_sign_{0};
-  // wheel_vx_ / wheel_omega_ are mutated from the /wheel_odom callback
-  // (50 Hz), gyro_z_ from the /imu/data callback (100 Hz). Both are
-  // read by on_fix() (GPS callback, ~5 Hz) and by
-  // republish_latched_when_stationary() (WallTimer, separate callback
-  // group). The bringup uses MultiThreadedExecutor; without atomics
-  // the read in on_fix could see a torn double from a partially
-  // written update. std::atomic<double> with sequentially-consistent
-  // ordering is a one-cycle penalty per read on x86 — negligible vs
-  // GPS sample rate.
+  std::int64_t anchor_source_ns_{};
+  CogMotionHistory motion_history_;
+  uint64_t rejected_motion_source_{0};
+  // Current accepted motion serves the stationary latch. COG queries the
+  // separately retained source history at each fix and across its baseline.
   std::atomic<double> wheel_vx_{0.0};
   std::atomic<double> wheel_omega_{0.0};
   std::atomic<double> gyro_z_{0.0};
-  // Absolute heading change integrated since the current anchor (∫|gyro_z|dt,
-  // accumulated in the /imu/data callback, reset on every anchor (re)seed).
-  // The instantaneous min_omega_for_anchor_ / sweep gates only catch fast
-  // pivots; a SLOW heading oscillation (e.g. an FTC limit-cycle on a tight
-  // path segment) keeps each sample under threshold yet swings the heading
-  // across the baseline, so the GPS displacement no longer points along the
-  // body axis and the published COG yaw is garbage — which the non-robust COG
-  // unary and the yaw-flip recovery then amplify into a 180° flip. Reject the
-  // COG when this exceeds cog_max_baseline_rotation_rad_ (a straight baseline
-  // is near zero). last_imu_t_ is the previous /imu/data stamp for dt.
-  std::atomic<double> abs_dtheta_since_anchor_{0.0};
   // Deadbanded absolute rotation accumulated since the stationary latch was
   // set; drives latch invalidation in republish_latched_when_stationary().
   std::atomic<double> abs_dtheta_since_latch_{0.0};
