@@ -349,6 +349,9 @@ def generate_launch_description() -> LaunchDescription:
                 # debugging fusion_graph; restore the cycle pattern once
                 # the baseline is clean.
                 "quality_pattern": "",
+                # One captured native 20 ms step of scheduling allowance.
+                # Consumer future-provenance rejection remains unchanged.
+                "delivery_latency_s": 0.020,
                 "noise_seed": 42,
             }
         ],
