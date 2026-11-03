@@ -129,6 +129,8 @@ void FusionGraphNode::OnTimer()
   //      only point where the anchor can be captured against a fresh
   //      dr_* (the same OnTimer invocation that just ran Tick); doing
   //      it later races subsequent OnImu integration.
+  //      Same-node estimate revisions correct that captured anchor without
+  //      recapturing DR or erasing motion since the node.
   //   2. Re-broadcast TF + /odometry/filtered_map every OnTimer with
   //      that anchor extrapolated through the current dr_*. Keeping
   //      the publish rate at OnTimer cadence (vs. only on new-node)
@@ -136,16 +138,24 @@ void FusionGraphNode::OnTimer()
   //      windows.
   if (auto snap = graph_->LatestSnapshot())
   {
-    if (!t_map_odom_anchor_valid_ || snap->node_index != last_anchored_node_index_)
     {
-      // tf_state_mu_: the anchor VALUE and valid flag are read together by
-      // TfBroadcastLoop; write the {value, valid=true} pair atomically so the
-      // loop never composes a stale anchor with fresh dr_*. dr_* is read here
-      // too (it is concurrently integrated by OnImu).
+      // Revision and anchor state are committed together for the TF thread.
       std::lock_guard<std::mutex> lock(tf_state_mu_);
-      const gtsam::Pose2 dr_at_node(dr_x_, dr_y_, dr_yaw_);
-      t_map_odom_anchor_ = snap->pose.compose(dr_at_node.inverse());
+      if (!t_map_odom_anchor_valid_ || snap->node_index != last_anchored_node_index_)
+      {
+        const gtsam::Pose2 dr_at_node(dr_x_, dr_y_, dr_yaw_);
+        t_map_odom_anchor_ = snap->pose.compose(dr_at_node.inverse());
+      }
+      else if (snap->estimate_revision != last_anchored_estimate_revision_)
+      {
+        // Correct the existing anchor on the LEFT, retaining the entire DR
+        // tail since this graph node (also after an odom-frame rebase).
+        t_map_odom_anchor_ =
+            snap->pose.compose(last_anchored_graph_pose_.inverse()).compose(t_map_odom_anchor_);
+      }
       last_anchored_node_index_ = snap->node_index;
+      last_anchored_estimate_revision_ = snap->estimate_revision;
+      last_anchored_graph_pose_ = snap->pose;
       t_map_odom_anchor_valid_ = true;
     }
     // Odom re-base: once the robot has driven odom_rebase_dist_m from the odom
