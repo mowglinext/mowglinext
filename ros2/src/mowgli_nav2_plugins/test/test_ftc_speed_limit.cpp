@@ -57,6 +57,26 @@ struct FTCSpeedLimitTestAccess
   {
     return controller.is_stalled_;
   }
+  static void ApproachFixture(FTCController& controller, double body_distance, bool second = false)
+  {
+    controller.current_state_ = FTCController::PlannerState::FOLLOWING;
+    controller.current_index_ =
+        second ? controller.pivot_corners_.back() : controller.pivot_corners_.front();
+    tf2::fromMsg(controller.global_plan_[controller.current_index_].pose,
+                 controller.current_control_point_);
+    controller.local_control_point_.setIdentity();
+    controller.local_control_point_.translation().x() = body_distance;
+  }
+
+  static void ApproachStateTick(FTCController& controller)
+  {
+    (void)controller.update_planner_state();
+  }
+
+  static bool ApproachTimerArmed(const FTCController& controller)
+  {
+    return controller.pivot_approach_start_.has_value();
+  }
 };
 }  // namespace mowgli_nav2_plugins
 
@@ -591,6 +611,59 @@ protected:
 
   double x_{0}, y_{0}, yaw_{0}, v_{0}, w_{0};
 };
+
+TEST_P(FtcPivotArrival, ApproachTimerUsesBodyAndCannotBeResetByRetreat)
+{
+  SetParameter("goal_timeout", 10.0);
+  controller_.newPathReceived(CornerPlan());
+  Access::ApproachFixture(controller_, .41);  // carrot is at the corner
+  Access::ApproachStateTick(controller_);
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 11000000000LL;
+  SetTime();
+  EXPECT_NO_THROW(Access::ApproachStateTick(controller_));
+  Access::ApproachFixture(controller_, .23);
+  Access::ApproachStateTick(controller_);
+  ASSERT_TRUE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 6000000000LL;
+  SetTime();
+  Access::ApproachFixture(controller_, .41);
+  EXPECT_NO_THROW(Access::ApproachStateTick(controller_));
+  time_ns_ += 4100000000LL;
+  SetTime();
+  EXPECT_THROW(Access::ApproachStateTick(controller_), nav2_core::ControllerException);
+  Access::ApproachFixture(controller_, .41, true);
+  EXPECT_NO_THROW(Access::ApproachStateTick(controller_));
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+  Access::ApproachFixture(controller_, .23, true);
+  Access::ApproachStateTick(controller_);
+  ASSERT_TRUE(Access::ApproachTimerArmed(controller_));
+  controller_.newPathReceived(CornerPlan());
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+}
+
+TEST_P(FtcPivotArrival, UnsupportedFrameAndExternalCapKeepFiniteBudgets)
+{
+  SetParameter("goal_timeout", 10.0);
+  auto plan = CornerPlan();
+  plan.header.frame_id = "odom";
+  controller_.newPathReceived(plan);
+  Access::ApproachFixture(controller_, .41);
+  Access::ApproachStateTick(controller_);
+  ASSERT_TRUE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 10100000000LL;
+  SetTime();
+  EXPECT_THROW(Access::ApproachStateTick(controller_), nav2_core::ControllerException);
+
+  controller_.newPathReceived(CornerPlan());
+  controller_.setSpeedLimit(.1, false);  // window is .08 m at this cap
+  Access::ApproachFixture(controller_, .1);
+  Access::ApproachStateTick(controller_);
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+  Access::ApproachFixture(controller_, .07);
+  Access::ApproachStateTick(controller_);
+  EXPECT_TRUE(Access::ApproachTimerArmed(controller_));
+}
 
 TEST_P(FtcPivotArrival, BrakesAndReachesRadialTipLeft)
 {

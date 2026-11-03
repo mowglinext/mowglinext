@@ -1447,15 +1447,29 @@ FTCController::PlannerState FTCController::update_planner_state()
 
     case PlannerState::FOLLOWING:
     {
-      if (const auto approach = stopCornerApproach())
+      const auto corner = nextPivotCorner();
+      const auto approach = stopCornerApproach();
+      if (pivot_approach_start_ && (!corner || pivot_approach_start_->first != *corner))
+        pivot_approach_start_.reset();
+      if (corner && !pivot_approach_start_)
       {
-        if (!pivot_approach_start_ || pivot_approach_start_->first != *approach)
-          pivot_approach_start_ = std::pair{*approach, clock_->now()};
+        // The carrot can enter the approach window well before the body.
+        // local_control_point_ is the corner transformed at the same supported
+        // pose epoch used for the approach speed and response limits.
+        const double window =
+            maxLinearSpeed() * (config_.pivot_coast_time_bound_s + 3 * kIntendedCommandHorizonSec);
+        const double distance = local_control_point_.translation().norm();
+        if (plan_header_.frame_id != "map" ||
+            (approach && (!std::isfinite(distance) || distance <= window)))
+          pivot_approach_start_ = std::pair{*corner, clock_->now()};
+      }
+      // Once armed, leaving the window or temporarily losing approach
+      // ownership cannot extend the deadline for the same corner.
+      if (pivot_approach_start_)
+      {
         if ((clock_->now() - pivot_approach_start_->second).seconds() > config_.goal_timeout)
           throw nav2_core::ControllerException("FTCController: timeout approaching pivot corner.");
       }
-      else
-        pivot_approach_start_.reset();
       const double distance = local_control_point_.translation().norm();
       if (distance > config_.max_follow_distance)
       {
@@ -1530,7 +1544,6 @@ FTCController::PlannerState FTCController::update_planner_state()
       // update_control_point), so the robot drives straight at it; once
       // base_link is there, stop and rotate. Never mid reverse-escape or
       // mid obstacle hold — those own the output until they release.
-      const auto corner = nextPivotCorner();
       if (corner.has_value() && current_index_ == *corner && !reverse_escape_active_ &&
           !obstacle_waiting_ && !turnFallbackReversing() &&
           PivotArrived(local_control_point_.translation().x(),
