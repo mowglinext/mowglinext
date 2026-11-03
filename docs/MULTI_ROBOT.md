@@ -206,7 +206,11 @@ these hold (`classify_docked_peer`):
    (+0.5 m either end), within 0.30 m of its axis and 30° of its heading;
 2. the peer's bare chassis is ≥ 2 cm clear of the strip our chassis sweeps
    along that rail (a charger BEHIND our dock keeps blocking the undock);
-3. the two bare chassis are ≥ 2 cm apart right now;
+3. the two bare chassis are ≥ 2 cm apart right now, unless we are reversing out
+   and that does not close on the peer. The block lands inside our footprint,
+   where collision_monitor and BackUp refuse every direction, so bringing it back
+   mid-reverse strands the robot (field 2026-11-03: UNDOCK_FAILED after 0.18 m, a
+   7° swerve). This check only stops us driving in (forward wheel motion, held 5 s);
 4. our grown footprint is within 0.5 m of the peer's block — so the block is
    back for the first transit after the undock (0.54 m at 1.5 m) and before
    an approach to the staging pose reaches it.

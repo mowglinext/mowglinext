@@ -78,6 +78,14 @@ _DOCK_RAIL_LATERAL_M = 0.30  # base_footprint off the rail axis
 _DOCK_RAIL_MAX_YAW_RAD = math.radians(30.0)  # heading off the dock heading
 # Real gap kept between the two PHYSICAL bodies while the exception holds.
 _DOCKED_PEER_MIN_CLEARANCE_M = 0.02
+# How far ahead reversing is judged, and how much closer to the peer's axis
+# counts as closing on it (pose noise, not motion).
+_REVERSE_PROBE_M = 0.30
+_REVERSE_CLOSING_EPS_M = 0.005
+# Forward wheel motion: docking in, where a too-close neighbour must stop us. Held
+# after the stop it causes, so standing still does not read as free to go on.
+_FORWARD_SPEED_MPS = 0.02
+_FORWARD_HOLD_S = 5.0
 # The exception ends once our footprint is this far from the peer's grown
 # block. Above RPP's collision look-ahead (1.0 s at 0.30 m/s), so the block is
 # gone before a transit to the staging pose reaches it and back once the
@@ -260,20 +268,42 @@ def on_dock_rail(robot: Pose2D, dock: Pose2D, undock_distance: float) -> bool:
     )
 
 
-def classify_docked_peer(peer: Pose2D, robot: Pose2D, dock: Pose2D, geo: DockGeometry) -> DockNeighbour:
+def reversing_closes_on(peer: Pose2D, robot: Pose2D) -> bool:
+    """Backing up along our own heading brings us nearer to the peer's axis."""
+    back = Pose2D(
+        robot.x - _REVERSE_PROBE_M * math.cos(robot.yaw),
+        robot.y - _REVERSE_PROBE_M * math.sin(robot.yaw),
+        robot.yaw,
+    )
+    return abs(in_frame(back, peer).y) < abs(in_frame(robot, peer).y) - _REVERSE_CLOSING_EPS_M
+
+
+def classify_docked_peer(
+    peer: Pose2D, robot: Pose2D, dock: Pose2D, geo: DockGeometry, driving_forward: bool = False
+) -> DockNeighbour:
     """How a peer that is ON ITS CHARGER relates to our own dock manoeuvres.
 
     Only DOCK_INFRASTRUCTURE drops it from the cloud. The physical checks use
     the bare chassis because the question is "can the bodies touch", which no
     margin answers; the release check uses the same grown shapes the costmap
-    and the collision monitor see, so the peer is back before they would."""
+    and the collision monitor see, so the peer is back before they would.
+
+    TOO_CLOSE must not trap us. The block reaches into our footprint, where
+    collision_monitor and BackUp refuse EVERY direction, so bringing it back
+    mid-reverse leaves the robot stuck between the docks with no way to finish
+    the undock or to dock again (field 2026-11-03: reversing swung the heading
+    7 degrees, the nose read 0 m from the peer, UNDOCK_FAILED after 0.18 m, and
+    every retry refused). So it only applies driving in, or if reversing itself
+    would close on the peer; otherwise reversing is the way out."""
     if not on_dock_rail(robot, dock, geo.undock_distance):
         return DockNeighbour.OFF_RAIL
     peer_body = footprint_corners(peer, geo.body)
     rail = Footprint(front=geo.body.front, rear=geo.body.rear - geo.undock_distance, half_width=geo.body.half_width)
     if polygon_clearance(peer_body, footprint_corners(dock, rail)) < _DOCKED_PEER_MIN_CLEARANCE_M:
         return DockNeighbour.BLOCKS_RAIL
-    if polygon_clearance(peer_body, footprint_corners(robot, geo.body)) < _DOCKED_PEER_MIN_CLEARANCE_M:
+    if polygon_clearance(peer_body, footprint_corners(robot, geo.body)) < _DOCKED_PEER_MIN_CLEARANCE_M and (
+        driving_forward or reversing_closes_on(peer, robot)
+    ):
         return DockNeighbour.TOO_CLOSE
     block = footprint_corners(peer, geo.grown, geo.peer_margin)
     if polygon_clearance(block, footprint_corners(robot, geo.grown)) >= _DOCK_NEIGHBOUR_RELEASE_GAP_M:
@@ -298,13 +328,14 @@ def dock_verdicts(
     robot: Optional[Pose2D],
     dock: Optional[Pose2D],
     geo: DockGeometry,
+    driving_forward: bool = False,
 ) -> List[Optional[DockNeighbour]]:
     """One verdict per peer: None when it is not a charging peer or when our
     own pose or dock pose is unknown — i.e. it stays a full obstacle."""
     if robot is None or dock is None:
         return [None] * len(peers)
     return [
-        classify_docked_peer(Pose2D(p.x, p.y, p.yaw), robot, dock, geo)
+        classify_docked_peer(Pose2D(p.x, p.y, p.yaw), robot, dock, geo, driving_forward)
         if p.yaw is not None and is_listed_docked(p, docked)
         else None
         for p in peers
@@ -383,6 +414,7 @@ class FleetPeerObstaclesNode(Node):
         self._robot: Optional[Pose2D] = None
         self._robot_seen_at = -math.inf
         self._dock: Optional[Pose2D] = None
+        self._forward_hold_until = -math.inf
         self._verdicts: Tuple[Optional[DockNeighbour], ...] = ()
 
         # The GUI publishes through foxglove_bridge (reliable, volatile).
@@ -393,6 +425,13 @@ class FleetPeerObstaclesNode(Node):
             Odometry,
             "/odometry/filtered_map",
             self._on_odom,
+            QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.VOLATILE),
+        )
+        # Measured motion: the fused pose carries no linear twist.
+        self._wheel_odom_sub = self.create_subscription(
+            Odometry,
+            "/wheel_odom",
+            self._on_wheel_odom,
             QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT, durability=DurabilityPolicy.VOLATILE),
         )
         # map_server latches the dock pose (transient_local) and re-sends it on change.
@@ -433,6 +472,10 @@ class FleetPeerObstaclesNode(Node):
         self._robot = pose2d_from_msg(msg.pose.pose)
         self._robot_seen_at = monotonic()
 
+    def _on_wheel_odom(self, msg: Odometry) -> None:
+        if msg.twist.twist.linear.x > _FORWARD_SPEED_MPS:
+            self._forward_hold_until = monotonic() + _FORWARD_HOLD_S
+
     def _on_dock(self, msg: PoseStamped) -> None:
         self._dock = pose2d_from_msg(msg.pose)
         self.get_logger().info(f"fleet_peer_obstacles: dock pose {self._dock}")
@@ -445,7 +488,9 @@ class FleetPeerObstaclesNode(Node):
         peers = fresh_peers(self._peers, now, self._timeout_s)
         docked = self._docked if now - self._docked_seen_at <= self._timeout_s else ()
         robot = self._robot if now - self._robot_seen_at <= _ROBOT_POSE_MAX_AGE_S else None
-        verdicts = dock_verdicts(peers, docked, robot, self._dock, self._dock_geometry)
+        verdicts = dock_verdicts(
+            peers, docked, robot, self._dock, self._dock_geometry, now < self._forward_hold_until
+        )
         self._log_verdict_changes(verdicts)
         points: List[Tuple[float, float, float]] = []
         for peer, verdict in zip(peers, verdicts):
@@ -468,7 +513,7 @@ class FleetPeerObstaclesNode(Node):
                 self.get_logger().warning(
                     f"fleet_peer_obstacles: peer {i} is on its charger but {verdict.value.replace('_', ' ')} "
                     f"(bodies closer than {_DOCKED_PEER_MIN_CLEARANCE_M:.2f} m to our dock rail or chassis) — "
-                    "kept as an obstacle, so undocking/docking beside it is refused; move the docks apart"
+                    "kept as an obstacle, so docking beside it is refused; move the docks apart"
                 )
 
 
