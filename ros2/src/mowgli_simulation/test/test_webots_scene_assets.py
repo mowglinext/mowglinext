@@ -5,6 +5,7 @@
 
 from pathlib import Path
 import re
+import xml.etree.ElementTree as ET
 
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -48,3 +49,26 @@ def test_tire_rubber_texture_dependencies_are_bundled():
             )
             assert texture.is_file(), f'missing appearance map: {texture}'
             assert texture.read_bytes().startswith(b'\xff\xd8'), texture
+
+
+def test_cutting_tool_frame_is_reachable_in_the_fixed_webots_model():
+    robot = ET.parse(PACKAGE / 'urdf_webots' / 'mowgli_webots.urdf').getroot()
+    assert len(robot.findall("link[@name='blade_link']")) == 1
+    parents = {}
+    joints = {}
+    for joint in robot.findall('joint'):
+        child = joint.find('child').attrib['link']
+        assert child not in parents, f'{child}: multiple TF parents'
+        parents[child] = joint.find('parent').attrib['link']
+        joints[child] = joint
+    # map_server stamps the blade position through this static chain. The
+    # xacro blade-placement formula uses the fixed Webots dimensions here.
+    assert parents['blade_link'] == 'base_link'
+    assert parents['base_link'] == 'base_footprint'
+    blade = joints['blade_link']
+    assert blade.attrib['type'] == 'fixed'
+    assert tuple(map(float, blade.find('origin').attrib['xyz'].split())) == (.18, 0., -.043)
+    assert tuple(map(float, blade.find('origin').attrib['rpy'].split())) == (0., 0., 0.)
+    assert joints['base_link'].attrib['type'] == 'fixed'
+    assert tuple(map(float, joints['base_link'].find('origin').attrib['xyz'].split())) == (
+        0., 0., .093)
