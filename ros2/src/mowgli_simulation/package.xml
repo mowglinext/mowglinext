@@ -27,6 +27,7 @@
 
   <!-- Python plugin runtime deps (mowgli_simulation.kinematic_drive) -->
   <exec_depend>rclpy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
 
   <!-- Webots integration -->
   <exec_depend>webots_ros2_driver</exec_depend>
