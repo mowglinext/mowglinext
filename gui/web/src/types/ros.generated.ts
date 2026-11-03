@@ -278,6 +278,18 @@ export type FirmwareParams = {
   params?: FirmwareParam[];
 };
 
+export type GnssFusionUpdate = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  producer_incarnation?: string;
+  graph_epoch?: number;
+  estimate_revision?: number;
+  pose_published?: boolean;
+  tf_support_stamp?: { sec: number; nanosec: number };
+  has_applied_fix?: boolean;
+  applied_fix?: NavSatFix;
+  applied_revision?: number;
+};
+
 export const enum GnssStatusConstants {
   FIX_TYPE_NO_FIX = 0,
   FIX_TYPE_GPS_FIX = 1,
