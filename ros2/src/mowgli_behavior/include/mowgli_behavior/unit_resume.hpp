@@ -27,6 +27,14 @@
 // cursor. What bounds it is not a count per unit — a 1.1 km unit legitimately
 // meets many path features — but the number of CONSECUTIVE resumes that made no
 // real progress, which is the actual signature of a deterministic re-abort loop.
+//
+// Spending that budget must not cost the rest of the unit either. A hole-free
+// area is one or two units, so "give up on the unit" meant giving up on the zone
+// because of one bad spot; and a pass that gains less than 0.5 % of a large plan
+// is not progress, so four such passes retired the area with the far side of the
+// bad spot never tried. FollowStrip therefore leaps kUnitResumeLeapM ahead when
+// the budget is spent and carries on: the cursor moves at least that far per
+// budget, so the unit still ends, and what is lost is bounded to the bad stretch.
 
 #pragma once
 
@@ -55,13 +63,18 @@ inline std::size_t nextUndoneUnit(std::size_t from,
   return from;
 }
 
+/// Arc skipped when the no-progress budget is spent, instead of dropping the rest of the unit.
+inline constexpr double kUnitResumeLeapM = 10.0;
+
 struct UnitResumeCfg
 {
   /// Consecutive no-progress resumes tolerated before the unit is given up.
   std::size_t max_consecutive{5};
   /// Poses driven since the last resume that count as real progress and clear
-  /// the consecutive counter.
-  std::size_t progress_reset_poses{135};
+  /// the consecutive counter: about 1 m at the planner's 0.03 m spacing. A resume
+  /// that actually drove is not the re-abort loop this budget exists to end, and
+  /// the stepped cursor already keeps every resume moving forward along the unit.
+  std::size_t progress_reset_poses{34};
   /// Below this many poses left, the remainder is not worth a transit.
   std::size_t min_remaining_poses{27};
 };
@@ -93,6 +106,13 @@ inline UnitResumeDecision DecideUnitResume(std::size_t unit_poses,
     return {false, spent};
   }
   return {true, spent + 1};
+}
+
+/// True when DecideUnitResume refused only because the budget is spent, with enough of the unit
+/// left to be worth a leap (kUnitResumeLeapM) rather than a drop.
+inline bool UnitResumeBudgetSpent(const UnitResumeDecision& decision, const UnitResumeCfg& cfg = {})
+{
+  return !decision.resume && decision.consecutive >= cfg.max_consecutive;
 }
 
 }  // namespace mowgli_behavior
