@@ -26,9 +26,39 @@
 namespace fusion_graph
 {
 
+void FusionGraphNode::ObserveMotionClockEpoch()
+{
+  const auto now = this->now();
+  if (last_motion_callback_clock_ && now < *last_motion_callback_clock_)
+  {
+    // A ROS-clock epoch is shared by both streams. Whichever callback arrives
+    // first invalidates both baselines/rate caches, so an IMU-first restart
+    // cannot integrate the previous epoch's wheel velocity. The next callback
+    // in this epoch must preserve any newly received wheel observation.
+    last_wheel_stamp_.reset();
+    last_imu_stamp_.reset();
+    wheel_vx_ = 0.0;
+    wheel_wz_ = 0.0;
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      dr_last_gz_ = 0.0;
+      dr_last_vx_eff_ = 0.0;
+    }
+    ResetLidarTiming();
+  }
+  last_motion_callback_clock_ = now;
+}
+
 void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
 {
+  ObserveMotionClockEpoch();
+  if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000u ||
+      !std::isfinite(msg->twist.twist.linear.x) || !std::isfinite(msg->twist.twist.linear.y) ||
+      !std::isfinite(msg->twist.twist.angular.z))
+    return;
   const rclcpp::Time stamp(msg->header.stamp);
+  if (last_wheel_stamp_ && stamp <= *last_wheel_stamp_)
+    return;
   // Latest forward velocity for the local-frame DR integration in OnImu.
   // twist.linear.y is non-holonomically locked to 0 by hardware_bridge
   // (tight vy covariance) — we mirror that by only integrating vx.
@@ -61,8 +91,12 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
 
 void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
 {
+  ObserveMotionClockEpoch();
+  if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000u ||
+      !std::isfinite(msg->angular_velocity.z))
+    return;
   const rclcpp::Time stamp(msg->header.stamp);
-  if (last_imu_stamp_ && stamp == *last_imu_stamp_)
+  if (last_imu_stamp_ && stamp <= *last_imu_stamp_)
     return;
   if (last_imu_stamp_)
   {
@@ -107,8 +141,6 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       abs_dtheta_since_last_gps_sample_rad_ += std::abs(gz) * dt;
     }
   }
-  if (last_imu_stamp_ && stamp <= *last_imu_stamp_)
-    ResetLidarTiming();
   const auto odom =
       lidar_anchor_odom_.Advance(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)));
   lidar_scan_history_.Push(stamp.seconds(),
