@@ -2295,6 +2295,79 @@ TEST_F(FollowStripDigTest, PrecisionLossCancelsLateAcceptedGoalAndWaitsForTermin
   EXPECT_EQ(follow->requestCount(), 2u);
 }
 
+TEST_F(FollowStripDigTest, FleetYieldDuringPrecisionPauseKeepsTrustedCursor)
+{
+  std::atomic<bool> ready{true};
+  ctx->coverage_precision_ready = [&ready]
+  {
+    return ready.load();
+  };
+  follow->rejectCancel(true);
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ready = false;
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_EQ(ctx->area_resume_pose_index.count(0), 1u);
+  const auto trusted_cursor = ctx->area_resume_pose_index.at(0);
+  setRobot(0.8, 0.0);  // only the untrusted estimate moves while stopped
+  ctx->fleet_excluded_areas.insert(0);
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), trusted_cursor);
+  EXPECT_EQ(follow->requestCount(), 1u);
+}
+
+TEST_F(FollowStripDigTest, FleetYieldOnPrecisionLossKeepsTrustedCursor)
+{
+  std::atomic<bool> ready{true};
+  ctx->coverage_precision_ready = [&ready]
+  {
+    return ready.load();
+  };
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ready = false;
+  setRobot(0.8, 0.0);
+  ctx->fleet_excluded_areas.insert(0);  // loss and yield on the same tick
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 0u);
+}
+
+TEST_F(FollowStripDigTest, HaltOnPrecisionLossKeepsTrustedCursor)
+{
+  std::atomic<bool> ready{true};
+  ctx->coverage_precision_ready = [&ready]
+  {
+    return ready.load();
+  };
+  startFollowStrip({straightUnit(0.0, 10.0)});
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ready = false;
+  setRobot(0.8, 0.0);
+  tree->haltTree();  // a parent guard can halt before the precision tick runs
+  EXPECT_EQ(ctx->area_resume_pose_index.at(0), 0u);
+}
+
 TEST_F(FollowStripDigTest, PrecisionDenialBlocksInitialCoverageUntilEvidenceReady)
 {
   std::atomic<bool> ready{false};

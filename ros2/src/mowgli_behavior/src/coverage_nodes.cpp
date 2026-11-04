@@ -1897,7 +1897,10 @@ void FollowStrip::onHalted()
     // Selection is already valid while a blade-off transit or the asynchronous
     // goal response is pending. Persist that logical cursor even without a
     // handle; transit motion must not be counted as coverage progress.
-    if (follow_handle_ && !transit_active_ && !transit_pending_ && !precision_paused_)
+    // A parent can halt on the same tick that precision is lost, before the
+    // private pause latches. Only trusted pose support may advance the cursor.
+    if (follow_handle_ && !transit_active_ && !transit_pending_ && !precision_paused_ &&
+        ctx->coverage_precision_ready && ctx->coverage_precision_ready())
     {
       updateProgress(ctx);
     }
@@ -1914,7 +1917,10 @@ BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, 
       (follow_handle_ || follow_future_.valid() || transit_active_ || transit_pending_) &&
       total_path_poses_ > 0 && swath_idx_ < swaths_.size())
   {
-    if (follow_handle_ && !transit_active_ && !transit_pending_)
+    // Fleet exclusion is checked before the private precision pause. Preserve
+    // the last trusted cursor both during a pause and on its first lost tick.
+    if (follow_handle_ && !transit_active_ && !transit_pending_ && !precision_paused_ &&
+        ctx->coverage_precision_ready && ctx->coverage_precision_ready())
     {
       updateProgress(ctx);
     }
