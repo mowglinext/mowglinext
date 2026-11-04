@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -140,6 +141,9 @@ struct BTContext
   /// proofing note on behavior_tree_node's clear_resume_requested_ for the
   /// pattern to follow instead of a mutex if that ever happens.
   mutable std::mutex context_mutex;
+
+  // Set by the behavior node; absent evidence denies coverage dispatch.
+  std::function<bool()> coverage_precision_ready;
 
   /// Fleet stop ownership is never persisted; all access takes context_mutex.
   FleetYieldState fleet_yield;

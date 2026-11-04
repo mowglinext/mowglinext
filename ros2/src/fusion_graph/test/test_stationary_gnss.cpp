@@ -179,13 +179,15 @@ TEST(StationaryGnss, UnsetTargetWaitsForOrdinaryNodeAndRemovedTargetIsDropped)
   p.max_graph_nodes = 1;
   fg::GraphManager g(p);
   g.Initialize(gtsam::Pose2(), 0.);
-  ASSERT_TRUE(g.QueueGnss(.3, 0., .003));
+  ASSERT_TRUE(g.QueueGnss(.3, 0., .003, false, std::nullopt, 1));
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 0u);
   EXPECT_FALSE(g.Tick(.2));
   EXPECT_TRUE(fg::GraphManagerTestAccess::HasGnss(g));
   ASSERT_TRUE(g.Tick(5.));
   EXPECT_FALSE(fg::GraphManagerTestAccess::HasGnss(g));
   EXPECT_EQ(fg::GraphManagerTestAccess::LastFactorKey(g), fg::PoseKey(1));
-  ASSERT_TRUE(g.QueueGnss(.3, 0., .003, false, 0));
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 1u);
+  ASSERT_TRUE(g.QueueGnss(.3, 0., .003, false, 0, 2));
   g.RebaseISAM2();
   EXPECT_FALSE(g.GetPose(0));
   const auto before = g.Stats();
@@ -193,6 +195,7 @@ TEST(StationaryGnss, UnsetTargetWaitsForOrdinaryNodeAndRemovedTargetIsDropped)
   EXPECT_FALSE(fg::GraphManagerTestAccess::HasGnss(g));
   EXPECT_EQ(g.Stats().successful_updates, before.successful_updates);
   EXPECT_EQ(g.Stats().factor_slots, before.factor_slots);
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 1u);
 }
 
 TEST(StationaryGnss, DelayedHistoricalFixKeepsItsTargetAndRefreshesHead)
@@ -461,4 +464,58 @@ TEST(StationaryGnss, TruthfulSlowCreepAndDelayedFixesDoNotAcquirePeriodSizedLag)
       EXPECT_LT(20. - g.LatestSnapshot()->timestamp, .25);
     }
   }
+}
+
+TEST(StationaryGnss, AppliedTokenRequiresSuccessfulFactorAndSurvivesMaintenance)
+{
+  fg::GraphManager g(Params());
+  g.Initialize(gtsam::Pose2(), 1.0);
+  const auto initial = *g.LatestSnapshot();
+  EXPECT_EQ(initial.applied_gnss_token, 0u);
+  ASSERT_TRUE(g.QueueGnss(.3, -.08, .003, true, 0, 11));
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 0u);
+  // Overwriting a Fixed observation with Float preserves the actual token.
+  ASSERT_TRUE(g.QueueGnss(.31, -.08, .3, true, 0, 12));
+  EXPECT_FALSE(g.Tick(1.04));
+  const auto committed = *g.LatestSnapshot();
+  EXPECT_EQ(committed.node_index, initial.node_index);
+  EXPECT_GT(committed.estimate_revision, initial.estimate_revision);
+  EXPECT_EQ(committed.applied_gnss_token, 12u);
+  EXPECT_EQ(committed.applied_gnss_revision, committed.estimate_revision);
+  g.RebaseISAM2();
+  const auto rebased = *g.LatestSnapshot();
+  EXPECT_EQ(rebased.graph_epoch, committed.graph_epoch);
+  EXPECT_EQ(rebased.applied_gnss_token, 12u);
+  EXPECT_EQ(rebased.applied_gnss_revision, committed.applied_gnss_revision);
+  // An older token cannot regress the applied observation watermark.
+  ASSERT_TRUE(g.QueueGnss(.3, -.08, .003, false, 0, 10));
+  EXPECT_FALSE(g.Tick(1.08));
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 12u);
+  ASSERT_FALSE(g.QueueGnss(.3, -.08, .003, false, 999999, 13));
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 12u);
+  ASSERT_FALSE(fg::GraphManagerTestAccess::FailingUpdate(g));
+  EXPECT_FALSE(g.LatestSnapshot());
+  EXPECT_GT(g.GraphEpoch(), committed.graph_epoch);
+  g.Initialize(gtsam::Pose2(), 2.0);
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 0u);
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_revision, 0u);
+}
+
+TEST(StationaryGnss, NewNodeCommitsOnlyIncludedObservationAndClockResetClearsIt)
+{
+  fg::GraphManager g(Params());
+  g.Initialize(gtsam::Pose2(), 1.0);
+  ASSERT_TRUE(g.QueueGnss(.3, -.08, .003, false, 0, 21));
+  g.AddWheelTwist(.5, 0, 0, .1);
+  g.AddGyroDelta(0, .1);
+  ASSERT_TRUE(g.Tick(1.1));
+  const auto committed = *g.LatestSnapshot();
+  EXPECT_EQ(committed.applied_gnss_token, 21u);
+  EXPECT_EQ(committed.applied_gnss_revision, committed.estimate_revision);
+  ASSERT_TRUE(g.QueueGnss(.3, -.08, .003, false, committed.node_index, 22));
+  EXPECT_FALSE(g.Tick(.5));
+  EXPECT_GT(g.GraphEpoch(), committed.graph_epoch);
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 0u);
+  EXPECT_FALSE(g.Tick(.55));
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 0u);
 }

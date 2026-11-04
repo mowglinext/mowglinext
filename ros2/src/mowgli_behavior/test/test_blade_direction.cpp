@@ -115,6 +115,10 @@ protected:
   void SetUp() override
   {
     ctx = std::make_shared<BTContext>();
+    ctx->coverage_precision_ready = []
+    {
+      return true;
+    };  // mocked precision-support module
     ctx->node = rclcpp::Node::make_shared("blade_direction_test");
     // FollowStrip::onStart measures the gap to the first unit through the TF
     // buffer (blade spin-up deferral, ae6d5780) and dereferences it without a

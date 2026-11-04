@@ -11,6 +11,7 @@ find_package(builtin_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 # Declare message files
@@ -21,6 +22,7 @@ set(msg_files
   "msg/ESCStatus.msg"
   "msg/HighLevelStatus.msg"
   "msg/GnssStatus.msg"
+  "msg/GnssFusionUpdate.msg"
   "msg/AbsolutePose.msg"
   "msg/WheelTick.msg"
   "msg/ImuRaw.msg"
@@ -86,6 +88,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
     std_msgs
     geometry_msgs
     nav_msgs
+    sensor_msgs
 )
 
 add_library(${PROJECT_NAME}_headers INTERFACE)

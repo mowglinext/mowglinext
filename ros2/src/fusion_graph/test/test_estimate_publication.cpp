@@ -12,6 +12,46 @@ namespace fusion_graph
 {
 struct FusionGraphNodeTestAccess
 {
+  static void Sync(FusionGraphNode& n)
+  {
+    n.SynchronizeSupportEpoch();
+  }
+  static void Cache(FusionGraphNode& n, uint64_t token, const sensor_msgs::msg::NavSatFix& fix)
+  {
+    n.RememberSupportFix(token, fix);
+  }
+  static void Odom(FusionGraphNode& n, const TickOutput& snapshot, int sec)
+  {
+    builtin_interfaces::msg::Time stamp;
+    stamp.sec = sec;
+    n.RecordSupportOdom(snapshot, stamp);
+  }
+  static void TfSent(FusionGraphNode& n, uint64_t epoch, uint64_t revision, int sec)
+  {
+    std::lock_guard<std::mutex> lock(n.tf_state_mu_);
+    builtin_interfaces::msg::Time stamp;
+    stamp.sec = sec;
+    n.support_tf_ = FusionGraphNode::SupportTf{epoch, revision, stamp};
+    n.PublishSupportLocked();
+  }
+  static void Gnss(FusionGraphNode& n, const sensor_msgs::msg::NavSatFix& fix)
+  {
+    n.OnGnss(std::make_shared<const sensor_msgs::msg::NavSatFix>(fix));
+  }
+  static void ObserverMode(FusionGraphNode& n)
+  {
+    n.primary_mode_ = false;
+  }
+  static void StartTfThread(FusionGraphNode& n)
+  {
+    n.tf_broadcast_rate_hz_ = 20.;
+    n.tf_thread_stop_.store(false);
+    n.tf_thread_ = std::thread(
+        [&n]()
+        {
+          n.TfBroadcastLoop();
+        });
+  }
   static GraphManager& Graph(FusionGraphNode& n)
   {
     return *n.graph_;
@@ -104,6 +144,14 @@ protected:
     EXPECT_GT(received.size(), count);
     return received.empty() ? gtsam::Pose2() : received.back();
   }
+  template <typename Predicate>
+  bool WaitFor(Predicate predicate)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!predicate() && std::chrono::steady_clock::now() < deadline)
+      executor.spin_once(std::chrono::milliseconds(10));
+    return predicate();
+  }
   std::shared_ptr<fg::FusionGraphNode> node;
   std::shared_ptr<rclcpp::Node> listener;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub;
@@ -184,3 +232,241 @@ TEST_F(PublicationTest, GnssOnlyRevisionIsPublishedWithResidualTail)
   EXPECT_TRUE(Publish(10.24).equals(after, 1e-9));
 }
 }  // namespace
+
+TEST_F(PublicationTest, SupportRequiresMatchingSentTfAndRetainsExactAppliedFix)
+{
+  std::vector<mowgli_interfaces::msg::GnssFusionUpdate> facts;
+  auto facts_sub = listener->create_subscription<mowgli_interfaces::msg::GnssFusionUpdate>(
+      "/fusion_graph/gnss_update",
+      rclcpp::QoS(10).reliable().transient_local(),
+      [&facts](mowgli_interfaces::msg::GnssFusionUpdate::ConstSharedPtr msg)
+      {
+        facts.push_back(*msg);
+      });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (facts_sub->get_publisher_count() == 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  auto& g = fg::FusionGraphNodeTestAccess::Graph(*node);
+  g.Initialize(gtsam::Pose2(), 1.0);
+  fg::FusionGraphNodeTestAccess::Sync(*node);
+  sensor_msgs::msg::NavSatFix fix;
+  fix.header.stamp.sec = 1;
+  fix.latitude = 48.0;
+  fix.position_covariance[0] = .09;
+  fg::FusionGraphNodeTestAccess::Cache(*node, 7, fix);
+  ASSERT_TRUE(g.QueueGnss(.3, 0., .3, true, 0, 7));
+  EXPECT_FALSE(g.Tick(1.04));
+  auto snap = *g.LatestSnapshot();
+  fg::FusionGraphNodeTestAccess::Odom(*node, snap, 2);
+  fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision - 1, 3);
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().graph_epoch == snap.graph_epoch;
+      }));
+  for (const auto& fact : facts)
+    EXPECT_FALSE(fact.pose_published);
+  fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 4);
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().pose_published &&
+               facts.back().tf_support_stamp.sec == 4;
+      }));
+  ASSERT_FALSE(facts.empty());
+  const auto fact = facts.back();
+  // All earlier publications have now arrived on this reliable writer.
+  // A mismatched TF revision must never have advertised support.
+  for (const auto& earlier : facts)
+  {
+    if (earlier.tf_support_stamp.sec != 4)
+    {
+      EXPECT_FALSE(earlier.pose_published);
+    }
+  }
+  EXPECT_TRUE(fact.pose_published);
+  EXPECT_TRUE(fact.has_applied_fix);
+  EXPECT_EQ(fact.header.stamp.sec, 2);
+  EXPECT_EQ(fact.tf_support_stamp.sec, 4);
+  EXPECT_EQ(fact.applied_fix.header.stamp.sec, 1);
+  EXPECT_EQ(fact.applied_fix.latitude, 48.0);
+  EXPECT_EQ(fact.applied_revision, snap.estimate_revision);
+  // Pending eviction cannot erase the separately pinned committed observation.
+  for (uint64_t token = 8; token < 50; ++token)
+    fg::FusionGraphNodeTestAccess::Cache(*node, token, fix);
+  fg::FusionGraphNodeTestAccess::Odom(*node, snap, 5);
+  fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 6);
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().header.stamp.sec == 5 &&
+               facts.back().tf_support_stamp.sec == 6;
+      }));
+  EXPECT_TRUE(facts.back().has_applied_fix);
+  EXPECT_EQ(facts.back().applied_fix.header.stamp.sec, 1);
+  g.Reset();
+  fg::FusionGraphNodeTestAccess::Sync(*node);
+  fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 5);
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().graph_epoch > snap.graph_epoch;
+      }));
+  ASSERT_FALSE(facts.empty());
+  EXPECT_FALSE(facts.back().pose_published);
+  EXPECT_FALSE(facts.back().has_applied_fix);
+  EXPECT_GT(facts.back().graph_epoch, snap.graph_epoch);
+}
+
+TEST_F(PublicationTest, MissingRawTokenCannotClaimPublishedSupport)
+{
+  std::vector<mowgli_interfaces::msg::GnssFusionUpdate> facts;
+  auto sub = listener->create_subscription<mowgli_interfaces::msg::GnssFusionUpdate>(
+      "/fusion_graph/gnss_update",
+      rclcpp::QoS(10).reliable().transient_local(),
+      [&facts](mowgli_interfaces::msg::GnssFusionUpdate::ConstSharedPtr msg)
+      {
+        facts.push_back(*msg);
+      });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (sub->get_publisher_count() == 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  auto& g = fg::FusionGraphNodeTestAccess::Graph(*node);
+  g.Initialize(gtsam::Pose2(), 1.0);
+  fg::FusionGraphNodeTestAccess::Sync(*node);
+  ASSERT_TRUE(g.QueueGnss(.3, 0., .3, true, 0, 88));
+  EXPECT_FALSE(g.Tick(1.04));
+  auto snap = *g.LatestSnapshot();
+  fg::FusionGraphNodeTestAccess::Odom(*node, snap, 2);
+  fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 3);
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().estimate_revision == snap.estimate_revision;
+      }));
+  ASSERT_FALSE(facts.empty());
+  EXPECT_FALSE(facts.back().pose_published);
+  EXPECT_FALSE(facts.back().has_applied_fix);
+}
+
+TEST_F(PublicationTest, DedicatedTfThreadPublishesOnlyAfterActualSend)
+{
+  std::vector<mowgli_interfaces::msg::GnssFusionUpdate> facts;
+  auto sub = listener->create_subscription<mowgli_interfaces::msg::GnssFusionUpdate>(
+      "/fusion_graph/gnss_update",
+      rclcpp::QoS(10).reliable().transient_local(),
+      [&facts](mowgli_interfaces::msg::GnssFusionUpdate::ConstSharedPtr msg)
+      {
+        facts.push_back(*msg);
+      });
+  const auto discovery = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (sub->get_publisher_count() == 0 && std::chrono::steady_clock::now() < discovery)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  auto& g = fg::FusionGraphNodeTestAccess::Graph(*node);
+  g.Initialize(gtsam::Pose2(), 1.0);
+  fg::FusionGraphNodeTestAccess::Sync(*node);
+  sensor_msgs::msg::NavSatFix fix;
+  fix.header.stamp.sec = 1;
+  fix.longitude = 11.5;
+  fg::FusionGraphNodeTestAccess::Cache(*node, 99, fix);
+  ASSERT_TRUE(g.QueueGnss(.3, 0., .3, true, 0, 99));
+  fg::FusionGraphNodeTestAccess::StartTfThread(*node);
+  fg::FusionGraphNodeTestAccess::Timer(*node, 1.04);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    executor.spin_some(std::chrono::milliseconds(10));
+    if (!facts.empty() && facts.back().pose_published)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_FALSE(facts.empty());
+  EXPECT_TRUE(facts.back().pose_published);
+  EXPECT_TRUE(facts.back().has_applied_fix);
+  EXPECT_EQ(facts.back().applied_fix.longitude, 11.5);
+  EXPECT_EQ(facts.back().estimate_revision, g.LatestSnapshot()->estimate_revision);
+  EXPECT_GE(rclcpp::Time(facts.back().tf_support_stamp).nanoseconds(),
+            rclcpp::Time(facts.back().header.stamp).nanoseconds());
+}
+
+TEST_F(PublicationTest, RawFixIsAcknowledgedOnlyAfterNodeCommitsAndPublishes)
+{
+  std::vector<mowgli_interfaces::msg::GnssFusionUpdate> facts;
+  auto sub = listener->create_subscription<mowgli_interfaces::msg::GnssFusionUpdate>(
+      "/fusion_graph/gnss_update",
+      rclcpp::QoS(10).reliable().transient_local(),
+      [&facts](mowgli_interfaces::msg::GnssFusionUpdate::ConstSharedPtr msg)
+      {
+        facts.push_back(*msg);
+      });
+  const auto discovery = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (sub->get_publisher_count() == 0 && std::chrono::steady_clock::now() < discovery)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  auto& g = fg::FusionGraphNodeTestAccess::Graph(*node);
+  g.Initialize(gtsam::Pose2(), 1.0);
+  fg::FusionGraphNodeTestAccess::Sync(*node);
+  fg::FusionGraphNodeTestAccess::Timer(*node, 1.04);
+  sensor_msgs::msg::NavSatFix fix;
+  fix.header.stamp.sec = 1;
+  fix.header.stamp.nanosec = 40000000;
+  fix.header.frame_id = "gps_link";
+  fix.status.status = sensor_msgs::msg::NavSatStatus::STATUS_GBAS_FIX;
+  fix.latitude = 48.1;
+  fix.longitude = 11.5;
+  fix.position_covariance_type = sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+  fix.position_covariance[0] = fix.position_covariance[4] = .000009;
+  fg::FusionGraphNodeTestAccess::Gnss(*node, fix);
+  EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 0u);
+  fg::FusionGraphNodeTestAccess::Timer(*node, 1.08);
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().pose_published &&
+               facts.back().applied_fix.header.stamp == fix.header.stamp;
+      }));
+  ASSERT_FALSE(facts.empty());
+  ASSERT_TRUE(facts.back().pose_published);
+  ASSERT_TRUE(facts.back().has_applied_fix);
+  EXPECT_EQ(facts.back().applied_fix.header.stamp, fix.header.stamp);
+  EXPECT_EQ(facts.back().applied_fix.header.frame_id, fix.header.frame_id);
+  EXPECT_EQ(facts.back().applied_fix.latitude, fix.latitude);
+  EXPECT_EQ(facts.back().applied_fix.position_covariance, fix.position_covariance);
+}
+
+TEST_F(PublicationTest, ObserverNeverClaimsOwnedTf)
+{
+  std::vector<mowgli_interfaces::msg::GnssFusionUpdate> facts;
+  auto sub = listener->create_subscription<mowgli_interfaces::msg::GnssFusionUpdate>(
+      "/fusion_graph/gnss_update",
+      rclcpp::QoS(10).reliable().transient_local(),
+      [&facts](mowgli_interfaces::msg::GnssFusionUpdate::ConstSharedPtr msg)
+      {
+        facts.push_back(*msg);
+      });
+  const auto discovery = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (sub->get_publisher_count() == 0 && std::chrono::steady_clock::now() < discovery)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  auto& g = fg::FusionGraphNodeTestAccess::Graph(*node);
+  g.Initialize(gtsam::Pose2(), 1.0);
+  fg::FusionGraphNodeTestAccess::Sync(*node);
+  sensor_msgs::msg::NavSatFix fix;
+  fg::FusionGraphNodeTestAccess::Cache(*node, 1, fix);
+  ASSERT_TRUE(g.QueueGnss(.3, 0., .3, true, 0, 1));
+  EXPECT_FALSE(g.Tick(1.04));
+  const auto snap = *g.LatestSnapshot();
+  fg::FusionGraphNodeTestAccess::ObserverMode(*node);
+  fg::FusionGraphNodeTestAccess::Odom(*node, snap, 2);
+  fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 3);
+  // An invalidation on the same reliable publisher is a delivery barrier:
+  // inspect the preceding observer publications only after it has arrived.
+  g.InvalidateGnssSupport();
+  fg::FusionGraphNodeTestAccess::Sync(*node);
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().graph_epoch > snap.graph_epoch;
+      }));
+  ASSERT_FALSE(facts.empty());
+  for (const auto& fact : facts)
+    EXPECT_FALSE(fact.pose_published);
+}
