@@ -1170,9 +1170,10 @@
                            (Smac + the enabled global obstacle_layer), then
                            FollowStrip mows from there. Soft: if the start is
                            genuinely unreachable (walled off), fall through and
-                           let FollowStrip try from the closest pose; the
-                           no-progress guard in GetNextUnmowedArea then retires
-                           the area after a pass with no coverage gain (so a
+                           let FollowStrip reacquire the unchanged start through
+                           its blade-off checked entry; the no-progress guard
+                           in GetNextUnmowedArea then retires the area after a
+                           pass with no coverage gain (so a
                            truly unreachable region doesn't loop forever, and a
                            DYNAMIC obstacle that later clears is picked up on a
                            subsequent pass). -->

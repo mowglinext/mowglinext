@@ -48,6 +48,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -57,6 +58,7 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
+#include "mowgli_behavior/coverage_entry.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
@@ -81,6 +83,15 @@ namespace mowgli_behavior
 {
 struct FollowStripOutcomeTestAccess
 {
+  static bool firstEntryTransit(const FollowStrip& node)
+  {
+    return node.transit_active_ && !node.follow_goal_ever_sent_;
+  }
+  static bool bladeRequested(const FollowStrip& node)
+  {
+    return node.blade_requested_on_;
+  }
+
   static void setBudgets(FollowStrip& node, std::size_t detours, std::size_t resumes)
   {
     node.detours_used_ = detours;
@@ -285,6 +296,18 @@ public:
     handles_.at(i)->succeed(std::make_shared<typename ActionT::Result>());
   }
 
+  // Remove only a terminal fixture-setup arrival, after the production client
+  // consumed it. Scenario counters/indices then retain their pre-entry meaning.
+  void discardCompletedSetupGoal(std::size_t i)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ASSERT_EQ(i + 1, handles_.size());
+    ASSERT_FALSE(handles_.at(i)->is_active());
+    handles_.pop_back();
+    --requests_;
+    --goal_requests_;
+  }
+
   void abort(std::size_t i)
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -321,6 +344,16 @@ protected:
     ctx->helper_node = rclcpp::Node::make_shared("test_follow_strip_dig_helper");
     ctx->tf_buffer = std::make_shared<tf2_ros::Buffer>(ctx->node->get_clock());
     ctx->current_area = 0;
+    for (const auto [x, y] : {std::pair{-5.0f, -5.0f},
+                              std::pair{30.0f, -5.0f},
+                              std::pair{30.0f, 30.0f},
+                              std::pair{-5.0f, 30.0f}})
+    {
+      geometry_msgs::msg::Point32 point;
+      point.x = x;
+      point.y = y;
+      ctx->current_area_polygon.points.push_back(point);
+    }
     ctx->dig_skip_radius_m = kRadius;
     setRobot(0.0, 0.0);
 
@@ -328,6 +361,9 @@ protected:
     follow = std::make_unique<FakeActionServer<Follow>>(server_node, "/follow_path");
     navigate = std::make_unique<FakeActionServer<Navigate>>(server_node, "/navigate_to_pose");
     createBladeService();
+    geometry_pub = server_node->create_publisher<visualization_msgs::msg::MarkerArray>(
+        "/map_server_node/transit_geometry", rclcpp::QoS(1).reliable().transient_local());
+    publishSelectedGeometry();
 
     startExecutor();
 
@@ -337,6 +373,51 @@ protected:
     factory.registerNodeType<mowgli_behavior::TransitToStrip>("TransitToStrip");
     factory.registerNodeType<mowgli_behavior::DetourAroundObstacle>("DetourAroundObstacle");
     factory.registerNodeType<mowgli_behavior::EndSession>("EndSession");
+  }
+
+  static visualization_msgs::msg::Marker permissionRing(const geometry_msgs::msg::Polygon& polygon,
+                                                        const std::string& role = "mowing",
+                                                        const std::string& ns = "area")
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = "map";
+    marker.ns = ns;
+    marker.text = role;
+    marker.type = marker.LINE_STRIP;
+    marker.action = marker.ADD;
+    marker.pose.orientation.w = 1;
+    for (const auto& point : polygon.points)
+    {
+      geometry_msgs::msg::Point p;
+      p.x = point.x;
+      p.y = point.y;
+      p.z = point.z;
+      marker.points.push_back(p);
+    }
+    return marker;
+  }
+
+  void publishSelectedGeometry()
+  {
+    visualization_msgs::msg::MarkerArray geometry;
+    geometry.markers.push_back(permissionRing(ctx->current_area_polygon));
+    for (const auto& hole : ctx->current_area_obstacles)
+      geometry.markers.push_back(permissionRing(hole, "", "obstacle"));
+    geometry_pub->publish(geometry);
+  }
+
+  void waitPermission(double x, double y, bool expected)
+  {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (std::chrono::steady_clock::now() < until)
+    {
+      std::shared_ptr<mowgli_behavior::CoverageEntryGeometry> cache;
+      if (blackboard->get("_coverage_entry_geometry", cache) && cache &&
+          cache->contains(x, y) == expected)
+        return;
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    FAIL() << "authoritative permission snapshot was not consumed";
   }
 
   void TearDown() override
@@ -461,6 +542,7 @@ protected:
 
   void startFollowStrip(const std::vector<nav_msgs::msg::Path>& units)
   {
+    automatically_arrive_near_entry_ = true;
     ctx->current_strip_subpaths = units;
     tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
         "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><FollowStrip/></BehaviorTree></root>",
@@ -522,6 +604,47 @@ protected:
               BT::NodeStatus::SUCCESS);
   }
 
+  // Legacy dig/readiness/ownership scenarios start at rest near their first
+  // unit. Supply the new checked arrival as explicit setup, without teleporting
+  // TF or changing any later transit. Admission tests below leave this disabled
+  // and inspect the full entry action history themselves.
+  void completeNearbyEntrySetup()
+  {
+    if (!automatically_arrive_near_entry_ || !tree)
+      return;
+    auto* strip = dynamic_cast<FollowStrip*>(tree->rootNode());
+    if (!strip)
+      return;
+    if (setup_arrival_)
+    {
+      if (!mowgli_behavior::FollowStripOutcomeTestAccess::firstEntryTransit(*strip))
+      {
+        navigate->discardCompletedSetupGoal(*setup_arrival_);
+        setup_arrival_.reset();
+        ++completed_setup_arrivals_;
+      }
+      return;
+    }
+    if (!mowgli_behavior::FollowStripOutcomeTestAccess::firstEntryTransit(*strip) ||
+        navigate->goalCount() == 0)
+      return;
+    const auto i = navigate->goalCount() - 1;
+    const auto goal = navigate->goal(i);
+    if (manual_entry_goals_.count(goal.get()))
+      return;
+    const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    const double gap = std::hypot(goal->pose.pose.position.x - tf.transform.translation.x,
+                                  goal->pose.pose.position.y - tf.transform.translation.y);
+    if (gap > 0.30)
+    {
+      manual_entry_goals_.insert(goal.get());
+      return;  // The scenario owns every far arrival, cancel and late result.
+    }
+    EXPECT_FALSE(mowgli_behavior::FollowStripOutcomeTestAccess::bladeRequested(*strip));
+    setup_arrival_ = i;
+    navigate->succeed(i);
+  }
+
   /// Tick at 20 Hz until `done` or the timeout. Returns the last tree status.
   BT::NodeStatus tickUntil(const std::function<bool()>& done, double timeout_s)
   {
@@ -531,7 +654,8 @@ protected:
     while (std::chrono::steady_clock::now() < deadline)
     {
       status = tree->tickOnce();
-      if (status != BT::NodeStatus::RUNNING || done())
+      completeNearbyEntrySetup();
+      if (status != BT::NodeStatus::RUNNING || (!setup_arrival_ && done()))
       {
         return status;
       }
@@ -552,7 +676,12 @@ protected:
     return false;
   }
 
+  std::size_t completed_setup_arrivals_{0};
+  bool automatically_arrive_near_entry_{false};
+  std::optional<std::size_t> setup_arrival_;
+  std::set<const Navigate::Goal*> manual_entry_goals_;
   std::shared_ptr<BTContext> ctx;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr geometry_pub;
   rclcpp::Node::SharedPtr server_node;
   std::unique_ptr<FakeActionServer<Follow>> follow;
   std::unique_ptr<FakeActionServer<Navigate>> navigate;
@@ -698,6 +827,14 @@ TEST_F(FollowStripDigTest, LiveStalledBladeFailsWithoutBookingUncutGround)
   ctx->blade_ready_config = {1000.0, 0.1, 0.5};
   reportBlade(0.0);
   startFollowStrip({straightUnit(0.0, 1.0)});
+  // Exclude setup OFF requests from the wait for the later failure's OFF.
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return completed_setup_arrivals_ == 1;
+                },
+                1.0),
+            BT::NodeStatus::RUNNING);
   const std::size_t requests_before_failure = bladeRequestCount();
   EXPECT_EQ(tickUntil(
                 [&]()
@@ -845,6 +982,15 @@ TEST_F(FollowStripDigTest, MissingServiceDoesNotRenewTheReadinessTimeout)
   ASSERT_NO_FATAL_FAILURE(removeBladeService());
   ctx->blade_ready_config = {1000.0, 0.1, 0.6};
   startFollowStrip({straightUnit(0.0, 1.0)});
+  // Measure the unchanged readiness budget after checked entry, not the new
+  // preceding action round trip and its blade-OFF service discovery waits.
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return completed_setup_arrivals_ == 1;
+                },
+                1.5),
+            BT::NodeStatus::RUNNING);
   const auto started = std::chrono::steady_clock::now();
   EXPECT_EQ(tickUntil(
                 []()
@@ -1050,7 +1196,8 @@ TEST_F(FollowStripDigTest, ShortScanDropoutCutsAndRestoresBladeWithoutReplacingC
             BT::NodeStatus::RUNNING);
   ASSERT_EQ(follow->goalCount(), 1u);
   ASSERT_GT(bladeRequestCount(), 0u);
-  EXPECT_EQ(bladeRequest(0).mow_enabled, 1u);
+  ASSERT_TRUE(hasBladeRequest(true, 0));
+  EXPECT_EQ(bladeRequest(bladeRequestCount() - 1).mow_enabled, 1u);
 
   const std::size_t requests_before_pause = bladeRequestCount();
   const float progress_before_pause = ctx->coverage_percent;
@@ -1904,6 +2051,9 @@ TEST_F(FollowStripDigTest, RestartBetweenUnitsKeepsCompletedUnitAndResumesTheNex
   restarted->node = ctx->node;
   restarted->helper_node = ctx->helper_node;
   restarted->tf_buffer = ctx->tf_buffer;
+  // This is the fixture map response, not persisted mission progress.
+  restarted->current_area_polygon = ctx->current_area_polygon;
+  restarted->current_area_obstacles = ctx->current_area_obstacles;
   ctx = restarted;
   blackboard->set("context", ctx);
   startFollowStrip(units);
@@ -1953,6 +2103,9 @@ TEST_F(FollowStripDigTest, RestartWithChangedPlanDiscardsCompletedSubpaths)
   restarted->node = ctx->node;
   restarted->helper_node = ctx->helper_node;
   restarted->tf_buffer = ctx->tf_buffer;
+  // This is the fixture map response, not persisted mission progress.
+  restarted->current_area_polygon = ctx->current_area_polygon;
+  restarted->current_area_obstacles = ctx->current_area_obstacles;
   ctx = restarted;
   blackboard->set("context", ctx);
   auto changed = units;
@@ -2464,4 +2617,710 @@ TEST_F(FollowStripDigTest, PrecisionCancelledGoalRemainsOwnedAcrossTreeHalt)
   EXPECT_EQ(result, BT::NodeStatus::RUNNING);
   EXPECT_EQ(navigate->goalCount(), 1u);  // genuine abort reached existing recovery
   EXPECT_EQ(follow->requestCount(), 1u);
+}
+
+// Entry admission regressions: controlled action endpoints, production BT nodes.
+namespace
+{
+nav_msgs::msg::Path entryTestPath()
+{
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  path.header.stamp.sec = 24;
+  path.header.stamp.nanosec = 520000000;
+  for (int i = 0; i < 658; ++i)
+  {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header.frame_id = "map";
+    pose.header.stamp.sec = 24;
+    pose.header.stamp.nanosec = 520000000 + i;
+    pose.pose.position.x = -2.9969917838565916 + i * 0.002;
+    pose.pose.position.y = 0.0029821079164083497;
+    pose.pose.orientation.w = 1;
+    path.poses.push_back(pose);
+  }
+  return path;
+}
+// Controlled TF approach samples. Actual RPP acquisition is tested separately
+// in test_coverage_entry_goal_checker; these drive the real BT action lifecycle.
+const char* entryApproachSamples()
+{
+  return R"(0 -3.0217157814254207 .021504446211422223 0 .2 0 0
+1 -3.0036621129492902 .021504446211422223 0 .18053668476130369 0 0
+2 -2.9866077243968272 .021504446211422223 0 .17054388552462907 0 0
+3 -2.9778517093593591 .021504446211422223 .0060822860120926005 .087560150374679235 .060822860120925998 0
+4 -2.9733563044978584 .021531788886704348 .021369607797738617 .044954880147428343 .15287321785646016 0
+5 -2.9710487709722426 .02158110748063408 .047465238542926974 .023080605051748124 .26095630745188358 0
+6 -2.9698651078162248 .021637332565112397 .085192326147830316 .01184997775119761 .37727087604903337 0
+7 -2.9692589161329574 .02168910074520709 .134973488835893 .0060839814376201905 .4978116268806268 1
+)";
+}
+geometry_msgs::msg::Polygon entryRectangle(double x0, double y0, double x1, double y1)
+{
+  geometry_msgs::msg::Polygon p;
+  for (const auto [x, y] :
+       {std::pair{x0, y0}, std::pair{x1, y0}, std::pair{x1, y1}, std::pair{x0, y1}})
+  {
+    geometry_msgs::msg::Point32 q;
+    q.x = x;
+    q.y = y;
+    p.points.push_back(q);
+  }
+  return p;
+}
+}  // namespace
+
+class CoverageEntryAdmission : public FollowStripDigTest
+{
+protected:
+  void replay(double x, double y, bool admitted, bool missing_tf = false, bool hole = false)
+  {
+    const auto path = entryTestPath();
+    ASSERT_EQ(path.poses.size(), 658u);
+    ASSERT_DOUBLE_EQ(path.poses.front().pose.position.x, -2.9969917838565916);
+    ASSERT_DOUBLE_EQ(path.poses.front().pose.position.y, 0.0029821079164083497);
+    ctx->current_area = 1;
+    ctx->current_area_polygon = entryRectangle(-3, -1, -1, 1);
+    ctx->current_area_obstacles.clear();
+    if (hole)
+      ctx->current_area_obstacles.push_back(entryRectangle(-2.99, -.05, -2.91, .1));
+    ctx->current_strip_subpaths = {path};
+    ctx->current_strip_path = path;
+    ctx->current_transit_goal = path.poses.front();
+    // Captured XY as controlled TF input. This fixture tests BT admission,
+    // not the producer provenance/precision-support module (already mocked by fixture).
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.frame_id = "map";
+    tf.child_frame_id = "base_footprint";
+    tf.transform.translation.x = x;
+    tf.transform.translation.y = y;
+    tf.transform.rotation.z = 0.9992122589048618;
+    tf.transform.rotation.w = 0.03968452663499449;
+    ctx->tf_buffer->setTransform(tf, "captured odometry pose as controlled test TF", true);
+    if (missing_tf)
+      ctx->tf_buffer->clear();
+    publishSelectedGeometry();
+    reportBlade(0.0);
+    tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\">"
+        "<Sequence><Fallback><TransitToStrip/><AlwaysSuccess/></Fallback>"
+        "<FollowStrip/></Sequence></BehaviorTree></root>",
+        blackboard));
+    ASSERT_EQ(tickUntil(
+                  [&]
+                  {
+                    return navigate->goalCount() == 1;
+                  },
+                  2.0),
+              BT::NodeStatus::RUNNING);
+    ASSERT_EQ(navigate->goalCount(), 1u);
+    EXPECT_EQ(follow->goalCount(), 0u);
+    EXPECT_FALSE(hasBladeRequest(true, 0));
+    navigate->succeed(0);  // real action result consumed by production TransitToStrip
+    if (admitted)
+    {
+      ASSERT_EQ(tickUntil(
+                    [&]
+                    {
+                      return navigate->goalCount() == 2;
+                    },
+                    1.0),
+                BT::NodeStatus::RUNNING);
+      ASSERT_EQ(navigate->goalCount(), 2u);
+      EXPECT_FALSE(hasBladeRequest(true, 0));
+      navigate->succeed(1);
+    }
+    const auto status = tickUntil(
+        [&]
+        {
+          reportBlade(3000.0);
+          return follow->goalCount() > 0;
+        },
+        1.2);
+    EXPECT_EQ(status, BT::NodeStatus::RUNNING);
+    const bool blade_on = hasBladeRequest(true, 0);
+    const auto count = follow->goalCount();
+
+    if (count)
+    {
+      const auto actual = follow->goal(0);
+      EXPECT_EQ(actual->controller_id, "FollowCoveragePath");
+      EXPECT_EQ(actual->path,
+                path);  // exact synthetic 658-pose request, including every stamp/header
+    }
+    // Safety assertions deliberately RED for outside/hole on current production BT.
+    EXPECT_EQ(blade_on, admitted);
+    EXPECT_EQ(count, admitted ? 1u : 0u);
+  }
+};
+TEST_F(CoverageEntryAdmission, CapturedOutsideDenied)
+{
+  replay(-3.0217157814254207, .021504446211422223, false);
+}
+TEST_F(CoverageEntryAdmission, InsideAdmitted)
+{
+  replay(-2.95, .0215044462, true);
+}
+TEST_F(CoverageEntryAdmission, ClosedWestBoundaryAdmitted)
+{
+  replay(-3.0, .0215044462, true);
+}
+TEST_F(CoverageEntryAdmission, WestBeyondOriginalEpsilonDenied)
+{
+  replay(-3.0 - 2e-8, .0215044462, false);
+}
+TEST_F(CoverageEntryAdmission, MissingTfDenied)
+{
+  replay(-3.0217157814, .0215044462, false, true);
+}
+TEST_F(CoverageEntryAdmission, HoleAxleDenied)
+{
+  replay(-2.95, .0215044462, false, false, true);
+}
+
+class CompleteEntryReplay : public FollowStripDigTest
+{
+protected:
+  void seed()
+  {
+    auto path = entryTestPath();
+    ASSERT_EQ(path.poses.size(), 658u);
+    ctx->current_area = 1;
+    ctx->current_area_polygon = entryRectangle(-3, -1, -1, 1);
+    ctx->current_area_obstacles.clear();
+    ctx->current_strip_subpaths = {path};
+    ctx->current_strip_path = path;
+    ctx->current_transit_goal = path.poses.front();
+    publishSelectedGeometry();
+    reportBlade(0.);
+    tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><FollowStrip/></BehaviorTree></root>",
+        blackboard));
+  }
+  void axle(double x, double y, double yaw)
+  {
+    geometry_msgs::msg::TransformStamped tf;
+    tf.header.frame_id = "map";
+    tf.child_frame_id = "base_footprint";
+    tf.transform.translation.x = x;
+    tf.transform.translation.y = y;
+    tf.transform.rotation.z = sin(yaw / 2);
+    tf.transform.rotation.w = cos(yaw / 2);
+    ctx->tf_buffer->setTransform(tf, "controlled entry approach", true);
+  }
+};
+TEST_F(CompleteEntryReplay, ControlledApproachReacquiresOutsideWithoutSkipping)
+{
+  seed();
+  axle(-3.0217157814254207, .021504446211422223, 0.);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return navigate->goalCount() == 1;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(navigate->goalCount(), 1u);
+  EXPECT_FALSE(hasBladeRequest(true, 0));
+  EXPECT_EQ(follow->goalCount(), 0u);
+  const auto navgoal = navigate->goal(0);
+  EXPECT_EQ(navgoal->pose.pose, entryTestPath().poses.front().pose);
+  std::istringstream trace(entryApproachSamples());
+  int n, done = 0;
+  double x, y, yaw, v, w;
+  int samples = 0;
+  while (trace >> n >> x >> y >> yaw >> v >> w >> done)
+  {
+    axle(x, y, yaw);
+    EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+    samples++;
+    EXPECT_FALSE(hasBladeRequest(true, 0));
+    EXPECT_EQ(follow->goalCount(), 0u);
+    if (done)
+      break;
+  }
+  ASSERT_GT(samples, 2);
+  ASSERT_EQ(done, 1);
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return follow->goalCount() == 1;
+                },
+                1.5),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 1u);
+  EXPECT_TRUE(hasBladeRequest(true, 0));
+  EXPECT_EQ(follow->goal(0)->path, entryTestPath());
+  EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
+  EXPECT_TRUE(ctx->area_completed_swaths[1].empty());
+  EXPECT_EQ(navigate->goalCount(), 1u);
+}
+TEST_F(CompleteEntryReplay, OutsideDuringSpinupCutsBladeAndReacquiresOriginalUnit)
+{
+  seed();
+  axle(-2.95, .02, 0.);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return navigate->goalCount() == 1;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return hasBladeRequest(true, 0);
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  const auto requests = bladeRequestCount();
+  axle(-3.0217, .0215, 0.);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return navigate->goalCount() == 2;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_TRUE(hasBladeRequest(false, requests));
+  EXPECT_EQ(navigate->goal(1)->pose.pose, entryTestPath().poses.front().pose);
+  EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
+  EXPECT_TRUE(ctx->area_completed_swaths[1].empty());
+  // Complete the same controlled actual-controller trace a second time.
+  std::istringstream trace(entryApproachSamples());
+  int n, done = 0;
+  double x, y, yaw, v, w;
+  while (trace >> n >> x >> y >> yaw >> v >> w >> done)
+  {
+    axle(x, y, yaw);
+    tree->tickOnce();
+    if (done)
+      break;
+  }
+  ASSERT_EQ(done, 1);
+  navigate->succeed(1);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return follow->goalCount() == 1;
+                },
+                1.5),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 1u);
+  EXPECT_EQ(follow->goal(0)->path, entryTestPath());
+  EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
+}
+TEST_F(CompleteEntryReplay, LaterUnitOutsideSuccessReacquiresWithoutChangingPath)
+{
+  seed();
+  const auto path = entryTestPath();
+  ctx->current_strip_subpaths = {path, path};
+  ctx->current_strip_path = path;
+  ctx->current_strip_path.poses.insert(ctx->current_strip_path.poses.end(),
+                                       path.poses.begin(),
+                                       path.poses.end());
+  axle(-2.95, .02, 0.);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return navigate->goalCount() == 1;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return follow->goalCount() == 1;
+                },
+                1.5),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 1u);
+  follow->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return navigate->goalCount() == 2;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  const auto requests = bladeRequestCount();
+  axle(-3.0217, .0215, 0.);
+  navigate->succeed(1);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return navigate->goalCount() == 3;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 1u);
+  EXPECT_FALSE(hasBladeRequest(true, requests));
+  EXPECT_EQ(navigate->goal(2)->pose.pose, path.poses.front().pose);
+  EXPECT_EQ(ctx->area_completed_swaths[1].size(), 1u);
+  std::istringstream trace(entryApproachSamples());
+  int n, done = 0;
+  double x, y, yaw, v, w;
+  while (trace >> n >> x >> y >> yaw >> v >> w >> done)
+  {
+    axle(x, y, yaw);
+    tree->tickOnce();
+    if (done)
+      break;
+  }
+  ASSERT_EQ(done, 1);
+  navigate->succeed(2);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return follow->goalCount() == 2;
+                },
+                1.5),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 2u);
+  EXPECT_EQ(follow->goal(1)->path, path);
+  EXPECT_EQ(ctx->area_resume_pose_index[1], 658u);
+}
+TEST_F(CompleteEntryReplay, MalformedAuthorityDoesNotEnableBladeOrDispatch)
+{
+  seed();
+  axle(-2.95, .02, 0.);
+  ctx->current_area_polygon = entryRectangle(-3, -1, -3, 1);
+  publishSelectedGeometry();
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return navigate->goalCount() == 1;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return navigate->goalCount() == 2;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_FALSE(hasBladeRequest(true, 0));
+  EXPECT_TRUE(ctx->area_completed_swaths[1].empty());
+}
+
+TEST_F(CompleteEntryReplay, InitialPrecisionPauseStillRequiresActualEntryAfterResume)
+{
+  seed();
+  axle(-2.95, .02, 0.);
+  std::atomic<bool> ready{false};
+  ctx->coverage_precision_ready = [&]
+  {
+    return ready.load();
+  };
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return bladeRequestCount() > 0;
+                },
+                .2),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(navigate->goalCount(), 0u);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_FALSE(hasBladeRequest(true, 0));
+  ready.store(true);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return navigate->goalCount() == 1;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_FALSE(hasBladeRequest(true, 0));
+  navigate->succeed(0);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return follow->goalCount() == 1;
+                },
+                1.5),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(follow->goalCount(), 1u);
+  EXPECT_EQ(follow->goal(0)->path, entryTestPath());
+  EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
+}
+
+// Full action/service BT handoff: the selected A plan keeps its exact identity,
+// while authoritative MOW permission can come from overlapping/adjacent B.
+class CoverageEntryUnion : public FollowStripDigTest
+{
+protected:
+  nav_msgs::msg::Path original;
+  visualization_msgs::msg::MarkerArray authority;
+
+  void seed(double left, double right, double goal_x = .05)
+  {
+    ctx->current_area = 1;
+    ctx->current_area_polygon = entryRectangle(0, -1, 2, 1);
+    ctx->current_area_obstacles.clear();
+    original = straightUnit(goal_x, 1.5);
+    ctx->current_strip_subpaths = {original};
+    ctx->current_strip_path = original;
+    ctx->current_transit_goal = original.poses.front();
+    authority.markers = {permissionRing(ctx->current_area_polygon),
+                         permissionRing(entryRectangle(left, -1, right, 1))};
+    setRobot(-.05, 0);
+    reportBlade(0.);
+  }
+  void start(bool permitted, double x = -.05)
+  {
+    setRobot(x, 0);
+    geometry_pub->publish(authority);
+    tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><FollowStrip/></BehaviorTree></root>",
+        blackboard));
+    ASSERT_EQ(tickUntil(
+                  [&]
+                  {
+                    return navigate->goalCount() == 1;
+                  },
+                  1.),
+              BT::NodeStatus::RUNNING);
+    ASSERT_EQ(navigate->goalCount(), 1u);
+    waitPermission(x, 0, permitted);
+    EXPECT_FALSE(hasBladeRequest(true, 0));
+    EXPECT_EQ(follow->goalCount(), 0u);
+    EXPECT_EQ(navigate->goal(0)->pose.pose, original.poses.front().pose);
+    navigate->succeed(0);
+  }
+  void expectDispatch()
+  {
+    ASSERT_EQ(tickUntil(
+                  [&]
+                  {
+                    reportBlade(3000.);
+                    return follow->goalCount() == 1;
+                  },
+                  1.5),
+              BT::NodeStatus::RUNNING);
+    ASSERT_EQ(follow->goalCount(), 1u);
+    EXPECT_EQ(navigate->goalCount(), 1u);
+    EXPECT_TRUE(hasBladeRequest(true, 0));
+    EXPECT_EQ(follow->goal(0)->path, original);
+    EXPECT_EQ(follow->goal(0)->controller_id, "FollowCoveragePath");
+    EXPECT_EQ(ctx->current_area, 1);
+    EXPECT_EQ(ctx->current_strip_subpaths, std::vector<nav_msgs::msg::Path>{original});
+    EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
+    EXPECT_TRUE(ctx->area_completed_swaths[1].empty());
+  }
+  void expectDenied()
+  {
+    ASSERT_EQ(tickUntil(
+                  [&]
+                  {
+                    reportBlade(3000.);
+                    return navigate->goalCount() == 2;
+                  },
+                  1.),
+              BT::NodeStatus::RUNNING);
+    EXPECT_EQ(follow->goalCount(), 0u);
+    EXPECT_FALSE(hasBladeRequest(true, 0));
+    EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
+    EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
+    EXPECT_TRUE(ctx->area_completed_swaths[1].empty());
+  }
+  void block(const std::string& ns)
+  {
+    seed(-1, 1);
+    authority.markers.push_back(permissionRing(entryRectangle(-.1, -.1, 0, .1), "", ns));
+    start(false);
+    expectDenied();
+  }
+};
+TEST_F(CoverageEntryUnion, OverlapDispatchesExactSelectedAUnitOnce)
+{
+  seed(-1, 1);
+  start(true);
+  expectDispatch();
+}
+TEST_F(CoverageEntryUnion, SharedClosedEdgeAcceptsLeftSide)
+{
+  seed(-1, 0, 0);
+  start(true);
+  expectDispatch();
+}
+TEST_F(CoverageEntryUnion, SharedClosedEdgeAcceptsRightSide)
+{
+  seed(-1, 0, 0);
+  start(true, .05);
+  expectDispatch();
+}
+TEST_F(CoverageEntryUnion, GlobalHoleDenies)
+{
+  block("obstacle");
+}
+TEST_F(CoverageEntryUnion, OtherAreasHoleDenies)
+{
+  block("obstacle");
+}
+TEST_F(CoverageEntryUnion, OwnDockBodyDenies)
+{
+  block("dock_body");
+}
+TEST_F(CoverageEntryUnion, PeerDockDenies)
+{
+  block("peer_dock");
+}
+TEST_F(CoverageEntryUnion, HoleClosedEdgeDenies)
+{
+  seed(-1, 1);
+  authority.markers.push_back(permissionRing(entryRectangle(-.05, -.1, 0, .1), "", "obstacle"));
+  start(false);
+  expectDenied();
+}
+TEST_F(CoverageEntryUnion, NavigationAreaCannotGrantPermission)
+{
+  seed(-1, 1);
+  authority.markers[1].text = "navigation";
+  start(false);
+  expectDenied();
+}
+TEST_F(CoverageEntryUnion, DockCorridorCannotGrantPermission)
+{
+  seed(-1, 1);
+  authority.markers[1].ns = "dock_corridor";
+  start(false);
+  expectDenied();
+}
+TEST_F(CoverageEntryUnion, OutsideAllMowingAreasDenied)
+{
+  seed(-1, 1);
+  start(false, -1.05);
+  expectDenied();
+}
+TEST_F(CoverageEntryUnion, MissingCompleteSnapshotDenied)
+{
+  seed(-1, 1);
+  authority.markers.clear();
+  start(false);
+  expectDenied();
+}
+TEST_F(CoverageEntryUnion, UnknownMarkerInvalidatesWholeSnapshot)
+{
+  seed(-1, 1);
+  authority.markers.push_back(permissionRing(entryRectangle(4, 4, 5, 5), "", "unknown"));
+  start(false);
+  expectDenied();
+}
+TEST_F(CoverageEntryUnion, MarkerMarginIsNotAppliedAgainToRawHole)
+{
+  seed(-1, 1);
+  auto hole = permissionRing(entryRectangle(-.2, -.1, -.06, .1), "", "obstacle");
+  hole.scale.x = .2;
+  authority.markers.push_back(hole);
+  start(true);
+  expectDispatch();
+}
+TEST_F(CoverageEntryUnion, DriftFromSelectedAIntoBWhileReadyStillDispatches)
+{
+  seed(-1, 1);
+  start(true, .05);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return hasBladeRequest(true, 0);
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  setRobot(-.05, 0);
+  expectDispatch();
+}
+TEST_F(CoverageEntryUnion, DriftOutsideWholeUnionTurnsOffAndReacquires)
+{
+  seed(-1, 1);
+  start(true);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return hasBladeRequest(true, 0);
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  const auto before = bladeRequestCount();
+  setRobot(-1.05, 0);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return navigate->goalCount() == 2;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_TRUE(hasBladeRequest(false, before));
+  EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
+  EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
+}
+TEST_F(CoverageEntryUnion, ValidToEmptyRevokesWhileWaitingForBlade)
+{
+  seed(-1, 1);
+  start(true);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return hasBladeRequest(true, 0);
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  const auto before = bladeRequestCount();
+  geometry_pub->publish(visualization_msgs::msg::MarkerArray{});
+  waitPermission(-.05, 0, false);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return navigate->goalCount() == 2;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_TRUE(hasBladeRequest(false, before));
+  EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
+}
+TEST_F(CoverageEntryUnion, ValidToMalformedRevokesWhileWaitingForBlade)
+{
+  seed(-1, 1);
+  start(true);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  return hasBladeRequest(true, 0);
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  const auto before = bladeRequestCount();
+  authority.markers.back().header.frame_id = "odom";
+  geometry_pub->publish(authority);
+  waitPermission(-.05, 0, false);
+  ASSERT_EQ(tickUntil(
+                [&]
+                {
+                  reportBlade(3000.);
+                  return navigate->goalCount() == 2;
+                },
+                1.),
+            BT::NodeStatus::RUNNING);
+  EXPECT_EQ(follow->goalCount(), 0u);
+  EXPECT_TRUE(hasBladeRequest(false, before));
+  EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
 }
