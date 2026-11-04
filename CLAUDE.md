@@ -68,6 +68,7 @@ This robot has spinning blades. The STM32 firmware is the sole blade safety auth
 - On the **OpenMower backend** (`HARDWARE_BACKEND=openmower`, `sensors/openmower/`) the stock OpenMower controllers have no such policy — the bridge on the host is in the actuation path (zero duty on any emergency / stale link / stale `cmd_vel`, blade only in AUTONOMOUS or MANUAL_MOWING — `blade_policy.hpp`). Treat every change there as safety-critical too.
 - Blade commands from ROS2 are fire-and-forget — firmware decides whether to execute
 - Emergency stop is handled by firmware, not software
+- `hardware_bridge` keeps the board inert (zero wheels, blade OFF, mode IDLE) until the firmware handshake reports the image's protocol (`mowgli_hardware/firmware_interlock.hpp`); never add a motion/blade/mode packet path that bypasses it
 - Flag ANY change that could affect physical behavior as safety-critical in PR reviews
 
 ## Monorepo Layout
