@@ -3022,20 +3022,26 @@ TEST_F(CompleteEntryReplay, InitialPrecisionPauseStillRequiresActualEntryAfterRe
   seed();
   axle(-2.95, .02, 0.);
   std::atomic<bool> ready{false};
+  std::atomic<std::size_t> precision_queries{0};
   ctx->coverage_precision_ready = [&]
   {
+    ++precision_queries;
     return ready.load();
   };
   ASSERT_EQ(tickUntil(
                 [&]
                 {
-                  return bladeRequestCount() > 0;
+                  return precision_queries.load() > 0 && bladeRequestCount() > 0;
                 },
                 .2),
             BT::NodeStatus::RUNNING);
+  ASSERT_GT(precision_queries.load(), 0u) << "the initial OFF alone is not a precision pause";
   EXPECT_EQ(navigate->goalCount(), 0u);
   EXPECT_EQ(follow->goalCount(), 0u);
   EXPECT_FALSE(hasBladeRequest(true, 0));
+  // Resume only after the retained map input reached the production subscriber;
+  // a missing snapshot intentionally causes another blade-off entry attempt.
+  ASSERT_NO_FATAL_FAILURE(waitPermission(-2.95, .02, true));
   ready.store(true);
   ASSERT_EQ(tickUntil(
                 [&]

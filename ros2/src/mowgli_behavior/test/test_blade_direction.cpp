@@ -21,6 +21,7 @@
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "mowgli_behavior/blade_control_service.hpp"
 #include "mowgli_behavior/blade_direction.hpp"
+#include "mowgli_behavior/coverage_entry.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_behavior/utility_nodes.hpp"
@@ -253,6 +254,18 @@ protected:
     auto* strip = dynamic_cast<FollowStrip*>(coverage.rootNode());
     ASSERT_NE(strip, nullptr);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    // The fake navigator can finish before transient-local discovery delivers
+    // the permission map. Establish that fixture input before consuming arrival;
+    // otherwise the production containment check correctly reacquires entry.
+    std::shared_ptr<CoverageEntryGeometry> geometry;
+    ASSERT_TRUE(blackboard->get("_coverage_entry_geometry", geometry));
+    ASSERT_NE(geometry, nullptr);
+    while (!geometry->contains(0.0, 0.0) && std::chrono::steady_clock::now() < deadline)
+    {
+      executor.spin_some();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(geometry->contains(0.0, 0.0));
     while ((entry_goals == before || !FollowStripOutcomeTestAccess::entryComplete(*strip)) &&
            std::chrono::steady_clock::now() < deadline)
     {
