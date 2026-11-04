@@ -552,7 +552,7 @@ RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash && MAKEFLAGS=-j3 colcon bui
 # target remains architecture-neutral, while this simulator target fails early
 # and clearly on unsupported Linux architectures.
 # =============================================================================
-FROM runtime AS simulation
+FROM runtime AS simulation-base
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
@@ -630,3 +630,16 @@ EXPOSE 8765
 EXPOSE 6080
 
 CMD ["ros2", "launch", "mowgli_bringup", "sim_full_system.launch.py", "headless:=true", "use_rviz:=false"]
+
+# Test the installed module AND executable from the complete simulator image.
+# Keep pytest and regression sources out of the distributed simulation target.
+FROM simulation-base AS simulation-clock-test
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pytest \
+ && rm -rf /var/lib/apt/lists/*
+COPY --chown=ubuntu:ubuntu ros2/src/mowgli_simulation/test/test_webots_supervisor_clock.py /opt/mowgli-tests/test_webots_supervisor_clock.py
+ENV MOWGLI_REQUIRE_WEBOTS_DRIVER=1 PYTHONDONTWRITEBYTECODE=1 USER=ubuntu
+USER ubuntu
+CMD ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "/opt/mowgli-tests/test_webots_supervisor_clock.py", "--junitxml=/results/webots-clock.xml"]
+
+# Preserve the public build target and default image, including its launch CMD.
+FROM simulation-base AS simulation

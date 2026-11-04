@@ -8,6 +8,7 @@ The simulator image applies the clock patch before installing the driver.
 A ROS-only build can collect these tests but needs that optional driver to run.
 """
 
+import importlib
 import importlib.util
 import os
 from pathlib import Path
@@ -18,7 +19,10 @@ import pytest
 
 @pytest.fixture(params=['module', 'executable'])
 def clock_callback(request):
-    module = pytest.importorskip('webots_ros2_driver.ros2_supervisor')
+    if os.environ.get('MOWGLI_REQUIRE_WEBOTS_DRIVER') == '1':
+        module = importlib.import_module('webots_ros2_driver.ros2_supervisor')
+    else:
+        module = pytest.importorskip('webots_ros2_driver.ros2_supervisor')
     if request.param == 'executable':
         from ament_index_python.packages import get_package_prefix
         path = Path(get_package_prefix('webots_ros2_driver')) / (
