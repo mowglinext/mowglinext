@@ -57,7 +57,7 @@ CornerGeometry CornerGeometry::parse(const visualization_msgs::msg::MarkerArray&
       if (m.text == "mowing")
         next.mowing.allowed.push_back(std::move(ring));
     }
-    else if (m.ns == "obstacle" || m.ns == "dock_body")
+    else if (m.ns == "obstacle" || m.ns == "dock_body" || m.ns == "peer_dock")
       next.mowing.blocked.push_back(std::move(ring));
     else if (m.ns != "dock_corridor")
       return {};

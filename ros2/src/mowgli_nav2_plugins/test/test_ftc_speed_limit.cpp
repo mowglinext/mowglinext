@@ -255,6 +255,31 @@ TEST(CornerGeometry, RolesAndCompleteReplacementFailClosed)
   EXPECT_FALSE(Geometry::parse(m).valid);
 }
 
+TEST(CornerGeometry, PeerDockSnapshotKeepsMowingAvailableAndRawBodyForbidden)
+{
+  using namespace mowgli_nav2_plugins;
+  const transit::Ring body{{.54, .285}, {.54, -.285}, {-.18, -.285}, {-.18, .285}};
+  auto snapshot = MowingBox(-3, -1, -1, 1);
+  auto peer = MowingBox(-2.05, -1.9, -.2, .2).markers.front();
+  peer.id = 1;
+  peer.ns = "peer_dock";
+  peer.scale.x = .4;
+  snapshot.markers.push_back(peer);
+
+  const auto geometry = CornerGeometry::parse(snapshot);
+  ASSERT_TRUE(geometry.valid) << "the map server's peer station is a supported forbidden ring";
+  EXPECT_TRUE(geometry.mowing.authorized({-2.7, 0}));
+  EXPECT_FALSE(geometry.mowing.clear({-2, 0}));
+  EXPECT_FALSE(geometry.rotationClear({-2.45, 0}, 0, .5, body));
+  EXPECT_FALSE(geometry.stoppingBudget({-2.45, 0}, .02, body));
+  const auto budget = geometry.stoppingBudget({-2.7, 0}, .02, body);
+  ASSERT_TRUE(budget);
+  EXPECT_DOUBLE_EQ(*budget, .02) << "transit's axle margin must not be applied to the body twice";
+
+  snapshot.markers.back().ns = "unknown_station";
+  EXPECT_FALSE(CornerGeometry::parse(snapshot).valid);
+}
+
 TEST(CornerGeometry, UnionCanCoverASeamButNavigationCannotCoverAGap)
 {
   using Geometry = mowgli_nav2_plugins::CornerGeometry;
