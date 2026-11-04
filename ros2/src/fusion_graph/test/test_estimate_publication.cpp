@@ -20,8 +20,27 @@ struct FusionGraphNodeTestAccess
   {
     n.RememberSupportFix(token, fix);
   }
+  static void Motion(FusionGraphNode& n)
+  {
+    // These tests manipulate graph/DR state directly; provide actual fresh
+    // zero-rate acquisitions independently of those synthetic state changes.
+    const auto stamp = n.now();
+    auto wheel = std::make_shared<nav_msgs::msg::Odometry>();
+    wheel->header.stamp = stamp;
+    n.OnWheelOdom(wheel);
+    auto imu = std::make_shared<sensor_msgs::msg::Imu>();
+    imu->header.stamp = stamp;
+    n.OnImu(imu);
+  }
   static void Odom(FusionGraphNode& n, const TickOutput& snapshot, int sec)
   {
+    if (!n.last_wheel_stamp_)
+    {
+      auto clock = n.get_clock()->get_clock_handle();
+      ASSERT_EQ(rcl_enable_ros_time_override(clock), RCL_RET_OK);
+      ASSERT_EQ(rcl_set_ros_time_override(clock, 1000000000), RCL_RET_OK);
+      Motion(n);
+    }
     builtin_interfaces::msg::Time stamp;
     stamp.sec = sec;
     n.RecordSupportOdom(snapshot, stamp);
@@ -76,6 +95,7 @@ struct FusionGraphNodeTestAccess
     auto clock = n.get_clock()->get_clock_handle();
     ASSERT_EQ(rcl_enable_ros_time_override(clock), RCL_RET_OK);
     ASSERT_EQ(rcl_set_ros_time_override(clock, int64_t(t * 1e9)), RCL_RET_OK);
+    Motion(n);
     n.OnTimer();
   }
 };

@@ -191,6 +191,18 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
 
   graph_ = std::make_shared<GraphManager>(gp);
   DeclareParameters();
+  // Clock holds its own lock during jump callbacks. Touch only this atomic;
+  // ordinary callbacks/writers apply the epoch under tf_state_mu_ later.
+  rcl_jump_threshold_t motion_jump{};
+  motion_jump.on_clock_change = true;
+  motion_jump.min_backward.nanoseconds = -1;
+  motion_clock_jump_handler_ = get_clock()->create_jump_callback(
+      nullptr,
+      [this](const rcl_time_jump_t&)
+      {
+        motion_clock_epoch_.fetch_add(1, std::memory_order_release);
+      },
+      motion_jump);
   SetupCommunications(gp.node_period_s);
 }
 

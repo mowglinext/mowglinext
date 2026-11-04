@@ -29,7 +29,9 @@ namespace fusion_graph
 void FusionGraphNode::ObserveMotionClockEpoch()
 {
   const auto now = this->now();
-  if (last_motion_callback_clock_ && now < *last_motion_callback_clock_)
+  const auto epoch = motion_clock_epoch_.load(std::memory_order_acquire);
+  if (epoch != motion_callback_epoch_ ||
+      (last_motion_callback_clock_ && now < *last_motion_callback_clock_))
   {
     // A ROS-clock epoch is shared by both streams. Whichever callback arrives
     // first invalidates both baselines/rate caches, so an IMU-first restart
@@ -46,6 +48,7 @@ void FusionGraphNode::ObserveMotionClockEpoch()
     }
     ResetLidarTiming();
   }
+  motion_callback_epoch_ = epoch;
   last_motion_callback_clock_ = now;
 }
 
@@ -59,6 +62,15 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
   const rclcpp::Time stamp(msg->header.stamp);
   if (last_wheel_stamp_ && stamp <= *last_wheel_stamp_)
     return;
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    const auto now_ns = this->now().nanoseconds();
+    motion_support_.Accept(true,
+                           stamp.nanoseconds(),
+                           now_ns,
+                           motion_clock_epoch_.load(std::memory_order_acquire));
+    MotionPublicationAllowedLocked(now_ns, now_ns);
+  }
   // Latest forward velocity for the local-frame DR integration in OnImu.
   // twist.linear.y is non-holonomically locked to 0 by hardware_bridge
   // (tight vy covariance) — we mirror that by only integrating vx.
@@ -67,7 +79,7 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
   if (last_wheel_stamp_)
   {
     double dt = (stamp - *last_wheel_stamp_).seconds();
-    if (dt > 0.0 && dt < 1.0)
+    if (dt > 0.0 && dt < kMotionIntegrationGapS)
     {
       graph_->AddWheelTwist(msg->twist.twist.linear.x,
                             msg->twist.twist.linear.y,
@@ -98,10 +110,19 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
   const rclcpp::Time stamp(msg->header.stamp);
   if (last_imu_stamp_ && stamp <= *last_imu_stamp_)
     return;
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    const auto now_ns = this->now().nanoseconds();
+    motion_support_.Accept(false,
+                           stamp.nanoseconds(),
+                           now_ns,
+                           motion_clock_epoch_.load(std::memory_order_acquire));
+    MotionPublicationAllowedLocked(now_ns, now_ns);
+  }
   if (last_imu_stamp_)
   {
     double dt = (stamp - *last_imu_stamp_).seconds();
-    if (dt > 0.0 && dt < 1.0)
+    if (dt > 0.0 && dt < kMotionIntegrationGapS)
     {
       graph_->AddGyroDelta(msg->angular_velocity.z, dt);
       // Local-frame dead reckoning. Yaw integrates the bias-corrected
