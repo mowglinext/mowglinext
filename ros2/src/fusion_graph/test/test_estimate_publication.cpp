@@ -144,6 +144,14 @@ protected:
     EXPECT_GT(received.size(), count);
     return received.empty() ? gtsam::Pose2() : received.back();
   }
+  template <typename Predicate>
+  bool WaitFor(Predicate predicate)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!predicate() && std::chrono::steady_clock::now() < deadline)
+      executor.spin_once(std::chrono::milliseconds(10));
+    return predicate();
+  }
   std::shared_ptr<fg::FusionGraphNode> node;
   std::shared_ptr<rclcpp::Node> listener;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub;
@@ -251,14 +259,31 @@ TEST_F(PublicationTest, SupportRequiresMatchingSentTfAndRetainsExactAppliedFix)
   auto snap = *g.LatestSnapshot();
   fg::FusionGraphNodeTestAccess::Odom(*node, snap, 2);
   fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision - 1, 3);
-  executor.spin_some(std::chrono::milliseconds(50));
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().graph_epoch == snap.graph_epoch;
+      }));
   for (const auto& fact : facts)
     EXPECT_FALSE(fact.pose_published);
   fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 4);
-  for (int i = 0; i < 10; ++i)
-    executor.spin_some(std::chrono::milliseconds(10));
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().pose_published &&
+               facts.back().tf_support_stamp.sec == 4;
+      }));
   ASSERT_FALSE(facts.empty());
   const auto fact = facts.back();
+  // All earlier publications have now arrived on this reliable writer.
+  // A mismatched TF revision must never have advertised support.
+  for (const auto& earlier : facts)
+  {
+    if (earlier.tf_support_stamp.sec != 4)
+    {
+      EXPECT_FALSE(earlier.pose_published);
+    }
+  }
   EXPECT_TRUE(fact.pose_published);
   EXPECT_TRUE(fact.has_applied_fix);
   EXPECT_EQ(fact.header.stamp.sec, 2);
@@ -271,15 +296,22 @@ TEST_F(PublicationTest, SupportRequiresMatchingSentTfAndRetainsExactAppliedFix)
     fg::FusionGraphNodeTestAccess::Cache(*node, token, fix);
   fg::FusionGraphNodeTestAccess::Odom(*node, snap, 5);
   fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 6);
-  for (int i = 0; i < 10; ++i)
-    executor.spin_some(std::chrono::milliseconds(10));
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().header.stamp.sec == 5 &&
+               facts.back().tf_support_stamp.sec == 6;
+      }));
   EXPECT_TRUE(facts.back().has_applied_fix);
   EXPECT_EQ(facts.back().applied_fix.header.stamp.sec, 1);
   g.Reset();
   fg::FusionGraphNodeTestAccess::Sync(*node);
   fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 5);
-  for (int i = 0; i < 10; ++i)
-    executor.spin_some(std::chrono::milliseconds(10));
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().graph_epoch > snap.graph_epoch;
+      }));
   ASSERT_FALSE(facts.empty());
   EXPECT_FALSE(facts.back().pose_published);
   EXPECT_FALSE(facts.back().has_applied_fix);
@@ -307,8 +339,11 @@ TEST_F(PublicationTest, MissingRawTokenCannotClaimPublishedSupport)
   auto snap = *g.LatestSnapshot();
   fg::FusionGraphNodeTestAccess::Odom(*node, snap, 2);
   fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 3);
-  for (int i = 0; i < 10; ++i)
-    executor.spin_some(std::chrono::milliseconds(10));
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().estimate_revision == snap.estimate_revision;
+      }));
   ASSERT_FALSE(facts.empty());
   EXPECT_FALSE(facts.back().pose_published);
   EXPECT_FALSE(facts.back().has_applied_fix);
@@ -405,8 +440,12 @@ TEST_F(PublicationTest, RawFixIsAcknowledgedOnlyAfterNodeCommitsAndPublishes)
   fg::FusionGraphNodeTestAccess::Gnss(*node, fix);
   EXPECT_EQ(g.LatestSnapshot()->applied_gnss_token, 0u);
   fg::FusionGraphNodeTestAccess::Timer(*node, 1.08);
-  for (int i = 0; i < 10; ++i)
-    executor.spin_some(std::chrono::milliseconds(10));
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().pose_published &&
+               facts.back().applied_fix.header.stamp == fix.header.stamp;
+      }));
   ASSERT_FALSE(facts.empty());
   ASSERT_TRUE(facts.back().pose_published);
   ASSERT_TRUE(facts.back().has_applied_fix);
@@ -440,8 +479,15 @@ TEST_F(PublicationTest, ObserverNeverClaimsOwnedTf)
   fg::FusionGraphNodeTestAccess::ObserverMode(*node);
   fg::FusionGraphNodeTestAccess::Odom(*node, snap, 2);
   fg::FusionGraphNodeTestAccess::TfSent(*node, snap.graph_epoch, snap.estimate_revision, 3);
-  for (int i = 0; i < 10; ++i)
-    executor.spin_some(std::chrono::milliseconds(10));
+  // An invalidation on the same reliable publisher is a delivery barrier:
+  // inspect the preceding observer publications only after it has arrived.
+  g.InvalidateGnssSupport();
+  fg::FusionGraphNodeTestAccess::Sync(*node);
+  ASSERT_TRUE(WaitFor(
+      [&]
+      {
+        return !facts.empty() && facts.back().graph_epoch > snap.graph_epoch;
+      }));
   ASSERT_FALSE(facts.empty());
   for (const auto& fact : facts)
     EXPECT_FALSE(fact.pose_published);
