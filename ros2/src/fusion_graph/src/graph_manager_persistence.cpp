@@ -112,6 +112,7 @@ void GraphManager::Reset()
 
 void GraphManager::ResetLocked()
 {
+  InvalidateGnssSupportLocked();
   // Rebuild iSAM2 with the same parameters used in the constructor —
   // GTSAM has no public clear() API.
   gtsam::ISAM2Params p;
@@ -136,6 +137,8 @@ void GraphManager::ResetLocked()
 
   latest_.reset();
   ticks_since_cov_ = 0;
+  rebased_updates_ = successful_updates_;
+  rebased_nodes_ = 0;
   // This reset is the live-graph self-heal path (IndeterminateSystem catch):
   // the graph re-seeds in the same datum frame. The LiDAR occupancy grid the
   // map anchor localises against lives in the node, not here, and survives.
@@ -144,6 +147,7 @@ void GraphManager::ResetLocked()
   // this flag before swapping isam_, so clearing it here makes the
   // in-flight worker discard its freshly-built tree instead of
   // overwriting our just-cleared one.
+  ++rebase_generation_;
   rebase_in_progress_ = false;
   rebase_pending_factors_.resize(0);
   rebase_pending_values_.clear();
@@ -343,6 +347,7 @@ try
   auto restored = isam_;
   restored.update(fg, kept_values);
   isam_ = std::move(restored);
+  InvalidateGnssSupportLocked();
   estimate_dirty_ = true;
 
   next_index_ = next_idx;
@@ -354,6 +359,8 @@ try
       std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
   last_node_time_s_ = std::min(last_t, now_s);
   initialized_ = true;
+  rebased_nodes_ = next_index_;
+  rebased_updates_ = successful_updates_;
 
   // Populate latest_ with the highest-index loaded pose so consumers
   // (LatestSnapshot, OnSetPose's ForceAnchor path, TF publisher) see
@@ -384,6 +391,8 @@ try
     }
     out.node_index = next_index_ - 1;
     out.timestamp = last_node_time_s_;
+    out.estimate_revision = ++estimate_revision_;
+    out.graph_epoch = graph_epoch_;
     latest_ = out;
     // Persisted files store the latest timestamp but not a complete per-node
     // timeline. Index only the pose whose epoch is known; subsequent live

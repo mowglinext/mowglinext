@@ -23,21 +23,25 @@ import threading
 import time
 import unittest
 
-from geometry_msgs.msg import Point32, PoseStamped, TransformStamped
+from geometry_msgs.msg import Point, Point32, PoseStamped, TransformStamped
 import launch
 import launch_testing.actions
 import launch_testing.markers
 from mowgli_interfaces.action import PlanCoverage
+from mowgli_interfaces.msg import GnssFusionUpdate, GnssStatus
 from mowgli_interfaces.srv import GetMowingArea, MowerControl, StartInArea
 from nav2_msgs.action import FollowPath, NavigateToPose
 from nav_msgs.msg import Path as NavPath
 import rclpy
 from rclpy.action import ActionServer, CancelResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Bool
 from tf2_ros import StaticTransformBroadcaster
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 @launch_testing.markers.keep_alive
@@ -78,11 +82,14 @@ class TestCoverageProcessRestart(unittest.TestCase):
           </Sequence>
         </BehaviorTree></root>""")
         self.units = [straight_unit(0.0, 10.0), straight_unit(10.0, 20.0)]
+        self.area_corners = ((-1.0, -1.0), (21.0, -1.0), (21.0, 1.0), (-1.0, 1.0))
         self.processes = []
         self.follow_goals = []
         self.transit_goals = []
         self.resume_values = []
         self.stopping = threading.Event()
+        self.precision_enabled = threading.Event()
+        self.observation_sequence = 0
         self.lock = threading.Lock()
         group = ReentrantCallbackGroup()
         self.map_service = self.node.create_service(
@@ -131,6 +138,32 @@ class TestCoverageProcessRestart(unittest.TestCase):
         transform.child_frame_id = 'base_footprint'
         transform.transform.rotation.w = 1.0
         self.tf.sendTransform(transform)
+        self.fix_pub = self.node.create_publisher(NavSatFix, '/gps/fix', 10)
+        self.status_pub = self.node.create_publisher(GnssStatus, '/gps/status', 10)
+        self.support_pub = self.node.create_publisher(
+            GnssFusionUpdate,
+            '/fusion_graph/gnss_update',
+            QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
+        self.precision_timer = self.node.create_timer(0.1, self.publish_precision)
+        self.geometry_pub = self.node.create_publisher(
+            MarkerArray, '/map_server_node/transit_geometry',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
+        area = Marker()
+        area.header.frame_id = 'map'
+        area.ns = 'area'
+        area.id = 502
+        area.type = Marker.LINE_STRIP
+        area.action = Marker.ADD
+        area.text = 'mowing'
+        area.pose.orientation.w = 1.0
+        area.scale.x = 0.02
+        area.points = [
+            Point(x=x, y=y) for x, y in (*self.area_corners, self.area_corners[0])
+        ]
+        # This is the complete fake map: one MOW area, no forbidden rings.
+        self.geometry_pub.publish(MarkerArray(markers=[area]))
         self.executor = MultiThreadedExecutor(num_threads=4)
         self.executor.add_node(self.node)
         self.spinner = threading.Thread(target=self.executor.spin)
@@ -152,13 +185,50 @@ class TestCoverageProcessRestart(unittest.TestCase):
         rclpy.shutdown()
         self.work.cleanup()
 
+    def publish_precision(self):
+        # Supply the real gate's inputs; no production bypass is installed.
+        # Keep source time behind receipt time without refreshing old evidence.
+        if not self.precision_enabled.is_set():
+            return
+        self.observation_sequence += 1
+        stamp = (self.node.get_clock().now() - Duration(nanoseconds=100_000_000)).to_msg()
+        fix = NavSatFix()
+        fix.header.stamp = stamp
+        fix.header.frame_id = 'gps_link'
+        fix.status.status = NavSatStatus.STATUS_GBAS_FIX
+        fix.latitude = 48.0
+        fix.longitude = 11.0
+        fix.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+        fix.position_covariance[0] = fix.position_covariance[4] = 0.000009
+        status = GnssStatus()
+        status.header = fix.header
+        status.fix_valid = True
+        status.fix_type = GnssStatus.FIX_TYPE_RTK_FIXED
+        status.position_observation_sequence = self.observation_sequence
+        status.source_id = 'restart-fixture'
+        status.source_incarnation = 'receiver-1'
+        support = GnssFusionUpdate()
+        support.header.stamp = stamp
+        support.header.frame_id = 'map'
+        support.producer_incarnation = 'restart-fixture-fusion'
+        support.graph_epoch = 1
+        support.estimate_revision = self.observation_sequence
+        support.applied_revision = self.observation_sequence
+        support.applied_fix = fix
+        support.has_applied_fix = True
+        support.pose_published = True
+        support.tf_support_stamp = stamp  # the fixture's static TF covers this epoch
+        self.fix_pub.publish(fix)
+        self.status_pub.publish(status)
+        self.support_pub.publish(support)
+
     def map_area(self, request, response):
         response.success = request.index == 0
         response.area.id = 502
         response.area.name = 'test_lawn'
         response.area.area.points = [
             Point32(x=x, y=y)
-            for x, y in ((-1.0, -1.0), (21.0, -1.0), (21.0, 1.0), (-1.0, 1.0))
+            for x, y in self.area_corners
         ]
         return response
 
@@ -194,6 +264,17 @@ class TestCoverageProcessRestart(unittest.TestCase):
 
     def execute_follow(self, handle):
         return self.execute_goal(handle, self.follow_goals, FollowPath.Result)
+
+    def complete_transit(self, index):
+        request, complete = self.transit_goals[index]
+        transform = TransformStamped()
+        transform.header.frame_id = 'map'
+        transform.child_frame_id = 'base_footprint'
+        transform.transform.translation.x = request.pose.pose.position.x
+        transform.transform.translation.y = request.pose.pose.position.y
+        transform.transform.rotation = request.pose.pose.orientation
+        self.tf.sendTransform(transform)
+        complete.set()
 
     def execute_transit(self, handle):
         return self.execute_goal(handle, self.transit_goals, NavigateToPose.Result)
@@ -240,13 +321,21 @@ class TestCoverageProcessRestart(unittest.TestCase):
         started = self.start_client.call_async(request)
         self.wait_until(started.done, 'START request did not finish')
         self.assertTrue(started.result().success)
+        time.sleep(0.3)
+        self.assertEqual(len(self.follow_goals), 0)  # missing precision still denies dispatch
+        self.precision_enabled.set()
+        self.wait_until(
+            lambda: len(self.transit_goals) == 1, 'Checked first entry not dispatched'
+        )
+        self.assertEqual(self.transit_goals[0][0].pose.pose.position.x, 0.0)
+        self.complete_transit(0)
         self.wait_until(
             lambda: len(self.follow_goals) == 1, 'First subpath not dispatched'
         )
         self.assertEqual(self.follow_goals[0][0].path.poses, self.units[0].poses)
         self.follow_goals[0][1].set()
         self.wait_until(
-            lambda: len(self.transit_goals) == 1, 'Transition not dispatched'
+            lambda: len(self.transit_goals) == 2, 'Transition not dispatched'
         )
 
         # Crash after completion is written and the cursor erased, while the
@@ -276,10 +365,10 @@ class TestCoverageProcessRestart(unittest.TestCase):
         second, log = self.start_process()  # no second START; test boot restoration
         self.assertNotEqual(first.pid, second.pid)
         self.wait_until(
-            lambda: len(self.transit_goals) == 2, 'Restart did not resume next subpath'
+            lambda: len(self.transit_goals) == 3, 'Restart did not resume next subpath'
         )
         self.assertEqual(len(self.follow_goals), 1)  # completed work was not repeated
-        self.assertEqual(self.transit_goals[1][0].pose.pose.position.x, 10.0)
+        self.assertEqual(self.transit_goals[2][0].pose.pose.position.x, 10.0)
         self.wait_until(
             lambda: True in self.resume_values, 'GUI resume signal was false'
         )
@@ -290,7 +379,7 @@ class TestCoverageProcessRestart(unittest.TestCase):
             ),
             'Restart resume log was not emitted',
         )
-        self.transit_goals[1][1].set()
+        self.complete_transit(2)
         self.wait_until(
             lambda: len(self.follow_goals) == 2, 'Next subpath not followed'
         )

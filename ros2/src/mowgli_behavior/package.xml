@@ -14,6 +14,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>ament_index_cpp</depend>
+  <depend>boost</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>
   <depend>behaviortree_cpp</depend>
@@ -28,6 +29,9 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>mowgli_interfaces</depend>
+  <depend>mowgli_nav2_plugins</depend>
+  <depend>visualization_msgs</depend>
+  <depend>mowgli_localization</depend>
   <depend>rcl_interfaces</depend>
 
 

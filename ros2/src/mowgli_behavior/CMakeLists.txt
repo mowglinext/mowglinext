@@ -18,6 +18,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 
 find_package(ament_cmake REQUIRED)
+find_package(Boost REQUIRED)
+include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -33,6 +35,13 @@ find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
+find_package(mowgli_nav2_plugins REQUIRED)
+find_package(visualization_msgs REQUIRED)
+# Use only the exported pure geometry headers, without linking the Nav2 plugin DSO.
+include_directories(SYSTEM ${mowgli_nav2_plugins_INCLUDE_DIRS})
+find_package(mowgli_localization REQUIRED)
+find_library(NAVSAT_STATUS_ASSOCIATION_LIBRARY navsat_status_association
+  PATHS "${mowgli_localization_DIR}/../../../lib" NO_DEFAULT_PATH REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 
 
@@ -60,9 +69,11 @@ add_executable(behavior_tree_node
 target_include_directories(behavior_tree_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${mowgli_localization_INCLUDE_DIRS}
 )
 
 target_link_libraries(behavior_tree_node
+  ${visualization_msgs_TARGETS}
   ${ament_index_cpp_TARGETS}
   ${rclcpp_TARGETS}
   ${rclcpp_action_TARGETS}
@@ -78,6 +89,7 @@ target_link_libraries(behavior_tree_node
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${mowgli_interfaces_TARGETS}
+  ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
   ${rcl_interfaces_TARGETS}
 )
 
@@ -147,8 +159,12 @@ if(BUILD_TESTING)
     test/test_blade_services.cpp
     ${blade_service_sources}
   )
-  target_include_directories(test_blade_services PUBLIC include)
+  target_include_directories(test_blade_services PUBLIC
+    include
+    ${mowgli_localization_INCLUDE_DIRS}
+  )
   target_link_libraries(test_blade_services
+    ${visualization_msgs_TARGETS}
     ${ament_index_cpp_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
@@ -163,6 +179,7 @@ if(BUILD_TESTING)
     ${tf2_TARGETS}
     ${tf2_ros_TARGETS}
     ${tf2_geometry_msgs_TARGETS}
+    ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
     ${rcl_interfaces_TARGETS}
     ${action_msgs_TARGETS}
   )
@@ -171,8 +188,12 @@ if(BUILD_TESTING)
     test/test_fleet_yield_services.cpp
     ${blade_service_sources}
   )
-  target_include_directories(test_fleet_yield_services PUBLIC include)
+  target_include_directories(test_fleet_yield_services PUBLIC
+    include
+    ${mowgli_localization_INCLUDE_DIRS}
+  )
   target_link_libraries(test_fleet_yield_services
+    ${visualization_msgs_TARGETS}
     ${ament_index_cpp_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
@@ -187,6 +208,7 @@ if(BUILD_TESTING)
     ${tf2_TARGETS}
     ${tf2_ros_TARGETS}
     ${tf2_geometry_msgs_TARGETS}
+    ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
     ${rcl_interfaces_TARGETS}
     ${action_msgs_TARGETS}
   )
@@ -201,6 +223,7 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_blade_direction PUBLIC include)
   target_link_libraries(test_blade_direction
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -410,6 +433,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_get_next_unmowed_area
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -568,6 +592,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_coverage_resume_location
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -602,6 +627,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_swath_progress
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -698,6 +724,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_follow_strip_dig
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -733,6 +760,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_transit_non_blocking
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -1139,6 +1167,11 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
+
+  ament_add_gtest(test_precision_coverage_support test/test_precision_coverage_support.cpp)
+  target_include_directories(test_precision_coverage_support PRIVATE include ${mowgli_localization_INCLUDE_DIRS})
+  target_link_libraries(test_precision_coverage_support ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
+    ${mowgli_interfaces_TARGETS} ${sensor_msgs_TARGETS})
 
   ament_add_gtest(test_blade_ready test/test_blade_ready.cpp)
   target_include_directories(test_blade_ready PRIVATE include)

@@ -149,6 +149,8 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   using mowgli_interfaces::gnss_observation_freshness::ObservationUpdate;
   if (observation_update == ObservationUpdate::kRosTimeDiscontinuity)
   {
+    graph_->InvalidateGnssSupport();
+    SynchronizeSupportEpoch();
     last_rtk_fixed_stamp_.reset();
     last_usable_gnss_stamp_.reset();
     last_gps_map_xy_.reset();
@@ -449,6 +451,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                                 dock,
                                 dock_reanchor_sigma_xy_m_,
                                 std::max(dock_pose_yaw_sigma_rad_, 0.035));
+            SynchronizeSupportEpoch();
           }
           last_dock_reanchor_node_ = snap->node_index;
         }
@@ -563,7 +566,9 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     }
   }
 
-  if (!graph_->QueueGnss(mx, my, sigma, /*robust=*/true, measurement_node))
+  SynchronizeSupportEpoch();
+  const uint64_t ingestion_token = ++next_ingestion_token_;
+  if (!graph_->QueueGnss(mx, my, sigma, /*robust=*/true, measurement_node, ingestion_token))
   {
     RCLCPP_WARN_THROTTLE(get_logger(),
                          *get_clock(),
@@ -571,6 +576,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                          "fusion_graph: GNSS epoch node left the live graph; sample dropped");
     return;
   }
+  RememberSupportFix(ingestion_token, *msg);
   commit_current_gnss_evidence();
   // Latch whether the most recent seed came from RTK-Fixed so the next
   // graph initialization can use a tight prior matching that quality.
@@ -626,12 +632,10 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
         // enough to let COG correct it without fighting if the
         // autoloaded yaw is wrong.
         graph_->ForceAnchor(snap->node_index, anchor, 0.005, 5.0 * M_PI / 180.0);
+        SynchronizeSupportEpoch();
         ResetLidarTiming();
-        // ForceAnchor shifts latest_.pose without bumping node_index;
-        // OnTimer's "node_index changed" check would miss it, leaving
-        // map→odom anchored at the pre-override correction. Force a
-        // refresh so the next OnTimer recomputes against fresh dr_*.
-        t_map_odom_anchor_valid_ = false;
+        // ForceAnchor publishes an estimate revision; OnTimer applies its
+        // rigid correction while retaining any DR tail beyond the head.
         rtk_autoload_override_done_ = true;
         RCLCPP_WARN(get_logger(),
                     "fusion_graph: RTK-Fixed override of autoloaded pose — "
