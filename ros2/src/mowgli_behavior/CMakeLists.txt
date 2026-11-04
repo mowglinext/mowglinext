@@ -152,7 +152,10 @@ if(BUILD_TESTING)
     test/test_blade_services.cpp
     ${blade_service_sources}
   )
-  target_include_directories(test_blade_services PUBLIC include)
+  target_include_directories(test_blade_services PUBLIC
+    include
+    ${mowgli_localization_INCLUDE_DIRS}
+  )
   target_link_libraries(test_blade_services
     ${ament_index_cpp_TARGETS}
     ${rclcpp_TARGETS}
@@ -168,6 +171,7 @@ if(BUILD_TESTING)
     ${tf2_TARGETS}
     ${tf2_ros_TARGETS}
     ${tf2_geometry_msgs_TARGETS}
+    ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
     ${rcl_interfaces_TARGETS}
     ${action_msgs_TARGETS}
   )
@@ -176,7 +180,10 @@ if(BUILD_TESTING)
     test/test_fleet_yield_services.cpp
     ${blade_service_sources}
   )
-  target_include_directories(test_fleet_yield_services PUBLIC include)
+  target_include_directories(test_fleet_yield_services PUBLIC
+    include
+    ${mowgli_localization_INCLUDE_DIRS}
+  )
   target_link_libraries(test_fleet_yield_services
     ${ament_index_cpp_TARGETS}
     ${rclcpp_TARGETS}
@@ -192,6 +199,7 @@ if(BUILD_TESTING)
     ${tf2_TARGETS}
     ${tf2_ros_TARGETS}
     ${tf2_geometry_msgs_TARGETS}
+    ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
     ${rcl_interfaces_TARGETS}
     ${action_msgs_TARGETS}
   )
