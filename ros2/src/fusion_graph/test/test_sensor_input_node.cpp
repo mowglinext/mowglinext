@@ -14,16 +14,9 @@ namespace fusion_graph
 class FusionGraphNodeInputTest : public ::testing::Test
 {
 protected:
-  static void SetUpTestSuite()
-  {
-    rclcpp::init(0, nullptr);
-  }
-  static void TearDownTestSuite()
-  {
-    rclcpp::shutdown();
-  }
   void SetUp() override
   {
+    rclcpp::init(0, nullptr);
     rclcpp::NodeOptions options;
     options.parameter_overrides({{"autoload_graph", false},
                                  {"auto_save_enabled", false},
@@ -43,6 +36,9 @@ protected:
   }
   void TearDown() override
   {
+    // A short direct-callback test can finish before the TF listener starts spinning.
+    // Shut down its context first so a late spin cannot overwrite destructor cancellation.
+    rclcpp::shutdown();
     node_.reset();
   }
   void Clock(double seconds)
