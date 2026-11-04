@@ -583,9 +583,12 @@ BT::NodeStatus FollowStrip::onStart()
     max_detours_per_segment_ = max_detours > 0 ? static_cast<std::size_t>(max_detours) : 0;
     getInput<double>("detour_footprint_radius_m", detour_footprint_radius_m_);
   }
-  detours_used_ = 0;
+  if (!precision_paused_)
+  {
+    detours_used_ = 0;
+    unit_resumes_without_progress_ = 0;
+  }
   last_detour_stuck_point_.reset();
-  unit_resumes_without_progress_ = 0;
   // Dig skip zones (dig_skip.hpp). Only digs that happen from NOW on interrupt
   // a goal of ours; the ones already recorded this session just shape what is
   // dispatched.
@@ -614,7 +617,9 @@ BT::NodeStatus FollowStrip::onStart()
   // cut it again in sendCurrentSwath cycled the blade on every retry of a
   // START_OCCUPIED pass (2026-09-10).
   const double first_gap = distanceToSegmentStart(ctx);
-  const bool start_blade = !unit_exhausted_by_dig_ && bladeSpinupBeforeFirstUnit(first_gap);
+  const bool precision_ready = ctx->coverage_precision_ready && ctx->coverage_precision_ready();
+  const bool start_blade = precision_ready && !precision_paused_ && !unit_exhausted_by_dig_ &&
+                           bladeSpinupBeforeFirstUnit(first_gap);
   // The coverage ATTEMPT begins here whether the blade spins up now or only
   // after a blade-off transit: the cross-hatch phase is consumed by trying, not
   // by physical rotation, so record it before the spin-up decision below.
@@ -792,6 +797,17 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     return false;
   }
 
+  if (!ctx->coverage_precision_ready || !ctx->coverage_precision_ready())
+  {
+    blade_dispatch_pending_ = true;
+    if (!precision_paused_)
+      precision_last_blade_off_ = {};
+    precision_paused_ = true;
+    publishPrecisionStop(ctx);
+    requestPrecisionBladeOff();
+    return true;
+  }
+
   // Dig skip zones: drive only the run BEFORE the next zone. sendCurrentSwath
   // already moved the front past any zone, so run.start is 0 here — unless a
   // dig was recorded while the transit to this front was in flight, in which
@@ -890,8 +906,9 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   // its error into this one's summary.
   tracking_slot_ = std::make_shared<TrackingFeedbackSlot>();
   rclcpp_action::Client<Nav2FollowPath>::SendGoalOptions follow_opts;
-  // The coverage goal needs a result callback too — see action_outcome.hpp.
-  follow_outcome_->Reset();
+  // A late result from an abandoned goal must not decide the new attempt.
+  // Each callback retains only the outcome slot created for its own dispatch.
+  follow_outcome_ = std::make_shared<ActionOutcomeSlot>();
   // issue #743: also capture the result's error_msg (renewed per goal, same
   // reason as tracking_slot_) so tryStartDetour can check
   // ftc_abort_reason::HasObstacleAbortMarker instead of relying solely on its
@@ -1069,7 +1086,8 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
     // options carry a result callback. The slot is shared_ptr-owned so a late
     // callback can never write through a dangling `this`.
     resetTransitResult();
-    transit_outcome_->Reset();
+    // A delayed result from an abandoned transit belongs to that dispatch.
+    transit_outcome_ = std::make_shared<ActionOutcomeSlot>();
     transit_abandonment_ = std::make_shared<GoalAbandonment>();
     rclcpp_action::Client<Nav2Navigate>::SendGoalOptions send_opts;
     send_opts.goal_response_callback =
@@ -1230,6 +1248,10 @@ BT::NodeStatus FollowStrip::onRunning()
   {
     return yieldToFleet(ctx, /*mid_pass=*/true);
   }
+
+  if (!transit_active_ && !transit_pending_ &&
+      (precision_paused_ || blade_dispatch_pending_ || swath_goal_sent_) && stepPrecisionPause(ctx))
+    return BT::NodeStatus::RUNNING;
 
   // Advance to the next swath; finish (SUCCESS/FAILURE) when none remain.
   // A swath is SKIPPED on goal-reject/abort rather than failing the whole
@@ -1875,7 +1897,10 @@ void FollowStrip::onHalted()
     // Selection is already valid while a blade-off transit or the asynchronous
     // goal response is pending. Persist that logical cursor even without a
     // handle; transit motion must not be counted as coverage progress.
-    if (follow_handle_ && !transit_active_ && !transit_pending_)
+    // A parent can halt on the same tick that precision is lost, before the
+    // private pause latches. Only trusted pose support may advance the cursor.
+    if (follow_handle_ && !transit_active_ && !transit_pending_ && !precision_paused_ &&
+        ctx->coverage_precision_ready && ctx->coverage_precision_ready())
     {
       updateProgress(ctx);
     }
@@ -1892,7 +1917,10 @@ BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, 
       (follow_handle_ || follow_future_.valid() || transit_active_ || transit_pending_) &&
       total_path_poses_ > 0 && swath_idx_ < swaths_.size())
   {
-    if (follow_handle_ && !transit_active_ && !transit_pending_)
+    // Fleet exclusion is checked before the private precision pause. Preserve
+    // the last trusted cursor both during a pause and on its first lost tick.
+    if (follow_handle_ && !transit_active_ && !transit_pending_ && !precision_paused_ &&
+        ctx->coverage_precision_ready && ctx->coverage_precision_ready())
     {
       updateProgress(ctx);
     }
@@ -1916,8 +1944,109 @@ BT::NodeStatus FollowStrip::yieldToFleet(const std::shared_ptr<BTContext>& ctx, 
   return BT::NodeStatus::SUCCESS;
 }
 
+void FollowStrip::publishPrecisionStop(const std::shared_ptr<BTContext>& ctx)
+{
+  if (!precision_stop_pub_)
+    precision_stop_pub_ =
+        ctx->node->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel_emergency", 10);
+  geometry_msgs::msg::TwistStamped zero;
+  zero.header.stamp = ctx->node->now();
+  zero.header.frame_id = "base_footprint";
+  precision_stop_pub_->publish(zero);
+}
+
+void FollowStrip::requestPrecisionBladeOff()
+{
+  const auto now = std::chrono::steady_clock::now();
+  if (precision_last_blade_off_.time_since_epoch().count() == 0 ||
+      now - precision_last_blade_off_ >= std::chrono::seconds(1))
+  {
+    precision_last_blade_off_ = now;
+    setBladeEnabled(false);
+  }
+}
+
+bool FollowStrip::stepPrecisionPause(const std::shared_ptr<BTContext>& ctx)
+{
+  const bool ready = ctx->coverage_precision_ready && ctx->coverage_precision_ready();
+  if (!precision_paused_ && ready)
+    return false;
+  if (!precision_paused_)
+  {
+    precision_last_blade_off_ = {};
+    precision_paused_ = true;
+    precision_had_goal_ = swath_goal_sent_ && !blade_dispatch_pending_;
+    if (precision_had_goal_)
+    {
+      // The estimate may already include the degraded observation; preserve
+      // the last cursor established while precision support was valid.
+      persistResumeCursor(ctx);
+      abandonGoal(follow_client_,
+                  follow_handle_,
+                  follow_future_,
+                  follow_abandonment_,
+                  ctx->node->get_logger(),
+                  "FollowStrip precision pause");
+    }
+  }
+  publishPrecisionStop(ctx);
+  requestPrecisionBladeOff();
+  if (precision_had_goal_)
+  {
+    if (!follow_handle_)
+    {
+      if (!follow_future_.valid() ||
+          follow_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        return true;
+      try
+      {
+        follow_handle_ = follow_future_.get();
+      }
+      catch (const std::exception&)
+      {
+        return true;  // unknown ownership remains stopped
+      }
+    }
+    if (follow_handle_)
+    {
+      const auto status = ResolveGoalStatus(follow_handle_->get_status(), follow_outcome_->Get());
+      if (!IsTerminalGoalStatus(status) || !ready)
+        return true;
+      if (status == kGoalStatusAborted)
+      {
+        precision_paused_ = false;
+        precision_had_goal_ = false;
+        // A tree halt may have reset these flags while the old result was
+        // pending. Route its genuine abort through the normal result handler.
+        goal_sent_ = true;
+        swath_goal_sent_ = true;
+        blade_dispatch_pending_ = false;
+        return false;
+      }
+    }
+    if (!ready)
+      return true;
+    if (swath_idx_ < swaths_.size() && !swaths_[swath_idx_].poses.empty())
+      trimUnitAt(ctx, std::min(path_progress_idx_, swaths_[swath_idx_].poses.size() - 1));
+    follow_handle_.reset();
+    follow_future_ = {};
+    swath_goal_sent_ = false;
+    precision_had_goal_ = false;
+    blade_dispatch_pending_ = true;
+  }
+  if (!ready)
+    return true;
+  precision_paused_ = false;
+  precision_last_blade_off_ = {};
+  return false;
+}
+
 void FollowStrip::abortActiveGoals(const std::shared_ptr<BTContext>& ctx)
 {
+  // Keep a precision-cancelled goal's future across a tree halt; a later
+  // restart must still observe its terminal result before dispatching again.
+  if (!precision_had_goal_)
+    precision_paused_ = false;
   blade_dispatch_pending_ = false;
   // abandonGoal() also reaches a goal the server has not answered yet (no handle to cancel).
   abandonGoal(follow_client_,
@@ -2700,7 +2829,8 @@ BT::NodeStatus TransitToStrip::onStart()
   // finishes in the same instant it is accepted, and its terminal status
   // message can be dropped before the client registers the handle
   // (action_outcome.hpp). It also carries nav2's error code (onFailed).
-  nav_outcome_->Reset();
+  // Keep a delayed result owned by the navigation attempt that produced it.
+  nav_outcome_ = std::make_shared<ActionOutcomeSlot>();
   nav_result_ = std::make_shared<TransitResultSlot>();
   nav_abandonment_ = std::make_shared<GoalAbandonment>();
   auto send_opts = rclcpp_action::Client<Nav2Navigate>::SendGoalOptions{};
@@ -2973,7 +3103,8 @@ BT::NodeStatus DetourAroundObstacle::onStart()
 
   nav_handle_.reset();
   // See TransitToStrip::onStart (action_outcome.hpp).
-  nav_outcome_->Reset();
+  // Keep a delayed result owned by the navigation attempt that produced it.
+  nav_outcome_ = std::make_shared<ActionOutcomeSlot>();
   nav_abandonment_ = std::make_shared<GoalAbandonment>();
   auto send_opts = rclcpp_action::Client<Nav2Navigate>::SendGoalOptions{};
   send_opts.goal_response_callback =

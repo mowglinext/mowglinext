@@ -181,6 +181,10 @@ protected:
   void SetUp() override
   {
     ctx = std::make_shared<BTContext>();
+    ctx->coverage_precision_ready = []
+    {
+      return true;
+    };  // mocked precision-support module
     ctx->node = rclcpp::Node::make_shared("test_transit_non_blocking");
     ctx->helper_node = rclcpp::Node::make_shared("test_transit_non_blocking_helper");
     ctx->tf_buffer = std::make_shared<tf2_ros::Buffer>(ctx->node->get_clock());

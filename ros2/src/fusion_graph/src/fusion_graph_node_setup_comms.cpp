@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <random>
+#include <sstream>
 #include <thread>
 
 #include <geometry_msgs/msg/quaternion.hpp>
@@ -37,6 +39,13 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
 
   // ── Pubs/subs ─────────────────────────────────────────────────────
   pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("/odometry/filtered_map", 10);
+  pub_gnss_update_ = create_publisher<mowgli_interfaces::msg::GnssFusionUpdate>(
+      "/fusion_graph/gnss_update", rclcpp::QoS(10).reliable().transient_local());
+  std::random_device random;
+  std::ostringstream incarnation;
+  incarnation << std::hex << random() << random() << random() << random();
+  producer_incarnation_ = incarnation.str();
+  SynchronizeSupportEpoch();
   // /odometry/filtered + odom→base_footprint TF — replaces ekf_odom_node.
   // Continuous local-frame dead reckoning (wheel vx + gyro_z), never
   // sees GPS, never jumps. Nav2's odom_topic in nav2_params.yaml still
@@ -332,6 +341,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
           return;
         }
         graph_->Reset();
+        SynchronizeSupportEpoch();
         // Drop the latched position seed so a pre-clear GPS fix cannot put the
         // new graph back at the position the operator was trying to escape.
         // Heading is safe to retain: a stationary robot cannot produce a new
@@ -400,10 +410,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       create_wall_timer(std::chrono::seconds(30),
                         [this]()
                         {
-                          if (!graph_->IsInitialized())
-                            return;
-                          const auto stats = graph_->Stats();
-                          if (stats.total_nodes - last_rebase_index_ < isam2_rebase_every_nodes_)
+                          if (!graph_->RebaseDue(isam2_rebase_every_nodes_))
                             return;
                           bool expected = false;
                           if (!rebase_in_flight_->compare_exchange_strong(expected, true))
@@ -412,19 +419,11 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                             // at the next maintenance tick.
                             return;
                           }
-                          // Commit the bookkeeping NOW so the next 30 s maintenance
-                          // tick doesn't re-trigger while the worker is still building.
-                          last_rebase_index_ = stats.total_nodes;
                           std::thread(
-                              [graph = graph_,
-                               logger = get_logger(),
-                               total = stats.total_nodes,
-                               flag = rebase_in_flight_]()
+                              [graph = graph_, logger = get_logger(), flag = rebase_in_flight_]()
                               {
                                 graph->RebaseISAM2();
-                                RCLCPP_INFO(logger,
-                                            "fusion_graph: iSAM2 rebased at node %lu",
-                                            static_cast<unsigned long>(total));
+                                RCLCPP_INFO(logger, "fusion_graph: iSAM2 maintenance finished");
                                 flag->store(false);
                               })
                               .detach();

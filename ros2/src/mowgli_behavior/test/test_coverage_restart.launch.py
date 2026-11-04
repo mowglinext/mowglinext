@@ -28,14 +28,17 @@ import launch
 import launch_testing.actions
 import launch_testing.markers
 from mowgli_interfaces.action import PlanCoverage
+from mowgli_interfaces.msg import GnssFusionUpdate, GnssStatus
 from mowgli_interfaces.srv import GetMowingArea, MowerControl, StartInArea
 from nav2_msgs.action import FollowPath, NavigateToPose
 from nav_msgs.msg import Path as NavPath
 import rclpy
 from rclpy.action import ActionServer, CancelResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Bool
 from tf2_ros import StaticTransformBroadcaster
 
@@ -83,6 +86,8 @@ class TestCoverageProcessRestart(unittest.TestCase):
         self.transit_goals = []
         self.resume_values = []
         self.stopping = threading.Event()
+        self.precision_enabled = threading.Event()
+        self.observation_sequence = 0
         self.lock = threading.Lock()
         group = ReentrantCallbackGroup()
         self.map_service = self.node.create_service(
@@ -131,6 +136,14 @@ class TestCoverageProcessRestart(unittest.TestCase):
         transform.child_frame_id = 'base_footprint'
         transform.transform.rotation.w = 1.0
         self.tf.sendTransform(transform)
+        self.fix_pub = self.node.create_publisher(NavSatFix, '/gps/fix', 10)
+        self.status_pub = self.node.create_publisher(GnssStatus, '/gps/status', 10)
+        self.support_pub = self.node.create_publisher(
+            GnssFusionUpdate,
+            '/fusion_graph/gnss_update',
+            QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
+        self.precision_timer = self.node.create_timer(0.1, self.publish_precision)
         self.executor = MultiThreadedExecutor(num_threads=4)
         self.executor.add_node(self.node)
         self.spinner = threading.Thread(target=self.executor.spin)
@@ -151,6 +164,43 @@ class TestCoverageProcessRestart(unittest.TestCase):
         self.node.destroy_node()
         rclpy.shutdown()
         self.work.cleanup()
+
+    def publish_precision(self):
+        # Supply the real gate's inputs; no production bypass is installed.
+        # Keep source time behind receipt time without refreshing old evidence.
+        if not self.precision_enabled.is_set():
+            return
+        self.observation_sequence += 1
+        stamp = (self.node.get_clock().now() - Duration(nanoseconds=100_000_000)).to_msg()
+        fix = NavSatFix()
+        fix.header.stamp = stamp
+        fix.header.frame_id = 'gps_link'
+        fix.status.status = NavSatStatus.STATUS_GBAS_FIX
+        fix.latitude = 48.0
+        fix.longitude = 11.0
+        fix.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+        fix.position_covariance[0] = fix.position_covariance[4] = 0.000009
+        status = GnssStatus()
+        status.header = fix.header
+        status.fix_valid = True
+        status.fix_type = GnssStatus.FIX_TYPE_RTK_FIXED
+        status.position_observation_sequence = self.observation_sequence
+        status.source_id = 'restart-fixture'
+        status.source_incarnation = 'receiver-1'
+        support = GnssFusionUpdate()
+        support.header.stamp = stamp
+        support.header.frame_id = 'map'
+        support.producer_incarnation = 'restart-fixture-fusion'
+        support.graph_epoch = 1
+        support.estimate_revision = self.observation_sequence
+        support.applied_revision = self.observation_sequence
+        support.applied_fix = fix
+        support.has_applied_fix = True
+        support.pose_published = True
+        support.tf_support_stamp = stamp  # the fixture's static TF covers this epoch
+        self.fix_pub.publish(fix)
+        self.status_pub.publish(status)
+        self.support_pub.publish(support)
 
     def map_area(self, request, response):
         response.success = request.index == 0
@@ -240,6 +290,9 @@ class TestCoverageProcessRestart(unittest.TestCase):
         started = self.start_client.call_async(request)
         self.wait_until(started.done, 'START request did not finish')
         self.assertTrue(started.result().success)
+        time.sleep(0.3)
+        self.assertEqual(len(self.follow_goals), 0)  # missing precision still denies dispatch
+        self.precision_enabled.set()
         self.wait_until(
             lambda: len(self.follow_goals) == 1, 'First subpath not dispatched'
         )
