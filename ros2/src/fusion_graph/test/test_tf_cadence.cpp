@@ -16,6 +16,12 @@ struct FusionGraphNodeTestAccess
 {
   static void Seed(FusionGraphNode& n)
   {
+    auto wheel = std::make_shared<nav_msgs::msg::Odometry>();
+    wheel->header.stamp = n.now();
+    n.OnWheelOdom(wheel);
+    auto imu = std::make_shared<sensor_msgs::msg::Imu>();
+    imu->header.stamp = n.now();
+    n.OnImu(imu);
     n.graph_->Initialize(gtsam::Pose2(1., 2., .2), 226.7);
     n.OnTimer();
   }
@@ -253,8 +259,8 @@ TEST_F(Cadence, PauseRewindAndBoundedLiveContextDestruction)
   buffer->clear();
   Clock(100060000000);
   ASSERT_TRUE(WaitClock(100060000000));
-  ASSERT_TRUE(WaitLatest(100160000000));
-  EXPECT_EQ(Latest(), 100160000000);
+  ServiceProbe(100ms);
+  EXPECT_EQ(Latest(), -1);  // Established motion support requires restart after rewind.
   const auto start = Steady::now();
   node.reset();
   const auto elapsed = Steady::now() - start;
@@ -274,23 +280,19 @@ TEST_F(Cadence, ClockBeforeWriterCounterexample)
   blocked_writer.unlock();
 }
 
-TEST_F(Cadence, SourceSwitchResumesOnEachClock)
+TEST_F(Cadence, SourceSwitchLatchesUntilRestart)
 {
   ASSERT_TRUE(node->set_parameter(rclcpp::Parameter("use_sim_time", false)).successful);
   buffer->clear();
-  const auto system_delivery = Steady::now() + 2s;
-  while (Latest() <= 1000000000000000000LL && Steady::now() < system_delivery)
-    std::this_thread::sleep_for(1ms);
-  EXPECT_GT(Latest(), 1000000000000000000LL);
+  ServiceProbe(100ms);
+  EXPECT_EQ(Latest(), -1);
   ASSERT_TRUE(node->set_parameter(rclcpp::Parameter("use_sim_time", true)).successful);
   Clock(50000000000);
   ASSERT_TRUE(WaitClock(50000000000));
-  std::this_thread::sleep_for(10ms);
-  buffer->clear();
   Clock(50060000000);
   ASSERT_TRUE(WaitClock(50060000000));
-  ASSERT_TRUE(WaitLatest(50160000000));
-  EXPECT_EQ(Latest(), 50160000000);
+  ServiceProbe(100ms);
+  EXPECT_EQ(Latest(), -1);
 }
 
 TEST_F(Cadence, ContextShutdownThenDestruction)

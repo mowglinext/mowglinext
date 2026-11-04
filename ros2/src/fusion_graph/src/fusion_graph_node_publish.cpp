@@ -5,6 +5,7 @@
 // implementation is split across several translation units to keep each file within the project's
 // 600-line budget; all share fusion_graph_node.hpp + fusion_graph_node_util.hpp.)
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <limits>
@@ -62,7 +63,15 @@ void FusionGraphNode::PublishLocalOdom()
   // local frame is ready before the graph itself initializes (Nav2's
   // local costmap and FTCController both rely on this TF, and they
   // can come up before any GPS fix has landed).
-  const rclcpp::Time now = this->now();
+  rclcpp::Time now(int64_t{0}, get_clock()->get_clock_type());
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    now = this->now();
+    if (!MotionPublicationAllowedLocked(
+            now.nanoseconds(),
+            (now + rclcpp::Duration::from_seconds(tf_publish_lead_s_)).nanoseconds()))
+      return;
+  }
   // Forward-stamp the TF by tf_publish_lead_s_ so Nav2 controller_server
   // lookups at clock()->now() land in tf2 interpolation territory instead of
   // throwing ExtrapolationException. The pose is propagated forward by the same
@@ -91,10 +100,6 @@ void FusionGraphNode::PublishLocalOdom()
   // NOT broadcast the TF, or two nodes would fight over the same transform.
   // When the dedicated TF thread is running it owns this broadcast (single
   // writer, monotonic stamps) — skip the inline send.
-  if (primary_mode_ && !tf_thread_.joinable())
-  {
-    tf_broadcaster_->sendTransform(t_odom_base);
-  }
 
   const geometry_msgs::msg::Quaternion q_msg = QuatFromYaw(dr_yaw_);
   nav_msgs::msg::Odometry odom;
@@ -129,6 +134,14 @@ void FusionGraphNode::PublishLocalOdom()
     v = 0.0;
   odom.twist.covariance[0] = 0.02;  // vx — wheel-odom velocity noise
   odom.twist.covariance[35] = 4e-4;  // wz — gyro rate noise (σ ≈ 0.02 rad/s)
+  // Serialize the final permission check and sends with loss publication.
+  // A capture taken before an observed rewind/loss must not repopulate TF.
+  std::lock_guard<std::mutex> lock(tf_state_mu_);
+  const auto send_now = this->now().nanoseconds();
+  if (!MotionPublicationAllowedLocked(send_now, std::max(send_now, stamp.nanoseconds())))
+    return;
+  if (primary_mode_ && !tf_thread_.joinable())
+    tf_broadcaster_->sendTransform(t_odom_base);
   pub_local_odom_->publish(odom);
 }
 
@@ -161,8 +174,33 @@ void FusionGraphNode::RememberSupportFix(uint64_t token, const sensor_msgs::msg:
 }
 
 // Caller holds tf_state_mu_. Neither publication alone confers support.
+bool FusionGraphNode::MotionPublicationAllowedLocked(int64_t now_ns, int64_t target_ns)
+{
+  const bool allowed = motion_support_.Allows(now_ns,
+                                              target_ns,
+                                              motion_clock_epoch_.load(std::memory_order_acquire));
+  if (motion_support_.lost() && !motion_loss_reported_)
+  {
+    motion_loss_reported_ = true;
+    support_odom_.reset();
+    support_tf_.reset();
+    // A negative retained fact supersedes the last positive publication. Keep
+    // graph/DR state for diagnosis; no returning input can clear the latch.
+    mowgli_interfaces::msg::GnssFusionUpdate msg;
+    msg.header.stamp = rclcpp::Time(now_ns, get_clock()->get_clock_type());
+    msg.header.frame_id = map_frame_;
+    msg.producer_incarnation = producer_incarnation_;
+    msg.graph_epoch = graph_->GraphEpoch();
+    pub_gnss_update_->publish(msg);
+  }
+  return allowed;
+}
+
 void FusionGraphNode::PublishSupportLocked()
 {
+  const auto now_ns = this->now().nanoseconds();
+  if (!MotionPublicationAllowedLocked(now_ns, now_ns))
+    return;
   if (!primary_mode_ || !support_odom_ || !support_tf_)
     return;
   const auto& snap = support_odom_->snapshot;
@@ -215,6 +253,15 @@ void FusionGraphNode::RecordSupportOdom(const TickOutput& out,
 
 void FusionGraphNode::PublishOutputs(const TickOutput& out)
 {
+  rclcpp::Time now(int64_t{0}, get_clock()->get_clock_type());
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    now = this->now();
+    if (!MotionPublicationAllowedLocked(
+            now.nanoseconds(),
+            (now + rclcpp::Duration::from_seconds(tf_publish_lead_s_)).nanoseconds()))
+      return;
+  }
   // Extrapolate the last-node pose through current odom integration
   // so the published map-frame outputs reflect motion that happened
   // since the snapshot was taken. Without this, /odometry/filtered_map
@@ -227,7 +274,7 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
 
   // 1. nav_msgs/Odometry on /odometry/filtered_map.
   nav_msgs::msg::Odometry odom;
-  odom.header.stamp = this->now();
+  odom.header.stamp = now;
   odom.header.frame_id = map_frame_;
   odom.child_frame_id = base_frame_;
   odom.pose.pose.position.x = extrapolated_map_base.x();
@@ -261,7 +308,13 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   odom.pose.covariance[14] = 1e-9;
   odom.pose.covariance[21] = 1e-9;
   odom.pose.covariance[28] = 1e-9;
-  pub_odom_->publish(odom);
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    const auto send_now = this->now().nanoseconds();
+    if (!MotionPublicationAllowedLocked(send_now, std::max(send_now, now.nanoseconds())))
+      return;
+    pub_odom_->publish(odom);
+  }
   RecordSupportOdom(out, odom.header.stamp);
 
   // Rebaseline the high-rate extrapolator (item #15). The fast
@@ -289,7 +342,13 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   // them all as -1 covariance to tell consumers the field is invalid.
   yaw_msg.angular_velocity_covariance[0] = -1.0;
   yaw_msg.linear_acceleration_covariance[0] = -1.0;
-  pub_fg_yaw_->publish(yaw_msg);
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    const auto send_now = this->now().nanoseconds();
+    if (!MotionPublicationAllowedLocked(send_now, std::max(send_now, now.nanoseconds())))
+      return;
+    pub_fg_yaw_->publish(yaw_msg);
+  }
 
   // 2. TF map -> odom. Skipped in observer mode so the active
   //    map-frame primary (typically ekf_map_node) keeps single
@@ -332,13 +391,17 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   // RotationShim queries at clock_->now() find a TF in the buffer that
   // is >= the request time and tf2 interpolates back instead of raising
   // ExtrapolationException. Default 0 (real hardware); sim sets ~0.1s.
-  t_map_odom.header.stamp = this->now() + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+  t_map_odom.header.stamp = now + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
   t_map_odom.header.frame_id = map_frame_;
   t_map_odom.child_frame_id = odom_frame_;
   t_map_odom.transform = tf2::toMsg(T_map_odom);
-  tf_broadcaster_->sendTransform(t_map_odom);
   {
     std::lock_guard<std::mutex> lock(tf_state_mu_);
+    const auto send_now = this->now().nanoseconds();
+    if (!MotionPublicationAllowedLocked(
+            send_now, std::max(send_now, rclcpp::Time(t_map_odom.header.stamp).nanoseconds())))
+      return;
+    tf_broadcaster_->sendTransform(t_map_odom);
     if (out.graph_epoch == support_epoch_ && out.graph_epoch == graph_->GraphEpoch())
     {
       if (!support_tf_ || support_tf_->epoch != out.graph_epoch ||
@@ -414,6 +477,7 @@ void FusionGraphNode::TfBroadcastLoop()
         {
           if (tf_thread_stop_.load(std::memory_order_acquire))
             return;
+          rclcpp::Time target(int64_t{0}, get_clock()->get_clock_type());
           double x;
           double y;
           double yaw;
@@ -424,6 +488,10 @@ void FusionGraphNode::TfBroadcastLoop()
           std::optional<TickOutput> anchor_snapshot;
           {
             std::lock_guard<std::mutex> lock(tf_state_mu_);
+            const auto now = this->now();
+            target = now + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+            if (!MotionPublicationAllowedLocked(now.nanoseconds(), target.nanoseconds()))
+              return;
             x = dr_x_;
             y = dr_y_;
             yaw = dr_yaw_;
@@ -440,8 +508,7 @@ void FusionGraphNode::TfBroadcastLoop()
           // odom→base is propagated. Removes the wz·lead heading error during pivots.
           ForwardStampPose(tf_publish_lead_s_, gz, vx_eff, x, y, yaw);
 
-          const rclcpp::Time stamp =
-              this->now() + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+          const rclcpp::Time stamp = target;
 
           std::vector<geometry_msgs::msg::TransformStamped> transforms;
           transforms.reserve(2);
@@ -475,10 +542,16 @@ void FusionGraphNode::TfBroadcastLoop()
             transforms.push_back(t_map_odom);
           }
 
+          // The snapshot lock above is deliberately short. Revalidate the
+          // captured target immediately before sending, under the same lock
+          // that records LOST and publishes negative support.
+          std::lock_guard<std::mutex> lock(tf_state_mu_);
+          const auto send_now = this->now().nanoseconds();
+          if (!MotionPublicationAllowedLocked(send_now, std::max(send_now, target.nanoseconds())))
+            return;
           tf_broadcaster_->sendTransform(transforms);
           if (anchor_valid && anchor_snapshot)
           {
-            std::lock_guard<std::mutex> lock(tf_state_mu_);
             if (anchor_snapshot->graph_epoch == support_epoch_ &&
                 anchor_snapshot->graph_epoch == graph_->GraphEpoch())
             {

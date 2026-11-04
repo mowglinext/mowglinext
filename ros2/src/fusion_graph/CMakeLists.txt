@@ -337,6 +337,13 @@ if(BUILD_TESTING)
   target_link_libraries(test_tf_cadence fusion_graph_node_objects
     ${rosgraph_msgs_TARGETS} ${tf2_msgs_TARGETS})
 
+  ament_add_ros_isolated_gtest(test_motion_publication test/test_motion_publication.cpp TIMEOUT 60)
+  target_link_libraries(test_motion_publication fusion_graph_node_objects ${tf2_msgs_TARGETS})
+
+  ament_add_gtest(test_sensor_input_node test/test_sensor_input_node.cpp TIMEOUT 60)
+  target_link_libraries(test_sensor_input_node fusion_graph_node_objects)
+  set_tests_properties(test_sensor_input_node PROPERTIES ENVIRONMENT "ROS_DOMAIN_ID=187")
+
   ament_add_gtest(test_gnss_timestamp
     test/test_gnss_timestamp.cpp
   )
