@@ -11,6 +11,8 @@
 #include <thread>
 
 #include <geometry_msgs/msg/quaternion.hpp>
+#include <rclcpp/create_timer.hpp>
+#include <rclcpp/exceptions/exceptions.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
 #include <tf2/LinearMath/Transform.hpp>
 #include <tf2/exceptions.hpp>
@@ -391,94 +393,119 @@ gtsam::Pose2 FusionGraphNode::SlewPublishedAnchor(const gtsam::Pose2& target,
 
 void FusionGraphNode::TfBroadcastLoop()
 {
-  // See tf_broadcast_rate_hz_ in the header for the rationale. This
-  // loop owns ALL TF broadcasting in primary mode — PublishLocalOdom
-  // and PublishOutputs skip their inline sendTransform when the
-  // thread is running (tf_thread_.joinable()), so there is exactly
-  // one writer per TF leg and stamps stay monotonic.
-  const auto period = std::chrono::duration<double>(1.0 / tf_broadcast_rate_hz_);
-  while (!tf_thread_stop_.load(std::memory_order_acquire))
+  // Keep publication on its existing single writer, independent of the main
+  // executor. Cadence follows the source clock: a simulated-time burst must
+  // not consume the prediction horizon while a wall-time sleep is pending.
+  const auto context = get_node_base_interface()->get_context();
+  if (tf_thread_stop_.load(std::memory_order_acquire) || !rclcpp::ok(context))
+    return;
+  try
   {
-    std::this_thread::sleep_for(period);
-    if (tf_thread_stop_.load(std::memory_order_acquire))
+    const auto group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
+    rclcpp::ExecutorOptions options;
+    options.context = context;
+    rclcpp::executors::SingleThreadedExecutor executor(options);
+    executor.add_callback_group(group, get_node_base_interface());
+    const auto timer = rclcpp::create_timer(
+        this,
+        get_clock(),
+        rclcpp::Duration::from_seconds(1.0 / tf_broadcast_rate_hz_),
+        [this]()
+        {
+          if (tf_thread_stop_.load(std::memory_order_acquire))
+            return;
+          double x;
+          double y;
+          double yaw;
+          double gz;
+          double vx_eff;
+          bool anchor_valid;
+          gtsam::Pose2 anchor;
+          std::optional<TickOutput> anchor_snapshot;
+          {
+            std::lock_guard<std::mutex> lock(tf_state_mu_);
+            x = dr_x_;
+            y = dr_y_;
+            yaw = dr_yaw_;
+            gz = dr_last_gz_;
+            vx_eff = dr_last_vx_eff_;
+            anchor_valid = t_map_odom_anchor_valid_;
+            anchor = t_map_odom_anchor_;
+            anchor_snapshot = support_anchor_snapshot_;
+          }
+
+          // Honest forward-stamp: advance the DR pose by the lead so the now()+lead
+          // stamp predicts the pose at that instant. The rotation happens in the
+          // odom→base leg (dr_yaw_); the map→odom anchor is time-invariant, so only
+          // odom→base is propagated. Removes the wz·lead heading error during pivots.
+          ForwardStampPose(tf_publish_lead_s_, gz, vx_eff, x, y, yaw);
+
+          const rclcpp::Time stamp =
+              this->now() + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
+
+          std::vector<geometry_msgs::msg::TransformStamped> transforms;
+          transforms.reserve(2);
+
+          geometry_msgs::msg::TransformStamped t_odom_base;
+          t_odom_base.header.stamp = stamp;
+          t_odom_base.header.frame_id = odom_frame_;
+          t_odom_base.child_frame_id = base_frame_;
+          t_odom_base.transform.translation.x = x;
+          t_odom_base.transform.translation.y = y;
+          t_odom_base.transform.translation.z = 0.0;
+          t_odom_base.transform.rotation = QuatFromYaw(yaw);
+          transforms.push_back(t_odom_base);
+
+          // map→odom only once the graph has produced its first node — the
+          // constant anchor is the single source of truth (see the anchor
+          // comment block in the header).
+          if (anchor_valid)
+          {
+            tf2::Transform T_map_odom;
+            T_map_odom.setOrigin(tf2::Vector3(anchor.x(), anchor.y(), 0.0));
+            tf2::Quaternion q_map_odom;
+            q_map_odom.setRPY(0.0, 0.0, anchor.theta());
+            T_map_odom.setRotation(q_map_odom);
+
+            geometry_msgs::msg::TransformStamped t_map_odom;
+            t_map_odom.header.stamp = stamp;
+            t_map_odom.header.frame_id = map_frame_;
+            t_map_odom.child_frame_id = odom_frame_;
+            t_map_odom.transform = tf2::toMsg(T_map_odom);
+            transforms.push_back(t_map_odom);
+          }
+
+          tf_broadcaster_->sendTransform(transforms);
+          if (anchor_valid && anchor_snapshot)
+          {
+            std::lock_guard<std::mutex> lock(tf_state_mu_);
+            if (anchor_snapshot->graph_epoch == support_epoch_ &&
+                anchor_snapshot->graph_epoch == graph_->GraphEpoch())
+            {
+              if (!support_tf_ || support_tf_->epoch != anchor_snapshot->graph_epoch ||
+                  support_tf_->revision != anchor_snapshot->estimate_revision)
+                support_tf_ = SupportTf{anchor_snapshot->graph_epoch,
+                                        anchor_snapshot->estimate_revision,
+                                        stamp};
+              PublishSupportLocked();
+            }
+          }
+        },
+        group);
+    while (!tf_thread_stop_.load(std::memory_order_acquire) && rclcpp::ok(options.context))
     {
-      break;
+      // A paused ROS clock must not hold node destruction open indefinitely.
+      executor.spin_once(std::chrono::milliseconds(50));
     }
-
-    double x;
-    double y;
-    double yaw;
-    double gz;
-    double vx_eff;
-    bool anchor_valid;
-    gtsam::Pose2 anchor;
-    std::optional<TickOutput> anchor_snapshot;
-    {
-      std::lock_guard<std::mutex> lock(tf_state_mu_);
-      x = dr_x_;
-      y = dr_y_;
-      yaw = dr_yaw_;
-      gz = dr_last_gz_;
-      vx_eff = dr_last_vx_eff_;
-      anchor_valid = t_map_odom_anchor_valid_;
-      anchor = t_map_odom_anchor_;
-      anchor_snapshot = support_anchor_snapshot_;
-    }
-
-    // Honest forward-stamp: advance the DR pose by the lead so the now()+lead
-    // stamp predicts the pose at that instant. The rotation happens in the
-    // odom→base leg (dr_yaw_); the map→odom anchor is time-invariant, so only
-    // odom→base is propagated. Removes the wz·lead heading error during pivots.
-    ForwardStampPose(tf_publish_lead_s_, gz, vx_eff, x, y, yaw);
-
-    const rclcpp::Time stamp = this->now() + rclcpp::Duration::from_seconds(tf_publish_lead_s_);
-
-    std::vector<geometry_msgs::msg::TransformStamped> transforms;
-    transforms.reserve(2);
-
-    geometry_msgs::msg::TransformStamped t_odom_base;
-    t_odom_base.header.stamp = stamp;
-    t_odom_base.header.frame_id = odom_frame_;
-    t_odom_base.child_frame_id = base_frame_;
-    t_odom_base.transform.translation.x = x;
-    t_odom_base.transform.translation.y = y;
-    t_odom_base.transform.translation.z = 0.0;
-    t_odom_base.transform.rotation = QuatFromYaw(yaw);
-    transforms.push_back(t_odom_base);
-
-    // map→odom only once the graph has produced its first node — the
-    // constant anchor is the single source of truth (see the anchor
-    // comment block in the header).
-    if (anchor_valid)
-    {
-      tf2::Transform T_map_odom;
-      T_map_odom.setOrigin(tf2::Vector3(anchor.x(), anchor.y(), 0.0));
-      tf2::Quaternion q_map_odom;
-      q_map_odom.setRPY(0.0, 0.0, anchor.theta());
-      T_map_odom.setRotation(q_map_odom);
-
-      geometry_msgs::msg::TransformStamped t_map_odom;
-      t_map_odom.header.stamp = stamp;
-      t_map_odom.header.frame_id = map_frame_;
-      t_map_odom.child_frame_id = odom_frame_;
-      t_map_odom.transform = tf2::toMsg(T_map_odom);
-      transforms.push_back(t_map_odom);
-    }
-
-    tf_broadcaster_->sendTransform(transforms);
-    if (anchor_valid && anchor_snapshot)
-    {
-      std::lock_guard<std::mutex> lock(tf_state_mu_);
-      if (anchor_snapshot->graph_epoch == support_epoch_ &&
-          anchor_snapshot->graph_epoch == graph_->GraphEpoch())
-      {
-        if (!support_tf_ || support_tf_->epoch != anchor_snapshot->graph_epoch ||
-            support_tf_->revision != anchor_snapshot->estimate_revision)
-          support_tf_ =
-              SupportTf{anchor_snapshot->graph_epoch, anchor_snapshot->estimate_revision, stamp};
-        PublishSupportLocked();
-      }
-    }
+    timer->cancel();
+    executor.remove_callback_group(group);
+  }
+  catch (const rclcpp::exceptions::RCLError&)
+  {
+    // Shutdown can invalidate the context between the check and executor/timer
+    // initialization. Live-context failures remain visible to the caller.
+    if (rclcpp::ok(context))
+      throw;
   }
 }
 }  // namespace fusion_graph
