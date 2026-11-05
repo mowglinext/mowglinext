@@ -25,6 +25,7 @@
 #include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
+#include "mowgli_behavior/dock_stall.hpp"
 #include "nav2_msgs/action/dock_robot.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -110,6 +111,11 @@ private:
   /// entry into WAIT_FOR_CHARGE rather than at the feedback rate. Written from
   /// the action feedback callback, read from the BT tick thread.
   std::atomic<uint16_t> last_feedback_state_{DockAction::Feedback::NONE};
+
+  /// True once the server is CONTROLLING the approach and the chassis has stood still for
+  /// kDockStallWindowS without charging (dock_stall.hpp). Never true in any other state.
+  bool approach_stalled(const std::shared_ptr<BTContext>& ctx);
+  DockStallDetector stall_detector_;
 
   /// Terminal verdict from the result callback. A goal the server finishes in
   /// the same instant it accepts it can lose its status message, leaving the
