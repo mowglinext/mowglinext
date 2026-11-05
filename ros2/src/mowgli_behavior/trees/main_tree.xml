@@ -231,6 +231,11 @@
         <!-- Lethal path: stop immediately, latch -->
         <Sequence name="LethalBoundaryHandler">
           <IsLethalBoundaryViolation/>
+          <!-- A boundary stop interrupts a PASS, it does not make the area unmowable. Marked
+               FIRST (see PausingGuardsMarkTheHaltFirst) so the interrupted pass is not charged
+               to GetNextUnmowedArea's no-progress budget: field 2026-10-26, five boundary
+               recoveries in four minutes retired two areas at 0 swaths. -->
+          <MarkGuardHalt reason="boundary"/>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
           <PublishHighLevelStatus state="0" state_name="BOUNDARY_EMERGENCY_STOP"/>
@@ -249,6 +254,7 @@
 
         <!-- Soft path: stop, then route back to a known-inside pose -->
         <Sequence name="SoftBoundaryHandler">
+          <MarkGuardHalt reason="boundary"/>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
           <PublishHighLevelStatus state="2" state_name="BOUNDARY_RECOVERY"/>
