@@ -76,6 +76,7 @@ set(action_files
   "action/CoverageTask.action"
   "action/PlanCoverage.action"
   "action/CalibrateDock.action"
+  "action/Goto.action"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}

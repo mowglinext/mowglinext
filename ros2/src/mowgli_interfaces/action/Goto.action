@@ -1,0 +1,56 @@
+# Point-to-point GOTO as an action: the same mission as ~/goto_pose
+# (COMMAND_GOTO = 9, GotoSequence), with a goal ID, a result that can be
+# fetched by that ID after the mission ended, client cancellation and
+# progress feedback.
+#
+# Served by behavior_tree_node (`~/goto`). A goal is accepted by the action
+# server, then admitted by the same rules as ~/goto_pose (acceptGotoRequest);
+# a refused goal is aborted at once with error_code REFUSED and the refusal
+# reason in error_msg. One GOTO at a time: a goal sent while another GOTO
+# (action or service) is active is refused as "busy".
+#
+# Results are kept by the action server for result_timeout after the goal
+# ends, and are lost if the node restarts: a client that cannot find its goal
+# any more must treat the mission as lost.
+
+# ── Goal ──────────────────────────────────────────────────────────────────
+# Target pose in the map frame: x east, y north, meters from the datum; yaw in
+# radians, counter-clockwise from east. The pose is base_link (rear axle center).
+float64 x
+float64 y
+float64 yaw
+---
+# ── Result ────────────────────────────────────────────────────────────────
+uint16 NONE=0                     # target reached (see settled)
+uint16 REFUSED=1                  # not admitted; error_msg is the ~/goto_pose reason
+uint16 FAILED=2                   # navigation failed, or one run exceeded goto_timeout_sec
+uint16 LOW_BATTERY_DOCKED=3       # low battery: transit halted, docked once
+uint16 LOW_BATTERY_DOCK_FAILED=4  # low battery: transit halted, docking failed
+uint16 CRITICAL_BATTERY=5         # critical-battery handling took over (error_msg: its state)
+uint16 INTERRUPTED=6              # ended by another command (error_msg: command, last state)
+uint16 DEADLINE=7                 # still running after goto_deadline_sec: stopped (COMMAND_STOP)
+uint16 CANCELED=8                 # canceled by the client: stopped (COMMAND_STOP) if still running
+uint16 SHUTDOWN=9                 # the node shut down while the goal was active
+
+uint16 error_code
+string error_msg
+
+# map → base_link when the goal ended. final_pose_valid is false when the
+# transform was unavailable or older than 1 s, or localization was degraded.
+geometry_msgs/PoseStamped final_pose
+bool final_pose_valid
+
+# NONE only: the wheels reported standstill for 0.5 s after the target was
+# reached (false if that did not happen within 3 s).
+bool settled
+---
+# ── Feedback ──────────────────────────────────────────────────────────────
+# Published at most once per second while the goal is active.
+uint8 PHASE_ACTIVE=0   # GotoSequence is running
+uint8 PHASE_PAUSED=1   # a root guard or the battery logic holds the tree; state_name says which
+
+uint8 phase
+string state_name                 # last published HighLevelStatus state_name
+geometry_msgs/PoseStamped current_pose
+bool current_pose_valid
+float32 distance_remaining        # straight-line distance to the target (m), if pose valid
