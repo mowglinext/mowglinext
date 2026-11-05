@@ -2,8 +2,10 @@ name: Host updater
 on:
   push:
     # Bootstrap addresses the exact checkout SHA, including docs/sensor-only
-    # commits and custom branches. Every installable revision needs an asset.
-    branches: ['**']
+    # commits. Only the supported install branches publish one: a release per
+    # push on every branch passed 1,000 releases in October 2026, past the
+    # stable picker's scan window. Custom branches use MOWGLI_UPDATER_BINARY.
+    branches: [main, dev]
     tags: ['v*.*.*']
   pull_request:
     branches: [main, dev]
@@ -72,3 +74,22 @@ jobs:
           if ! gh release view "updater-$REVISION" --repo "$REPO" >/dev/null 2>&1; then
             gh release create "updater-$REVISION" dist/* --repo "$REPO" --target "$REVISION" --prerelease --title "Updater $REVISION" --notes 'Installer bootstrap binaries. Not a complete container deployment.'
           fi
+      - name: Prune old installer bootstraps
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Keep 30 days of bootstraps, plus every version tag's commit and the
+          # main/dev heads: those are the checkouts the installer is run from.
+          cutoff="$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          keep="$({
+            gh api --paginate "repos/$REPO/tags?per_page=100" -q '.[] | select(.name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | .commit.sha'
+            gh api "repos/$REPO/commits/main" -q .sha
+            gh api "repos/$REPO/commits/dev" -q .sha
+          } | sed 's/^/updater-/')"
+          gh api --paginate "repos/$REPO/releases?per_page=100" \
+            -q ".[] | select(.prerelease and (.tag_name | test(\"^updater-[0-9a-f]{40}$\")) and .created_at < \"$cutoff\") | .tag_name" |
+            grep -vxF -f <(printf '%s\n' "$keep") |
+            while read -r tag; do
+              gh release delete "$tag" --repo "$REPO" --yes --cleanup-tag || echo "::warning::could not delete $tag"
+            done

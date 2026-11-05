@@ -62,7 +62,14 @@ func (g GitHubSource) List(ctx context.Context, source Source) ([]Deployment, er
 			break
 		}
 		if page == 10 {
-			return nil, fmt.Errorf("release scan limit reached; narrow or archive obsolete publications")
+			// GitHub lists newest first, so a full window still holds every
+			// recent production release. Only a window with nothing usable in
+			// it is an error: failing the whole scan hid v1.6.0 from every
+			// stable robot once per-commit bootstrap prereleases passed 1,000.
+			if len(headers) == 0 {
+				return nil, fmt.Errorf("release scan limit reached; narrow or archive obsolete publications")
+			}
+			break
 		}
 	}
 	// Backports may occupy newer pages than the highest production version.

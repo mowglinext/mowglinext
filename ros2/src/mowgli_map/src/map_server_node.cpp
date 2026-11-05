@@ -38,6 +38,7 @@
 
 #include "mowgli_interfaces/wgs84_projection.hpp"
 #include "mowgli_map/internal_helpers.hpp"
+#include "mowgli_map/peer_dock_rings.hpp"
 #include <grid_map_core/GridMap.hpp>
 #include <grid_map_core/GridMapMath.hpp>
 #include <grid_map_core/iterators/CircleIterator.hpp>
@@ -207,12 +208,15 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
                  0.0,
                  1.0);
 
-  // Dock body (physical structure the robot cannot drive into). Cells
-  // inside are marked OBSTACLE_PERMANENT — F2C strips stop at the body
-  // edge and Smac treats them as lethal. Defaults match the YardForce500
-  // dock; override per-site in mowgli_robot.yaml.
-  dock_body_length_m_ = declare_parameter<double>("dock_body_length_m", 0.80);
+  // Dock body: the physical station, tray and head, which the robot only ever
+  // enters through the docking manoeuvre. Forbidden to transit (keepout mask +
+  // transit geometry) and to coverage (coverage_server reads the same ring).
+  // It starts `dock_body_rear_m` behind the dock pose (the docked rear bumper)
+  // and runs `dock_body_length_m` toward the station; both are injected from
+  // robot_config_util.dock_body_extents, so they follow the chassis.
+  dock_body_length_m_ = std::max(declare_parameter<double>("dock_body_length_m", 0.80), 0.0);
   dock_body_width_m_ = declare_parameter<double>("dock_body_width_m", 0.55);
+  dock_body_rear_m_ = std::max(declare_parameter<double>("dock_body_rear_m", 0.12), 0.0);
 
   // Dock approach corridor (behind the dock along -X). Cells here are
   // classified DOCKING_AREA (mowable — corridor lawn still gets cut) and
@@ -278,6 +282,14 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   invalidate_keepout_mask();
 
   // ── Subscribers ──────────────────────────────────────────────────────────
+  peer_docks_sub_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/fleet/peer_docks",
+      rclcpp::QoS(5),
+      [this](geometry_msgs::msg::PoseArray::ConstSharedPtr msg)
+      {
+        on_peer_docks(std::move(msg));
+      });
+
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
       "/map",
       rclcpp::QoS(1),
@@ -661,22 +673,27 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 void MapServerNode::rebuild_dock_polygons()
 {
   // (Re)build the three coupled dock polygons. All three rectangles live in
-  // the dock's local frame (origin at docking_pose_, +X forward) and are
-  // rotated into the map frame using d_yaw.
+  // the dock's local frame (origin at docking_pose_) and are rotated into the
+  // map frame using d_yaw.
   //
-  //   * body     — physical dock structure: from -dock_body_length_m
-  //                (rear of body, behind dock origin) to 0 along +X,
-  //                ±dock_body_width_m/2 along Y. Marks OBSTACLE_PERMANENT.
-  //   * corridor — approach lane: from -approach_back to -dock_body_length_m
+  // dock_pose_ is the DOCKED robot's base_footprint with its heading: the robot
+  // docks nose-first, so +X points from the lawn TOWARD THE STATION and the
+  // undock reverses along -X.
+  //
+  //   * body     — physical station, tray and head: from -dock_body_rear_m (the
+  //                docked rear bumper) to length - rear along +X,
+  //                ±dock_body_width_m/2 along Y. Forbidden to transit (keepout
+  //                mask + transit geometry) and to coverage.
+  //   * corridor — approach lane: from -approach_back to -dock_body_rear_m
   //                along +X (immediately behind the body), ±half_width along
   //                Y. Marks DOCKING_AREA, carved out of keepout mask.
-  //   * exclusion — union (-approach_back to 0, ±max half-widths). Kept for
-  //                 visualization / GUI overlay only.
+  //   * exclusion — union (-approach_back to the body's far end, ±max
+  //                 half-widths). Kept for visualization / GUI overlay only.
   //
-  // Convention: dock_pose_ is the *docked-robot* pose (front of robot touching
-  // the dock). +X in dock-local frame points AWAY from the dock (the staging
-  // direction); the body sits in -X, behind the docked robot's reference
-  // point. The corridor extends further in -X.
+  // Until 2026-11 the body spanned [-length, 0]: the lawn BEHIND the docked
+  // robot. Transit routed under the real station (operator report, two-mower
+  // site), and a coverage unit ending on open grass in front of the dock read
+  // as "inside the dock".
   //
   // The transit planner recovers the dock heading from exactly this layout
   // (`transit::dockFrame`: corridor directly behind the body, +X toward the
@@ -688,7 +705,8 @@ void MapServerNode::rebuild_dock_polygons()
   dock_corridor_polygon_.points.clear();
   dock_exclusion_polygon_.points.clear();
 
-  const double body_len = dock_body_length_m_;
+  const double body_rear = dock_body_rear_m_;
+  const double body_front = dock_body_length_m_ - dock_body_rear_m_;
   const double body_half_width = 0.5 * dock_body_width_m_;
   const double corridor_back = dock_approach_corridor_length_m_;
   const double corridor_half_width = dock_approach_corridor_half_width_m_;
@@ -718,24 +736,104 @@ void MapServerNode::rebuild_dock_polygons()
     poly.points.push_back(poly.points.front());
   };
 
-  append_rect(dock_body_polygon_, -body_len, 0.0, body_half_width);
-  append_rect(dock_corridor_polygon_, -corridor_back, -body_len, corridor_half_width);
+  append_rect(dock_body_polygon_, -body_rear, body_front, body_half_width);
+  append_rect(dock_corridor_polygon_, -corridor_back, -body_rear, corridor_half_width);
   append_rect(dock_exclusion_polygon_,
               -corridor_back,
-              0.0,
+              body_front,
               std::max(body_half_width, corridor_half_width));
   has_dock_exclusion_ = true;
+  rebuild_peer_dock_rings();
   RCLCPP_INFO(get_logger(),
               "Dock polygons: pose=(%.2f, %.2f) yaw=%.2f rad — "
-              "body %.2fm × %.2fm (OBSTACLE_PERMANENT), "
+              "body %.2fm × %.2fm (forbidden, %.2fm behind the pose to %.2fm ahead), "
               "corridor %.2fm × %.2fm (DOCKING_AREA, keepout carve-out)",
               d_x,
               d_y,
               d_yaw,
-              body_len,
+              dock_body_length_m_,
               2.0 * body_half_width,
-              corridor_back - body_len,
+              body_rear,
+              body_front,
+              corridor_back - body_rear,
               2.0 * corridor_half_width);
+}
+
+void MapServerNode::rebuild_peer_dock_rings()
+{
+  peer_dock_rings_.clear();
+  const double margin = std::max(keepout_obstacle_margin_m_, 0.0);
+  const double half_width = 0.5 * dock_body_width_m_;
+  for (const auto& pose : peer_dock_poses_)
+  {
+    const double yaw = 2.0 * std::atan2(pose.orientation.z, pose.orientation.w);
+    const double c = std::cos(yaw);
+    const double s = std::sin(yaw);
+    geometry_msgs::msg::Polygon ring;
+    const double corners[][2] = {
+        {dock_body_length_m_ - dock_body_rear_m_, half_width},
+        {dock_body_length_m_ - dock_body_rear_m_, -half_width},
+        {-dock_body_rear_m_, -half_width},
+        {-dock_body_rear_m_, half_width},
+    };
+    for (const auto& corner : corners)
+    {
+      geometry_msgs::msg::Point32 point;
+      point.x = static_cast<float>(pose.position.x + c * corner[0] - s * corner[1]);
+      point.y = static_cast<float>(pose.position.y + s * corner[0] + c * corner[1]);
+      ring.points.push_back(point);
+    }
+    ring.points.push_back(ring.points.front());
+
+    switch (classify_peer_dock(ring, dock_body_polygon_, dock_corridor_polygon_, margin))
+    {
+      case PeerDockUse::kIgnored:
+        RCLCPP_WARN(get_logger(),
+                    "Peer station at (%.2f, %.2f) overlaps this robot's own dock or approach "
+                    "corridor: ignored, so it cannot block docking. Check both dock poses.",
+                    pose.position.x,
+                    pose.position.y);
+        break;
+      case PeerDockUse::kBareRing:
+        peer_dock_rings_.push_back({std::move(ring), 0.0});
+        break;
+      case PeerDockUse::kFull:
+        peer_dock_rings_.push_back({std::move(ring), margin});
+        break;
+    }
+  }
+}
+
+void MapServerNode::on_peer_docks(geometry_msgs::msg::PoseArray::ConstSharedPtr msg)
+{
+  // Sent at 5 Hz and stable in normal operation; rebuilding pauses transit for
+  // the settle time, so only a real move counts.
+  constexpr double kMovedM = 0.02;
+  constexpr double kMovedQuat = 0.01;
+  {
+    std::lock_guard<std::mutex> lock(map_mutex_);
+    const bool same =
+        msg->poses.size() == peer_dock_poses_.size() &&
+        std::equal(msg->poses.begin(),
+                   msg->poses.end(),
+                   peer_dock_poses_.begin(),
+                   [](const geometry_msgs::msg::Pose& a, const geometry_msgs::msg::Pose& b)
+                   {
+                     return std::hypot(a.position.x - b.position.x, a.position.y - b.position.y) <
+                                kMovedM &&
+                            std::abs(a.orientation.z - b.orientation.z) < kMovedQuat &&
+                            std::abs(a.orientation.w - b.orientation.w) < kMovedQuat;
+                   });
+    if (same)
+    {
+      return;
+    }
+    peer_dock_poses_.assign(msg->poses.begin(), msg->poses.end());
+    rebuild_peer_dock_rings();
+    masks_dirty_ = true;
+  }
+  RCLCPP_INFO(get_logger(), "Peer stations: %zu", msg->poses.size());
+  defer_mask_rebuild();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -129,6 +130,38 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
 
   // Lyrical's SimpleActionServer owns the standard ROS action options.
   // Result retention starts after completion; it is not a planning deadline.
+  // Same snapshot, same ring as the transit planner. An empty array only means a
+  // map edit is in progress (the dock is retained across it): keep the last one.
+  dock_geometry_sub_ = create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      [this](visualization_msgs::msg::MarkerArray::ConstSharedPtr msg)
+      {
+        if (msg->markers.empty())
+        {
+          return;
+        }
+        std::vector<geometry_msgs::msg::Polygon> next;
+        for (const auto& marker : msg->markers)
+        {
+          if (marker.ns != "dock_body" && marker.ns != "peer_dock")
+          {
+            continue;
+          }
+          geometry_msgs::msg::Polygon polygon;
+          for (const auto& p : marker.points)
+          {
+            geometry_msgs::msg::Point32 point;
+            point.x = static_cast<float>(p.x);
+            point.y = static_cast<float>(p.y);
+            polygon.points.push_back(point);
+          }
+          next.push_back(std::move(polygon));
+        }
+        std::lock_guard<std::mutex> lock(dock_keepouts_mutex_);
+        dock_keepouts_ = std::move(next);
+      },
+      rclcpp::QoS(1).transient_local());
+
   action_server_ = std::make_unique<ActionServer>(shared_from_this(),
                                                   "plan_coverage",
                                                   std::bind(&CoverageServer::planCoverage, this),
@@ -174,6 +207,25 @@ nav2::CallbackReturn CoverageServer::on_configure(const rclcpp_lifecycle::State&
   return nav2::CallbackReturn::SUCCESS;
 }
 
+std::optional<std::vector<geometry_msgs::msg::Polygon>> CoverageServer::dockKeepouts()
+{
+  std::lock_guard<std::mutex> lock(dock_keepouts_mutex_);
+  return dock_keepouts_;
+}
+
+std::optional<std::vector<geometry_msgs::msg::Polygon>> CoverageServer::waitForDockKeepouts(
+    std::chrono::milliseconds timeout)
+{
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  auto keepouts = dockKeepouts();
+  while (!keepouts && std::chrono::steady_clock::now() < deadline)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    keepouts = dockKeepouts();
+  }
+  return keepouts;
+}
+
 nav2::CallbackReturn CoverageServer::on_activate(const rclcpp_lifecycle::State& /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Activating %s", get_name());
@@ -194,6 +246,7 @@ nav2::CallbackReturn CoverageServer::on_cleanup(const rclcpp_lifecycle::State& /
 {
   RCLCPP_INFO(get_logger(), "Cleaning up %s", get_name());
   action_server_.reset();
+  dock_geometry_sub_.reset();
   preview_obstacle_clearance_service_.reset();
   preview_coverage_service_.reset();
   correct_recorded_obstacle_service_.reset();
@@ -240,6 +293,7 @@ constexpr double kSwathStep = 0.10;  // m between poses on a straight swath
 // limits disabled (no recorded geometry is copied then). Shared by planCoverage and the preview,
 // so the ring corners the planner leaves sharp are the same in both.
 PivotJoinLimits makePivotLimits(const mowgli_interfaces::action::PlanCoverage::Goal& goal,
+                                const std::vector<geometry_msgs::msg::Polygon>& keepouts,
                                 double sweep_radius,
                                 double boundary_margin)
 {
@@ -255,7 +309,7 @@ PivotJoinLimits makePivotLimits(const mowgli_interfaces::action::PlanCoverage::G
   {
     limits.recorded_boundary.emplace_back(p.x, p.y);
   }
-  for (const auto& obstacle : goal.obstacles)
+  const auto add_obstacle = [&limits](const geometry_msgs::msg::Polygon& obstacle)
   {
     std::vector<std::pair<double, double>> ring;
     ring.reserve(obstacle.points.size());
@@ -267,7 +321,9 @@ PivotJoinLimits makePivotLimits(const mowgli_interfaces::action::PlanCoverage::G
     {
       limits.recorded_obstacles.push_back(std::move(ring));
     }
-  }
+  };
+  std::for_each(goal.obstacles.begin(), goal.obstacles.end(), add_obstacle);
+  std::for_each(keepouts.begin(), keepouts.end(), add_obstacle);
   return limits;
 }
 
@@ -277,8 +333,11 @@ PivotJoinLimits makePivotLimits(const mowgli_interfaces::action::PlanCoverage::G
 // so the whole downstream pipeline — headlands, safe_holes, sub-path splits,
 // connectors — keeps that distance from drawn obstacles (root zones the 2D
 // LiDAR cannot see). The outer boundary is untouched (chassis_safety_inset
-// owns that margin).
+// owns that margin), except where a keepout crosses it. `keepouts` are the map's
+// charging stations: they get the same margin and never reach the operator's
+// obstacle list, so a map save cannot persist them.
 f2c::types::Cell buildCellFromGoal(const mowgli_interfaces::action::PlanCoverage::Goal& goal,
+                                   const std::vector<geometry_msgs::msg::Polygon>& keepouts,
                                    double obstacle_margin)
 {
   if (goal.outer_boundary.points.size() < 3)
@@ -299,7 +358,39 @@ f2c::types::Cell buildCellFromGoal(const mowgli_interfaces::action::PlanCoverage
     return dedupClosedRing(ring);
   };
 
-  f2c::types::Cell cell(make_ring(goal.outer_boundary));
+  f2c::types::LinearRing shell = make_ring(goal.outer_boundary);
+  std::vector<f2c::types::LinearRing> keepout_holes;
+  std::vector<f2c::types::LinearRing> grown_keepouts;
+  for (const auto& keepout : keepouts)
+  {
+    if (keepout.points.size() >= 3)
+    {
+      grown_keepouts.push_back(bufferRingOutward(make_ring(keepout), obstacle_margin));
+    }
+  }
+  // Stations side by side overlap once grown, and overlapping holes are not a valid cell.
+  for (const auto& grown : mergeOverlappingRings(grown_keepouts))
+  {
+    auto edited = subtractKeepoutFromField(shell, grown);
+    if (edited.dropped_area > 0.0)
+    {
+      RCLCPP_WARN(rclcpp::get_logger("coverage_server"),
+                  "PlanCoverage: a charging station cuts this area in two; the smaller side "
+                  "(%.1f m²) is not planned. Move the station or split the area.",
+                  edited.dropped_area);
+    }
+    shell = std::move(edited.shell);
+    if (edited.hole)
+    {
+      keepout_holes.push_back(std::move(*edited.hole));
+    }
+  }
+
+  f2c::types::Cell cell(shell);
+  for (const auto& hole : keepout_holes)
+  {
+    cell.addRing(hole);
+  }
   for (const auto& hole : goal.obstacles)
   {
     if (hole.points.size() >= 3)
@@ -618,7 +709,21 @@ void CoverageServer::planCoverage()
     // inflate holes past the field.
     const double obstacle_margin = live.obstacle_margin;
 
-    f2c::types::Cell cell = buildCellFromGoal(*goal, obstacle_margin);
+    // The stations come from map_server's latched snapshot. Planning without them
+    // would drive the blade through one, so a snapshot that never came fails the plan.
+    const auto keepouts = waitForDockKeepouts(kDockGeometryWait);
+    if (!keepouts)
+    {
+      result->success = false;
+      result->message =
+          "no map geometry from map_server yet (map edit in progress, or see its "
+          "~/planning_grid_error): cannot place the charging station";
+      RCLCPP_ERROR(get_logger(), "PlanCoverage: %s", result->message.c_str());
+      action_server_->terminate_current(result);
+      return;
+    }
+
+    f2c::types::Cell cell = buildCellFromGoal(*goal, *keepouts, obstacle_margin);
 
     // Robot's minimum trackable turning radius — floors both the ring-corner
     // fillets inside the planner and the turn-around connectors below. Read
@@ -632,6 +737,7 @@ void CoverageServer::planCoverage()
     // before the plan because the ring stage leaves a corner SHARP where the robot will pivot.
     const PivotJoinLimits pivot_limits =
         makePivotLimits(*goal,
+                        *keepouts,
                         get_parameter("pivot_sweep_radius").as_double(),
                         get_parameter("boundary_soft_margin").as_double());
 
@@ -1120,9 +1226,19 @@ void CoverageServer::previewCoverage(
     const double mow_angle_rad =
         (goal.mow_angle_deg < 0.0) ? -1.0 : goal.mow_angle_deg * M_PI / 180.0;
 
-    const f2c::types::Cell cell = buildCellFromGoal(goal, live.obstacle_margin);
+    const auto keepouts = dockKeepouts();
+    if (!keepouts)
+    {
+      response->success = false;
+      response->message =
+          "no map geometry from map_server yet (map edit in progress, or see its "
+          "~/planning_grid_error): cannot place the charging station";
+      return;
+    }
+    const f2c::types::Cell cell = buildCellFromGoal(goal, *keepouts, live.obstacle_margin);
     const PivotJoinLimits preview_pivot_limits =
         makePivotLimits(goal,
+                        *keepouts,
                         get_parameter("pivot_sweep_radius").as_double(),
                         get_parameter("boundary_soft_margin").as_double());
     const BoustrophedonPlan plan =

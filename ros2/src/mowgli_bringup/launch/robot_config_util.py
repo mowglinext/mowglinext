@@ -316,6 +316,48 @@ def keepout_obstacle_margin(
     return min(OBSTACLE_MARGIN_MAX_M, max(0.0, half_width, follow))
 
 
+# The station head: from the docked robot's nose to the end of the dock body.
+DOCK_HEAD_DEPTH_M = 0.20
+DEFAULT_DOCK_BODY_LENGTH_M = 0.80
+
+
+def dock_body_extents(params):
+    """map_server dock body, as (rear_m, length_m) along the dock axis.
+
+    The dock pose is the docked robot's base_footprint and it docks nose-first,
+    so the physical station lies on the +x side of that pose. The body starts at
+    the docked rear bumper and reaches past the nose by the station head;
+    `dock_body_length_m` can only lengthen it, because a chassis that outgrows
+    the shipped station still needs its head inside the ring.
+
+    Uses the BARE chassis (margin 0): this is where the object is, and the body
+    margin is added by each consumer exactly once.
+    """
+    params = params or {}
+    front, rear, _half_width = chassis_footprint(params, margin=0.0)
+    rear_m = max(-rear, 0.0)
+    length = float(params.get("dock_body_length_m", DEFAULT_DOCK_BODY_LENGTH_M))
+    return rear_m, max(length, front + DOCK_HEAD_DEPTH_M + rear_m)
+
+
+# The transit planner's kStationClearance (authorized_transit_planner), plus slack.
+DOCK_STATION_PIVOT_CLEARANCE_M = 0.10
+DOCK_STATION_ZONE_SLACK_M = 0.05
+
+
+def dock_no_pivot_distance(params):
+    """behavior_tree_node.dock_no_pivot_distance_m.
+
+    How far behind the dock pose a robot facing the station can no longer pivot
+    without swinging its nose into the head, so the planner refuses it. Inside,
+    the BT docks straight in or reverses out instead, so it must be at least the
+    planner's own limit: the slack makes the BT take over first.
+    """
+    front, _rear, _half_width = chassis_footprint(params)
+    reach = chassis_circumscribed_radius(params) - front + DOCK_STATION_PIVOT_CLEARANCE_M
+    return max(reach + DOCK_STATION_ZONE_SLACK_M, 0.0)
+
+
 def dig_skip_radius(params):
     """behavior_tree_node.dig_skip_radius_m: coverage poses skipped around a dig.
 

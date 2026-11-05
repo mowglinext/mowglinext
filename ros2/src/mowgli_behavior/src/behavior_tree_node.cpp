@@ -28,6 +28,7 @@
 #include "ament_index_cpp/get_package_share_path.hpp"
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/loggers/bt_cout_logger.h"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/battery_filter.hpp"
@@ -460,6 +461,24 @@ private:
     // previous session (the bridge outlives BT restarts) must not become a
     // skip zone of this one, nor look like "a dig just happened" to a
     // FollowStrip that is mid-goal when this node restarts.
+    context_->dock_station_zone.pivot_clear_m =
+        declare_parameter<double>("dock_no_pivot_distance_m", DockStationZone{}.pivot_clear_m);
+    context_->dock_station_zone.half_width_m =
+        declare_parameter<double>("dock_body_half_width_m", DockStationZone{}.half_width_m);
+    context_->dock_station_zone.front_m =
+        declare_parameter<double>("dock_body_front_m", DockStationZone{}.front_m);
+    docking_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+        "/map_server_node/docking_pose",
+        rclcpp::QoS(1).transient_local(),
+        [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          context_->dock_x = msg->pose.position.x;
+          context_->dock_y = msg->pose.position.y;
+          context_->dock_yaw = 2.0 * std::atan2(msg->pose.orientation.z, msg->pose.orientation.w);
+          context_->dock_pose_known = true;
+        });
+
     context_->dig_skip_radius_m =
         declare_parameter<double>("dig_skip_radius_m", kDefaultDigSkipRadiusM);
     dig_event_sub_ = create_subscription<mowgli_interfaces::msg::DigEvent>(
@@ -897,6 +916,10 @@ private:
             {
               clearSingleAreaMode(*context_);
             }
+            if (cmd == HighLevelControl::Request::COMMAND_START)
+            {
+              context_->start_awaiting_dispatch = true;
+            }
             // The previous session ended unfinished and EndSession kept its progress: this Start
             // resumes it. Unless it has aged out — then it begins fresh, like any other Start.
             if (cmd == HighLevelControl::Request::COMMAND_START &&
@@ -974,6 +997,7 @@ private:
             context_->resume_after_incomplete_end = false;
             context_->blade_direction.clearOperatorInhibit();
             context_->current_command = 1;  // COMMAND_START
+            context_->start_awaiting_dispatch = true;
             // A START retries a failed critical dock and keeps a pending charge.
             battery_recovery_changed = applyCommandToBatteryRecovery(*context_, 1);
           }
@@ -1623,17 +1647,10 @@ private:
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
       context_->resume_after_incomplete_end = false;
-      context_->area_completed_swaths.clear();
-      context_->area_swath_count.clear();
-      context_->area_resume_pose_index.clear();
-      context_->area_unit_progress.clear();
-      context_->area_path_pose_count.clear();
-      context_->area_plan_fingerprint.clear();
-      context_->completed_areas.clear();
+      clearRecordedCoverageProgress(*context_);
       context_->attempted_areas.clear();
       context_->incomplete_retired_areas.clear();
       context_->area_attempt_count.clear();
-      context_->area_last_coverage.clear();
       context_->coverage_start_blocked = false;
       context_->start_blocked_area.reset();
       context_->area_start_blocked_count.clear();
@@ -1726,6 +1743,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::UInt64>::SharedPtr area_list_generation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr dig_escalated_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::DigEvent>::SharedPtr dig_event_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr docking_pose_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr mow_progress_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr fused_odom_sub_;
   // LocalizationGuard state. Both feeds write loc_obs_ under

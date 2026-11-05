@@ -56,6 +56,8 @@ const adjustedLiveValue = (response: Record<string, unknown>, name: string): {ap
 export interface ExternalSaver {
     /** Number of pending edits (0 = clean). Feeds the Save button count. */
     dirtyCount: number;
+    /** Keep the section's reconciliation owner alive until all writes settle. */
+    pending?: boolean;
     /** Persist; resolve true on success, false after showing its own error. */
     save: () => Promise<boolean>;
     /** Drop pending edits (page-level Revert). */
@@ -604,11 +606,13 @@ export const useSettingsManager = () => {
     // closure in persistSettings); the state mirror only drives rendering.
     const externalSaversRef = useRef<Record<string, ExternalSaver>>({});
     const [externalDirtyCounts, setExternalDirtyCounts] = useState<Record<string, number>>({});
+    const [externalPending, setExternalPending] = useState<Record<string, boolean>>({});
     const registerExternalSaver = useCallback((id: string, saver: ExternalSaver) => {
         externalSaversRef.current[id] = saver;
         setExternalDirtyCounts((prev) =>
             prev[id] === saver.dirtyCount ? prev : { ...prev, [id]: saver.dirtyCount }
         );
+        setExternalPending(prev => prev[id] === !!saver.pending ? prev : {...prev, [id]: !!saver.pending});
     }, []);
     const unregisterExternalSaver = useCallback((id: string) => {
         delete externalSaversRef.current[id];
@@ -625,13 +629,17 @@ export const useSettingsManager = () => {
     );
     const dirtyCount = dirtyKeys.size + externalDirtyCount;
     const isDirty = dirtyCount > 0;
+    const isSectionPending = (sectionId: SettingsSection) =>
+        externalPending[sectionId === "weather" ? "irrisense" : sectionId] ?? false;
 
 
     const isSectionDirty = useCallback(
         (sectionId: SettingsSection): boolean => {
             const section = SECTION_DEFINITIONS.find((s) => s.id === sectionId);
             if (!section) return false;
-            if ((externalDirtyCounts[section.id] ?? 0) > 0) return true;
+            // IrriSense is rendered within Weather but retains its saver ID.
+            const saverId = section.id === "weather" ? "irrisense" : section.id;
+            if ((externalDirtyCounts[saverId] ?? 0) > 0) return true;
             if (section.id === "advanced") {
                 // Advanced section: any key not in other sections
                 const knownKeys = new Set(
@@ -1046,6 +1054,7 @@ export const useSettingsManager = () => {
         isOverridden,
         resetToDefault,
         isSectionDirty,
+        isSectionPending,
         matchesSearch,
         save,
         savePartialValues,

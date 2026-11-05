@@ -19,9 +19,19 @@ import (
 // other because the operator left coordination off or a fix lagged.
 
 const (
-	fleetPeersTopic   = "/fleet/peers"
-	fleetPeersMsgType = "geometry_msgs/msg/PoseArray"
-	peerFeedPeriod    = 200 * time.Millisecond
+	fleetPeersTopic = "/fleet/peers"
+	// The subset of /fleet/peers that is ON ITS CHARGER, same poses, same
+	// tick. The fleet node may treat such a peer as dock infrastructure while
+	// this robot undocks or docks beside it (two docks side by side would
+	// otherwise refuse every undock). Every peer stays on /fleet/peers, so an
+	// older ROS stack that ignores this topic keeps them all as obstacles.
+	fleetDockedPeersTopic = "/fleet/docked_peers"
+	// Every peer's STATION, wherever the peer is, in our map frame. map_server
+	// forbids them to transit and coverage. Sent every tick, empty once the last
+	// peer is gone, so the list map_server holds can never go stale.
+	fleetPeerDocksTopic = "/fleet/peer_docks"
+	fleetPeersMsgType   = "geometry_msgs/msg/PoseArray"
+	peerFeedPeriod      = 200 * time.Millisecond
 	// A mirrored pose older than this is not placed: the peer's socket is up
 	// but its localizer went quiet, and a stale footprint would block a lawn
 	// cell the robot has long left (the fleet node drops it after 3 s too).
@@ -41,13 +51,15 @@ type PeerFeedStatus struct {
 
 // peerMapPose is one peer placed in THIS robot's map frame (metres, x east,
 // y north). HasYaw is false when only the antenna fix was fresh: the fleet
-// node then marks a disc instead of an oriented footprint.
+// node then marks a disc instead of an oriented footprint. OnCharger comes
+// from a fresh highLevelStatus.
 type peerMapPose struct {
-	ID     string
-	X      float64
-	Y      float64
-	Yaw    float64
-	HasYaw bool
+	ID        string
+	X         float64
+	Y         float64
+	Yaw       float64
+	HasYaw    bool
+	OnCharger bool
 }
 
 type poseArrayMsg struct {
@@ -120,7 +132,34 @@ func fusedMapPose(r FleetRobot, selfDatum LatLon, maxAge time.Duration) (peerMap
 	if (peerDatum.Lat != 0 || peerDatum.Lon != 0) && !sameDatum(peerDatum, selfDatum) {
 		x, y = enuFromDatum(selfDatum, latLonFromMap(peerDatum, x, y))
 	}
-	return peerMapPose{ID: r.Identity.ID, X: x, Y: y, Yaw: pose.MotionHeading, HasYaw: true}, true
+	return peerMapPose{
+		ID: r.Identity.ID, X: x, Y: y, Yaw: pose.MotionHeading, HasYaw: true,
+		OnCharger: peerOnCharger(r, maxAge),
+	}, true
+}
+
+// peerOnCharger: a FRESH highLevelStatus says the peer is charging. A stale
+// or unreadable one is "not on its charger", which keeps it a full obstacle.
+func peerOnCharger(r FleetRobot, maxAge time.Duration) bool {
+	if !topicFresh(r, "highLevelStatus", maxAge) {
+		return false
+	}
+	var hl struct {
+		IsCharging bool `json:"is_charging"`
+	}
+	return json.Unmarshal(r.Topics["highLevelStatus"], &hl) == nil && hl.IsCharging
+}
+
+// dockedPeerPoses keeps the peers on their charger, with a heading (the
+// fleet node never treats a heading-less disc as dock infrastructure).
+func dockedPeerPoses(poses []peerMapPose) []peerMapPose {
+	out := []peerMapPose{}
+	for _, p := range poses {
+		if p.OnCharger && p.HasYaw {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func fixMapPose(r FleetRobot, selfDatum LatLon, maxAge time.Duration) (peerMapPose, bool) {
@@ -172,12 +211,35 @@ func peerPoseArray(poses []peerMapPose, stamp time.Time) poseArrayMsg {
 	return msg
 }
 
+// peerDockPoses places every known peer station in our map frame, online or
+// not: the registry remembers it. A peer without a datum is assumed to share ours.
+func peerDockPoses(peers []FleetPeer, selfDatum LatLon) []peerMapPose {
+	out := []peerMapPose{}
+	for _, p := range peers {
+		if p.Dock == nil {
+			continue
+		}
+		x, y := p.Dock.X, p.Dock.Y
+		peerDatum := LatLon{Lat: p.DatumLat, Lon: p.DatumLon}
+		if (peerDatum.Lat != 0 || peerDatum.Lon != 0) && !sameDatum(peerDatum, selfDatum) {
+			x, y = enuFromDatum(selfDatum, latLonFromMap(peerDatum, x, y))
+		}
+		if math.IsNaN(x) || math.IsNaN(y) || math.IsInf(x, 0) || math.IsInf(y, 0) || math.IsNaN(p.Dock.Yaw) || math.IsInf(p.Dock.Yaw, 0) {
+			continue
+		}
+		out = append(out, peerMapPose{ID: p.ID, X: x, Y: y, Yaw: p.Dock.Yaw, HasYaw: true})
+	}
+	return out
+}
+
 // peerFeed is the 5 Hz publisher owned by the FleetProvider.
 type peerFeed struct {
 	mu     sync.Mutex
 	status PeerFeedStatus
-	stop   chan struct{}
-	done   chan struct{}
+	// A station list went out, so the last peer's removal must be announced.
+	docksPublished bool
+	stop           chan struct{}
+	done           chan struct{}
 }
 
 func newPeerFeed() *peerFeed {
@@ -225,6 +287,7 @@ func (f *FleetProvider) PeerFeedStatus() PeerFeedStatus {
 // unknown (there is no map frame to place a peer in).
 func (f *FleetProvider) publishPeerFeed(now time.Time) {
 	if len(f.Peers()) == 0 {
+		f.retractPeerDocks(now)
 		f.setFeed(func(s *PeerFeedStatus) { s.Active = false; s.PeersPublished = 0 })
 		return
 	}
@@ -251,14 +314,49 @@ func (f *FleetProvider) publishPeerFeed(now time.Time) {
 		f.setFeed(func(s *PeerFeedStatus) { s.Active = false; s.LastError = "publish /fleet/peers: " + err.Error() })
 		return
 	}
+	// Published every tick, empty when no peer is docked, so the fleet node
+	// learns within one tick that a neighbour left its charger. A failure
+	// here only loses the dock exception: every peer is already an obstacle.
+	lastError := ""
+	docked := peerPoseArray(dockedPeerPoses(poses), now)
+	if err := f.ros.Publish(fleetDockedPeersTopic, fleetPeersMsgType, &docked); err != nil {
+		lastError = "publish /fleet/docked_peers: " + err.Error()
+	}
+	docks := peerPoseArray(peerDockPoses(f.Peers(), LatLon{Lat: self.DatumLat, Lon: self.DatumLon}), now)
+	if err := f.ros.Publish(fleetPeerDocksTopic, fleetPeersMsgType, &docks); err != nil {
+		lastError = "publish /fleet/peer_docks: " + err.Error()
+	} else {
+		f.feed.mu.Lock()
+		f.feed.docksPublished = true
+		f.feed.mu.Unlock()
+	}
 	f.setFeed(func(s *PeerFeedStatus) {
 		s.Active = true
 		s.PeersPublished = len(poses)
 		s.Publishes++
 		t := now
 		s.LastPublishAt = &t
-		s.LastError = ""
+		s.LastError = lastError
 	})
+}
+
+// retractPeerDocks tells map_server once that no station is left to avoid. It
+// retries on the next tick until that message is out.
+func (f *FleetProvider) retractPeerDocks(now time.Time) {
+	f.feed.mu.Lock()
+	pending := f.feed.docksPublished
+	f.feed.mu.Unlock()
+	if !pending {
+		return
+	}
+	empty := peerPoseArray(nil, now)
+	if err := f.ros.Publish(fleetPeerDocksTopic, fleetPeersMsgType, &empty); err != nil {
+		logrus.WithError(err).Warn("fleet: could not retract the peer stations")
+		return
+	}
+	f.feed.mu.Lock()
+	f.feed.docksPublished = false
+	f.feed.mu.Unlock()
 }
 
 func (f *FleetProvider) setFeed(apply func(*PeerFeedStatus)) {

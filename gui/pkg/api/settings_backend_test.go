@@ -315,3 +315,27 @@ func TestMavrosAllowsSharedFeedForwardAndRollbackButRejectsPID(t *testing.T) {
 		assert.Equal(t, expected, w.Code, path)
 	}
 }
+
+// A save refused for an unknown backend must say which value and where: the
+// GUI used to show nothing but "[object Response]" for it.
+func TestSettingsSaveRefusalNamesTheUnsupportedBackend(t *testing.T) {
+	db, _ := newBackendTestDB(t, "mowgli:\n  ros__parameters:\n    robot_name: alpha\n", "HARDWARE_BACKEND=vermut\n")
+
+	_, err := resolveHardwareBackendForDB(db)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, errUnsupportedHardwareBackend, "callers still classify it as unsupported")
+
+	body, _ := json.Marshal(map[string]any{"robot_name": "beta"})
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/settings/yaml", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	setupSettingsRouter(db).ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	var got ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Contains(t, got.Error, `HARDWARE_BACKEND="vermut"`)
+	assert.Contains(t, got.Error, "expected one of mowgli, mavros, openmower")
+	envPath, _ := db.Get("system.mower.runtimeEnvFile")
+	assert.Contains(t, got.Error, string(envPath), "names the file to fix")
+}

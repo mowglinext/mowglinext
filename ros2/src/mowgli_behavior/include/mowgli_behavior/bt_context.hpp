@@ -33,6 +33,7 @@
 #include "mowgli_behavior/blade_ready.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
+#include "mowgli_behavior/dock_alignment.hpp"
 #include "mowgli_behavior/fleet_yield.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_behavior/transit_avoidance.hpp"
@@ -114,6 +115,7 @@ struct BTContext
   /// Does NOT cover the coverage-tracking fields below (command state +
   /// swath-completion model: target_area_index, single_area_target,
   /// attempted_areas, incomplete_retired_areas, area_attempt_count, area_last_coverage,
+  /// area_last_partial_poses,
   /// area_completed_swaths,
   /// area_swath_count, area_resume_pose_index, area_path_pose_count,
   /// area_plan_fingerprint, completed_areas, session_failed_transit_targets,
@@ -276,6 +278,15 @@ struct BTContext
   bool resume_after_incomplete_end{false};
   std::chrono::steady_clock::time_point resume_after_incomplete_end_time{};
 
+  /// Set by an operator START (~/high_level_control COMMAND_START, ~/start_in_area) and cleared
+  /// by the first area GetNextUnmowedArea dispatches after it. While set, a scan that finds every
+  /// area already COMPLETE has not mowed a thing for this Start: the progress it found belongs to
+  /// a session that finished without reaching EndSession (its dock was preempted, or the stack
+  /// restarted first). GetNextUnmowedArea then discards that progress and mows the lawn again
+  /// instead of reporting MOWING_COMPLETE — field 2026-10-26, v1.6.0: every Play undocked, said
+  /// "mowing complete" and drove back, for good. Not persisted: a restart is not a Start.
+  bool start_awaiting_dispatch{false};
+
   /// Stable id (mowglinext#637) of the area single_area_target's index
   /// pointed at when it was locked in — captured from the FIRST probe
   /// response after the request was consumed (NOT from the ~/start_in_area
@@ -316,13 +327,19 @@ struct BTContext
   /// despite advancing 0.3 → 18.6 % across the 5 dispatches. Cleared by
   /// EndSession.
   std::map<uint32_t, uint32_t> area_attempt_count;
-  /// Best coverage_percent seen for an area so far this session, used to
-  /// decide whether a dispatch made progress (and thus resets the
-  /// no-progress attempt counter). Cleared by EndSession.
+  /// High-water mark of the units booked fully mowed in an area this session
+  /// (area_completed_swaths size), used to decide whether a dispatch made
+  /// progress and thus resets the no-progress attempt counter. Cleared by
+  /// EndSession.
   std::map<uint32_t, float> area_last_coverage;
+  /// Its partner (area_progress.hpp): the high-water mark of the furthest
+  /// poses reached inside the area's UNFINISHED units (area_unit_progress), so
+  /// a pass that mowed a long stretch of a long unit is not "no progress".
+  /// Reset with area_last_coverage, everywhere.
+  std::map<uint32_t, std::size_t> area_last_partial_poses;
   static constexpr uint32_t kMaxAreaAttempts = 5;
-  /// Minimum coverage_percent gain that counts as progress (resets the
-  /// no-progress counter). Below this, a dispatch is treated as stuck.
+  /// Share of an area's plan an unfinished unit must gain to count as
+  /// progress (minPartialProgressPoses, never below ~1 m of path).
   static constexpr float kAreaProgressEpsilonPct = 0.5f;
 
   // -----------------------------------------------------------------------
@@ -937,6 +954,9 @@ struct BTContext
   double dock_x{0.0};
   double dock_y{0.0};
   double dock_yaw{0.0};
+  /// False until map_server's latched /map_server_node/docking_pose arrives.
+  bool dock_pose_known{false};
+  DockStationZone dock_station_zone;
 
   // -----------------------------------------------------------------------
   // Legacy coverage path components (retained for potential future use).
@@ -1153,6 +1173,35 @@ inline bool hasRecordedCoverageProgress(const BTContext& ctx)
     }
   }
   return false;
+}
+
+/// Forget every recorded coverage progress — what hasRecordedCoverageProgress() looks at plus
+/// the plan fingerprints, swath counts and the per-area high-water mark — so the next scan
+/// plans and mows each area from its first line. Session budgets, flags and the single-area
+/// target are the caller's business.
+inline void clearRecordedCoverageProgress(BTContext& ctx)
+{
+  ctx.area_completed_swaths.clear();
+  ctx.area_swath_count.clear();
+  ctx.area_resume_pose_index.clear();
+  ctx.area_unit_progress.clear();
+  ctx.area_path_pose_count.clear();
+  ctx.area_plan_fingerprint.clear();
+  ctx.completed_areas.clear();
+  ctx.area_last_coverage.clear();
+  ctx.area_last_partial_poses.clear();
+  ctx.coverage_plausibility_warning = false;
+}
+
+/// Forget the recorded progress of ONE area, for an explicit "mow this area" request.
+inline void clearAreaCoverageProgress(BTContext& ctx, uint32_t area)
+{
+  ctx.area_completed_swaths.erase(area);
+  ctx.area_resume_pose_index.erase(area);
+  ctx.area_unit_progress.erase(area);
+  ctx.area_last_coverage.erase(area);
+  ctx.area_last_partial_poses.erase(area);
+  ctx.completed_areas.erase(area);
 }
 
 /// Does a plain COMMAND_START keep the single-area clip it finds latched? Yes when the operator

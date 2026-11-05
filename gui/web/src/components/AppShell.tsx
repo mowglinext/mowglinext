@@ -1,7 +1,7 @@
 import {observeAsync} from "../utils/async";
 import {isJsonObject} from "../utils/json";
 import {useAsyncHandler} from "../hooks/useAsyncHandler";
-import {type ReactNode, useEffect, useMemo, useState} from "react";
+import {type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useMatches, useNavigate, useOutlet} from "react-router-dom";
 import {AnimatePresence, motion, LayoutGroup} from "framer-motion";
 import {
@@ -184,11 +184,13 @@ export function AppShell() {
             <LanguageSwitcher/>
             <NotificationBell/>
           </div>
-          <div style={{width:'100%', display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginTop:4}}>
+          <div style={{width:'100%', display:'flex', flexWrap:'wrap', alignItems:'center', justifyContent:'space-between', gap:8, marginTop:4}}>
             <HardwareBackendBadge/>
             <MowerStatus/>
           </div>
         </header>
+
+        {showInstallBanner && <IOSInstallBanner onDismiss={dismissInstallBanner}/>}
 
         <main style={{
           flex: 1, overflow: 'auto', minHeight: 0,
@@ -197,8 +199,6 @@ export function AppShell() {
         }}>
           <AnimatedOutlet currentPath={currentPath}/>
         </main>
-
-        {showInstallBanner && <IOSInstallBanner onDismiss={dismissInstallBanner}/>}
 
         <MobileMoreSheet
           open={moreOpen}
@@ -306,8 +306,10 @@ function AnimatedOutlet({currentPath}: {currentPath: string}) {
   const outlet = useOutlet();
   // Scrolling pages must grow with their content so main's bottom padding
   // follows the final control instead of sitting behind overflowing children.
-  // Map and logs own their viewport layout and still need a definite height.
-  const fillViewport = currentPath === '/map' || currentPath === '/logs';
+  // Map needs a definite height. Logs flex to fill the viewport but may grow
+  // on short screens, keeping main's bottom clearance after the final control.
+  const fillViewport = currentPath === '/map';
+  const isLogs = currentPath === '/logs';
   return (
     <AnimatePresence mode="wait">
       <motion.div
@@ -316,7 +318,8 @@ function AnimatedOutlet({currentPath}: {currentPath: string}) {
         animate={{opacity: 1, y: 0}}
         exit={{opacity: 0, y: -6}}
         transition={{duration: 0.28, ease: [0.2, 0.7, 0.2, 1]}}
-        style={{minHeight: '100%', height: fillViewport ? '100%' : undefined}}
+        style={{minHeight: '100%', height: fillViewport ? '100%' : undefined,
+          display: isLogs ? 'flex' : undefined, flexDirection: isLogs ? 'column' : undefined}}
       >
         {outlet}
       </motion.div>
@@ -527,17 +530,36 @@ function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreShe
   const navigate = useNavigate();
   const {displayMode} = useThemeMode();
 
-  // Escape closes the sheet (keyboard parity with the backdrop tap / X button).
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, onClose]);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  // Native modal dialogs move/contain focus, make the rest of the document
+  // inert, and restore the opener when closed (including on navigation).
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open) dialog.showModal();
+    else dialog.close();
+    return () => { dialog.close(); };
+  }, [open]);
 
   return (
+    <dialog
+      ref={dialogRef}
+      aria-label={t('nav.more')}
+      onCancel={e => { e.preventDefault(); onClose(); }}
+      onKeyDown={e => {
+        if (e.key !== 'Tab') return;
+        const buttons = e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+        const first = buttons[0], last = buttons[buttons.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }}
+      style={{position: 'fixed', inset: 0, margin: 0, padding: 0, border: 'none', width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none', background: 'transparent'}}
+    >
     <AnimatePresence>
       {open && (
         <>
@@ -561,7 +583,7 @@ function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreShe
           >
             <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12}}>
               <span style={{fontSize: 13, fontWeight: 600, color: 'rgba(236, 255, 244, 0.66)'}}>{t('nav.more')}</span>
-              <button onClick={onClose} aria-label={t('nav.close')} style={{
+              <button autoFocus onClick={onClose} aria-label={t('nav.close')} style={{
                 background: 'transparent', border: 'none', cursor: 'pointer', color: 'rgba(236, 255, 244, 0.66)',
                 display: 'flex', padding: 4,
               }}>
@@ -592,6 +614,7 @@ function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreShe
         </>
       )}
     </AnimatePresence>
+    </dialog>
   );
 }
 
