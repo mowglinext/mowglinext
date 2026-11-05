@@ -116,6 +116,31 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// SetStopReason
+// ---------------------------------------------------------------------------
+/// Remember why the mower stopped (HighLevelStatus.stop_reason / stop_detail) so the operator can
+/// read it after the tree has moved on to IDLE. Always SUCCESS: reporting must never change the
+/// outcome of the branch it sits in. Ports: reason (a mowgli_behavior::stop_reason code), detail
+/// (optional sentence), overwrite (default true).
+class SetStopReason : public BT::SyncActionNode
+{
+public:
+  SetStopReason(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<std::string>("reason", "stop_reason code"),
+            BT::InputPort<std::string>("detail", "", "short English sentence"),
+            BT::InputPort<bool>("overwrite", true, "replace an earlier reason")};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // MarkGuardHalt
 // ---------------------------------------------------------------------------
 

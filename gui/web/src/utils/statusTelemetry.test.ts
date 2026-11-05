@@ -14,7 +14,7 @@ const highLevel: Required<HighLevelStatus> = {
     state: 2, state_name: 'PLANNING', sub_state_name: '', current_area: -1,
     current_path: -1, current_path_index: -1, total_swaths: 0, completed_swaths: 0,
     skipped_swaths: 0, coverage_percent: 0, gps_quality_percent: 100,
-    battery_percent: 42, is_charging: false, emergency: false,
+    battery_percent: 42, is_charging: false, emergency: false, stop_reason: '', stop_detail: '',
 };
 const status: Required<Status> = {
     stamp: {sec: 12, nanosec: 5}, mower_status: 255, reset_cause: 0,

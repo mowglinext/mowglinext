@@ -1,3 +1,4 @@
+import "./map/mapLayout.css";
 import {settingsCoordinate} from '../utils/settingsContract';
 import {visibleRobotGeometry} from "../utils/robotModel";
 import {dockVisualGeometry} from "../components/robot/dockGeometry";
@@ -32,6 +33,8 @@ import {useMapEditHistory} from "./map/hooks/useMapEditHistory.ts";
 import {useMapOffset} from "./map/hooks/useMapOffset.ts";
 import {useMapBearing} from "./map/hooks/useMapBearing.ts";
 import {useMapBearingCamera} from "./map/hooks/useMapBearingCamera.ts";
+import {MAP_ROTATION_LOCKED_KEY} from "./map/hooks/mapRotationConfig.ts";
+import {useMapRotationLock} from "./map/hooks/useMapRotationLock.ts";
 import {useManualMode} from "./map/hooks/useManualMode.ts";
 import {useMapEditing, type ShrinkMemory} from "./map/hooks/useMapEditing.ts";
 import {useObstacleOriginals} from "./map/hooks/useObstacleOriginals.ts";
@@ -109,6 +112,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     const {t, i18n} = useTranslation();
     const {colors, displayMode} = useThemeMode();
     const isMobile = useIsMobile();
+    // The desktop toolbar may wrap on narrow screens or in another language.
+    // Reserve its measured height for the other overlays rather than assuming one row.
+    const [toolbarHeight, setToolbarHeight] = useState(64);
+    const measureToolbar = useCallback((node: HTMLDivElement | null) => {
+        if (!node) return;
+        const observer = new ResizeObserver(() => setToolbarHeight(node.getBoundingClientRect().height));
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, []);
     const mowerAction = useMowerAction()
     const resetMowingProgress = useResetMowingProgress()
 
@@ -133,7 +145,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         type: "FeatureCollection",
         features: []
     })
-    const {config, setConfig} = useConfig(["gui.map.offset.x", "gui.map.offset.y", "gui.map.display.bearing"])
+    const {config, setConfig} = useConfig(["gui.map.offset.x", "gui.map.offset.y", "gui.map.display.bearing", MAP_ROTATION_LOCKED_KEY])
     const envs = useEnv()
     const guiApi = useApi()
     const obstacleOriginals = useObstacleOriginals();
@@ -266,8 +278,15 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
     // Extracted hooks
     const {offsetX, offsetY, handleOffsetX, handleOffsetY} = useMapOffset({config, setConfig, notification});
     const {bearing, handleBearing} = useMapBearing({config, setConfig, notification});
+    const {rotationLocked, setRotationLocked} = useMapRotationLock({config, setConfig, notification});
 
-    const onMapLoad = useMapBearingCamera({mapInstanceRef, bearing, onBearingChange: handleBearing, interactive: !compact});
+    const onMapLoad = useMapBearingCamera({
+        mapInstanceRef,
+        bearing,
+        onBearingChange: handleBearing,
+        interactive: !compact,
+        rotationLocked,
+    });
 
     const _datumLon = settingsCoordinate(settings["datum_lon"])
     const _datumLat = settingsCoordinate(settings["datum_lat"])
@@ -1576,8 +1595,9 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
         );
     }
 
+    const joystickVisible = highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode;
     return (
-        <div style={{
+        <div className="map-layout" style={{
             // Full-bleed the map across the AppShell's main padding.
             // Desktop main padding is 24px top / 32px horizontal / 48px bottom.
             // Mobile main padding includes the bottom safe area as well.
@@ -1884,9 +1904,10 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                     )}
                 </Map> : <Spinner/>}
                 <JoystickOverlay
-                    visible={highLevelStatus.highLevelStatus.state_name === "RECORDING" || highLevelStatus.highLevelStatus.state_name === "MANUAL_MOWING" || manualMode}
+                    visible={joystickVisible}
                     isRecording={highLevelStatus.highLevelStatus.state_name === "RECORDING"}
                     mobile={isMobile}
+                    desktopBottom={toolbarHeight + 24}
                     onStart={handleJoyStart}
                     onMove={handleJoyMove}
                     onStop={handleJoyStop}
@@ -1929,6 +1950,8 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                         onToggleObstacleClearance={() => obstacleClearancePreview.setEnabled((v) => !v)}
                         showCoveragePreview={coveragePreview.enabled}
                         onToggleCoveragePreview={() => coveragePreview.setEnabled((v) => !v)}
+                        rotationLocked={rotationLocked}
+                        onToggleRotationLocked={() => setRotationLocked(!rotationLocked)}
                         onManualMode={handleManualMode}
                         onStopManualMode={handleStopManualMode}
                         onBackupMap={handleBackupMap}
@@ -1990,7 +2013,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 )}
                 {/* Desktop: View mode — bottom glass toolbar */}
                 {!isMobile && !editMap && (
-                    <div style={{position: 'absolute', bottom: 12, left: 16, right: 16, zIndex: 10, background: colors.glassBackground, backdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, WebkitBackdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, padding: '10px 14px'}}>
+                    <div ref={measureToolbar} style={{position: 'absolute', bottom: 12, left: 16, right: 16, zIndex: 10, background: colors.glassBackground, backdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, WebkitBackdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, padding: '10px 14px'}}>
                         <MapToolbar
                             manualMode={manualMode}
                             useSatellite={useSatellite}
@@ -2020,7 +2043,7 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                 )}
                 {/* Desktop: Right panel — collapsible sections, one open at a time */}
                 {!isMobile && (
-                    <div style={{position: 'absolute', top: 12, right: 16, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 0, width: 240, maxHeight: 'calc(100% - 32px)', background: colors.glassBackground, backdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, WebkitBackdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, overflow: 'hidden'}}>
+                    <div style={{position: 'absolute', top: 12, right: 16, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 0, width: 240, maxHeight: `calc(100% - ${toolbarHeight + 36}px${joystickVisible ? ' - var(--map-joystick-height)' : ''})`, background: colors.glassBackground, backdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, WebkitBackdropFilter: displayMode === 'visual' ? 'blur(22px) saturate(140%)' : undefined, borderRadius: 18, border: colors.glassBorder, boxShadow: colors.glassShadow, overflowY: 'auto'}}>
                         <MapSidebarAccordion
                             openKey={sidebarOpen}
                             onOpenChange={setSidebarOpen}
@@ -2146,7 +2169,12 @@ export const MapPage: React.FC<{compact?: boolean}> = ({compact = false}) => {
                                     title: t('mapOffsetPanel.mapRotation'),
                                     content: (
                                         <div style={{padding: '4px 12px 12px'}}>
-                                            <MapRotationPanel bearing={bearing} onChangeBearing={handleBearing}/>
+                                            <MapRotationPanel
+                                                bearing={bearing}
+                                                onChangeBearing={handleBearing}
+                                                rotationLocked={rotationLocked}
+                                                onChangeRotationLocked={setRotationLocked}
+                                            />
                                         </div>
                                     ),
                                 },

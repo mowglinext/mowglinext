@@ -555,4 +555,36 @@ TEST(DigObstructionGuardTest, ExemptsEveryOperatorRecoveryLane)
   }
 }
 
+TEST(GuardFallthroughTest, InitialPowerGuardPrecedesEveryRootMotionHandler)
+{
+  const auto xml = std::regex_replace(ReadMainTree(), std::regex("<!--[\\s\\S]*?-->"), "");
+  const auto emergency = xml.find("<Fallback name=\"EmergencyGuard\">");
+  const auto emergency_block = ExtractGuardBlock(xml, "EmergencyGuard");
+  ASSERT_FALSE(emergency_block.empty());
+  const auto emergency_end = xml.find(emergency_block) + emergency_block.size();
+  const auto power = xml.find("<ReactiveFallback name=\"InitialPowerGuard\">");
+  ASSERT_NE(emergency, std::string::npos);
+  ASSERT_NE(power, std::string::npos);
+  EXPECT_LT(emergency, power);
+  // Only whitespace separates EmergencyGuard from InitialPowerGuard.
+  EXPECT_EQ(xml.substr(emergency_end, power - emergency_end).find_first_not_of(" \t\r\n"),
+            std::string::npos);
+  for (const auto* name : {"SensorSafetyGuard",
+                           "BoundaryGuard",
+                           "LocalizationGuard",
+                           "DigObstructionGuard",
+                           "MainLogic"})
+  {
+    const auto handler = xml.find("name=\"" + std::string(name) + "\"");
+    ASSERT_NE(handler, std::string::npos) << name;
+    EXPECT_LT(power, handler) << name << " can execute before the initial power sample";
+  }
+  const auto block = ExtractGuardBlock(xml, "InitialPowerGuard");
+  EXPECT_NE(block.find("<HasPowerSample/>"), std::string::npos);
+  EXPECT_NE(block.find("<SetMowerEnabled enabled=\"false\"/>"), std::string::npos);
+  EXPECT_NE(block.find("<StopMoving/>"), std::string::npos);
+  EXPECT_NE(block.find("state=\"1\" state_name=\"WAITING_FOR_POWER\""), std::string::npos);
+  EXPECT_NE(block.find("<AlwaysFailure/>"), std::string::npos);
+}
+
 }  // namespace

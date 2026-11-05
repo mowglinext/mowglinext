@@ -78,17 +78,17 @@ unless noted otherwise. QoS 1 throughout.
 
 | Topic | Direction | Retained | Source | Rate |
 |-------|-----------|----------|--------|------|
-| `<prefix>/status` | out | yes | `/hardware_bridge/status` | latest value, at most `publish_rate` Hz |
-| `<prefix>/power` | out | yes | `/hardware_bridge/power` | latest value, at most `publish_rate` Hz |
-| `<prefix>/emergency` | out | yes | `/hardware_bridge/emergency` | every ROS message (not rate-limited) |
-| `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | every ROS message (~1 Hz, not rate-limited) |
-| `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | `publish_rate` Hz |
-| `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | `publish_rate` Hz |
-| `<prefix>/pose` | out | no | `/odometry/filtered_map` (fused localizer pose, **map frame**) | latest value, at most `publish_rate` Hz |
-| `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | latest value, at most `publish_rate` Hz |
+| `<prefix>/status` | out | yes | `/hardware_bridge/status` | on change, at most `publish_rate` Hz, plus a `state_heartbeat_period_s` (10 s) heartbeat |
+| `<prefix>/power` | out | yes | `/hardware_bridge/power` | on change, at most `publish_rate` Hz, plus a 10 s heartbeat (in practice `publish_rate`: the mV/mA readings change every sample) |
+| `<prefix>/emergency` | out | yes | `/hardware_bridge/emergency` | on change, **immediately** (never rate-limited), plus a 10 s heartbeat |
+| `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | on change, immediately (not rate-limited), plus a 10 s heartbeat |
+| `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | on movement > `position_deadband_m` (0.2 m) or a turn > 5°, at most `publish_rate` Hz, plus a `position_heartbeat_period_s` (30 s) heartbeat |
+| `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | on movement > 0.2 m (lat/lon distance), at most `publish_rate` Hz, plus a 30 s heartbeat |
+| `<prefix>/pose` | out | no | `/odometry/filtered_map` (fused localizer pose, **map frame**) | on movement > 0.2 m or a turn > 5°, at most `publish_rate` Hz, plus a 30 s heartbeat |
+| `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | on change, at most `publish_rate` Hz, plus a 10 s heartbeat |
 | `<prefix>/area_boundary` | out | yes | `/map_server_node/get_mowing_area` (polled) | on change, polled every 10 s |
 | `<prefix>/coverage_path` | out | yes | `/coverage/full_plan` (latched) | on change |
-| `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
+| `<prefix>/diagnostics` | out | no | `/diagnostics` (every publisher, merged by status name) | every `diagnostics_publish_period_s` (10 s), and within 1 s of a level change |
 | `<prefix>/available` | out | yes | connection state (LWT) | on connect/disconnect |
 | `<prefix>/host` | out | yes | the bridge's own LAN IP | once, on the first successful connect |
 | `<prefix>/areas` | out | yes | `/map_server_node/get_mowing_area` (polled) | ~every 10s |
@@ -342,6 +342,15 @@ drawing it, rather than connecting every point in order.
 
 `level`: 0 OK, 1 WARN, 2 ERROR (standard `diagnostic_msgs/DiagnosticStatus` levels).
 
+Several nodes publish `/diagnostics` (`diagnostics_node`'s 1 Hz summary plus Nav2 and driver
+arrays — about 16 arrays a second in total). The bridge keeps the latest status for every `name`
+across all of them and publishes the merged list, sorted by name, every
+`diagnostics_publish_period_s` (10 s). When any status's level changes — or a status appears, or
+disappears because its publisher has been silent for 60 s — the list goes out early, at most once a
+second. A change of message text alone (many messages embed live rates or ages) waits for the next
+period. Until 2026-10 every array was forwarded as it arrived (~958 messages, 1.2 MB a minute on an
+idle robot), each carrying only its own publisher's subset.
+
 ### `<prefix>/available` (Last Will and Testament)
 
 Retained `"online"` (published once connected, and again on every reconnect) or `"offline"`
@@ -589,4 +598,54 @@ Read once at startup (`ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt
 | `use_ssl` | `false` | `mqtt_use_ssl` |
 | `home_assistant_discovery_enabled` | `false` | `mqtt_home_assistant_discovery_enabled` |
 | `mqtt_client_id` | `mowgli_ros2` | package-share `mqtt_bridge.yaml` only (not on the GUI) |
-| `publish_rate` | `1.0` Hz | package-share `mqtt_bridge.yaml` only — also the rate limit for position/gps/status/power/rtk_status. The MQTT network loop runs on its own fixed 50 ms timer, independent of this |
+| `publish_rate` | `1.0` Hz | package-share `mqtt_bridge.yaml` only — the rate cap for position/gps/pose/status/power/rtk_status. The MQTT network loop runs on its own fixed 50 ms timer, independent of this |
+| `state_heartbeat_period_s` | `10.0` s (clamped to 1–3600) | package-share `mqtt_bridge.yaml` only — how often an UNCHANGED emergency/high_level_status/status/power/rtk_status payload is resent; a change is sent at once |
+| `position_deadband_m` | `0.2` m (clamped to 0–100) | package-share `mqtt_bridge.yaml` only — movement that publishes position/pose/gps (gps: lat/lon distance, equirectangular); position/pose also publish on a turn > 5° |
+| `position_heartbeat_period_s` | `30.0` s (clamped to 1–3600) | package-share `mqtt_bridge.yaml` only — resend of an unmoved position/pose/gps |
+| `diagnostics_publish_period_s` | `10.0` s (clamped to 1–3600) | package-share `mqtt_bridge.yaml` only — merged diagnostics cadence; a level change goes out within 1 s |
+
+An out-of-range value is clamped with a WARN in the bridge's log.
+
+## Upgrading: cleaning up Home Assistant history
+
+Before 2026-10 the bridge sent far more than Home Assistant needed. Measured over 60 s on an idle,
+docked robot: `<prefix>/diagnostics` 958 messages (1.17 MB — about 1.7 GB a day),
+`<prefix>/emergency` 237, `<prefix>/high_level_status` 155, every one of them unchanged; and Home
+Assistant's recorder wrote a new row about once a second for the **Location** device tracker
+(every `<prefix>/gps` field, 8-decimal latitude/longitude and altitude jitter included, was an
+attribute), ~51 a minute for **Battery voltage** and ~56 for **Charge current** (millivolt /
+milliamp noise). The bridge now publishes on change with heartbeats (see the Rate column above),
+and the discovery record rounds the noisy sensors (battery voltage to 0.1 V, charge and blade
+current to 0.01 A, blade speed, battery, coverage and GPS quality to whole numbers) and limits
+the attributes: the device tracker keeps only `latitude`/`longitude` rounded to 5 decimals (~1 m),
+the lawn mower only `state_name`, `sub_state_name`, `current_area`, `coverage_percent` (whole
+percent), `completed_swaths`, `skipped_swaths` and `total_swaths`. Entity ids and unique ids are
+unchanged, so existing dashboards and automations keep working; an automation that read another
+attribute of the mower entity (e.g. `current_path_index`) should read `<prefix>/high_level_status`
+directly instead.
+
+The rows already recorded stay in the database. To drop them, run the
+`recorder.purge_entities` action once from **Developer tools → Actions** (adjust the entity ids to
+the ones Home Assistant shows for your mower):
+
+```yaml
+action: recorder.purge_entities
+target:
+  entity_id:
+    - sensor.mowglinext_battery_voltage
+    - sensor.mowglinext_charge_current
+    - device_tracker.mowglinext_location
+    - lawn_mower.mowglinext
+```
+
+This deletes ALL history of those entities, not only the noisy part. If you do not need the
+history of an entity at all, you can also keep it out of the recorder for good:
+
+```yaml
+# configuration.yaml
+recorder:
+  exclude:
+    entities:
+      - device_tracker.mowglinext_location
+```
+

@@ -567,6 +567,54 @@ const docTemplate = `{
                 }
             }
         },
+        "/health/live": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Check GUI HTTP liveness",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/health/ros": {
+            "get": {
+                "description": "A healthy transport does not establish sensor freshness or mower safety readiness.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Check the GUI to ROS transport",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/api.ROSHealth"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/api.ROSHealth"
+                        }
+                    }
+                }
+            }
+        },
         "/import/openmower": {
             "post": {
                 "description": "Parse a user-supplied OpenMower map.json, translate it\ninto MowgliNext's coordinate frame, and return a summary\nfor confirmation. Setting ` + "`" + `apply=true` + "`" + ` runs the live write\npath (areas + dock pose). See docs/IMPORT_OPENMOWER_MAP.md.",
@@ -2619,6 +2667,17 @@ const docTemplate = `{
                 }
             }
         },
+        "api.ROSHealth": {
+            "type": "object",
+            "properties": {
+                "ready": {
+                    "type": "boolean"
+                },
+                "transport": {
+                    "$ref": "#/definitions/foxglove.TransportHealth"
+                }
+            }
+        },
         "api.RemoteAccessSettingsResponse": {
             "type": "object",
             "properties": {
@@ -3011,6 +3070,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "foxglove.TransportHealth": {
+            "type": "object",
+            "properties": {
+                "connected": {
+                    "type": "boolean"
+                },
+                "heartbeat_ok": {
+                    "type": "boolean"
+                },
+                "last_pong_at": {
                     "type": "string"
                 }
             }

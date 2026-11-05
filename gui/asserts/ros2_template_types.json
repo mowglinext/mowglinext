@@ -127,6 +127,7 @@
     "obstacle_reverse_max_dist_m": "number",
     "obstacle_reverse_speed_mps": "number",
     "obstacle_slowdown_ratio": "number",
+    "obstacle_transit_margin_m": "number",
     "obstacle_wait_timeout_s": "number",
     "one_wheel_lift_emergency_ms": "integer",
     "openmower_wheel_duty_per_mps": "number",

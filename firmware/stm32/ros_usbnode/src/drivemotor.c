@@ -38,11 +38,10 @@
 #define DRIVEMOTOR_LENGTH_RECEIVED_MSG 20
 #define DRIVEMOTOR_FEEDBACK_TIMEOUT_MS 75u
 
-/* Kinematic ceiling on per-frame encoder motion. cmd_vel is capped to the runtime max_mps,
- * so in one ~20 ms controller frame a wheel advances at most
- *   max_mps * ticks_per_meter * 0.02 s  ticks.
- * The x3 factor is slack for frame-time jitter; a "reset" whose remainder
- * exceeds this is not real motion (a glitch) and is dropped, not accumulated.
+/* Kinematic ceiling on encoder motion between source acquisitions. cmd_vel
+ * is capped to runtime max_mps. Use the measured interval (nominally 20 ms),
+ * bounded by the feedback deadline, with x3 slack for source-frame jitter.
+ * Reject larger magnitudes before USB gating; always allow one quantized tick.
  */
 #define DRIVEMOTOR_MIN_TICKS_PER_M 50.0f
 #define DRIVEMOTOR_MAX_TICKS_PER_M 5000.0f
@@ -88,6 +87,8 @@ typedef struct {
 typedef struct {
   int8_t s8Eff;     /* committed/published travel direction (-1/0/+1)        */
   uint8_t u8Resets; /* counter resets counted during an unconfirmed reversal */
+  uint32_t sample_tick; /* timestamp of this wheel's previous acquisition */
+  uint8_t have_sample_tick;
 } DRIVEMOTOR_dirfilter_t;
 
 /******************************************************************************
@@ -125,8 +126,8 @@ uint16_t prev_left_encoder_val = 0;
 /* Last *confirmed* per-wheel direction + reset-bracket counters. Replaces the
  * old prev_*_direction / prev_*_wheel_speed_val edge-prediction fence, which
  * raced the controller's reset latency and mis-signed reversal coast ticks. */
-static DRIVEMOTOR_dirfilter_t left_dir_filter = {0, 0};
-static DRIVEMOTOR_dirfilter_t right_dir_filter = {0, 0};
+static DRIVEMOTOR_dirfilter_t left_dir_filter = {0};
+static DRIVEMOTOR_dirfilter_t right_dir_filter = {0};
 uint32_t right_encoder_ticks = 0;
 uint32_t left_encoder_ticks = 0;
 int32_t right_ticks_signed =
@@ -175,11 +176,21 @@ static float drivemotor_clamp_max_mps(float max_mps) {
   return max_mps;
 }
 
-static uint32_t drivemotor_max_ticks_per_frame(void) {
+static uint32_t drivemotor_max_ticks_per_frame(uint32_t elapsed_ms) {
   const float ticks_per_meter =
       drivemotor_clamp_ticks_per_meter(g_ticks_per_meter);
-  return (uint32_t)(drivemotor_clamp_max_mps(g_max_mps) * ticks_per_meter *
-                    0.02f * 3.0f);
+  /* Allow normal source-frame jitter/gaps, but stale feedback must not grow
+   * the acceptance budget indefinitely. USB gaps do not affect this clock. */
+  uint32_t window_ms = elapsed_ms > DRIVEMOTOR_FEEDBACK_TIMEOUT_MS
+                           ? DRIVEMOTOR_FEEDBACK_TIMEOUT_MS : elapsed_ms;
+  if (window_ms < 20u) {
+    window_ms = 20u;
+  }
+  const uint32_t limit = (uint32_t)(drivemotor_clamp_max_mps(g_max_mps) *
+                                   ticks_per_meter * (float)window_ms * 0.003f);
+  /* Low-speed travel can average less than one tick per frame, but a real
+   * encoder pulse is still one whole tick. Never quantize the ceiling to 0. */
+  return limit > 0u ? limit : 1u;
 }
 
 static uint8_t left_speed_req;
@@ -325,8 +336,8 @@ void DRIVEMOTOR_Init(void) {
   left_encoder_ticks = 0;
   prev_right_encoder_val = 0;
   prev_left_encoder_val = 0;
-  left_dir_filter = (DRIVEMOTOR_dirfilter_t){0, 0};
-  right_dir_filter = (DRIVEMOTOR_dirfilter_t){0, 0};
+  left_dir_filter = (DRIVEMOTOR_dirfilter_t){0};
+  right_dir_filter = (DRIVEMOTOR_dirfilter_t){0};
 }
 
 /// @brief handle drive motor messages
@@ -559,13 +570,14 @@ static int8_t resolve_direction(DRIVEMOTOR_dirfilter_t *f, int8_t reported,
 
 /// @brief Fold one controller frame into a wheel's tick totals + travel dir.
 ///
-/// Rule 1 - detect the counter reset DIRECTLY: any decrease in the controller's
-/// per-wheel counter means it reset to 0, so the progress since the reset is
-/// the new value; otherwise the counter rose and we add the difference. (The
+/// Rule 1 - fold the raw 16-bit counter at every controller acquisition. A
+/// decrease with a plausible modular delta is a natural wrap; otherwise use
+/// the post-reset remainder. An increase uses the ordinary difference. (The
 /// old code PREDICTED the reset from direction/speed edges and pre-synced
 /// prev_*, which raced the controller's one-frame reset latency and scored the
-/// pre-reset count as a phantom jump.) A reset whose remainder exceeds one
-/// frame's kinematic limit is a glitch and is dropped rather than accumulated.
+/// pre-reset count as a phantom jump.) Apply the frame's kinematic limit to
+/// EVERY candidate before accumulation: USB gaps must never hide a 65536-tick
+/// glitch inside an otherwise plausible cumulative host-side delta.
 ///
 /// Rule 2 - the magnitude is signed by the CONFIRMED direction from
 /// resolve_direction(), not the reported byte, so coast ticks on a reversal
@@ -578,19 +590,28 @@ static int8_t resolve_direction(DRIVEMOTOR_dirfilter_t *f, int8_t reported,
 static int8_t DRIVEMOTOR_UpdateWheel(DRIVEMOTOR_dirfilter_t *f, int8_t reported,
                                      uint8_t speed, uint16_t val,
                                      uint16_t *prev, uint32_t *ticks,
-                                     int32_t *ticks_signed) {
+                                     int32_t *ticks_signed,
+                                     uint32_t sample_tick) {
   int32_t l_s32Delta = (int32_t)val - (int32_t)*prev;
   /* Confirmed travel direction for THIS frame's motion. */
   int8_t l_s8Eff = resolve_direction(f, reported, speed, l_s32Delta < 0);
 
+  const uint32_t elapsed_ms = f->have_sample_tick
+                                 ? sample_tick - f->sample_tick : 20u;
+  f->sample_tick = sample_tick;
+  f->have_sample_tick = 1u;
+  const uint32_t frame_limit = drivemotor_max_ticks_per_frame(elapsed_ms);
   uint32_t l_u32Mag = 0;
   if (reported != 0) {
     if (l_s32Delta >= 0) {
       l_u32Mag = (uint32_t)l_s32Delta; /* progress within a segment */
-    } else if ((uint32_t)val <= drivemotor_max_ticks_per_frame()) {
-      l_u32Mag = (uint32_t)val; /* reset: new-segment progress so far */
+    } else {
+      const uint32_t wrapped_delta = (uint16_t)(val - *prev);
+      l_u32Mag = wrapped_delta <= frame_limit ? wrapped_delta : (uint32_t)val;
     }
-    /* else: implausibly large reset remainder => glitch, drop it */
+    if (l_u32Mag > frame_limit) {
+      l_u32Mag = 0; /* implausible progress/reset remainder: discard glitch */
+    }
   }
   *prev = val;
   *ticks += l_u32Mag; /* legacy unsigned-abs counter */
@@ -631,9 +652,9 @@ void DRIVEMOTOR_App_Rx(void) {
     /*
      * Fold each wheel's controller frame into its tick totals and resolve
      * the true travel direction (DRIVEMOTOR_UpdateWheel / resolve_direction).
-     * Reset detection is now DIRECT — any drop in the per-wheel counter is a
-     * reset, so the new value is the post-reset progress (a glitch beyond one
-     * frame's kinematic limit is dropped). The publishable direction is held
+     * Counter decreases use a plausible natural-wrap delta or the post-reset
+     * remainder; every candidate is bounded at acquisition before USB gating.
+     * The publishable direction is held
      * at the old sign through a reversal until the speed byte or a second
      * reset confirms the wheel has truly turned around, so the coast ticks
      * the controller emits one frame early are never mis-signed. This
@@ -641,14 +662,17 @@ void DRIVEMOTOR_App_Rx(void) {
      * raced the controller's reset latency and corrupted left/right_ticks_
      * signed (and thus /wheel_odom + the wheel-PI loop) on every reversal.
      */
+    const uint32_t acquisition_tick = drivemotor_last_valid_tick;
     int8_t l_s8EffLeftDir = DRIVEMOTOR_UpdateWheel(
         &left_dir_filter, left_direction,
         drivemotor_psReceivedData.u8_left_speed, left_encoder_val,
-        &prev_left_encoder_val, &left_encoder_ticks, &left_ticks_signed);
+        &prev_left_encoder_val, &left_encoder_ticks, &left_ticks_signed,
+        acquisition_tick);
     int8_t l_s8EffRightDir = DRIVEMOTOR_UpdateWheel(
         &right_dir_filter, right_direction,
         drivemotor_psReceivedData.u8_right_speed, right_encoder_val,
-        &prev_right_encoder_val, &right_encoder_ticks, &right_ticks_signed);
+        &prev_right_encoder_val, &right_encoder_ticks, &right_ticks_signed,
+        acquisition_tick);
 
     /* Sign the reported speed magnitude by the CONFIRMED direction too, so
      * the host's velocity sign agrees with the signed-tick trend. */

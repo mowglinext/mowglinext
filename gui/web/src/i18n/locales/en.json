@@ -104,6 +104,7 @@
     }
   },
   "settingsHardwareBackend": {
+    "title": "Hardware backend",
     "active": "Active backend",
     "names": {
       "mowgli": "Mowgli board (STM32)",
@@ -274,7 +275,8 @@
       "ntrip": "NTRIP",
       "vesc": "VESC",
       "tfluna-front": "Front TF-Luna",
-      "tfluna-edge": "Edge TF-Luna"
+      "tfluna-edge": "Edge TF-Luna",
+      "openmower": "OpenMower bridge"
     },
     "containerStates": {
       "running": "Running",
@@ -667,6 +669,13 @@
     "baseHeadingUncertaintyTooltip": "Standard deviation (rad) of the base heading used to seed the fusion graph at charging contact. Lower = the calibrated heading is trusted more."
   },
   "diagnosticsPage": {
+    "guiHttp": "GUI HTTP",
+    "guiResponding": "Responding",
+    "rosTransport": "ROS connection",
+    "transportHealthy": "Heartbeat verified",
+    "transportChecking": "Waiting for heartbeat",
+    "transportDisconnected": "Disconnected",
+    "transportHint": "The GUI can respond while ROS is unavailable. A healthy connection does not confirm fresh sensors or mower readiness.",
     "verdictEmergency": "Emergency",
     "verdictAttention": "Attention required",
     "verdictAllGood": "All good",
@@ -983,6 +992,29 @@
     "sourceUnchanged": "Publication unchanged for {{seconds}} s",
     "lidarNoEstimate": "No estimate yet"
   },
+  "stopReason": {
+    "genericTitle": "The mower stopped",
+    "AREA_START_BLOCKED": {
+      "title": "Stopped: the mower's own position is blocked",
+      "hint": "Every pass was refused because the mower stands on a blocked spot, often right in front of the dock. Move it a metre or two and press Play: the progress is kept."
+    },
+    "AREA_NO_PROGRESS": {
+      "title": "Stopped: an area could not be mown",
+      "hint": "Several passes in a row mowed nothing new, so the area was given up. Check the map and the obstacles around it, then press Play to try again."
+    },
+    "DOCK_NAV_FAILED": {
+      "title": "Stopped: the mower could not drive back to the dock",
+      "hint": "It is standing where it stopped. Drive or carry it to the dock, or press Play to continue mowing."
+    },
+    "UNDOCK_FAILED": {
+      "title": "Stopped: the mower could not back out of the dock",
+      "hint": "Check that nothing blocks the way out of the dock, then press Play."
+    },
+    "CHARGER_FAILED": {
+      "title": "Stopped: the mower is at the dock but is not charging",
+      "hint": "Check the charging contacts and that the mower sits straight in the dock."
+    }
+  },
   "mowgliNextPage": {
     "mowerOnDockTop": "Mower on its dock — top view",
     "mowerTop": "Mower — top view",
@@ -1261,6 +1293,10 @@
     "readinessCtaDrawArea": "Draw area"
   },
   "settingsPage": {
+    "leaveTitle": "Leave without saving?",
+    "leaveBody": "Your unsaved settings will be discarded. Stay on this page to save them.",
+    "discardAndLeave": "Discard and leave",
+    "keepEditing": "Keep editing",
     "ros2Restarting": "Restarting ROS2…",
     "ros2Restarted": "ROS2 restarted",
     "ros2RestartFailed": "ROS2 restart failed",
@@ -1281,6 +1317,8 @@
     "technicalDetails": "Technical details"
   },
   "schedulePage": {
+    "weeklyOverview": "Weekly start times",
+    "startSpacingHint": "Blocks mark scheduled starts with a minimum spacing of 60 minutes. Mowing has no fixed duration.",
     "planning": "Planning",
     "soilWetBlocking": "Soil wet — scheduled mows suspended",
     "soilWet": "Soil wet",
@@ -1370,6 +1408,10 @@
     "noAreaHint": "Record a mowing area to see the live map."
   },
   "statisticsPage": {
+    "readFailed": "Mowing history could not be loaded. Retry to read it.",
+    "refreshFailed": "Mowing history could not be refreshed. Showing the last confirmed data.",
+    "retry": "Retry",
+    "loadingHistory": "Loading mowing history…",
     "statistics": "Statistics",
     "aYearOfMowing": "A year of mowing",
     "noMowingYet": "No mowing yet",
@@ -1961,7 +2003,10 @@
   "mapOffsetPanel": {
     "mapOffset": "Map Offset",
     "mapRotation": "Map Rotation",
-    "resetToNorthUp": "Reset to north-up"
+    "resetToNorthUp": "Reset to north-up",
+    "lockRotation": "Lock map rotation",
+    "unlockRotation": "Unlock map rotation",
+    "rotationLockSaveError": "Failed to save the map rotation lock"
   },
   "mapEditArea": {
     "areaTypeMowing": "Mowing Area",
@@ -3214,6 +3259,8 @@
     "boundaryClearanceDescription": "How far transit moves between locations prefer to stay from the recorded boundary. This is a soft preference, not a hard rule — transit can still cross the margin when that's the only option (e.g. right after undocking). Mowing itself is unaffected — the robot still cuts up to the true edge as configured elsewhere; only point-to-point travel is nudged back.",
     "boundaryInnerMargin": "Transit Boundary Margin",
     "boundaryInnerMarginTooltip": "Distance (m) transit paths are nudged to stay inside the recorded boundary. 0 disables this and lets transit hug or clip the recorded line, as before this setting existed.",
+    "obstacleTransitMargin": "Transit Obstacle Margin",
+    "obstacleTransitMarginTooltip": "Extra distance (m) outside a drawn obstacle's keepout band that transit paths prefer to keep. A soft preference, never a hard block. It exists because the keepout band is only the body half-width while the controller checks the whole footprint against the real object. 0 disables it. Mowing is unaffected.",
     "dockExemptRadius": "Dock Exemption Radius",
     "dockExemptRadiusTooltip": "Radius (m) around the dock pose, in every direction, exempt from the transit boundary margin above — so the dock approach carries no bias at all, not just \"never blocked\". Widen this if your dock sees a lot of GNSS drift (e.g. under a canopy). Only takes effect once a dock pose is set."
   },
@@ -4254,6 +4301,8 @@
     "Motor control": "Motor control",
     "IMU": "IMU",
     "Diagnostics": "Diagnostics",
+    "Navigation": "Navigation",
+    "Obstacles": "Obstacles",
     "Other": "Other"
   },
   "hookNotifications": {

@@ -146,6 +146,15 @@ shown for review; a date alone never proves that source code is newer.
 
 Verification reports the failing component or check, such as an unhealthy GPS
 container, missing LiDAR scans, an unexpected image, or incompatible firmware.
+The GUI container's bounded HTTP healthcheck uses `/api/health/live`, which
+answers locally even while ROS is unavailable. `/api/health/ros` reports the
+separate Foxglove transport connection and heartbeat evidence (503 until both
+are healthy); it does not establish sensor freshness or mower safety readiness.
+Diagnostics snapshots and `/api/system/update-readiness` include this transport
+status alongside their existing checks. Updater runtime components expose
+`health_status`: `not_configured` means a legacy container has no application
+probe, even when its running-process compatibility verdict is healthy. A failed
+Docker healthcheck reports unhealthy; it does not restart any service.
 When only an optional component is already unhealthy, review shows its exact
 service/check identity and offers an explicit forced installation. The updater
 samples those checks again immediately before maintenance and accepts after the
@@ -253,6 +262,39 @@ rollback started before the board was flashed, in which the previous images
 meet the same refusal from the other side. After a successful forced install
 the GUI shows a persistent "flash the mainboard firmware now" alert (Firmware
 section, ST-Link) until the board reports the new protocol.
+
+**The new host must keep the previous protocol's telemetry decodable.** The
+exception above only works if `maintenance_ready` can actually be proven
+while the new host talks to the OLD firmware — and that needs live wheel
+odometry (the stationary proof). Protocol v9 grew the odometry packet
+(17 → 19 bytes); the first v9 host dropped every v8 packet, `/wheel_odom`
+went silent, readiness reported *"Fresh firmware, behaviour and wheel
+telemetry required"* and every update-first install from v8 firmware rolled
+back (field, 2026-10-25), stranding the operator on the GUI that cannot flash
+v9. The bridge now decodes the v8 odometry layout too
+(`mowgli_hardware/legacy_odometry.hpp`), only from a board whose handshake
+declared v8, for telemetry only — `firmware_compatible` stays false and
+mowing stays blocked until the firmware is flashed.
+
+Checklist for every future protocol bump (host side):
+
+- If a packet the readiness verdict depends on changes shape (status, blade
+  status, odometry), keep the PREVIOUS protocol's layout decodable for one
+  version (move the old struct to a `Ll*V<N>` legacy decoder, dispatch on the
+  exact length, accept it only from a board that declared protocol N).
+  "One version" means back to the protocol of the **last published release**,
+  not just the previous dev bump: v1.5.0 shipped v7 while dev went v8 → v9, so
+  the v9 host accepts the identical 17-byte odometry from v7 and v8 boards
+  (`kOldestLegacyOdometryProtocolVersion`).
+- Never let a legacy decoder set `firmware_compatible` or relax any motion,
+  blade or parameter-store gate — it exists only so the update-first window
+  can prove idle, stationary and blade-off.
+- Drop the previous legacy decoder when adding the new one
+  (`kLegacyOdometryProtocolVersion + 1 == kMowgliProtocolVersion` is a
+  `static_assert`, so the bump cannot be forgotten).
+- Hardware acceptance: from the previous firmware, install the new release with
+  "install anyway" and expect a successful verification (not a rollback), then
+  flash from the new GUI.
 
 ## Installed stack, health and component versions
 
@@ -726,7 +768,9 @@ and updater binaries only when complete. All optional image variants are checked
 runs for main/dev/release tags, or by manual dispatch on a custom branch. A fork
 must enable the workflow and publish readable GHCR images and release assets.
 The separate `updater.yml` publishes exact-commit installer bootstrap binaries on
-every branch push (including documentation-only commits) and version-tag push.
+every `main`/`dev` push (including documentation-only commits) and version-tag
+push, and prunes bootstraps older than 30 days except version-tag commits and the
+current `main`/`dev` heads.
 If the asset is unavailable or CI has not finished, supported installation stops
 with an actionable error; it does not enable Watchtower as a fallback. A locally
 built `MOWGLI_UPDATER_BINARY` remains available for unpublished checkouts.
@@ -737,8 +781,10 @@ is accepted only after verifying the release exists. Software uploads its descri
 last, after the bundle and binaries, without overwriting firmware assets or an
 existing deployment. Development/custom snapshots use prereleases.
 The picker returns up to 30 deployments, scanning at most 1,000
-release headers. Hitting the scan limit reports an error. Publication and storage
-retention remain maintainer responsibilities. HTTPS and trusted repository
+release headers (newest first). A stable scan that fills the window keeps the
+production releases it found; it reports an error only when the window holds none.
+Clients up to v1.6.0 fail the whole scan at the limit, so the repository must stay
+under 1,000 releases: that is what the bootstrap pruning above guarantees. HTTPS and trusted repository
 configuration establish provenance; SHA-256 checks detect corruption, not an
 independent signing authority.
 

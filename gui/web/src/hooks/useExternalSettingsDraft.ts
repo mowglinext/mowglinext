@@ -6,6 +6,16 @@ import type {SetStateAction} from "react";
  */
 export function useExternalSettingsDraft<T extends object>() {
     const [draft, setState] = useState<T>({} as T);
+    const [inputValues, setInputValues] = useState<Record<string, string>>({});
+    const [pendingSaves, setPendingSaves] = useState(0);
+    const setInputValue = useCallback((key: string, value: string) => {
+        setInputValues(previous => {
+            const next = {...previous};
+            if (value) next[key] = value;
+            else delete next[key];
+            return next;
+        });
+    }, []);
     const current = useRef(draft);
     const revisions = useRef(new Map<keyof T, number>());
     const acknowledged = useRef(new Map<keyof T, number>());
@@ -26,6 +36,7 @@ export function useExternalSettingsDraft<T extends object>() {
     }, []);
 
     const saveDraft = useCallback((persist: (submitted: T) => Promise<boolean>): Promise<boolean> => {
+        setPendingSaves(count => count + 1);
         const snapshot = {...current.current};
         const sentRevisions = new Map(revisions.current);
         const task = tail.current.then(async () => {
@@ -50,8 +61,14 @@ export function useExternalSettingsDraft<T extends object>() {
         });
         // A rejected request must not poison the order of later retries.
         tail.current = task.then(() => undefined, () => undefined);
-        return task;
+        return task.finally(() => setPendingSaves(count => count - 1));
     }, [setDraft]);
 
-    return {draft, setDraft, saveDraft};
+    const revertDraft = useCallback(() => {
+        setDraft({} as T);
+        setInputValues({});
+    }, [setDraft]);
+    const dirtyCount = new Set([...Object.keys(draft), ...Object.keys(inputValues)]).size;
+    return {draft, setDraft, saveDraft, revertDraft, dirtyCount, pending: pendingSaves > 0,
+        inputs: {values: inputValues, setValue: setInputValue}};
 }

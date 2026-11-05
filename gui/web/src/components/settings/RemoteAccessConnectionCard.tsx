@@ -1,4 +1,4 @@
-import {useState} from "react";
+import {useSettingsInput} from "../../hooks/useSettingsInput.ts";
 import {Button, Card, Form, Input, Space, Switch, Typography} from "antd";
 import {useTranslation} from "react-i18next";
 import type {RemoteAccessSettings, RemoteAccessSettingsUpdate} from "../../types/remoteAccess.ts";
@@ -19,7 +19,7 @@ interface RemoteAccessConnectionCardProps {
  */
 export function RemoteAccessConnectionCard({settings, draft, onChange}: RemoteAccessConnectionCardProps) {
     const {t} = useTranslation();
-    const [keyInput, setKeyInput] = useState("");
+    const [keyInput, setKeyInput] = useSettingsInput("authKey");
 
     const hostname = draft.hostname ?? settings.hostname;
     const serveHttps = draft.serveHttps ?? settings.serveHttps;

@@ -31,7 +31,7 @@ import {rasterizeMowProgress} from "../utils/mowProgress.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
 import {computeBatteryPercent, hasBatteryReading} from "../utils/battery.ts";
 import {deriveGpsStatus} from "../utils/gpsStatus.ts";
-import {deriveIsMoving} from "../utils/mowerMotion.ts";
+import {deriveIsMoving, isSessionActive} from "../utils/mowerMotion.ts";
 import {deriveChargeHold} from "../utils/chargeHold.ts";
 
 import {GlassCard} from "../concept/components/GlassCard.tsx";
@@ -43,6 +43,7 @@ import type {MiniArea, MiniProgress} from "../concept/components/LiveMapMini.tsx
 import {ProgressRibbon} from "../concept/components/ProgressRibbon.tsx";
 import {SoilWetBanner} from "../components/dashboard/SoilWetBanner.tsx";
 import {DigEscalationBanner} from "../components/dashboard/DigEscalationBanner.tsx";
+import {StopReasonBanner} from "../components/dashboard/StopReasonBanner.tsx";
 import {isCoverageScanPaused} from "../components/dashboard/scanPaused.ts";
 import {WeatherChip} from "../concept/components/WeatherChip.tsx";
 import {useWeather} from "../hooks/useWeather.ts";
@@ -128,6 +129,9 @@ function useMowerData(backend?: string) {
     rainKnown: status.rain_detected !== undefined,
     isMoving,
     scanPaused,
+    stopReason: highLevelStatus.stop_reason ?? "",
+    sessionActive: isSessionActive(stateNum),
+    stopDetail: highLevelStatus.stop_detail ?? "",
     toolWidth: (settings?.tool_width as number | undefined) ?? 0.18,
     batteryFullPercent: (settings?.battery_full_percent as number | undefined) ?? 95,
     batteryManualResumePercent: (settings?.battery_manual_resume_percent as number | undefined) ?? 30,
@@ -410,6 +414,8 @@ export const MowgliNextPage = () => {
         {/* Repeat-dig escalation: hardware_bridge halted the mission — the
             operator needs to know why nothing is moving and how to clear it */}
         <DigEscalationBanner variants={riseFade}/>
+        <StopReasonBanner reason={data.stopReason} detail={data.stopDetail}
+                          sessionActive={data.sessionActive} variants={riseFade}/>
 
         {/* IrriSense: the garden is wet — warn before anyone starts a mow */}
         <SoilWetBanner variants={riseFade}/>

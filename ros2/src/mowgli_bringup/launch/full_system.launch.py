@@ -62,6 +62,8 @@ from robot_config_util import (  # noqa: E402
     chassis_footprint,
     dig_proposal_radius,
     dig_skip_radius,
+    dock_body_extents,
+    dock_no_pivot_distance,
     keepout_obstacle_margin,
     load_robot_params,
     resolve_lidar_enabled,
@@ -409,6 +411,12 @@ def generate_launch_description() -> LaunchDescription:
             # replaces the pending dig KEEPOUT, which blocked planning from the
             # robot's own pose (START_OCCUPIED, 2026-09-17).
             {"dig_skip_radius_m": dig_skip_radius(robot_params)},
+            {"dock_no_pivot_distance_m": dock_no_pivot_distance(robot_params)},
+            {"dock_body_half_width_m": float(robot_params.get("dock_body_width_m", 0.55)) / 2.0},
+            {
+                "dock_body_front_m": dock_body_extents(robot_params)[1]
+                - dock_body_extents(robot_params)[0]
+            },
             # Area-recording boundary resolution. Both were hardcoded in
             # main_tree.xml (0.2 m Douglas-Peucker tolerance, 2 Hz sampling),
             # which cost a field recording all but 24 vertices of a 38 m
@@ -560,7 +568,8 @@ def generate_launch_description() -> LaunchDescription:
             {"dock_pose_x": float(robot_params.get("dock_pose_x", 0.0))},
             {"dock_pose_y": float(robot_params.get("dock_pose_y", 0.0))},
             {"dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0))},
-            {"dock_body_length_m": float(robot_params.get("dock_body_length_m", 0.80))},
+            {"dock_body_rear_m": dock_body_extents(robot_params)[0]},
+            {"dock_body_length_m": dock_body_extents(robot_params)[1]},
             {"dock_body_width_m": float(robot_params.get("dock_body_width_m", 0.55))},
             # Bypass-arc planner geometry — lifted from physical/operational
             # sections of mowgli_robot.yaml so the cleaning-robot detour
@@ -616,6 +625,10 @@ def generate_launch_description() -> LaunchDescription:
             # mowgli_robot.yaml for why this must stay soft, never lethal.
             {"boundary_inner_margin_m": float(
                 robot_params.get("boundary_inner_margin_m", 0.20))},
+            # Soft transit margin around drawn obstacles (mowglinext#975): the
+            # obstacle counterpart of boundary_inner_margin_m — soft, never lethal.
+            {"obstacle_transit_margin_m": float(
+                robot_params.get("obstacle_transit_margin_m", 0.30))},
             {"dock_inner_margin_exempt_radius_m": float(
                 robot_params.get("dock_inner_margin_exempt_radius_m", 2.5))},
             # tool_width is the SINGLE source of truth (mowgli_robot.yaml) for
@@ -848,6 +861,10 @@ def generate_launch_description() -> LaunchDescription:
     # hardcode the robot's width"). Respawned: in the no-LiDAR variant the
     # collision monitor reads this node's cloud, so a crash must heal itself.
     fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint(robot_params)
+    # The bare chassis + undock reverse feed the docked-neighbour exception
+    # (two mowers on side-by-side docks), which asks whether the BODIES can
+    # touch — a question the margin-grown block above cannot answer.
+    fleet_body_front_m, fleet_body_rear_m, fleet_body_half_width_m = chassis_footprint(robot_params, margin=0.0)
     fleet_peer_obstacles_node = Node(
         package="mowgli_bringup",
         executable="fleet_peer_obstacles.py",
@@ -860,6 +877,10 @@ def generate_launch_description() -> LaunchDescription:
             "chassis_front_m": float(fleet_front_m),
             "chassis_rear_m": float(fleet_rear_m),
             "chassis_half_width_m": float(fleet_half_width_m),
+            "body_front_m": float(fleet_body_front_m),
+            "body_rear_m": float(fleet_body_rear_m),
+            "body_half_width_m": float(fleet_body_half_width_m),
+            "undock_distance_m": float(robot_params.get("undock_distance", 1.5)),
         }],
     )
 

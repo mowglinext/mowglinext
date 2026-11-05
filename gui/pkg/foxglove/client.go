@@ -19,6 +19,8 @@ const (
 	maxReconnectDelay     = 30 * time.Second
 	callServiceTimeout    = 10 * time.Second
 	defaultWriteTimeout   = 5 * time.Second
+	defaultPingInterval   = 5 * time.Second
+	defaultPongTimeout    = 15 * time.Second
 )
 
 // subscriberEntry associates a caller-supplied ID with its callback.
@@ -114,10 +116,16 @@ type Client struct {
 
 	connected atomic.Bool
 	done      chan struct{}
+	startOnce sync.Once
+	closeOnce sync.Once
+	stopped   chan struct{}
+	heartbeat atomic.Pointer[connectionHeartbeat]
 
 	reconnectDelay time.Duration
 	maxReconnect   time.Duration
 	writeTimeout   time.Duration
+	pingInterval   time.Duration
+	pongTimeout    time.Duration
 
 	subIDCounter  atomic.Uint32
 	callIDCounter atomic.Uint32
@@ -177,11 +185,15 @@ func NewClient(url string) *Client {
 		pendingParam:   make(map[string]chan []Parameter),
 		advertised:     make(map[string]uint32),
 		done:           make(chan struct{}),
+		stopped:        make(chan struct{}),
 		reconnectDelay: defaultReconnectDelay,
 		maxReconnect:   maxReconnectDelay,
 		writeTimeout:   defaultWriteTimeout,
+		pingInterval:   defaultPingInterval,
+		pongTimeout:    defaultPongTimeout,
 		dialer: websocket.Dialer{
-			Subprotocols: []string{"foxglove.sdk.v1"},
+			Subprotocols:     []string{"foxglove.sdk.v1"},
+			HandshakeTimeout: 10 * time.Second,
 		},
 	}
 }
@@ -195,54 +207,50 @@ func (c *Client) Connected() bool {
 // Connect starts the reconnect loop. It never returns an error — callers can
 // watch Connected() for state changes.
 func (c *Client) Connect(ctx context.Context) error {
-	conn, _, err := c.dialer.DialContext(ctx, c.url, nil)
-	if err != nil {
-		logrus.WithError(err).WithField("url", c.url).
-			Warn("foxglove: initial dial failed, will keep retrying")
-		go c.reconnectLoop(ctx)
-		return nil
-	}
-
-	c.connMu.Lock()
-	c.conn = conn
-	c.connMu.Unlock()
-	c.connected.Store(true)
-
-	logrus.WithField("url", c.url).Info("foxglove: connected")
-
-	go c.readPump()
-	go c.reconnectLoop(ctx)
-
+	c.startOnce.Do(func() {
+		runCtx, cancel := context.WithCancel(ctx)
+		// Close must also cancel an in-progress handshake, including the first dial.
+		go func() {
+			select {
+			case <-c.done:
+				cancel()
+			case <-runCtx.Done():
+			}
+		}()
+		conn, _, err := c.dialer.DialContext(runCtx, c.url, nil)
+		if err != nil {
+			logrus.WithError(err).WithField("url", c.url).
+				Warn("foxglove: initial dial failed, will keep retrying")
+		} else if !c.installConnection(runCtx, conn) {
+			conn = nil
+		}
+		go func() {
+			defer cancel()
+			defer close(c.stopped)
+			c.reconnectLoop(runCtx, conn)
+		}()
+	})
 	return nil
 }
 
 // Close shuts down the connection and stops all background goroutines.
 func (c *Client) Close() error {
-	select {
-	case <-c.done:
-		return nil
-	default:
+	var err error
+	c.closeOnce.Do(func() {
 		close(c.done)
-	}
-
-	c.connMu.Lock()
-	defer c.connMu.Unlock()
-
-	if c.conn == nil {
-		return nil
-	}
-
-	err := c.conn.WriteControl(
-		websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-		time.Now().Add(c.writeTimeout),
-	)
-	closeErr := c.conn.Close()
-	c.connected.Store(false)
-
-	if closeErr != nil {
-		return fmt.Errorf("foxglove: close: %w", closeErr)
-	}
+		c.connMu.Lock()
+		defer c.connMu.Unlock()
+		if c.conn == nil {
+			return
+		}
+		// Closing the socket interrupts both ReadMessage and any heartbeat write.
+		// No new connection may be installed once done is closed.
+		err = c.conn.Close()
+		c.connected.Store(false)
+		if heartbeat := c.heartbeat.Load(); heartbeat != nil {
+			heartbeat.connected.Store(false)
+		}
+	})
 	return err
 }
 
@@ -412,7 +420,10 @@ func (c *Client) Publish(topic string, msg interface{}, schemaName ...string) er
 // ctx is cancelled. The request is JSON-marshalled, then CDR-encoded using the
 // service's request schema. The CDR response is deserialized back to JSON.
 func (c *Client) CallService(ctx context.Context, service string, args interface{}, serviceType ...string) (json.RawMessage, error) {
-	if !c.connected.Load() {
+	c.connMu.Lock()
+	conn := c.conn
+	c.connMu.Unlock()
+	if conn == nil || !c.connected.Load() {
 		return nil, fmt.Errorf("foxglove: CallService %s: not connected", service)
 	}
 
@@ -463,7 +474,7 @@ func (c *Client) CallService(ctx context.Context, service string, args interface
 	copy(buf[13:13+len(encoding)], encoding)
 	copy(buf[13+len(encoding):], cdrData)
 
-	err = c.writeMessage(websocket.BinaryMessage, buf)
+	err = c.writeMessageOn(conn, websocket.BinaryMessage, buf)
 	if err != nil {
 		return nil, fmt.Errorf("foxglove: CallService send: %w", err)
 	}
@@ -515,10 +526,16 @@ func (c *Client) writeJSON(v interface{}) error {
 // terminal; close the socket so readPump triggers the existing reconnect and
 // desired subscriptions are replayed on the replacement connection.
 func (c *Client) writeMessage(messageType int, data []byte) error {
+	return c.writeMessageOn(nil, messageType, data)
+}
+
+// A service request belongs to the connection that supplied its service ID.
+// Never send it on a replacement transport after serialization/registration.
+func (c *Client) writeMessageOn(expected *websocket.Conn, messageType int, data []byte) error {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
-	if c.conn == nil {
-		return fmt.Errorf("foxglove: write: no connection")
+	if c.conn == nil || (expected != nil && c.conn != expected) {
+		return fmt.Errorf("foxglove: write: connection unavailable or replaced")
 	}
 	if err := c.conn.SetWriteDeadline(time.Now().Add(c.writeTimeout)); err != nil {
 		_ = c.conn.Close()
@@ -531,46 +548,50 @@ func (c *Client) writeMessage(messageType int, data []byte) error {
 	return err
 }
 
-func (c *Client) readPump() {
-	c.connMu.Lock()
-	conn := c.conn
-	c.connMu.Unlock()
-	if conn == nil {
-		return
-	}
+func (c *Client) readPump(ctx context.Context, conn *websocket.Conn, heartbeat *connectionHeartbeat) {
+	stop := make(chan struct{})
+	probeStopped := make(chan struct{})
 	defer func() {
+		close(stop)
+		_ = conn.Close()
+		<-probeStopped // The old socket's probe must exit before the next dial.
 		c.connMu.Lock()
 		if c.conn == conn {
-			_ = conn.Close()
-			// Finish calls from this transport before making reconnect visible.
-			// Otherwise a replacement can register a call in the gap and have
-			// its response slot failed by the previous read pump's cleanup.
+			// Complete old calls before publishing disconnection. No old reader or
+			// pong callback can run after this pump returns to the reconnect loop.
 			c.failPendingCalls("connection to foxglove_bridge lost before the response arrived")
 			c.conn = nil
+			heartbeat.connected.Store(false)
 			c.connected.Store(false)
 		}
 		c.connMu.Unlock()
 		logrus.Info("foxglove: readPump exiting")
 	}()
-
-	for {
-		select {
-		case <-c.done:
-			return
-		default:
+	conn.SetReadDeadline(time.Now().Add(c.pongTimeout))
+	conn.SetPongHandler(func(data string) error {
+		if data != heartbeatPayload {
+			return nil
 		}
-
+		now := time.Now()
+		heartbeat.lastPong.Store(&now)
+		return conn.SetReadDeadline(now.Add(c.pongTimeout))
+	})
+	go func() {
+		defer close(probeStopped)
+		c.probeConnection(ctx, conn, stop)
+	}()
+	for {
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
-			select {
-			case <-c.done:
-				return
-			default:
-				logrus.WithError(err).Warn("foxglove: read error, triggering reconnect")
-				return
+			if ctx.Err() == nil {
+				select {
+				case <-c.done:
+				default:
+					logrus.WithError(err).Warn("foxglove: read error, triggering reconnect")
+				}
 			}
+			return
 		}
-
 		switch msgType {
 		case websocket.TextMessage:
 			c.dispatchText(data)
@@ -884,86 +905,93 @@ func (c *Client) handleServiceCallResponse(data []byte) {
 // Reconnect loop
 // ---------------------------------------------------------------------------
 
-func (c *Client) reconnectLoop(ctx context.Context) {
-	delay := c.reconnectDelay
+// installConnection publishes a fully reset transport, unless shutdown won
+// the race with the dial. The reconnect loop is the sole owner of readers.
+func (c *Client) installConnection(ctx context.Context, conn *websocket.Conn) bool {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+	select {
+	case <-c.done:
+		_ = conn.Close()
+		return false
+	default:
+	}
+	if ctx.Err() != nil {
+		_ = conn.Close()
+		return false
+	}
+	heartbeat := &connectionHeartbeat{}
+	heartbeat.connected.Store(true)
+	c.conn = conn
+	c.heartbeat.Store(heartbeat)
+	c.connected.Store(true)
+	return true
+}
 
+func (c *Client) resetTransportState() {
+	c.chanMu.Lock()
+	c.channels = make(map[string]*channelState)
+	c.channelsByID = make(map[uint32]*channelState)
+	c.chanMu.Unlock()
+	c.svcDefMu.Lock()
+	c.services = make(map[string]*serviceState)
+	c.servicesByID = make(map[uint32]*serviceState)
+	c.svcDefMu.Unlock()
+	c.advMu.Lock()
+	c.advertised = make(map[string]uint32)
+	c.advMu.Unlock()
+	c.serverCapabilities = nil
+	c.subMu.RLock()
+	c.pendingMu.Lock()
+	for topic, entries := range c.subscribers {
+		if len(entries) > 0 {
+			c.pendingTopics[topic] = true
+		}
+	}
+	c.pendingMu.Unlock()
+	c.subMu.RUnlock()
+}
+
+func (c *Client) reconnectLoop(ctx context.Context, conn *websocket.Conn) {
+	delay := c.reconnectDelay
 	for {
-		for c.connected.Load() {
-			select {
-			case <-c.done:
-				return
-			case <-ctx.Done():
-				return
-			case <-time.After(200 * time.Millisecond):
+		if conn != nil {
+			started := time.Now()
+			heartbeat := c.heartbeat.Load()
+			c.readPump(ctx, conn, heartbeat)
+			// A handshake alone is not recovery. Repeated silent/half-open sockets
+			// retain exponential backoff; reset only after sustained heartbeat evidence.
+			if pong := heartbeat.lastPong.Load(); pong != nil && pong.Sub(started) >= c.pongTimeout {
+				delay = c.reconnectDelay
 			}
 		}
-
+		timer := time.NewTimer(delay)
 		select {
 		case <-c.done:
+			timer.Stop()
 			return
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		default:
+		case <-timer.C:
 		}
-
-		logrus.WithFields(logrus.Fields{
-			"url":   c.url,
-			"delay": delay,
-		}).Info("foxglove: attempting reconnect")
-
-		conn, _, err := c.dialer.DialContext(ctx, c.url, nil)
+		logrus.WithFields(logrus.Fields{"url": c.url, "delay": delay}).Info("foxglove: attempting reconnect")
+		var err error
+		conn, _, err = c.dialer.DialContext(ctx, c.url, nil)
 		if err != nil {
-			logrus.WithError(err).WithField("retry_in", delay).
-				Warn("foxglove: reconnect failed")
-			select {
-			case <-c.done:
+			logrus.WithError(err).Warn("foxglove: reconnect failed")
+		} else {
+			c.resetTransportState()
+			if !c.installConnection(ctx, conn) {
 				return
-			case <-ctx.Done():
-				return
-			case <-time.After(delay):
 			}
+			logrus.WithField("url", c.url).Info("foxglove: reconnected")
+		}
+		if delay < c.maxReconnect {
 			delay *= 2
 			if delay > c.maxReconnect {
 				delay = c.maxReconnect
 			}
-			continue
 		}
-
-		c.connMu.Lock()
-		c.conn = conn
-		c.connMu.Unlock()
-		c.connected.Store(true)
-
-		// Clear stale state — server will re-advertise channels and services.
-		c.chanMu.Lock()
-		c.channels = make(map[string]*channelState)
-		c.channelsByID = make(map[uint32]*channelState)
-		c.chanMu.Unlock()
-
-		c.svcDefMu.Lock()
-		c.services = make(map[string]*serviceState)
-		c.servicesByID = make(map[uint32]*serviceState)
-		c.svcDefMu.Unlock()
-
-		c.advMu.Lock()
-		c.advertised = make(map[string]uint32)
-		c.advMu.Unlock()
-
-		// Mark all currently subscribed topics as pending so they get
-		// re-subscribed when channels are re-advertised.
-		c.subMu.RLock()
-		c.pendingMu.Lock()
-		for topic, entries := range c.subscribers {
-			if len(entries) > 0 {
-				c.pendingTopics[topic] = true
-			}
-		}
-		c.pendingMu.Unlock()
-		c.subMu.RUnlock()
-
-		logrus.WithField("url", c.url).Info("foxglove: reconnected")
-
-		go c.readPump()
-		delay = c.reconnectDelay
 	}
 }

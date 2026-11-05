@@ -37,9 +37,12 @@
 
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_behavior/stop_reason.hpp"
 #include <gtest/gtest.h>
 
 using mowgli_behavior::BTContext;
+using mowgli_behavior::clearStopReason;
+using mowgli_behavior::recordStopReason;
 using mowgli_behavior::withLiveStatusFields;
 using mowgli_interfaces::msg::HighLevelStatus;
 
@@ -248,4 +251,69 @@ TEST(HighLevelStatusSnapshot, LiveFieldsNeverFallBackToCachedValues)
   EXPECT_FLOAT_EQ(refreshed.gps_quality_percent, 0.0f);
   EXPECT_FLOAT_EQ(refreshed.battery_percent, ctx.battery_percent);
   EXPECT_FALSE(refreshed.is_charging);
+}
+
+// The failure states the tree publishes (AREA_UNREACHABLE, NAV_TO_DOCK_FAILED, ...) are replaced by
+// IDLE within seconds. The reason the mower stopped lives in the context, so the republish carries
+// it for as long as the context holds it, whatever the cached state is.
+TEST(HighLevelStatusSnapshot, StopReasonSurvivesTheStateThatWasPublishedOnce)
+{
+  HighLevelStatus idle;
+  idle.state = HighLevelStatus::HIGH_LEVEL_STATE_IDLE;
+  idle.state_name = "IDLE";
+  BTContext ctx;
+  recordStopReason(ctx, mowgli_behavior::stop_reason::kAreaStartBlocked, "Area 3 blocked", false);
+
+  const HighLevelStatus refreshed = withLiveStatusFields(idle, ctx);
+
+  EXPECT_EQ(refreshed.stop_reason, "AREA_START_BLOCKED");
+  EXPECT_EQ(refreshed.stop_detail, "Area 3 blocked");
+}
+
+TEST(HighLevelStatusSnapshot, NothingIsReportedWhenThereIsNoStopReason)
+{
+  BTContext ctx;
+
+  const HighLevelStatus refreshed = withLiveStatusFields(chargingSnapshot(), ctx);
+
+  EXPECT_TRUE(refreshed.stop_reason.empty());
+  EXPECT_TRUE(refreshed.stop_detail.empty());
+}
+
+TEST(StopReason, TheFirstAreaFailureStaysTheHeadlineUnlessOverwritten)
+{
+  BTContext ctx;
+  recordStopReason(ctx, mowgli_behavior::stop_reason::kAreaNoProgress, "Area 1 stalled", false);
+  recordStopReason(ctx, mowgli_behavior::stop_reason::kAreaStartBlocked, "Area 2 blocked", false);
+  EXPECT_EQ(ctx.stop_reason, "AREA_NO_PROGRESS");
+  EXPECT_EQ(ctx.stop_detail, "Area 1 stalled");
+}
+
+TEST(StopReason, ADockFailureReplacesTheAreaReasonButKeepsItsDetail)
+{
+  BTContext ctx;
+  recordStopReason(ctx, mowgli_behavior::stop_reason::kAreaStartBlocked, "Area 3 blocked", false);
+  recordStopReason(ctx, mowgli_behavior::stop_reason::kDockNavFailed, "Cannot reach dock.", true);
+  EXPECT_EQ(ctx.stop_reason, "DOCK_NAV_FAILED");
+  EXPECT_EQ(ctx.stop_detail, "Cannot reach dock. Earlier: Area 3 blocked");
+}
+
+TEST(StopReason, RepeatingTheSameReasonDoesNotStackDetails)
+{
+  BTContext ctx;
+  recordStopReason(ctx, mowgli_behavior::stop_reason::kDockNavFailed, "Cannot reach dock.", true);
+  recordStopReason(ctx, mowgli_behavior::stop_reason::kDockNavFailed, "Cannot reach dock.", true);
+  EXPECT_EQ(ctx.stop_detail, "Cannot reach dock.");
+}
+
+TEST(StopReason, AnEmptyReasonIsIgnoredAndClearEmptiesBoth)
+{
+  BTContext ctx;
+  recordStopReason(ctx, "", "no code", true);
+  EXPECT_TRUE(ctx.stop_reason.empty());
+  EXPECT_TRUE(ctx.stop_detail.empty());
+  recordStopReason(ctx, mowgli_behavior::stop_reason::kChargerFailed, "No charge.", true);
+  clearStopReason(ctx);
+  EXPECT_TRUE(ctx.stop_reason.empty());
+  EXPECT_TRUE(ctx.stop_detail.empty());
 }

@@ -216,6 +216,16 @@ if(BUILD_TESTING)
   ament_add_ros_isolated_gtest(test_mqtt_bridge
     test/test_mqtt_bridge.cpp
   )
+
+  # ROS-free: the bridge's send-on-change / deadband / diagnostics-merge policies.
+  ament_add_gtest(test_mqtt_publish_policy
+    test/test_mqtt_publish_policy.cpp
+  )
+  target_include_directories(test_mqtt_publish_policy
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(test_mqtt_publish_policy
+    ${diagnostic_msgs_TARGETS}
+  )
   ament_add_ros_isolated_gtest(test_mqtt_map_poll
     test/test_mqtt_map_poll.cpp
   )

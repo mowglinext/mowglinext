@@ -1747,7 +1747,10 @@ def test_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
 def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
     """Without a LiDAR nothing else can see a peer, so a dedicated fleet_layer
     (an ObstacleLayer under a name CI's obstacle/static disjointness guard does
-    not police) feeds BOTH costmaps."""
+    not police) feeds BOTH costmaps. Both are RecentObstacleLayer: with no
+    scan to raytrace, a plain ObstacleLayer keeps every mark forever — a moving
+    peer leaves a lethal trail, and a docked neighbour the fleet node stops
+    publishing (side-by-side docks, 2026-10-28) keeps blocking the undock."""
     merged = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml("nav2_params_no_lidar.yaml"))
     for cm in ("local_costmap", "global_costmap"):
         params = merged[cm][cm]["ros__parameters"]
@@ -1755,9 +1758,9 @@ def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
         assert len(found) == 1, f"{cm}: expected exactly one fleet source"
         layer, _, src = found[0]
         assert layer == "fleet_layer"
-        expected = ("mowgli_nav2_plugins::RecentObstacleLayer" if cm == "global_costmap"
-                    else "nav2_costmap_2d::ObstacleLayer")
-        assert params[layer]["plugin"] == expected
+        assert params[layer]["plugin"] == "mowgli_nav2_plugins::RecentObstacleLayer", (
+            f"{cm}: a marking-only fleet layer must forget marks the cloud no longer carries"
+        )
         assert src["marking"] is True and src["clearing"] is False
         plugins = params["plugins"]
         assert plugins.index("fleet_layer") < plugins.index("inflation_layer"), (
@@ -1765,9 +1768,7 @@ def test_no_lidar_variant_marks_fleet_peers_in_both_costmaps() -> None:
         )
     local = merged["local_costmap"]["local_costmap"]["ros__parameters"]["fleet_layer"]
     glob = merged["global_costmap"]["global_costmap"]["ros__parameters"]["fleet_layer"]
-    assert {k: v for k, v in local.items() if k != "plugin"} == {
-        k: v for k, v in glob.items() if k != "plugin"
-    }, "local/global fleet observation configurations drifted apart"
+    assert local == glob, "local/global fleet layer configurations drifted apart"
 
 
 def test_no_lidar_collision_monitor_stops_for_fleet_peers_without_a_stale_stop() -> None:

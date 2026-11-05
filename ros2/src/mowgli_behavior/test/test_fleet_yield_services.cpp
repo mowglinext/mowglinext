@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <thread>
 
 #include <gtest/gtest.h>
@@ -397,7 +398,8 @@ TEST_F(FleetYieldServices, ChargerTelemetryRevokesBeforeStatusCanReturnIdle)
 
 TEST_F(FleetYieldServices, PowerChargerRevokesReadyHoldEvenWithInvalidVoltageAndNoStatusUpdate)
 {
-  for (float voltage : {0.0f, 1.0f})
+  ctx->restored_mow_charge_check_pending = true;
+  for (float voltage : {std::numeric_limits<float>::quiet_NaN(), 0.0f, 1.0f})
   {
     ctx->current_command = 1;
     status(2, "MOWING");
@@ -415,6 +417,8 @@ TEST_F(FleetYieldServices, PowerChargerRevokesReadyHoldEvenWithInvalidVoltageAnd
               return ctx->latest_power.charger_enabled;
             });
     EXPECT_FALSE(ctx->fleet_yield.held());  // Revoke in the subscriber, before any request.
+    EXPECT_FALSE(ctx->power_sample_received);
+    EXPECT_TRUE(ctx->restored_mow_charge_check_pending);
     EXPECT_EQ(ctx->current_command, 8);
     EXPECT_EQ(call(Request::RESUME, epoch, "client-a").result, Response::INELIGIBLE);
     EXPECT_EQ(ctx->current_command, 8);

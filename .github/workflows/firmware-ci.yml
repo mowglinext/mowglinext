@@ -47,6 +47,9 @@ jobs:
       - name: Test F401 USB recovery and stale command isolation
         run: python3 firmware/scripts/test_usb_recovery.py
 
+      - name: Test odometry acquisition time through USB send-gate drops
+        run: python3 firmware/scripts/test_odometry_time.py
+
       - name: Test charger state machine
         run: python3 firmware/scripts/test_charger.py
 

@@ -40,4 +40,12 @@ services:
       - /etc/localtime:/etc/localtime:ro
     depends_on:
       - mowgli
+    # HTTP liveness only: ROS readiness is reported separately at /api/health/ros.
+    # Docker reports unhealthy; no restart watchdog is attached to this probe.
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--noproxy", "*", "--connect-timeout", "1", "--max-time", "2", "http://127.0.0.1:4006/api/health/live"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped

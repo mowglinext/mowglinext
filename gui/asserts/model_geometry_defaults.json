@@ -10,7 +10,9 @@
     "YardForceSA650": {
       "chassis_z_offset": 0
     },
-    "BiltemaRM1000": {},
+    "BiltemaRM1000": {
+      "chassis_z_offset": -0.06
+    },
     "YardForce900ECO": {
       "chassis_z_offset": 0
     },

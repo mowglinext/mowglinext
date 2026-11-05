@@ -102,9 +102,22 @@ export const MOWER_MODELS: MowerModel[] = [
         label: "mowerModels.BiltemaRM1000.label",
         description: "mowerModels.BiltemaRM1000.description",
         appearance: {style: "rm1000", dockAppearance: "styled"},
-        // Provisional caster position only; retain the user's other dimensions
-        // and calibration until RM1000 hardware measurements are available.
-        defaults: {caster_x_offset: 0.35},
+        // Owner measurements on a Biltema RM1000, 2026-10-25 (metres, radii not
+        // diameters). Body, wheels, casters, blade and the dock illustration only:
+        // battery, sensor mounts, mass and encoder calibration were not measured, so
+        // applying this preset keeps the user's values for them. The caster X of
+        // 0.30 m replaces the earlier provisional 0.35 m guess.
+        defaults: {
+            wheel_radius: 0.1, wheel_track: 0.325, wheel_x_offset: 0.0, wheel_width: 0.036,
+            caster_x_offset: 0.30, caster_radius: 0.045, caster_track: 0.215,
+            chassis_length: 0.57, chassis_width: 0.40, chassis_height: 0.22,
+            chassis_center_x: 0.13, chassis_z_offset: -0.06,
+            // Blade centre 0.06 m ahead of the chassis centre, i.e. 0.19 m from base_link.
+            blade_x_offset: 0.06, blade_y_offset: 0.0, blade_radius: 0.09, tool_width: 0.18,
+            // Dock artwork footprint (GUI only, no physical effect).
+            dock_visual_length: 0.63, dock_visual_width: 0.46,
+            dock_visual_x_offset: 0.02, dock_visual_y_offset: 0.0,
+        },
     },
     {
         value: "YardForce900ECO",

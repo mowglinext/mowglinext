@@ -803,6 +803,16 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  # ---- test_area_progress ---- (area_progress.hpp, pure header, no ROS)
+  ament_add_gtest(test_area_progress
+    test/test_area_progress.cpp
+  )
+
+  target_include_directories(test_area_progress PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_action_outcome ----
   ament_add_gtest(test_action_outcome
     test/test_action_outcome.cpp
@@ -885,6 +895,7 @@ if(BUILD_TESTING)
   # current_command + resume cursor) and only EndSession on a dead charger.
   ament_add_ros_isolated_gtest(test_battery_critical_resume
     test/test_battery_critical_resume.cpp
+    src/docking_nodes.cpp
     $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
     $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
     $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
@@ -902,6 +913,7 @@ if(BUILD_TESTING)
 
   target_link_libraries(test_battery_critical_resume
     ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}

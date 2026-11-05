@@ -27,16 +27,26 @@
  * simply logs every publish/subscribe call at DEBUG level.
  *
  * ROS2 → MQTT
- *   /hardware_bridge/status              → <prefix>/status             (JSON)
- *   /hardware_bridge/power               → <prefix>/power              (JSON)
- *   /hardware_bridge/emergency           → <prefix>/emergency          (JSON)
+ * Publish cadence (mqtt_publish_policy.hpp; measured flood it fixes: 2026-10-25)
+ *   state topics    — on change (payload differs) + heartbeat every state_heartbeat_period_s;
+ *                     status/power/rtk_status additionally capped at publish_rate.
+ *   position topics — when moved > position_deadband_m or turned > 5 deg, else a heartbeat
+ *                     every position_heartbeat_period_s; capped at publish_rate.
+ *   diagnostics     — merged latest-per-name view every diagnostics_publish_period_s, and
+ *                     early (at most once a second) when any level changes.
+ *
+ *   /hardware_bridge/status              → <prefix>/status             (JSON) — state topic
+ *   /hardware_bridge/power               → <prefix>/power              (JSON) — state topic
+ *   /hardware_bridge/emergency           → <prefix>/emergency          (JSON) — state topic, a
+ *                                           change is published the moment it arrives (no cap)
  *   /wheel_odom                          → <prefix>/position   (JSON: x, y, theta, odom frame) —
- * rate-limited /diagnostics                         → <prefix>/diagnostics        (JSON summary)
- *   /behavior_tree_node/high_level_status → <prefix>/high_level_status (JSON) — retained;
- *                                           subscription watchdog below (mowglinext#644)
- *   /gps/fix                             → <prefix>/gps        (JSON: lat/lon/alt) — rate-limited
+ *                                           position topic
+ *   /diagnostics (all publishers merged) → <prefix>/diagnostics        (JSON summary)
+ *   /behavior_tree_node/high_level_status → <prefix>/high_level_status (JSON) — retained state
+ *                                           topic, no cap; subscription watchdog below (#644)
+ *   /gps/fix                             → <prefix>/gps        (JSON: lat/lon/alt) — position topic
  *   /odometry/filtered_map               → <prefix>/pose       (JSON: x, y, yaw, MAP frame) —
- *                                           the fused localizer pose, rate-limited
+ *                                           the fused localizer pose, position topic
  *   /gps/status                          → <prefix>/rtk_status (JSON) — retained; the SAME
  *                                           mowgli_interfaces/msg/GnssStatus + gnss_status_utils
  *                                           helpers the LED ring and behavior tree use, so this
@@ -123,9 +133,13 @@
  * mqtt_topic_prefix  string  "mowgli"
  * home_assistant_discovery_enabled bool false — publish
  * retained Home Assistant device discovery
- * publish_rate       double  1.0   Hz — max rate of
- * position/gps/status/power/rtk_status use_ssl            bool    false datum_lat          double
- * 0.0   — injected from mowgli_robot.yaml by full_system.launch.py, datum_lon          double  0.0
+ * publish_rate       double  1.0   Hz — max rate of position/gps/pose/status/power/rtk_status
+ * diagnostics_publish_period_s double 10.0 s — merged diagnostics cadence (level changes early)
+ * state_heartbeat_period_s     double 10.0 s — resend of an unchanged state topic
+ * position_deadband_m          double  0.2 m — movement that publishes position/gps/pose
+ * position_heartbeat_period_s  double 30.0 s — resend of an unmoved position topic
+ * use_ssl            bool    false
+ * datum_lat / datum_lon double 0.0 — injected from mowgli_robot.yaml by full_system.launch.py,
  * same as map_server_node/navsat_to_absolute_pose_node; used only to label <prefix>/area_boundary's
  * map-frame geometry with the WGS84 origin it's relative to.
  */
@@ -154,6 +168,7 @@
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/start_in_area.hpp"
+#include "mowgli_monitoring/mqtt_publish_policy.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -510,6 +525,11 @@ public:
                              const rclcpp::Time& last_publish,
                              double min_interval_s);
 
+  /// Deadband sample of an odometry pose: planar x/y (metres) and yaw.
+  static MotionDeadbandGate::Sample odometry_motion_sample(const nav_msgs::msg::Odometry& msg);
+  /// Deadband sample of a GPS fix: latitude/longitude (degrees), no heading.
+  static MotionDeadbandGate::Sample gps_motion_sample(const sensor_msgs::msg::NavSatFix& msg);
+
 private:
   // ---- Initialisation -------------------------------------------------------
 
@@ -529,6 +549,8 @@ private:
                        const char* description);
 
   void declare_parameters();
+  /// Clamp a period/distance parameter into [lo, hi], with a WARN naming it.
+  double clamp_parameter(const char* name, double value, double lo, double hi);
   void create_mqtt_client();
   void create_subscriptions();
   /// (Re)create just the <prefix>/high_level_status subscription — used at
@@ -604,6 +626,16 @@ private:
 
   void on_timer();
 
+  /// Publish the merged diagnostics view when its period elapsed, or early (at most
+  /// once per kDiagnosticsMinIntervalS) after a level change. Called from both
+  /// on_diagnostics() and on_timer().
+  void maybe_publish_diagnostics(double now_s);
+  /// Publish `payload` retained on `suffix` if `gate` says it changed or a heartbeat is due.
+  void publish_state(const char* suffix,
+                     const std::string& payload,
+                     ChangeOrHeartbeatGate& gate,
+                     double now_s);
+
   /// Keep a failed retained publication pending until the client accepts it.
   void publish_pending_retained(const char* suffix,
                                 std::optional<std::string>& pending,
@@ -667,6 +699,10 @@ private:
   double dock_pose_yaw_{0.0};
   double battery_empty_voltage_{24.0};
   double battery_full_voltage_{28.0};
+  double diagnostics_publish_period_s_{10.0};
+  double state_heartbeat_period_s_{10.0};
+  double position_deadband_m_{0.2};
+  double position_heartbeat_period_s_{30.0};
 
   // Tracks MQTT connection edges so discovery is refreshed after reconnect.
   bool mqtt_was_connected_{false};
@@ -690,6 +726,41 @@ private:
   rclcpp::Time last_gnss_status_publish_{0, 0, RCL_ROS_TIME};
   std::optional<nav_msgs::msg::Odometry> pending_pose_{};
   rclcpp::Time last_pose_publish_{0, 0, RCL_ROS_TIME};
+
+  // ---- Send-on-change / deadband state (mqtt_publish_policy.hpp) -------------
+  // Re-built from the parameters in declare_parameters(); these initialisers are
+  // only the code defaults.
+
+  /// A heading change that is worth a pose/position update on its own.
+  static constexpr double kHeadingDeadbandRad = 5.0 * M_PI / 180.0;
+  /// Earliest re-publication of diagnostics after a level change.
+  static constexpr double kDiagnosticsMinIntervalS = 1.0;
+  /// Bound on distinct diagnostic names kept (diagnostics_node alone has ~10).
+  static constexpr std::size_t kMaxDiagnosticsEntries = 128;
+  /// A diagnostic name not refreshed for this long is dropped (its publisher is gone).
+  static constexpr double kDiagnosticsStaleAfterS = 60.0;
+
+  ChangeOrHeartbeatGate emergency_gate_{};
+  ChangeOrHeartbeatGate high_level_status_gate_{};
+  ChangeOrHeartbeatGate status_gate_{};
+  ChangeOrHeartbeatGate power_gate_{};
+  ChangeOrHeartbeatGate rtk_status_gate_{};
+  MotionDeadbandGate position_gate_{MotionDeadbandGate::Frame::kPlanarMetres,
+                                    0.2,
+                                    kHeadingDeadbandRad,
+                                    30.0};
+  MotionDeadbandGate pose_gate_{MotionDeadbandGate::Frame::kPlanarMetres,
+                                0.2,
+                                kHeadingDeadbandRad,
+                                30.0};
+  MotionDeadbandGate gps_gate_{MotionDeadbandGate::Frame::kWgs84Degrees,
+                               0.2,
+                               kHeadingDeadbandRad,
+                               30.0};
+
+  DiagnosticsAggregator diagnostics_{kMaxDiagnosticsEntries, kDiagnosticsStaleAfterS};
+  bool diagnostics_level_changed_{false};
+  std::optional<double> last_diagnostics_publish_s_{};
 
   // ---- High-level-status subscription watchdog state -------------------------
 

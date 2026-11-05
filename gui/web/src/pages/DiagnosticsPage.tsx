@@ -1,4 +1,5 @@
 import {DiagnosticHealthSummary} from '../components/diagnostics/DiagnosticHealthSummary';
+import {TransportHealthStatus} from '../components/diagnostics/TransportHealthStatus';
 import {deriveDiagnosticHealth, diagnosticTelemetryFresh, containerObservationLevel, unavailableReport, mavrosWheelRequirement} from '../utils/diagnosticHealth';
 import {useMultiplexStatus} from '../hooks/useWS';
 import {powerDisplayValue} from '../utils/physicalTelemetry';
@@ -492,6 +493,7 @@ export const DiagnosticsPage = () => {
                 >
                     {snapshotReadError && <Alert data-testid="diagnostic-snapshot-read-error" type="error" showIcon
                         style={{marginBottom: 12}} message={t('diagnosticsPage.snapshotErrorTitle')} description={snapshotReadError}/>}
+                    <TransportHealthStatus fresh={snapshotFresh} ros={snapshot?.ros}/>
                     <Table
                         size="small"
                         dataSource={snapshot?.containers ?? []}

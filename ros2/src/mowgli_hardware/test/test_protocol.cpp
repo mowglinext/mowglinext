@@ -84,11 +84,11 @@ TEST(ProtocolSizes, UiEventPacketSize)
 
 TEST(ProtocolSizes, OdometryPacketSize)
 {
-  // 1 (type) + 2 (dt_millis) + 4 (left_ticks) + 4 (right_ticks)
-  // + 2 (left_velocity_mm_s) + 2 (right_velocity_mm_s) + 2 (crc) = 17.
+  // 1 (type) + 4 (acquisition_millis) + 4 (left_ticks) + 4 (right_ticks)
+  // + 2 (left_velocity_mm_s) + 2 (right_velocity_mm_s) + 2 (crc) = 19.
   // The ll_datatypes.hpp header has a matching static_assert; this test
   // guards the wire layout against future field additions.
-  EXPECT_EQ(sizeof(LlOdometry), 17u);
+  EXPECT_EQ(sizeof(LlOdometry), 19u);
 }
 
 TEST(ProtocolSizes, ResetCausePacketSize)
@@ -174,7 +174,7 @@ TEST(OdometryPacket, FieldOffsetsAreCorrect)
 {
   LlOdometry pkt{};
   pkt.type = 0x04;
-  pkt.dt_millis = 0x1234;
+  pkt.acquisition_millis = 0x12345678;
   pkt.left_ticks = 0x11223344;
   pkt.right_ticks = -42;
   pkt.left_velocity_mm_s = 250;  // signed — positive == forward
@@ -187,34 +187,34 @@ TEST(OdometryPacket, FieldOffsetsAreCorrect)
   // type at offset 0
   EXPECT_EQ(raw[0], 0x04);
 
-  // dt_millis at offset 1 (little-endian)
-  uint16_t dt;
-  std::memcpy(&dt, raw + 1, sizeof(dt));
-  EXPECT_EQ(dt, 0x1234);
+  // acquisition_millis at offset 1 (little-endian)
+  uint32_t acquisition;
+  std::memcpy(&acquisition, raw + 1, sizeof(acquisition));
+  EXPECT_EQ(acquisition, 0x12345678u);
 
-  // left_ticks at offset 3
+  // left_ticks at offset 5
   int32_t lt;
-  std::memcpy(&lt, raw + 3, sizeof(lt));
+  std::memcpy(&lt, raw + 5, sizeof(lt));
   EXPECT_EQ(lt, 0x11223344);
 
-  // right_ticks at offset 7
+  // right_ticks at offset 9
   int32_t rt;
-  std::memcpy(&rt, raw + 7, sizeof(rt));
+  std::memcpy(&rt, raw + 9, sizeof(rt));
   EXPECT_EQ(rt, -42);
 
-  // left_velocity_mm_s at offset 11
+  // left_velocity_mm_s at offset 13
   int16_t lv;
-  std::memcpy(&lv, raw + 11, sizeof(lv));
+  std::memcpy(&lv, raw + 13, sizeof(lv));
   EXPECT_EQ(lv, 250);
 
-  // right_velocity_mm_s at offset 13
+  // right_velocity_mm_s at offset 15
   int16_t rv;
-  std::memcpy(&rv, raw + 13, sizeof(rv));
+  std::memcpy(&rv, raw + 15, sizeof(rv));
   EXPECT_EQ(rv, -120);
 
-  // crc at offset 15
+  // crc at offset 17
   uint16_t crc;
-  std::memcpy(&crc, raw + 15, sizeof(crc));
+  std::memcpy(&crc, raw + 17, sizeof(crc));
   EXPECT_EQ(crc, 0xABCD);
 }
 
@@ -261,7 +261,7 @@ TEST(ProtocolRoundtrip, OdometryPacket)
 {
   LlOdometry pkt{};
   pkt.type = PACKET_ID_LL_ODOMETRY;
-  pkt.dt_millis = 20;
+  pkt.acquisition_millis = 20;
   pkt.left_ticks = 15000;
   pkt.right_ticks = 14900;
   pkt.left_velocity_mm_s = 250;
@@ -445,7 +445,7 @@ TEST(OdometryPacket, NegativeTicksRoundtrip)
 {
   LlOdometry pkt{};
   pkt.type = PACKET_ID_LL_ODOMETRY;
-  pkt.dt_millis = 20;
+  pkt.acquisition_millis = 20;
   pkt.left_ticks = -5000;
   pkt.right_ticks = -5100;
   pkt.left_velocity_mm_s = -180;

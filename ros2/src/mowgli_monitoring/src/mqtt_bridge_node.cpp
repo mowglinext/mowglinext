@@ -26,10 +26,12 @@
 
 #include "mowgli_monitoring/mqtt_bridge_node.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -581,6 +583,67 @@ void MqttBridgeNode::declare_parameters()
     RCLCPP_WARN(get_logger(), "publish_rate out of range; clamping to 1.0 Hz.");
     publish_rate_ = 1.0;
   }
+
+  // Send-on-change / deadband cadence (mqtt_publish_policy.hpp). Package-share
+  // mqtt_bridge.yaml only, like publish_rate — not GUI-exposed.
+  diagnostics_publish_period_s_ =
+      clamp_parameter("diagnostics_publish_period_s",
+                      declare_parameter<double>("diagnostics_publish_period_s", 10.0),
+                      kDiagnosticsMinIntervalS,
+                      3600.0);
+  state_heartbeat_period_s_ =
+      clamp_parameter("state_heartbeat_period_s",
+                      declare_parameter<double>("state_heartbeat_period_s", 10.0),
+                      1.0,
+                      3600.0);
+  position_deadband_m_ = clamp_parameter("position_deadband_m",
+                                         declare_parameter<double>("position_deadband_m", 0.2),
+                                         0.0,
+                                         100.0);
+  position_heartbeat_period_s_ =
+      clamp_parameter("position_heartbeat_period_s",
+                      declare_parameter<double>("position_heartbeat_period_s", 30.0),
+                      1.0,
+                      3600.0);
+
+  emergency_gate_ = ChangeOrHeartbeatGate(state_heartbeat_period_s_);
+  high_level_status_gate_ = ChangeOrHeartbeatGate(state_heartbeat_period_s_);
+  status_gate_ = ChangeOrHeartbeatGate(state_heartbeat_period_s_);
+  power_gate_ = ChangeOrHeartbeatGate(state_heartbeat_period_s_);
+  rtk_status_gate_ = ChangeOrHeartbeatGate(state_heartbeat_period_s_);
+  position_gate_ = MotionDeadbandGate(MotionDeadbandGate::Frame::kPlanarMetres,
+                                      position_deadband_m_,
+                                      kHeadingDeadbandRad,
+                                      position_heartbeat_period_s_);
+  pose_gate_ = MotionDeadbandGate(MotionDeadbandGate::Frame::kPlanarMetres,
+                                  position_deadband_m_,
+                                  kHeadingDeadbandRad,
+                                  position_heartbeat_period_s_);
+  gps_gate_ = MotionDeadbandGate(MotionDeadbandGate::Frame::kWgs84Degrees,
+                                 position_deadband_m_,
+                                 kHeadingDeadbandRad,
+                                 position_heartbeat_period_s_);
+}
+
+double MqttBridgeNode::clamp_parameter(const char* name, double value, double lo, double hi)
+{
+  if (!std::isfinite(value))
+  {
+    RCLCPP_WARN(get_logger(), "%s is not finite; using %.3f.", name, lo);
+    return lo;
+  }
+  const double clamped = std::clamp(value, lo, hi);
+  if (clamped != value)
+  {
+    RCLCPP_WARN(get_logger(),
+                "%s=%.3f out of range [%.3f, %.3f]; clamping to %.3f.",
+                name,
+                value,
+                lo,
+                hi,
+                clamped);
+  }
+  return clamped;
 }
 
 void MqttBridgeNode::create_mqtt_client()
@@ -822,7 +885,10 @@ void MqttBridgeNode::on_power(mowgli_interfaces::msg::Power::ConstSharedPtr msg)
 
 void MqttBridgeNode::on_emergency(mowgli_interfaces::msg::Emergency::ConstSharedPtr msg)
 {
-  mqtt_client_->publish(full_topic("emergency"), serialise_emergency(*msg), /*retain=*/true);
+  // Published from the callback, never through the rate-limited timer: a change
+  // goes out the moment it arrives. Only unchanged repeats (4 Hz from the bridge)
+  // are reduced to the heartbeat.
+  publish_state("emergency", serialise_emergency(*msg), emergency_gate_, now().seconds());
 }
 
 void MqttBridgeNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
@@ -833,7 +899,59 @@ void MqttBridgeNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
 
 void MqttBridgeNode::on_diagnostics(diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr msg)
 {
-  mqtt_client_->publish(full_topic("diagnostics"), serialise_diagnostics(*msg), /*retain=*/false);
+  // Several nodes publish /diagnostics (~16 arrays/s in total). Merge them into one
+  // latest-per-name view instead of forwarding each array.
+  const double now_s = now().seconds();
+  if (diagnostics_.merge(*msg, now_s))
+  {
+    diagnostics_level_changed_ = true;
+  }
+  maybe_publish_diagnostics(now_s);
+}
+
+void MqttBridgeNode::maybe_publish_diagnostics(double now_s)
+{
+  if (diagnostics_.drop_stale(now_s))
+  {
+    diagnostics_level_changed_ = true;
+  }
+  if (diagnostics_.empty())
+  {
+    return;
+  }
+  const double since_last = last_diagnostics_publish_s_.has_value()
+                                ? now_s - *last_diagnostics_publish_s_
+                                : std::numeric_limits<double>::infinity();
+  const bool due = since_last >= diagnostics_publish_period_s_ ||
+                   (diagnostics_level_changed_ && since_last >= kDiagnosticsMinIntervalS);
+  if (!due)
+  {
+    return;
+  }
+  if (mqtt_client_->publish(full_topic("diagnostics"),
+                            serialise_diagnostics(diagnostics_.snapshot()),
+                            /*retain=*/false))
+  {
+    last_diagnostics_publish_s_ = now_s;
+    diagnostics_level_changed_ = false;
+  }
+}
+
+void MqttBridgeNode::publish_state(const char* suffix,
+                                   const std::string& payload,
+                                   ChangeOrHeartbeatGate& gate,
+                                   double now_s)
+{
+  if (!gate.should_publish(payload, now_s))
+  {
+    return;
+  }
+  // Marked only when accepted: a publish lost to a broker outage is retried by
+  // the next message instead of being treated as delivered.
+  if (mqtt_client_->publish(full_topic(suffix), payload, /*retain=*/true))
+  {
+    gate.mark_published(payload, now_s);
+  }
 }
 
 void MqttBridgeNode::on_high_level_status(
@@ -842,9 +960,12 @@ void MqttBridgeNode::on_high_level_status(
   received_high_level_status_ = true;
   last_high_level_status_received_ = now();
 
-  mqtt_client_->publish(full_topic("high_level_status"),
-                        serialise_high_level_status(*msg),
-                        /*retain=*/true);
+  // ~2.6 Hz from behavior_tree_node, identical while idle: send changes as they
+  // arrive (no extra latency), unchanged repeats only as the heartbeat.
+  publish_state("high_level_status",
+                serialise_high_level_status(*msg),
+                high_level_status_gate_,
+                now().seconds());
 }
 
 void MqttBridgeNode::on_gps_fix(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
@@ -935,6 +1056,19 @@ bool MqttBridgeNode::is_publish_due(const rclcpp::Time& now,
                                     double min_interval_s)
 {
   return (now - last_publish).seconds() >= min_interval_s;
+}
+
+MotionDeadbandGate::Sample MqttBridgeNode::odometry_motion_sample(
+    const nav_msgs::msg::Odometry& msg)
+{
+  const auto& q = msg.pose.pose.orientation;
+  const double yaw = std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+  return MotionDeadbandGate::Sample{msg.pose.pose.position.x, msg.pose.pose.position.y, yaw};
+}
+
+MotionDeadbandGate::Sample MqttBridgeNode::gps_motion_sample(const sensor_msgs::msg::NavSatFix& msg)
+{
+  return MotionDeadbandGate::Sample{msg.latitude, msg.longitude, std::nullopt};
 }
 
 bool MqttBridgeNode::is_high_level_status_stale(bool received_before,
@@ -1312,29 +1446,70 @@ void MqttBridgeNode::on_timer()
     mqtt_client_->publish(full_topic("host"), serialise_host(host_ip_), /*retain=*/true);
   }
 
-  // Rate-limited publishes: each topic sends only its latest pending message, at most
-  // once per 1/publish_rate_ seconds. emergency and high_level_status are not limited
-  // (see their callbacks) — they are low-rate and must not be delayed.
+  // Rate-limited publishes: each topic considers only its latest pending message, at
+  // most once per 1/publish_rate_ seconds. State topics then go out only when their
+  // payload changed (or as a heartbeat); position topics only when the robot moved or
+  // turned (or as a heartbeat). An unmoved position sample stays pending, so its
+  // heartbeat still fires after the source went quiet. emergency and high_level_status
+  // are not rate-limited (see their callbacks) — a change there must not be delayed.
   const rclcpp::Time flush_time = now();
+  const double flush_s = flush_time.seconds();
   const double min_interval = 1.0 / publish_rate_;
-  const auto flush = [&](auto& pending,
-                         rclcpp::Time& last_publish,
-                         const char* suffix,
-                         auto&& serialise,
-                         bool retain)
+
+  const auto flush_state = [&](auto& pending,
+                               rclcpp::Time& last_publish,
+                               const char* suffix,
+                               auto&& serialise,
+                               ChangeOrHeartbeatGate& gate)
   {
-    if (pending.has_value() && is_publish_due(flush_time, last_publish, min_interval))
+    if (!pending.has_value() || !is_publish_due(flush_time, last_publish, min_interval))
     {
-      mqtt_client_->publish(full_topic(suffix), serialise(*pending), retain);
-      last_publish = flush_time;
-      pending.reset();
+      return;
     }
+    last_publish = flush_time;
+    publish_state(suffix, serialise(*pending), gate, flush_s);
+    pending.reset();
   };
 
-  flush(pending_odom_, last_odom_publish_, "position", serialise_position, /*retain=*/false);
-  flush(pending_gps_, last_gps_publish_, "gps", serialise_gps, /*retain=*/false);
-  flush(pending_status_, last_status_publish_, "status", serialise_status, /*retain=*/true);
-  flush(
+  const auto flush_motion = [&](auto& pending,
+                                rclcpp::Time& last_publish,
+                                const char* suffix,
+                                auto&& serialise,
+                                auto&& to_sample,
+                                MotionDeadbandGate& gate)
+  {
+    if (!pending.has_value() || !is_publish_due(flush_time, last_publish, min_interval))
+    {
+      return;
+    }
+    const MotionDeadbandGate::Sample sample = to_sample(*pending);
+    if (!gate.should_publish(sample, flush_s))
+    {
+      return;  // kept pending for the heartbeat
+    }
+    last_publish = flush_time;
+    if (mqtt_client_->publish(full_topic(suffix), serialise(*pending), /*retain=*/false))
+    {
+      gate.mark_published(sample, flush_s);
+    }
+    pending.reset();
+  };
+
+  flush_motion(pending_odom_,
+               last_odom_publish_,
+               "position",
+               serialise_position,
+               odometry_motion_sample,
+               position_gate_);
+  flush_motion(pending_gps_, last_gps_publish_, "gps", serialise_gps, gps_motion_sample, gps_gate_);
+  flush_motion(pending_pose_,
+               last_pose_publish_,
+               "pose",
+               serialise_pose,
+               odometry_motion_sample,
+               pose_gate_);
+  flush_state(pending_status_, last_status_publish_, "status", serialise_status, status_gate_);
+  flush_state(
       pending_power_,
       last_power_publish_,
       "power",
@@ -1342,13 +1517,16 @@ void MqttBridgeNode::on_timer()
       {
         return serialise_power(power, battery_empty_voltage_, battery_full_voltage_);
       },
-      /*retain=*/true);
-  flush(pending_pose_, last_pose_publish_, "pose", serialise_pose, /*retain=*/false);
-  flush(pending_gnss_status_,
-        last_gnss_status_publish_,
-        "rtk_status",
-        serialise_rtk_status,
-        /*retain=*/true);
+      power_gate_);
+  flush_state(pending_gnss_status_,
+              last_gnss_status_publish_,
+              "rtk_status",
+              serialise_rtk_status,
+              rtk_status_gate_);
+
+  // Periodic merged-diagnostics publish, and the deferred half of an early publish
+  // after a level change that arrived inside kDiagnosticsMinIntervalS.
+  maybe_publish_diagnostics(flush_s);
 
   maybe_poll_area_boundaries();
 
@@ -1958,6 +2136,27 @@ std::string MqttBridgeNode::home_assistant_discovery_topic(const std::string& to
   return "homeassistant/device/" + home_assistant_device_id(topic_prefix) + "/config";
 }
 
+namespace
+{
+// Home Assistant's recorder writes a row whenever an entity's state OR any of its
+// attributes changes. Without these templates every field of the source JSON became
+// an attribute: the device_tracker's 8-decimal lat/lon and altitude jitter wrote ~1
+// row/s on the dock, and the mower entity's current_path_index wrote several per
+// second while mowing. Keep only slowly changing, useful fields, rounded.
+// 5 decimals of a degree ≈ 1 m: below that a docked robot's position is GNSS noise.
+constexpr const char* kHomeAssistantLocationAttributesTemplate =
+    "{{ {'latitude': value_json.latitude | round(5), "
+    "'longitude': value_json.longitude | round(5)} | tojson }}";
+constexpr const char* kHomeAssistantMowerAttributesTemplate =
+    "{{ {'state_name': value_json.state_name, "
+    "'sub_state_name': value_json.sub_state_name, "
+    "'current_area': value_json.current_area, "
+    "'coverage_percent': value_json.coverage_percent | round(0), "
+    "'completed_swaths': value_json.completed_swaths, "
+    "'skipped_swaths': value_json.skipped_swaths, "
+    "'total_swaths': value_json.total_swaths} | tojson }}";
+}  // namespace
+
 std::string MqttBridgeNode::serialise_home_assistant_discovery(const std::string& topic_prefix)
 {
   return serialise_home_assistant_discovery(topic_prefix, {});
@@ -1991,7 +2190,7 @@ std::string MqttBridgeNode::serialise_home_assistant_discovery(
       "{% else %}paused{% endif %}";
 
   std::string json;
-  json.reserve(5000);
+  json.reserve(7000);
   json += "{\"device\":{\"identifiers\":[\"" + id +
           "\"],\"name\":\"MowgliNext\",\"manufacturer\":\"MowgliNext\","
           "\"model\":\"Robot mower\"},"
@@ -2014,6 +2213,8 @@ std::string MqttBridgeNode::serialise_home_assistant_discovery(
                        "_mower\",\"activity_state_topic\":\"" + high_level +
                        "\",\"activity_value_template\":\"" + json_escape(activity_template) +
                        "\",\"json_attributes_topic\":\"" + high_level +
+                       "\",\"json_attributes_template\":\"" +
+                       json_escape(kHomeAssistantMowerAttributesTemplate) +
                        "\",\"start_mowing_command_topic\":\"" + command +
                        "\",\"start_mowing_command_template\":\"1\",\"pause_command_topic\":\"" +
                        command + "\",\"pause_command_template\":\"8\",\"dock_command_topic\":\"" +
@@ -2051,41 +2252,41 @@ std::string MqttBridgeNode::serialise_home_assistant_discovery(
   sensor("battery",
          "Battery",
          high_level,
-         "{{ value_json.battery_percent }}",
+         "{{ value_json.battery_percent | round(0) }}",
          ",\"device_class\":\"battery\",\"unit_of_measurement\":\"%\","
          "\"state_class\":\"measurement\"");
   sensor("coverage",
          "Coverage",
          high_level,
-         "{{ value_json.coverage_percent }}",
+         "{{ value_json.coverage_percent | round(0) }}",
          ",\"unit_of_measurement\":\"%\",\"state_class\":\"measurement\"");
   sensor("gps_quality",
          "GPS quality",
          high_level,
-         "{{ value_json.gps_quality_percent }}",
+         "{{ value_json.gps_quality_percent | round(0) }}",
          ",\"unit_of_measurement\":\"%\",\"state_class\":\"measurement\"");
   sensor("rtk_state", "RTK state", rtk, "{{ value_json.rtk_mode_name }}");
   sensor("blade_rpm",
          "Blade speed",
          status,
-         "{{ value_json.mower_motor_rpm }}",
+         "{{ value_json.mower_motor_rpm | round(0) }}",
          ",\"unit_of_measurement\":\"rpm\",\"state_class\":\"measurement\"");
   sensor("blade_current",
          "Blade current",
          status,
-         "{{ value_json.mower_esc_current }}",
+         "{{ value_json.mower_esc_current | round(2) }}",
          ",\"device_class\":\"current\",\"unit_of_measurement\":\"A\","
          "\"state_class\":\"measurement\"");
   sensor("battery_voltage",
          "Battery voltage",
          power,
-         "{{ value_json.v_battery }}",
+         "{{ value_json.v_battery | round(1) }}",
          ",\"device_class\":\"voltage\",\"unit_of_measurement\":\"V\","
          "\"state_class\":\"measurement\"");
   sensor("charge_current",
          "Charge current",
          power,
-         "{{ value_json.charge_current }}",
+         "{{ value_json.charge_current | round(2) }}",
          ",\"device_class\":\"current\",\"unit_of_measurement\":\"A\","
          "\"state_class\":\"measurement\"");
   binary_sensor("charging",
@@ -2104,6 +2305,8 @@ std::string MqttBridgeNode::serialise_home_assistant_discovery(
                    "{\"platform\":\"device_tracker\",\"name\":\"Location\","
                    "\"unique_id\":\"" +
                        id + "_location\",\"json_attributes_topic\":\"" + gps +
+                       "\",\"json_attributes_template\":\"" +
+                       json_escape(kHomeAssistantLocationAttributesTemplate) +
                        "\",\"source_type\":\"gps\"}");
 
   // A select entity would start mowing as soon as its value changed, which is

@@ -95,6 +95,19 @@ Live parameter writes require a reply from the bridge. If an update is reported 
 and check the current value before retrying. Bridges that do not reply can no
 longer report a successful write by simply echoing the requested value.
 
+### Unsaved settings
+
+YAML and integration edits remain available when switching Settings sections or
+filtering them with search. The shared Save count includes pending Notifications,
+Remote access and IrriSense changes even when their section is hidden. Save writes
+those drafts; Revert discards them. Typed replacement tokens remain in memory
+across section changes, but still need Apply/Set before Save sends them. Leaving
+Settings asks whether to discard unsaved changes or keep editing. Refreshing or closing the tab uses the browser’s
+unsaved-changes warning; drafts are not stored across a confirmed reload.
+
+In onboarding, a failed configuration save keeps the current step and draft for
+retry. It does not advance to readiness or restart GPS after that failed save.
+
 ### Settings: Remote access section
 
 An on/off switch for the Tailscale sidecar, a node name, an optional write-only auth key (interactive login otherwise), an HTTPS-publishing toggle (Tailscale Serve, needs MagicDNS + HTTPS certificates enabled on the tailnet) and the pinned image. Below it a status card polls every 5 s while the section is open: image download → starting → **Login required** with an *Open Tailscale login* button, or **Connected** with the reachable URLs and a *Log out of tailnet* action. The settings live in the GUI database, not in `mowgli_robot.yaml`, and the page's single Save button covers them.

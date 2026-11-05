@@ -1078,6 +1078,19 @@ mowgli:
     # do even with boundary_inner_margin_m non-zero, since the margin above
     # is a soft cost and cannot strand the robot on its own.
     dock_inner_margin_exempt_radius_m: 2.5
+    # Soft TRANSIT margin (m) around every DRAWN obstacle, outside its lethal keepout band
+    # (keepout_obstacle_margin, derived from the chassis). The obstacle counterpart of
+    # boundary_inner_margin_m above: the same non-lethal mid-cost in the keepout mask, so the
+    # global planner (Smac, point-to-point TRANSIT) prefers a wider berth around drawn obstacles
+    # where there is room, and is never blocked from starting, ending or passing through it.
+    # Why: the lethal band is only the body half-width (0.275 m) and the planner is a point check,
+    # while the controller tests the whole footprint (about 0.53 m forward of the rear axle)
+    # against the LiDAR cells of the real object, which a drawn polygon only approximates. A
+    # transit planned right along the lethal band can therefore stop on "collision ahead"
+    # (mowglinext#975). Coverage/mowing is unaffected: FTC tracks the F2C path against the LOCAL
+    # costmap, which never carries this mask, and the coverage rings stay reachable (they are
+    # planned inside this band). 0 disables it.
+    obstacle_transit_margin_m: 0.30
 
     # collision_monitor PolygonSlow slowdown factor when a scan return is
     # inside the chassis+15 cm approach box (LiDAR variant only). 0.3 = slow

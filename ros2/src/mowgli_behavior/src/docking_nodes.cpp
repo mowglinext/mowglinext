@@ -21,6 +21,8 @@
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/dock_alignment.hpp"
+#include "tf2/exceptions.hpp"
+#include "tf2/time.hpp"
 
 namespace mowgli_behavior
 {
@@ -75,10 +77,63 @@ void DockRobot::log_contact_delta(const std::shared_ptr<BTContext>& ctx, uint16_
               d.range_m);
 }
 
+bool RobotIsAtDockStation(BTContext& ctx)
+{
+  if (!ctx.tf_buffer)
+  {
+    return false;
+  }
+  double dock_x, dock_y, dock_yaw;
+  DockStationZone zone;
+  {
+    std::lock_guard<std::mutex> lock(ctx.context_mutex);
+    if (!ctx.dock_pose_known)
+    {
+      return false;
+    }
+    dock_x = ctx.dock_x;
+    dock_y = ctx.dock_y;
+    dock_yaw = ctx.dock_yaw;
+    zone = ctx.dock_station_zone;
+  }
+  try
+  {
+    const auto tf = ctx.tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    const auto& q = tf.transform.rotation;
+    const double yaw =
+        std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+    return IsFacingStationInNoPivotZone(tf.transform.translation.x,
+                                        tf.transform.translation.y,
+                                        yaw,
+                                        dock_x,
+                                        dock_y,
+                                        dock_yaw,
+                                        zone);
+  }
+  catch (const tf2::TransformException&)
+  {
+    return false;  // no pose: the ordinary paths apply
+  }
+}
+
+BT::NodeStatus IsAtDockStation::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  return RobotIsAtDockStation(*ctx) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
 BT::NodeStatus DockRobot::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   ctx->last_dock_succeeded = false;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    if (ctx->latest_power.charger_enabled)
+    {
+      ctx->last_dock_succeeded = true;
+      return BT::NodeStatus::SUCCESS;
+    }
+  }
 
   std::string dock_id = "home_dock";
   if (auto res = getInput<std::string>("dock_id"))
@@ -106,12 +161,24 @@ BT::NodeStatus DockRobot::onStart()
   DockAction::Goal goal_msg;
   goal_msg.dock_id = dock_id;
   goal_msg.dock_type = dock_type;
-  goal_msg.navigate_to_staging_pose = true;
+  // Already on the approach line, too close to pivot: the transit planner would
+  // refuse the leg to the staging pose, and it is not needed. docking_server
+  // drives straight in and, if that fails, reverses to staging for its retry.
+  const bool at_station = RobotIsAtDockStation(*ctx);
+  goal_msg.navigate_to_staging_pose = !at_station;
+  if (at_station)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "DockRobot: already at the station without charge, skipping the staging leg");
+  }
 
   last_feedback_state_ = DockAction::Feedback::NONE;
   stall_detector_.Reset();
 
   auto send_goal_options = rclcpp_action::Client<DockAction>::SendGoalOptions{};
+  goal_abandonment_ = std::make_shared<GoalAbandonment>();
+  send_goal_options.goal_response_callback =
+      cancelWhenAbandoned<DockAction>(action_client_, goal_abandonment_);
   send_goal_options.feedback_callback =
       [this, ctx](GoalHandle::SharedPtr, const std::shared_ptr<const DockAction::Feedback> fb)
   {
@@ -129,7 +196,9 @@ BT::NodeStatus DockRobot::onStart()
   // signal that cannot be lost when the server finishes a goal in the same
   // instant it accepts it — "Robot is already docked, no need to dock" left a
   // polled handle stuck on ACCEPTED for 11.5 h on 2026-09-17.
-  outcome_->Reset();
+  // A halted attempt can deliver its result after this attempt starts. Keep
+  // its callback's slot separate so a late CANCELED cannot fail the new goal.
+  outcome_ = std::make_shared<ActionOutcomeSlot>();
   send_goal_options.result_callback = [slot = outcome_](const GoalHandle::WrappedResult& result)
   {
     slot->Record(OutcomeFromResultCode(result.code));
@@ -152,6 +221,17 @@ BT::NodeStatus DockRobot::onStart()
 BT::NodeStatus DockRobot::onRunning()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  bool charging;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    charging = ctx->latest_power.charger_enabled;
+  }
+  if (charging)
+  {
+    onHalted();
+    ctx->last_dock_succeeded = true;
+    return BT::NodeStatus::SUCCESS;
+  }
 
   if (!goal_handle_)
   {
@@ -245,12 +325,15 @@ void DockRobot::onHalted()
   // otherwise BoundaryGuard would stay exempted after the transit ended.
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
   ctx->docking_active = false;
-  if (goal_handle_)
-  {
-    RCLCPP_INFO(ctx->node->get_logger(), "DockRobot: canceling active goal");
-    cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "DockRobot");
-    goal_handle_.reset();
-  }
+  // A reactive charger fast path can halt us before the goal response arrives.
+  // Abandon that pending request too, so it cannot start navigating later.
+  abandonGoal(action_client_,
+              goal_handle_,
+              goal_handle_future_,
+              goal_abandonment_,
+              ctx->node->get_logger(),
+              "DockRobot");
+  goal_handle_.reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -282,8 +365,9 @@ BT::NodeStatus UndockRobot::onStart()
   goal_msg.dock_type = dock_type;
 
   auto send_goal_options = rclcpp_action::Client<UndockAction>::SendGoalOptions{};
-  // See DockRobot::onStart — the terminal status can be lost, the result cannot.
-  outcome_->Reset();
+  // See DockRobot::onStart: request the result, with a fresh slot per attempt
+  // so a halted attempt's late callback cannot overwrite this goal's outcome.
+  outcome_ = std::make_shared<ActionOutcomeSlot>();
   send_goal_options.result_callback = [slot = outcome_](const GoalHandle::WrappedResult& result)
   {
     slot->Record(OutcomeFromResultCode(result.code));

@@ -18,9 +18,11 @@
 // per-area resume cursor + completed-swath sets round-trip through a file and a
 // changed map is detected as stale.
 
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <string>
 
 #include "mowgli_behavior/bt_context.hpp"
@@ -771,4 +773,220 @@ TEST(CoveragePersistence, MalformedUnitProgressRowIsSkipped)
   ASSERT_TRUE(loadCoverageResumeState(loaded));
   EXPECT_EQ(loaded.area_unit_progress.at(0).size(), 1u);
   std::remove(path.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// Age of restored progress (field 2026-10-25: a 6-day-old snapshot was resumed)
+// ---------------------------------------------------------------------------
+//
+// EndSession(keep_incomplete) ages the kept progress out after kIncompleteResumeMaxAge, but only
+// in RAM: three container restarts (updater) later, Play on 2026-10-25 resumed a snapshot kept on
+// 2026-10-19 — four of five sub-paths "done" — mowed the one remaining ring unit and declared the
+// lawn complete. The snapshot now carries the wall-clock time it was written, and a restart
+// treats it exactly as a live process would.
+
+namespace
+{
+using Wall = std::chrono::system_clock;
+using Steady = std::chrono::steady_clock;
+
+/// A session that ended unfinished: four units done, the ring unit at 3 %, a targeted area.
+void keptUnfinishedSession(BTContext& ctx)
+{
+  ctx.current_command = 0;  // EndSession(keep_incomplete) never leaves a START behind
+  ctx.area_completed_swaths[0] = {1, 2, 3, 4};
+  ctx.area_resume_pose_index[0] = 731;
+  ctx.area_unit_progress[0][0] = 731;
+  ctx.area_path_pose_count[0] = 24930;
+  ctx.area_plan_fingerprint[0] = 9684291347066709001ull;
+  ctx.single_area_target = 0;
+  ctx.single_area_target_id = 5;
+}
+}  // namespace
+
+TEST(CoveragePersistence, SavedAtRoundTripsToTheSecond)
+{
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/saved_at_round_trip.txt";
+  keptUnfinishedSession(ctx);
+  const Wall::time_point written = Wall::time_point(std::chrono::seconds(1792964473));
+
+  ASSERT_TRUE(saveCoverageResumeState(ctx, written));
+
+  BTContext loaded;
+  loaded.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(loaded));
+  ASSERT_TRUE(loaded.coverage_resume_saved_at.has_value());
+  EXPECT_EQ(*loaded.coverage_resume_saved_at, written);
+  std::remove(ctx.coverage_resume_path.c_str());
+}
+
+TEST(CoveragePersistence, ASnapshotWithoutSavedAtHasAnUnknownAgeAndIsStillResumed)
+{
+  // Written by a build that predates the row: the progress is kept, as before.
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/saved_at_absent.txt";
+  {
+    std::ofstream f(ctx.coverage_resume_path, std::ios::trunc);
+    f << "mowgli_coverage_resume v3\n"
+      << "current_command 0\n"
+      << "current_area 0\n"
+      << "completed_areas\n"
+      << "area 0 5 24930 9684291347066709001 731 completed 1 2 3 4\n";
+  }
+  ASSERT_TRUE(loadCoverageResumeState(ctx));
+  EXPECT_FALSE(ctx.coverage_resume_saved_at.has_value());
+
+  const Wall::time_point boot = Wall::now();
+  const Steady::time_point boot_steady = Steady::now();
+  const auto policy = mowgli_behavior::applyRestoredCommandPolicy(ctx, boot, boot_steady);
+
+  EXPECT_FALSE(policy.expired_progress);
+  EXPECT_FALSE(policy.auto_continue);
+  EXPECT_TRUE(mowgli_behavior::hasRecordedCoverageProgress(ctx));
+  // The age clock starts at boot: Play within a day resumes, later than that starts fresh.
+  EXPECT_TRUE(ctx.resume_after_incomplete_end);
+  EXPECT_FALSE(mowgli_behavior::incompleteResumeExpired(ctx.resume_after_incomplete_end_time,
+                                                        boot_steady + std::chrono::hours(23)));
+  EXPECT_TRUE(mowgli_behavior::incompleteResumeExpired(ctx.resume_after_incomplete_end_time,
+                                                       boot_steady + std::chrono::hours(25)));
+  std::remove(ctx.coverage_resume_path.c_str());
+}
+
+TEST(CoveragePersistence, KeptProgressOlderThanADayIsDiscardedAtBoot)
+{
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/saved_at_stale.txt";
+  keptUnfinishedSession(ctx);
+  const Wall::time_point written = Wall::time_point(std::chrono::seconds(1792964473));
+  ASSERT_TRUE(saveCoverageResumeState(ctx, written));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+  ASSERT_TRUE(mowgli_behavior::hasRecordedCoverageProgress(restarted));
+
+  const auto policy =
+      mowgli_behavior::applyRestoredCommandPolicy(restarted,
+                                                  written + std::chrono::hours(6 * 24),
+                                                  Steady::now());
+
+  EXPECT_TRUE(policy.expired_progress);
+  EXPECT_FALSE(policy.auto_continue);
+  EXPECT_FALSE(mowgli_behavior::hasRecordedCoverageProgress(restarted));
+  EXPECT_FALSE(mowgli_behavior::hasCoverageResumeState(restarted)) << "the GUI must offer Start";
+  EXPECT_TRUE(restarted.area_completed_swaths.empty());
+  EXPECT_TRUE(restarted.area_resume_pose_index.empty());
+  EXPECT_TRUE(restarted.area_unit_progress.empty());
+  EXPECT_TRUE(restarted.area_plan_fingerprint.empty());
+  EXPECT_TRUE(restarted.area_path_pose_count.empty());
+  EXPECT_FALSE(restarted.single_area_target.has_value());
+  EXPECT_FALSE(restarted.single_area_target_id.has_value());
+  EXPECT_FALSE(restarted.resume_after_incomplete_end);
+  EXPECT_EQ(restarted.current_command, 0u);
+  std::remove(ctx.coverage_resume_path.c_str());
+}
+
+TEST(CoveragePersistence, KeptProgressYoungerThanADayIsResumedWithItsRealAge)
+{
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/saved_at_fresh.txt";
+  keptUnfinishedSession(ctx);
+  const Wall::time_point written = Wall::time_point(std::chrono::seconds(1792964473));
+  ASSERT_TRUE(saveCoverageResumeState(ctx, written));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+
+  const Wall::time_point boot = written + std::chrono::hours(5);
+  const Steady::time_point boot_steady = Steady::now();
+  const auto policy = mowgli_behavior::applyRestoredCommandPolicy(restarted, boot, boot_steady);
+
+  EXPECT_FALSE(policy.expired_progress);
+  EXPECT_FALSE(policy.auto_continue);
+  EXPECT_EQ(restarted.current_command, 0u);
+  EXPECT_TRUE(mowgli_behavior::hasRecordedCoverageProgress(restarted));
+  EXPECT_EQ(restarted.area_completed_swaths.at(0), (std::set<std::size_t>{1, 2, 3, 4}));
+  ASSERT_TRUE(restarted.single_area_target.has_value());
+  // Play continues it, as the START handler does for a kept session in the same process ...
+  EXPECT_TRUE(restarted.resume_after_incomplete_end);
+  // ... and its age is counted from the time the snapshot was written, not from boot: 5 h old at
+  // boot, it expires 19 h later.
+  EXPECT_FALSE(mowgli_behavior::incompleteResumeExpired(restarted.resume_after_incomplete_end_time,
+                                                        boot_steady + std::chrono::hours(18)));
+  EXPECT_TRUE(mowgli_behavior::incompleteResumeExpired(restarted.resume_after_incomplete_end_time,
+                                                       boot_steady + std::chrono::hours(20)));
+  std::remove(ctx.coverage_resume_path.c_str());
+}
+
+TEST(CoveragePersistence, AMidRunRestartStillAutoContinuesAFreshStart)
+{
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/saved_at_mid_run.txt";
+  keptUnfinishedSession(ctx);
+  ctx.current_command = 1;  // the mow was running when the process died
+  const Wall::time_point written = Wall::time_point(std::chrono::seconds(1792964473));
+  ASSERT_TRUE(saveCoverageResumeState(ctx, written));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+  const auto policy = mowgli_behavior::applyRestoredCommandPolicy(restarted,
+                                                                  written + std::chrono::minutes(3),
+                                                                  Steady::now());
+
+  EXPECT_FALSE(policy.expired_progress);
+  EXPECT_TRUE(policy.auto_continue);
+  EXPECT_EQ(restarted.current_command, 1u);
+  // The run continues on its own; nothing is waiting for a Play.
+  EXPECT_FALSE(restarted.resume_after_incomplete_end);
+  std::remove(ctx.coverage_resume_path.c_str());
+}
+
+TEST(CoveragePersistence, ADayOldStartDoesNotAutoContinueAfterARestart)
+{
+  // A START left on disk by a mow that died a day ago must not move the mower by itself when
+  // power returns, and its progress no longer describes the lawn either.
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/saved_at_old_start.txt";
+  keptUnfinishedSession(ctx);
+  ctx.current_command = 1;
+  const Wall::time_point written = Wall::time_point(std::chrono::seconds(1792964473));
+  ASSERT_TRUE(saveCoverageResumeState(ctx, written));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+  const auto policy = mowgli_behavior::applyRestoredCommandPolicy(restarted,
+                                                                  written + std::chrono::hours(25),
+                                                                  Steady::now());
+
+  EXPECT_TRUE(policy.expired_progress);
+  EXPECT_FALSE(policy.auto_continue);
+  EXPECT_EQ(restarted.current_command, 0u);
+  EXPECT_FALSE(mowgli_behavior::hasCoverageResumeState(restarted));
+  std::remove(ctx.coverage_resume_path.c_str());
+}
+
+TEST(CoveragePersistence, ExpiredProgressKeepsTheCrossHatchPhase)
+{
+  BTContext ctx;
+  ctx.coverage_resume_path = ::testing::TempDir() + "/saved_at_cross_hatch.txt";
+  keptUnfinishedSession(ctx);
+  ctx.cross_hatch[0].next_perpendicular = true;
+  const Wall::time_point written = Wall::time_point(std::chrono::seconds(1792964473));
+  ASSERT_TRUE(saveCoverageResumeState(ctx, written));
+
+  BTContext restarted;
+  restarted.coverage_resume_path = ctx.coverage_resume_path;
+  ASSERT_TRUE(loadCoverageResumeState(restarted));
+  const auto policy = mowgli_behavior::applyRestoredCommandPolicy(restarted,
+                                                                  written + std::chrono::hours(48),
+                                                                  Steady::now());
+
+  EXPECT_TRUE(policy.expired_progress);
+  ASSERT_EQ(restarted.cross_hatch.count(0), 1u) << "the phase describes the lawn, not the run";
+  EXPECT_TRUE(restarted.cross_hatch.at(0).next_perpendicular);
+  std::remove(ctx.coverage_resume_path.c_str());
 }

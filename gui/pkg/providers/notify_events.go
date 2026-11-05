@@ -74,6 +74,7 @@ type NotifyStatus struct {
 	CoveragePercent float32 `json:"coverage_percent"`
 	BatteryPercent  float32 `json:"battery_percent"`
 	Emergency       bool    `json:"emergency"`
+	IsCharging      bool    `json:"is_charging"`
 }
 
 // NotifyEvent is one detected, not-yet-rendered notification.
@@ -147,14 +148,19 @@ type NotifyDetector struct {
 	lastEventAt time.Time
 	lastSent    map[string]time.Time
 	areaNames   map[int]string
+	// A terminal failure survives guard/status interruptions and GUI restarts.
+	// Only an observed new attempt or successful charging ends the incident.
+	reportedFailures map[string]bool
+	failuresChanged  bool
 }
 
 // NewNotifyDetector returns a detector with no session and no area.
 func NewNotifyDetector() *NotifyDetector {
 	return &NotifyDetector{
-		currentArea: -1,
-		lastSent:    make(map[string]time.Time),
-		areaNames:   make(map[int]string),
+		currentArea:      -1,
+		lastSent:         make(map[string]time.Time),
+		areaNames:        make(map[int]string),
+		reportedFailures: make(map[string]bool),
 	}
 }
 
@@ -184,7 +190,7 @@ func (d *NotifyDetector) OnStatus(st NotifyStatus, now time.Time, wantsKind func
 		params["state"] = st.StateName
 		params["battery"] = formatPercent(st.BatteryPercent)
 		cooldownKey := notificationCooldownKey(message, params)
-		if !d.pastCooldown(cooldownKey, now) {
+		if message != NotifyMsgNavFailed && !d.pastCooldown(cooldownKey, now) {
 			return
 		}
 		d.lastSent[cooldownKey] = now
@@ -195,6 +201,12 @@ func (d *NotifyDetector) OnStatus(st NotifyStatus, now time.Time, wantsKind func
 	prev := d.prevState
 	entered := st.StateName != prev
 	d.prevState = st.StateName
+	for failure := range d.reportedFailures {
+		if clearsFailureIncident(st, failure) {
+			delete(d.reportedFailures, failure)
+			d.failuresChanged = true
+		}
+	}
 
 	// Emergency: rising edge only; a cleared latch is visible on the next mow.
 	if st.Emergency && !d.emergency {
@@ -228,6 +240,21 @@ func (d *NotifyDetector) OnStatus(st NotifyStatus, now time.Time, wantsKind func
 }
 
 type emitFn func(kind, message string, priority int, params map[string]string)
+
+// An emergency, RTK wait, reconnect, or idle status is not evidence that a
+// failed action was retried. Motion phases identify an actual new attempt;
+// charging phases resolve navigation failures. Contact alone cannot establish
+// recovery from a dead charger. A failure status itself never rearms it.
+func clearsFailureIncident(st NotifyStatus, failure string) bool {
+	switch st.StateName {
+	case "PREFLIGHT_CHECK", "UNDOCKING", "RESUMING_UNDOCKING", "MOWING", "TRANSIT", "PLANNING",
+		"RETURNING_HOME", "LOW_BATTERY_DOCKING", "CRITICAL_BATTERY_DOCKING":
+		return st.State == highLevelStateAutonomous
+	case "CHARGING", "CRITICAL_BATTERY_CHARGING", "IDLE_DOCKED", "MANUAL_CHARGING":
+		return st.IsCharging && failure != "CHARGER_FAILED"
+	}
+	return false
+}
 
 func (d *NotifyDetector) onMowingTick(st NotifyStatus, wantsKind func(string) bool, emit emitFn) {
 	if !d.inSession {
@@ -291,7 +318,11 @@ func (d *NotifyDetector) onStateEntered(st NotifyStatus, prev string, emit emitF
 	case st.StateName == "DIG_OBSTRUCTION":
 		emit(NotifyEventBlocked, NotifyMsgDigObstruction, notifyPriorityMax, nil)
 	case blockedStates[st.StateName]:
-		emit(NotifyEventBlocked, NotifyMsgNavFailed, notifyPriorityHigh, nil)
+		if !d.reportedFailures[st.StateName] {
+			d.reportedFailures[st.StateName] = true
+			d.failuresChanged = true
+			emit(NotifyEventBlocked, NotifyMsgNavFailed, notifyPriorityHigh, nil)
+		}
 	case st.StateName == "CRITICAL_BATTERY_DOCKING":
 		emit(NotifyEventBattery, NotifyMsgBatteryLow, notifyPriorityDefault, nil)
 	case st.StateName == "RAIN_DETECTED_DOCKING":

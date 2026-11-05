@@ -1481,7 +1481,7 @@ wheelTicks_handler(int32_t p_s32LeftTicksSigned, int32_t p_s32RightTicksSigned,
   static int32_t prev_right_ticks = 0;
 
   const uint32_t now_tick = HAL_GetTick();
-  const uint16_t dt_ms = (uint16_t)(now_tick - last_odom_tick);
+  const uint32_t dt_ms = now_tick - last_odom_tick;
   last_odom_tick = now_tick;
 
   const int32_t delta_left = p_s32LeftTicksSigned - prev_left_ticks;
@@ -1515,7 +1515,8 @@ wheelTicks_handler(int32_t p_s32LeftTicksSigned, int32_t p_s32RightTicksSigned,
 
   pkt_odometry_t odom;
   odom.type = PKT_ID_ODOMETRY;
-  odom.dt_millis = dt_ms;
+  // Time belongs to this encoder acquisition, regardless of USB send gating.
+  odom.acquisition_millis = now_tick;
   odom.left_ticks = p_s32LeftTicksSigned;
   odom.right_ticks = p_s32RightTicksSigned;
   odom.left_velocity_mm_s = left_v_mm_s;

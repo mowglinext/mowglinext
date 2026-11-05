@@ -24,6 +24,7 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
+#include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/dock_stall.hpp"
 #include "nav2_msgs/action/dock_robot.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
@@ -32,6 +33,27 @@
 
 namespace mowgli_behavior
 {
+
+/// The robot stands on the station's approach line, nose toward it, too close to
+/// pivot (IsFacingStationInNoPivotZone). False without a pose or a dock pose.
+bool RobotIsAtDockStation(BTContext& ctx);
+
+/// Condition form of RobotIsAtDockStation, for the undock branch of main_tree.xml.
+class IsAtDockStation : public BT::ConditionNode
+{
+public:
+  IsAtDockStation(const std::string& name, const BT::NodeConfig& config)
+      : BT::ConditionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+
+  BT::NodeStatus tick() override;
+};
 
 // ---------------------------------------------------------------------------
 // DockRobot
@@ -83,6 +105,7 @@ private:
   rclcpp_action::Client<DockAction>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
+  std::shared_ptr<GoalAbandonment> goal_abandonment_;
 
   /// Last docking feedback state seen, so the contact delta is logged once per
   /// entry into WAIT_FOR_CHARGE rather than at the feedback rate. Written from

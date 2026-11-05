@@ -32,6 +32,7 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_array.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <nav2_msgs/msg/costmap_filter_info.hpp>
@@ -156,6 +157,11 @@ public:
 
   /// Test-only: report whether a current mow-progress grid is cached.
   bool mow_progress_cache_valid_for_test() const;
+
+  void on_peer_docks_for_test(geometry_msgs::msg::PoseArray::ConstSharedPtr msg)
+  {
+    on_peer_docks(std::move(msg));
+  }
 
   /// Clear all layers to their default values.
   void clear_map_layers();
@@ -1008,6 +1014,15 @@ private:
   /// "Start occupied".
   double boundary_inner_margin_m_{0.3};
 
+  /// Soft TRANSIT margin (m) around every drawn obstacle, outside its lethal keepout band
+  /// (keepout_obstacle_margin_m_): cells up to keepout_obstacle_margin_m_ + this far from the
+  /// polygon get kSoftPenaltyMaskCost in the keepout mask — the same mid-cost as the boundary
+  /// bands, NEVER lethal. It nudges the global planner (Smac, point-to-point TRANSIT) towards a
+  /// wider berth around drawn obstacles where there is room, because the lethal band is only the
+  /// body half-width while the controller tests the whole footprint against the real object. 0
+  /// disables it. Read declare_parameters(), not this initialiser (mowglinext#975).
+  double obstacle_transit_margin_m_{0.0};
+
   /// Cells within this distance of docking_pose_ are exempt from the
   /// boundary_inner_margin_m_ penalty above, regardless of direction — kept
   /// even though the mid-cost design no longer strictly needs it for
@@ -1048,12 +1063,14 @@ private:
   /// shape via Minimum Bounding Rectangle. 0 = north-south, 90 = east-west.
   double mow_angle_override_deg_{std::numeric_limits<double>::quiet_NaN()};
 
-  /// Dock body extent in dock local frame (m). The body is the physical
-  /// dock structure the robot cannot drive through. Cells inside the body
-  /// rectangle are marked OBSTACLE_PERMANENT — strips stop here, and Smac
-  /// treats it as lethal. Defaults match the YardForce500 dock.
+  /// Dock body extent in dock local frame (m): the physical station, from
+  /// dock_body_rear_m_ behind the dock pose to length - rear ahead of it.
+  /// Lethal in the keepout mask and forbidden in the transit geometry, and
+  /// coverage_server plans around the same ring. Defaults match the YardForce500
+  /// dock and the shipped chassis.
   double dock_body_length_m_{0.80};
   double dock_body_width_m_{0.55};
+  double dock_body_rear_m_{0.12};
 
   /// Dock approach corridor in dock local frame (m). Rectangle behind the
   /// dock body along -X used by opennav_docking for final alignment. Cells
@@ -1302,9 +1319,9 @@ private:
 
   /// Three coupled dock polygons in map frame, all derived from
   /// docking_pose_ + dock_body/corridor parameters. Built once at startup.
-  ///   * dock_body_polygon_     — physical dock body (0.80×0.55 m default).
-  ///                              Marks OBSTACLE_PERMANENT in classification;
-  ///                              strips stop here, Smac treats as lethal.
+  ///   * dock_body_polygon_     — physical station (0.80×0.55 m default), on
+  ///                              the +X side of the dock pose. Lethal in the
+  ///                              keepout mask, forbidden in transit geometry.
   ///   * dock_corridor_polygon_ — approach lane behind dock (1.5×0.80 m).
   ///                              Marks DOCKING_AREA in classification
   ///                              (mowable); explicitly carved out of the
@@ -1314,6 +1331,19 @@ private:
   ///                              the planner directly; body and corridor
   ///                              polygons drive all real behavior.
   geometry_msgs::msg::Polygon dock_body_polygon_;
+  /// The other fleet members' stations, from the GUI feed (/fleet/peer_docks),
+  /// sized like our own and judged against it (peer_dock_rings.hpp).
+  struct PeerDockRing
+  {
+    geometry_msgs::msg::Polygon polygon;
+    double margin_m{0.0};
+  };
+  std::vector<geometry_msgs::msg::Pose> peer_dock_poses_;
+  std::vector<PeerDockRing> peer_dock_rings_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr peer_docks_sub_;
+  void on_peer_docks(geometry_msgs::msg::PoseArray::ConstSharedPtr msg);
+  /// Call with map_mutex_ held.
+  void rebuild_peer_dock_rings();
   geometry_msgs::msg::Polygon dock_corridor_polygon_;
   geometry_msgs::msg::Polygon dock_exclusion_polygon_;
   bool has_dock_exclusion_{false};

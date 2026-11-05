@@ -300,6 +300,12 @@ if(BUILD_TESTING)
   )
 
   # Pure logic, no ROS deps — which gates a SetDockingPoint request must pass.
+  ament_add_gtest(test_peer_dock_rings
+    test/test_peer_dock_rings.cpp
+  )
+  target_include_directories(test_peer_dock_rings PRIVATE include)
+  target_link_libraries(test_peer_dock_rings ${geometry_msgs_TARGETS})
+
   ament_add_gtest(test_dock_set_gates
     test/test_dock_set_gates.cpp
   )

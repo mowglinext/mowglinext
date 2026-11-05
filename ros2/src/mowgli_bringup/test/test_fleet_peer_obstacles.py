@@ -113,3 +113,156 @@ def test_defaults_match_the_costmap_and_the_feed() -> None:
     # The GUI feed runs at 5 Hz; a peer must outlive one missed message but
     # vanish quickly once its robot goes quiet.
     assert 0.4 < fleet._DEFAULT_PEER_TIMEOUT_S <= 5.0
+
+
+# --- Dock-neighbour exception (two mowers on side-by-side docks) -------------
+
+BODY = fleet.Footprint(front=0.48, rear=-0.12, half_width=0.225)  # chassis_footprint(margin=0)
+GROWN = fleet.Footprint(front=0.53, rear=-0.17, half_width=0.275)  # what launch injects as chassis_*
+GEO = fleet.DockGeometry(body=BODY, grown=GROWN, peer_margin=0.15, undock_distance=1.5)
+DOCK = fleet.Pose2D(0.0, 0.0, 0.0)
+# The 2026-10-28 bag, in our dock frame: the neighbour sits 0.526 m to the
+# left, 0.107 m behind, same heading — 7.6 cm between the two chassis.
+NEIGHBOUR = fleet.Pose2D(-0.107, 0.526, 0.0)
+
+
+def _square(cx: float, cy: float, half: float):
+    return [(cx + half, cy + half), (cx + half, cy - half), (cx - half, cy - half), (cx - half, cy + half)]
+
+
+def test_polygon_clearance_measures_the_gap_and_is_zero_on_contact() -> None:
+    assert math.isclose(fleet.polygon_clearance(_square(0, 0, 0.5), _square(2, 0, 0.5)), 1.0, abs_tol=1e-9)
+    assert fleet.polygon_clearance(_square(0, 0, 0.5), _square(0.9, 0.0, 0.5)) == 0.0
+    assert fleet.polygon_clearance(_square(0, 0, 0.5), _square(0.2, 0.1, 0.1)) == 0.0  # contained
+    # Corner to corner along the diagonal.
+    gap = fleet.polygon_clearance(_square(0, 0, 0.5), _square(2, 2, 0.5))
+    assert math.isclose(gap, math.hypot(1.0, 1.0), abs_tol=1e-9)
+
+
+def test_in_frame_expresses_a_pose_relative_to_the_dock() -> None:
+    dock = fleet.Pose2D(1.0, 2.0, math.pi / 2)
+    behind = fleet.Pose2D(1.0, 1.0, math.pi / 2)  # 1 m "south" = 1 m behind a north-facing dock
+    r = fleet.in_frame(behind, dock)
+    assert math.isclose(r.x, -1.0, abs_tol=1e-9)
+    assert math.isclose(r.y, 0.0, abs_tol=1e-9)
+    assert math.isclose(r.yaw, 0.0, abs_tol=1e-9)
+
+
+def test_the_neighbour_overlaps_our_footprint_in_todays_model() -> None:
+    """Why BackUp refused the undock: the grown block reaches 0.184 m into us."""
+    block = fleet.footprint_corners(NEIGHBOUR, GROWN, 0.15)
+    assert fleet.polygon_clearance(block, fleet.footprint_corners(DOCK, GROWN)) == 0.0
+    # ...while the bodies themselves are 7.6 cm apart.
+    gap = fleet.polygon_clearance(fleet.footprint_corners(NEIGHBOUR, BODY), fleet.footprint_corners(DOCK, BODY))
+    assert math.isclose(gap, 0.526 - 2 * 0.225, abs_tol=1e-9)
+
+
+def test_a_charging_neighbour_is_dock_infrastructure_while_we_sit_on_our_dock() -> None:
+    assert fleet.classify_docked_peer(NEIGHBOUR, DOCK, DOCK, GEO) is fleet.DockNeighbour.DOCK_INFRASTRUCTURE
+
+
+def test_the_2026_10_28_bag_poses_are_dock_infrastructure() -> None:
+    """Map-frame poses straight from rosbag_20261028T151820Z."""
+    ours = fleet.Pose2D(-3.957, 1.277, math.radians(-77.0))
+    peer = fleet.Pose2D(-3.469, 1.500, math.radians(-76.9))
+    assert fleet.classify_docked_peer(peer, ours, ours, GEO) is fleet.DockNeighbour.DOCK_INFRASTRUCTURE
+
+
+def test_the_exception_holds_through_the_undock_and_ends_once_clear_of_the_block() -> None:
+    mid_undock = fleet.Pose2D(-0.8, 0.0, 0.0)
+    assert fleet.classify_docked_peer(NEIGHBOUR, mid_undock, DOCK, GEO) is fleet.DockNeighbour.DOCK_INFRASTRUCTURE
+    # End of the 1.5 m reverse = the staging pose: our grown front is 0.54 m
+    # behind the grown block, so the neighbour is a full obstacle again for
+    # the first transit plan (and for the approach to staging).
+    staging = fleet.Pose2D(-1.5, 0.0, 0.0)
+    assert fleet.classify_docked_peer(NEIGHBOUR, staging, DOCK, GEO) is fleet.DockNeighbour.CLEAR
+
+
+def test_a_charging_peer_on_our_way_out_is_never_dock_infrastructure() -> None:
+    behind_us = fleet.Pose2D(-1.0, 0.0, 0.0)
+    assert fleet.classify_docked_peer(behind_us, DOCK, DOCK, GEO) is fleet.DockNeighbour.BLOCKS_RAIL
+
+
+def test_bodies_about_to_touch_bring_the_neighbour_back_driving_in() -> None:
+    drifted = fleet.Pose2D(0.0, 0.07, 0.0)  # 6 mm left between the chassis
+    assert (
+        fleet.classify_docked_peer(NEIGHBOUR, drifted, DOCK, GEO, driving_forward=True)
+        is fleet.DockNeighbour.TOO_CLOSE
+    )
+
+
+def test_bodies_about_to_touch_never_refuse_a_straight_reverse_out() -> None:
+    drifted = fleet.Pose2D(0.0, 0.07, 0.0)
+    assert fleet.classify_docked_peer(NEIGHBOUR, drifted, DOCK, GEO) is fleet.DockNeighbour.DOCK_INFRASTRUCTURE
+
+
+def _pose_on_dock_axes(dock: "fleet.Pose2D", along: float, left: float, yaw_error: float) -> "fleet.Pose2D":
+    c, s = math.cos(dock.yaw), math.sin(dock.yaw)
+    return fleet.Pose2D(dock.x + c * along - s * left, dock.y + s * along + c * left, dock.yaw + yaw_error)
+
+
+def test_field_2026_11_03_a_swerved_reverse_keeps_going() -> None:
+    # Recorded: docks 0.526 m apart, the peer on our right; reversing 0.18 m swung the heading
+    # 7.3 deg, nose toward it. The bare chassis then read < 2 cm, the block came back into our
+    # footprint: collision_monitor stopped the BackUp and every retry was refused.
+    dock = fleet.Pose2D(-3.463, 1.422, -1.3439)
+    peer = _pose_on_dock_axes(dock, 0.107, -0.526, 0.0)
+    swerved = fleet.Pose2D(-3.516, 1.568, dock.yaw - math.radians(7.3))
+    body = fleet.polygon_clearance(
+        fleet.footprint_corners(peer, GEO.body), fleet.footprint_corners(swerved, GEO.body)
+    )
+    assert body < 0.02
+    assert fleet.classify_docked_peer(peer, swerved, dock, GEO) is fleet.DockNeighbour.DOCK_INFRASTRUCTURE
+
+
+def test_a_reverse_that_would_close_on_the_neighbour_is_still_refused() -> None:
+    # Same site, heading swung the other way: reversing swings the tail into the peer.
+    dock = fleet.Pose2D(0.0, 0.0, 0.0)
+    peer = _pose_on_dock_axes(dock, 0.0, -0.48, 0.0)
+    tail_in = fleet.Pose2D(0.0, 0.0, math.radians(10.0))
+    assert fleet.reversing_closes_on(peer, tail_in, GEO.body)
+    assert fleet.classify_docked_peer(peer, tail_in, dock, GEO) is fleet.DockNeighbour.TOO_CLOSE
+
+
+def test_off_our_dock_rail_the_neighbour_is_a_full_obstacle() -> None:
+    turned = fleet.Pose2D(-1.0, 0.0, math.radians(45.0))
+    elsewhere = fleet.Pose2D(-5.0, 3.0, 0.0)
+    assert fleet.classify_docked_peer(NEIGHBOUR, turned, DOCK, GEO) is fleet.DockNeighbour.OFF_RAIL
+    assert fleet.classify_docked_peer(NEIGHBOUR, elsewhere, DOCK, GEO) is fleet.DockNeighbour.OFF_RAIL
+
+
+def test_dock_verdicts_need_the_feed_listing_our_pose_and_our_dock() -> None:
+    charging = fleet.PeerPose(NEIGHBOUR.x, NEIGHBOUR.y, NEIGHBOUR.yaw, seen_at=0.0)
+    disc = fleet.PeerPose(NEIGHBOUR.x, NEIGHBOUR.y, None, seen_at=0.0)
+    listed = [fleet.Pose2D(NEIGHBOUR.x + 0.01, NEIGHBOUR.y, NEIGHBOUR.yaw)]
+
+    infra = fleet.DockNeighbour.DOCK_INFRASTRUCTURE
+    assert fleet.dock_verdicts([charging], listed, DOCK, DOCK, GEO) == [infra]
+    # Not on /fleet/docked_peers (moving, or an older GUI): full obstacle.
+    assert fleet.dock_verdicts([charging], [], DOCK, DOCK, GEO) == [None]
+    # A heading-less disc is never matched.
+    assert fleet.dock_verdicts([disc], listed, DOCK, DOCK, GEO) == [None]
+    # Our own pose or dock pose unknown/stale: full obstacle.
+    assert fleet.dock_verdicts([charging], listed, None, DOCK, GEO) == [None]
+    assert fleet.dock_verdicts([charging], listed, DOCK, None, GEO) == [None]
+
+
+def test_is_listed_docked_matches_the_same_pose_only() -> None:
+    peer = fleet.PeerPose(1.0, 2.0, 0.5, seen_at=0.0)
+    assert fleet.is_listed_docked(peer, [fleet.Pose2D(1.02, 2.0, 0.52)])
+    assert not fleet.is_listed_docked(peer, [fleet.Pose2D(1.2, 2.0, 0.5)])  # another robot
+    assert not fleet.is_listed_docked(peer, [fleet.Pose2D(1.0, 2.0, 0.9)])  # same spot, other heading
+
+
+def test_a_reverse_straight_at_a_peer_behind_us_is_still_refused() -> None:
+    # Same heading, peer right behind: its axis distance never changes, the gap does.
+    dock = fleet.Pose2D(0.0, 0.0, 0.0)
+    close_behind = fleet.Pose2D(-0.61, 0.0, 0.0)
+    assert fleet.reversing_closes_on(close_behind, dock, GEO.body)
+
+
+def test_the_too_close_guard_needs_fresh_odometry_to_stand_down() -> None:
+    assert not fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=9.9, hold_until=5.0)
+    assert fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=9.9, hold_until=12.0), "held after motion"
+    assert fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=8.0, hold_until=5.0), "stale"
+    assert fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=-math.inf, hold_until=-math.inf), "never seen"

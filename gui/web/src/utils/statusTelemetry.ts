@@ -32,7 +32,7 @@ const highLevelFields: Fields<HighLevelStatus> = {
     current_area: int16, current_path: int16, current_path_index: int16,
     total_swaths: int16, completed_swaths: int16, skipped_swaths: int16,
     coverage_percent: percent, gps_quality_percent: percent, battery_percent: percent,
-    is_charging: boolean, emergency: boolean,
+    is_charging: boolean, emergency: boolean, stop_reason: string, stop_detail: string,
 };
 const statusFields: Fields<Status> = {
     stamp, mower_status: uint8, reset_cause: uint8, reset_cause_name: string,

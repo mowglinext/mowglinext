@@ -67,9 +67,14 @@ extern "C" {
  * (0x5B). It is armed only while the board is stopped and is carried out at
  * the next boot before the watchdog starts. A log with a committed record is
  * never erased automatically.
+ * v9 replaces odometry dt_millis with a 32-bit acquisition_millis HAL tick
+ * (17->19 bytes). Receivers subtract acquisition time and cumulative ticks
+ * between the same received samples, retaining time across USB packet drops.
+ * Host and firmware must be upgraded together; the compatibility gate blocks
+ * mowing with an older protocol. IMU timing is unchanged.
  * ---------------------------------------------------------------------------*/
 
-#define MOWGLI_PROTOCOL_VERSION 8u
+#define MOWGLI_PROTOCOL_VERSION 9u
 
 /* ---------------------------------------------------------------------------
  * Firmware version (semantic version of THIS firmware build).
@@ -372,11 +377,14 @@ typedef struct {
  * is computed firmware-side using the hardware-timer-accurate dt so the
  * host doesn't have to divide by a jittery USB-arrival interval.
  *
- * Wire size: 17 bytes (must match sizeof(LlOdometry) in ll_datatypes.hpp).
+ * Acquisition time and cumulative ticks identify the same sample. Receivers
+ * subtract both between received samples, including any skipped transmissions.
+ *
+ * Wire size: 19 bytes (must match sizeof(LlOdometry) in ll_datatypes.hpp).
  */
 typedef struct {
   uint8_t type;        /**< PKT_ID_ODOMETRY */
-  uint16_t dt_millis;  /**< Firmware-measured interval since last packet [ms] */
+  uint32_t acquisition_millis; /**< HAL tick at encoder acquisition [ms], wraps at 2^32 */
   int32_t left_ticks;  /**< Signed cumulative left encoder ticks */
   int32_t right_ticks; /**< Signed cumulative right encoder ticks */
   int16_t left_velocity_mm_s;  /**< Signed left wheel velocity [mm/s] */
@@ -674,8 +682,8 @@ typedef struct {
  *     type(1) + button_id(1) + press_duration(1) + crc(2) = 5
  *
  *   pkt_odometry_t:
- *     type(1) + dt_millis(2) + left_ticks(4) + right_ticks(4) +
- *     left_velocity_mm_s(2) + right_velocity_mm_s(2) + crc(2) = 17
+ *     type(1) + acquisition_millis(4) + left_ticks(4) + right_ticks(4) +
+ *     left_velocity_mm_s(2) + right_velocity_mm_s(2) + crc(2) = 19
  *
  *   pkt_reset_cause_t:
  *     type(1) + reset_cause(1) + last_stage_before_reset(1) + crc(2) = 5
@@ -702,7 +710,7 @@ _Static_assert(sizeof(pkt_status_t) == 38u, "pkt_status_t layout unexpected");
 _Static_assert(sizeof(pkt_imu_t) == 41u, "pkt_imu_t layout unexpected");
 _Static_assert(sizeof(pkt_ui_event_t) == 5u,
                "pkt_ui_event_t layout unexpected");
-_Static_assert(sizeof(pkt_odometry_t) == 17u,
+_Static_assert(sizeof(pkt_odometry_t) == 19u,
                "pkt_odometry_t layout unexpected");
 _Static_assert(sizeof(pkt_reset_cause_t) == 5u,
                "pkt_reset_cause_t layout unexpected");

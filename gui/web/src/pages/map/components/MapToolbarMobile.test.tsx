@@ -51,6 +51,7 @@ describe("MapToolbarMobile", () => {
     onUndo: vi.fn(),
     onRedo: vi.fn(),
     onToggleSatellite: vi.fn(),
+    onToggleRotationLocked: vi.fn(),
     onManualMode: vi.fn().mockResolvedValue(undefined),
     onStopManualMode: vi.fn().mockResolvedValue(undefined),
     onBackupMap: vi.fn(),
@@ -104,5 +105,15 @@ describe("MapToolbarMobile", () => {
     await user.click(screen.getByText(en.resetMowingProgress.action));
 
     expect(defaultProps.onResetMowingProgress).toHaveBeenCalledOnce();
+  });
+
+  it("offers the mower-wide rotation lock in the mobile display menu", async () => {
+    const user = userEvent.setup();
+    render(<MapToolbarMobile {...defaultProps} rotationLocked />);
+
+    await user.click(screen.getByLabelText(en.mapToolbarMobile.more));
+    await user.click(screen.getByText(en.mapOffsetPanel.unlockRotation));
+
+    expect(defaultProps.onToggleRotationLocked).toHaveBeenCalledOnce();
   });
 });

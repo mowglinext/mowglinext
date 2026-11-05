@@ -249,7 +249,10 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider, db types.IDBProvi
 		if !result.GPSFresh {
 			result.GPSReceiverFresh, result.GPSReason = receiverFresh, receiverReason
 		}
-		c.JSON(200, result)
+		c.JSON(200, struct {
+			updater.Readiness
+			ROS ROSHealth `json:"ros"`
+		}{result, readROSHealth(ros)})
 	})
 }
 
