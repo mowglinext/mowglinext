@@ -82,6 +82,19 @@ for forbidden in mowgli-mavros mowgli-ntrip mowgli-openmower; do
   fi
 done
 
+section "GUI HTTP liveness probe survives Compose generation"
+
+GUI_SERVICE_BLOCK="$(awk '
+  /^[[:space:]]*#/ { next }
+  /^  gui:$/ { in_service=1 }
+  in_service && /^  [[:alnum:]_]+:$/ && $0 != "  gui:" { exit }
+  in_service { print }
+' "$COMPOSE_FILE")"
+assert_contains "GUI declares a healthcheck" "healthcheck:" "$GUI_SERVICE_BLOCK"
+assert_contains "GUI healthcheck probes local HTTP liveness" "http://127.0.0.1:4006/api/health/live" "$GUI_SERVICE_BLOCK"
+assert_contains "GUI probe has a curl deadline" "--max-time" "$GUI_SERVICE_BLOCK"
+assert_not_contains "GUI liveness does not require ROS readiness" "/api/health/ros" "$GUI_SERVICE_BLOCK"
+
 section "Universal GNSS compose uses the canonical mowgli-gps sidecar"
 
 GPS_SERVICE_BLOCK="$(awk '

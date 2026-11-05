@@ -150,14 +150,18 @@ inline std::optional<Point> areaCentroid(const Ring& ring)
 }
 
 // The dock's own frame, recovered from the two rings map_server builds around the dock pose
-// (`rebuild_dock_polygons`): the body spans local x in [-dock_body_length, 0] and the approach
-// corridor lies directly behind it, further along -x. +x points from the corridor through the
-// body TOWARD THE CHARGING STATION (the robot docks nose-first, staging_x_offset < 0), and x = 0 is
-// the body's station-side edge, i.e. the line through the dock pose.
+// (`rebuild_dock_polygons`): the body is the physical station and the approach corridor lies
+// directly behind it, further along -x. +x points from the corridor through the body TOWARD THE
+// CHARGING STATION (the robot docks nose-first, staging_x_offset < 0), and x = 0 is the line
+// through the dock pose, which the body straddles.
 struct DockFrame
 {
-  Point origin;  // on the station-side edge of the body, on its centre line
+  Point origin;  // the dock pose
   Point axis;  // unit vector, toward the station
+  // The body in this frame.
+  double body_rear{0};
+  double body_front{0};
+  double body_half_width{0};
 
   Point local(Point p) const
   {
@@ -168,8 +172,14 @@ struct DockFrame
 // How far the corridor's station-side edge may sit from the body's rear edge and still count as
 // "directly behind it" (float32 polygon points, nothing more).
 constexpr double kDockRingAdjacency = 0.02;
-inline std::optional<DockFrame> dockFrame(const Ring& body, const Ring& corridor)
+// `pose_ahead_of_rear`: how far the dock pose lies ahead of the body's rear edge (the marker's
+// scale.y). Nothing in the rings says so.
+inline std::optional<DockFrame> dockFrame(const Ring& body,
+                                          const Ring& corridor,
+                                          double pose_ahead_of_rear)
 {
+  if (!std::isfinite(pose_ahead_of_rear) || pose_ahead_of_rear < 0)
+    return std::nullopt;
   const auto body_centre = areaCentroid(body), corridor_centre = areaCentroid(corridor);
   if (!body_centre || !corridor_centre)
     return std::nullopt;
@@ -183,18 +193,26 @@ inline std::optional<DockFrame> dockFrame(const Ring& body, const Ring& corridor
     return (p.x - body_centre->x) * axis.x + (p.y - body_centre->y) * axis.y;
   };
   double body_front = -INFINITY, body_rear = INFINITY, corridor_front = -INFINITY;
+  double half_width = 0;
   for (const auto& p : body)
   {
     body_front = std::max(body_front, along(p));
     body_rear = std::min(body_rear, along(p));
+    half_width =
+        std::max(half_width,
+                 std::abs(-(p.x - body_centre->x) * axis.y + (p.y - body_centre->y) * axis.x));
   }
   for (const auto& p : corridor)
     corridor_front = std::max(corridor_front, along(p));
   // Anything else is not the map_server dock layout: fail closed rather than guess a heading.
   if (std::abs(corridor_front - body_rear) > kDockRingAdjacency)
     return std::nullopt;
-  return DockFrame{{body_centre->x + body_front * axis.x, body_centre->y + body_front * axis.y},
-                   axis};
+  const double pose_along = body_rear + pose_ahead_of_rear;
+  return DockFrame{{body_centre->x + pose_along * axis.x, body_centre->y + pose_along * axis.y},
+                   axis,
+                   -pose_ahead_of_rear,
+                   body_front - pose_along,
+                   half_width};
 }
 
 struct Geometry
@@ -202,11 +220,15 @@ struct Geometry
   std::vector<Ring> allowed;
   std::vector<Ring> blocked;
   std::vector<double> blocked_margins;
-  // Parallel to `blocked` (a missing entry means false): rings a START may lie inside. Only the
-  // dock body is one — the robot legitimately ends a coverage unit in front of the dock, and a
-  // start there must plan its way OUT. Goals, search cells and every path segment still treat the
-  // ring as blocked.
+  // Parallel to `blocked` (a missing entry means false): rings a START may lie inside, or within
+  // their margin. Only the dock body is one — a failed docking stops right next to the station,
+  // and a start there must plan its way OUT. Goals, search cells and every path segment still
+  // treat the ring as blocked.
   std::vector<bool> start_exempt;
+  // Parallel to `blocked`: a START in such a ring's margin (not in the ring) may leave. Another
+  // fleet member's station: its object stays blocked even for that leg, since we have no reason to
+  // drive onto it, and a margin must not strand a robot that a lateral skirt put there.
+  std::vector<bool> margin_start_exempt;
   // Set only when the snapshot carries exactly one dock body and one approach corridor; without
   // it a start inside the dock body cannot be oriented and stays START_OCCUPIED.
   std::optional<DockFrame> dock;
@@ -221,27 +243,44 @@ struct Geometry
   {
     return i < start_exempt.size() && start_exempt[i];
   }
-  bool insideStartExempt(Point p) const
+  bool marginStartExempt(std::size_t i) const
+  {
+    return i < margin_start_exempt.size() && margin_start_exempt[i];
+  }
+  bool insideMarginStartExempt(Point p) const
   {
     for (std::size_t i = 0; i < blocked.size(); ++i)
-      if (startExempt(i) && inside(p, blocked[i]))
+      if (marginStartExempt(i) && !inside(p, blocked[i]) &&
+          ringDistance(p, blocked[i]) <= margin(i) + kEpsilon)
         return true;
     return false;
   }
-  // The same geometry without the start-exempt rings: what a start inside one of them is judged
-  // and connected against.
-  Geometry withoutStartExempt() const
+  bool insideStartExempt(Point p) const
   {
+    for (std::size_t i = 0; i < blocked.size(); ++i)
+      if (startExempt(i) && ringDistance(p, blocked[i]) <= margin(i) + kEpsilon)
+        return true;
+    return false;
+  }
+  // What a start at `p` inside an exempt zone is judged and connected against: the dock body is
+  // gone only if `p` is in its zone, and every peer station keeps its object but loses its margin.
+  Geometry relaxedForStart(Point p) const
+  {
+    const bool in_own_zone = insideStartExempt(p);
     Geometry result;
     result.allowed = allowed;
     result.dock = dock;
     result.obstacle_margin = obstacle_margin;
     for (std::size_t i = 0; i < blocked.size(); ++i)
     {
-      if (startExempt(i))
+      if (startExempt(i) && in_own_zone)
+      {
+        // The ring itself is ground the leg may cross, even where no area covers the station.
+        result.allowed.push_back(blocked[i]);
         continue;
+      }
       result.blocked.push_back(blocked[i]);
-      result.blocked_margins.push_back(margin(i));
+      result.blocked_margins.push_back(marginStartExempt(i) ? 0.0 : margin(i));
     }
     return result;
   }

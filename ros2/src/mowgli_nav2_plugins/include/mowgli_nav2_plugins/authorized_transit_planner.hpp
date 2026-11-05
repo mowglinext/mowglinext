@@ -87,6 +87,9 @@ private:
                                                  const std::function<void()>& check) const;
   bool costSegmentClear(transit::Point a, transit::Point b) const;
   bool costSegmentClear(transit::Point a, transit::Point b, std::vector<double>& cuts) const;
+  bool costClearOutsideStartExempt(transit::Point a,
+                                   transit::Point b,
+                                   const transit::Geometry& geometry) const;
   geometry_msgs::msg::PoseStamped anchor(const geometry_msgs::msg::PoseStamped& endpoint,
                                          const transit::Geometry& geometry) const;
   bool pathValid(const nav_msgs::msg::Path& path, const transit::Geometry& geometry) const;

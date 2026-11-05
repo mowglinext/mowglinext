@@ -206,7 +206,11 @@ these hold (`classify_docked_peer`):
    (+0.5 m either end), within 0.30 m of its axis and 30° of its heading;
 2. the peer's bare chassis is ≥ 2 cm clear of the strip our chassis sweeps
    along that rail (a charger BEHIND our dock keeps blocking the undock);
-3. the two bare chassis are ≥ 2 cm apart right now;
+3. the two bare chassis are ≥ 2 cm apart right now, unless we are reversing out
+   and that does not close on the peer. The block lands inside our footprint,
+   where collision_monitor and BackUp refuse every direction, so bringing it back
+   mid-reverse strands the robot (field 2026-11-03: UNDOCK_FAILED after 0.18 m, a
+   7° swerve). This check only stops us driving in (forward wheel motion, held 5 s);
 4. our grown footprint is within 0.5 m of the peer's block — so the block is
    back for the first transit after the undock (0.54 m at 1.5 m) and before
    an approach to the staging pose reaches it.
@@ -218,6 +222,21 @@ cases 2/3 log a warning that the docks must be moved apart. With a LiDAR the
 scanner still sees the neighbour's real body and the LOCAL `obstacle_layer`
 keeps old fleet marks until a scan raytraces them away; both are unverified
 on hardware.
+
+**Stations of the other mowers.** A docked peer is only visible while its robot is
+on it, and an empty station is an object too. So each robot advertises its dock pose
+in its fleet identity, the registry persists it with the peer's datum (it stays
+known while the peer is offline), and the feed publishes `/fleet/peer_docks`, every
+peer's station in our map frame, every tick, once empty when the last peer is removed.
+`map_server` builds a ring sized like our own station (one body model per robot; a
+peer with a very different station is approximated). Lethal in the mask, forbidden in
+the transit geometry, a hole or notch in coverage, re-projected per robot, and never in
+`areas.dat` or the map push. It can never block our own dock (`peer_dock_rings.hpp`):
+overlapping our dock or corridor = ignored with a warning, margin reaching the corridor
+= object only. This complements `/fleet/peer_obstacles`, which still follows the robot.
+A peer's pose changing, or the first list after a restart, rebuilds the mask (transit
+pauses for the settle time, about 1.5 s) and changes the plan fingerprint of any area
+the station touches, so an interrupted mow of that area restarts.
 
 **Yield rule** (the coordinator, only while coordination is ON): when a peer
 WITH PRIORITY (smaller `robot_id`) is autonomous within `yield_distance_m`

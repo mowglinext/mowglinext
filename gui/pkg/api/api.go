@@ -36,6 +36,7 @@ func NewAPI(dbProvider types.IDBProvider, dockerProvider types.IDockerProvider, 
 	webDir := string(webDirectory)
 	registerWebUI(r, webDir)
 	apiGroup := r.Group("/api")
+	HealthRoutes(apiGroup, rosProvider)
 	ConfigRoute(apiGroup, dbProvider)
 	SettingsRoutes(apiGroup, dbProvider)
 	GNSSRoutes(apiGroup, dbProvider, dockerProvider)

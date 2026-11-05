@@ -669,6 +669,13 @@
     "baseHeadingUncertaintyTooltip": "Standard deviation (rad) of the base heading used to seed the fusion graph at charging contact. Lower = the calibrated heading is trusted more."
   },
   "diagnosticsPage": {
+    "guiHttp": "GUI HTTP",
+    "guiResponding": "Responding",
+    "rosTransport": "ROS connection",
+    "transportHealthy": "Heartbeat verified",
+    "transportChecking": "Waiting for heartbeat",
+    "transportDisconnected": "Disconnected",
+    "transportHint": "The GUI can respond while ROS is unavailable. A healthy connection does not confirm fresh sensors or mower readiness.",
     "verdictEmergency": "Emergency",
     "verdictAttention": "Attention required",
     "verdictAllGood": "All good",
