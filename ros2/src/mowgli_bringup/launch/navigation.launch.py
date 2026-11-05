@@ -1230,6 +1230,17 @@ def generate_launch_description() -> LaunchDescription:
                     "use_composition": "False",
                 }.items(),
             ),
+            # The recovery's "BackUp" in navigate_to_pose*.xml is served by this node
+            # (server_name="retrace"), NOT by Nav2's behavior_server: it only undoes the last
+            # piece the robot drove, straight back, so a recovery can never reverse the mower
+            # across the boundary (field 2026-10-26, 0.21 m -> 0.57 m outside, lethal).
+            Node(
+                package="mowgli_nav2_plugins",
+                executable="retrace_server_node",
+                name="retrace_server",
+                output="screen",
+                parameters=[{"use_sim_time": use_sim_time}],
+            ),
         ]
     )
 
