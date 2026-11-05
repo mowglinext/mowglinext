@@ -238,6 +238,10 @@ mowgli:
     # goto_timeout_sec: COMMAND_GOTO (~/goto_pose) — a NavigateToPose run longer
     # than this is cancelled and the GOTO ends on GOTO_FAILED. 0 = no limit.
     goto_timeout_sec: 300.0
+    # goto_deadline_sec: ~/goto action — a goal still active this long after it
+    # was accepted (root-guard pauses included) is stopped and ends DEADLINE.
+    # 0 = no limit.
+    goto_deadline_sec: 1800.0
     # Localization-quality gate (LocalizationGuard): pause blade-on mowing
     # while ABSOLUTE POSITION is untrustworthy. Field incident 2026-08-02:
     # >60 s plain-GPS fallback (σ ≈ 1.5 m) drove the robot out of the area

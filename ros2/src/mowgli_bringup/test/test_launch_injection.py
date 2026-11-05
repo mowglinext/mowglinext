@@ -342,6 +342,18 @@ def test_full_system_injects_goto_timeout() -> None:
     assert eval(expression, {"robot_params": {"goto_timeout_sec": 120}}) == 120.0
 
 
+def test_full_system_injects_goto_deadline() -> None:
+    """The ~/goto action's overall bound, root-guard pauses included."""
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    values = _node_parameter_values(call, "goto_deadline_sec")
+    assert len(values) == 1
+    expression = compile(ast.Expression(body=values[0]), "launch", "eval")
+    assert eval(expression, {"robot_params": {}}) == 1800.0
+    assert eval(expression, {"robot_params": {"goto_deadline_sec": 0}}) == 0.0
+    assert eval(expression, {"robot_params": {"goto_deadline_sec": 600}}) == 600.0
+
+
 @pytest.mark.parametrize(
     "key,cast,default,configured",
     [
