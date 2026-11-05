@@ -42,6 +42,7 @@
 #include "mowgli_behavior/escape_nodes.hpp"
 #include "mowgli_behavior/external_rain_state.hpp"
 #include "mowgli_behavior/fleet_yield_service.hpp"
+#include "mowgli_behavior/goto_action.hpp"
 #include "mowgli_behavior/goto_request.hpp"
 #include "mowgli_behavior/localization_health.hpp"
 #include "mowgli_behavior/recording_nodes.hpp"
@@ -212,6 +213,18 @@ public:
     catch (const std::exception& ex)
     {
       RCLCPP_WARN(get_logger(), "Tree halt during shutdown: %s", ex.what());
+    }
+    if (goto_action_server_)
+    {
+      try
+      {
+        goto_action_server_->shutdown();
+      }
+      catch (const std::exception& ex)
+      {
+        RCLCPP_WARN(get_logger(), "GotoAction shutdown: %s", ex.what());
+      }
+      goto_action_server_.reset();
     }
     logger_.reset();
     rest_observer_.reset();
@@ -1046,42 +1059,7 @@ private:
         {
           RCLCPP_INFO(
               get_logger(), "GotoPose: received x=%.2f y=%.2f yaw=%.2f", req->x, req->y, req->yaw);
-          if (mowgli_interfaces::updateMaintenanceActive())
-          {
-            resp->success = false;
-            resp->reason = "maintenance_active";
-            return;
-          }
-          if (!rest_observer_ || !goto_missing_branches_.empty())
-          {
-            RCLCPP_WARN(get_logger(),
-                        "GotoPose: rejected (unsupported_tree: missing %s)",
-                        goto_missing_branches_.empty() ? "observer"
-                                                       : goto_missing_branches_.c_str());
-            resp->success = false;
-            resp->reason = "unsupported_tree";
-            return;
-          }
-          // The thresholds GotoLowBatteryGuard trips on. Without them the
-          // battery check cannot be made, so the request is refused.
-          mowgli_behavior::GotoBatteryLimits battery;
-          if (!blackboard_->get("battery_low_pct", battery.low_pct) ||
-              !blackboard_->get("battery_critical_pct", battery.critical_pct) ||
-              !blackboard_->get("battery_critical_voltage", battery.critical_voltage))
-          {
-            RCLCPP_ERROR(get_logger(), "GotoPose: rejected (battery_unknown: thresholds missing)");
-            resp->success = false;
-            resp->reason = "battery_unknown";
-            return;
-          }
-          const auto decision =
-              mowgli_behavior::acceptGotoRequest(*context_,
-                                                 req->x,
-                                                 req->y,
-                                                 req->yaw,
-                                                 battery,
-                                                 now(),
-                                                 std::chrono::steady_clock::now());
+          const auto decision = admitGoto(req->x, req->y, req->yaw);
           resp->success = decision.accepted;
           resp->reason = decision.reason;
           if (!decision.accepted)
@@ -1621,6 +1599,19 @@ private:
       goto_timeout_sec = kDefaultGotoTimeoutSec;
     }
     blackboard_->set("goto_timeout_sec", goto_timeout_sec);
+    // ~/goto action: longest an accepted goal may stay active, root-guard
+    // pauses included, before it is stopped (COMMAND_STOP) and ended with
+    // DEADLINE. Same validation as goto_timeout_sec; 0 disables.
+    constexpr double kDefaultGotoDeadlineSec = 1800.0;
+    goto_deadline_sec_ = declare_parameter<double>("goto_deadline_sec", kDefaultGotoDeadlineSec);
+    if (!mowgli_behavior::isValidGotoTimeout(goto_deadline_sec_))
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "goto_deadline_sec=%f is invalid (0 = no limit, else > 0) — using %.0f s",
+                   goto_deadline_sec_,
+                   kDefaultGotoDeadlineSec);
+      goto_deadline_sec_ = kDefaultGotoDeadlineSec;
+    }
 
     // Tail-current gate for the charge-hold auto-resume (IsChargeCurrentBelow,
     // BatteryGuard / CriticalBatteryDock) — see condition_nodes.hpp for why
@@ -1681,6 +1672,14 @@ private:
                    tree_file.c_str(),
                    goto_missing_branches_.c_str());
     }
+    goto_action_server_ = std::make_unique<mowgli_behavior::GotoActionServer>(
+        *this,
+        context_,
+        [this](double x, double y, double yaw)
+        {
+          return admitGoto(x, y, yaw);
+        },
+        goto_deadline_sec_);
 
     // Optionally attach a console logger for debugging BT state transitions.
     const bool bt_debug_logging = declare_parameter<bool>("bt_debug_logging", false);
@@ -1691,6 +1690,36 @@ private:
     }
 
     RCLCPP_INFO(get_logger(), "Behavior tree loaded successfully");
+  }
+
+  /// Admission shared by ~/goto_pose and the ~/goto action: the node-level
+  /// checks, then acceptGotoRequest, which stores the target and raises
+  /// COMMAND_GOTO when it accepts.
+  mowgli_behavior::GotoRequestDecision admitGoto(double x, double y, double yaw)
+  {
+    if (mowgli_interfaces::updateMaintenanceActive())
+    {
+      return {false, "maintenance_active"};
+    }
+    if (!rest_observer_ || !goto_missing_branches_.empty())
+    {
+      RCLCPP_WARN(get_logger(),
+                  "admitGoto: rejected (unsupported_tree: missing %s)",
+                  goto_missing_branches_.empty() ? "observer" : goto_missing_branches_.c_str());
+      return {false, "unsupported_tree"};
+    }
+    // The thresholds GotoLowBatteryGuard trips on. Without them the battery
+    // check cannot be made, so the request is refused.
+    mowgli_behavior::GotoBatteryLimits battery;
+    if (!blackboard_->get("battery_low_pct", battery.low_pct) ||
+        !blackboard_->get("battery_critical_pct", battery.critical_pct) ||
+        !blackboard_->get("battery_critical_voltage", battery.critical_voltage))
+    {
+      RCLCPP_ERROR(get_logger(), "admitGoto: rejected (battery_unknown: thresholds missing)");
+      return {false, "battery_unknown"};
+    }
+    return mowgli_behavior::acceptGotoRequest(
+        *context_, x, y, yaw, battery, now(), std::chrono::steady_clock::now());
   }
 
   void setupTimer()
@@ -1814,6 +1843,10 @@ private:
       std::lock_guard<std::mutex> lock(context_->context_mutex);
       context_->tree_at_rest = at_rest;
     }
+    if (goto_action_server_)
+    {
+      goto_action_server_->afterTick(rest_observer_ && rest_observer_->gotoRunning());
+    }
     bool persist_resume_state = command_resume_persistence_requested_.exchange(false);
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
@@ -1929,6 +1962,8 @@ private:
   BT::Tree tree_;
   /// Computes BTContext::tree_at_rest around every tick (see tickTree).
   std::unique_ptr<mowgli_behavior::GotoRestObserver> rest_observer_;
+  std::unique_ptr<mowgli_behavior::GotoActionServer> goto_action_server_;
+  double goto_deadline_sec_{0.0};
   /// Branches GOTO needs that tree_ lacks ("" when the tree supports GOTO).
   std::string goto_missing_branches_;
   std::unique_ptr<BT::StdCoutLogger> logger_;

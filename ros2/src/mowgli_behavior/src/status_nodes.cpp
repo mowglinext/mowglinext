@@ -16,6 +16,7 @@
 #include "mowgli_behavior/status_nodes.hpp"
 
 #include "mowgli_behavior/coverage_persistence.hpp"
+#include "mowgli_behavior/goto_outcome.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
 #include "mowgli_behavior/stop_reason.hpp"
 
@@ -177,6 +178,26 @@ BT::NodeStatus SetStopReason::tick()
               ctx->stop_reason.c_str(),
               ctx->stop_detail.empty() ? "" : " — ",
               ctx->stop_detail.c_str());
+  return BT::NodeStatus::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// SetGotoOutcome
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus SetGotoOutcome::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  auto outcome = getInput<std::string>("outcome");
+  if (!outcome || !isGotoOutcome(*outcome))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "SetGotoOutcome: invalid outcome '%s'",
+                 outcome ? outcome->c_str() : outcome.error().c_str());
+    return BT::NodeStatus::SUCCESS;
+  }
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  ctx->goto_outcome = *outcome;
   return BT::NodeStatus::SUCCESS;
 }
 

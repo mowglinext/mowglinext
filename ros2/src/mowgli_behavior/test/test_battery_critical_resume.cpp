@@ -69,6 +69,7 @@ using mowgli_behavior::IsCriticalDockFailureLatched;
 using mowgli_behavior::IsLastDockSucceeded;
 using mowgli_behavior::IsResumeUndockAllowed;
 using mowgli_behavior::LatchCriticalDockFailure;
+using mowgli_behavior::SetGotoOutcome;
 
 // ---------------------------------------------------------------------------
 // Global ROS2 init/shutdown
@@ -172,6 +173,7 @@ protected:
     factory.registerNodeType<IsResumeUndockAllowed>("IsResumeUndockAllowed");
     factory.registerNodeType<EndSession>("EndSession");
     factory.registerNodeType<ClearCommand>("ClearCommand");
+    factory.registerNodeType<SetGotoOutcome>("SetGotoOutcome");
 
     // Default to "charger active, current already tapered" so tests that only
     // care about battery_percent don't also have to think about the new gate.

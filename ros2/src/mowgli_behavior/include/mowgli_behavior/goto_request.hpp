@@ -173,6 +173,7 @@ inline GotoRequestDecision acceptGotoRequest(BTContext& ctx,
   // mower, as for every other accepted command except STOP.
   clearStopReason(ctx);
   ctx.goto_target_pose = pose;
+  ctx.goto_outcome.clear();
   ctx.current_command = kCommandGoto;
   return {true, ""};
 }
@@ -212,6 +213,10 @@ public:
           {
             rest_nodes_.push_back(node);
           }
+          else
+          {
+            goto_node_ = node;
+          }
           subscribers_.push_back(node->subscribeToStatusChange(
               [this](BT::TimePoint, const BT::TreeNode&, BT::NodeStatus, BT::NodeStatus status)
               {
@@ -243,6 +248,13 @@ public:
     return root_status == BT::NodeStatus::SUCCESS && completed_this_tick_;
   }
 
+  /// Whether GotoSequence is RUNNING after the tick: false while a root guard
+  /// or the battery logic holds the tree during a GOTO.
+  bool gotoRunning() const
+  {
+    return goto_node_ != nullptr && goto_node_->status() == BT::NodeStatus::RUNNING;
+  }
+
   std::size_t restBranchCount() const
   {
     return rest_nodes_.size();
@@ -268,6 +280,7 @@ public:
 private:
   std::vector<std::string> found_;
   std::vector<const BT::TreeNode*> rest_nodes_;
+  const BT::TreeNode* goto_node_{nullptr};
   std::vector<BT::TreeNode::StatusChangeSubscriber> subscribers_;
   bool completed_this_tick_{false};
 };

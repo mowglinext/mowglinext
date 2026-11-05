@@ -649,6 +649,7 @@
                   <Fallback name="CriticalBatteryResumeOrGotoTerminate">
                     <Sequence name="GotoTerminatesOnCriticalBattery">
                       <IsCommand command="9"/>
+                      <SetGotoOutcome outcome="CRITICAL_BATTERY_DOCKED"/>
                       <PublishHighLevelStatus state="1" state_name="GOTO_CRITICAL_BATTERY_DOCKED"/>
                       <ClearCommand/>
                     </Sequence>
@@ -1559,9 +1560,11 @@
                     <Sequence>
                       <DockRobot dock_id="home_dock" dock_type="simple_charging_dock"/>
                       <IsLastDockSucceeded/>
+                      <SetGotoOutcome outcome="LOW_BATTERY_DOCKED"/>
                       <PublishHighLevelStatus state="1" state_name="GOTO_LOW_BATTERY_DOCKED"/>
                     </Sequence>
                     <Sequence>
+                      <SetGotoOutcome outcome="LOW_BATTERY_DOCK_FAILED"/>
                       <PublishHighLevelStatus state="0" state_name="GOTO_LOW_BATTERY_DOCK_FAILED"/>
                       <SetStopReason reason="DOCK_NAV_FAILED" detail="The mower could not drive back to the dock and is standing where it stopped."/>
                     </Sequence>
@@ -1577,9 +1580,11 @@
               <Fallback name="GotoNavOrFailed">
                 <Sequence>
                   <NavigateToPose timeout_sec="{goto_timeout_sec}"/>
+                  <SetGotoOutcome outcome="REACHED"/>
                   <PublishHighLevelStatus state="1" state_name="GOTO_REACHED"/>
                 </Sequence>
                 <Sequence>
+                  <SetGotoOutcome outcome="FAILED"/>
                   <PublishHighLevelStatus state="1" state_name="GOTO_FAILED"/>
                   <AlwaysSuccess/>
                 </Sequence>
