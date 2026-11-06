@@ -136,6 +136,10 @@ if(BUILD_TESTING)
     test/test_webots_controller_remaps.py
   )
 
+  ament_add_pytest_test(test_webots_supervisor_clock
+    test/test_webots_supervisor_clock.py
+  )
+
   # ---- test_firmware_wheel_model ----
   # firmware_wheel_model.hpp is header-only and ROS-free; no ROS deps needed.
   ament_add_gtest(test_firmware_wheel_model
