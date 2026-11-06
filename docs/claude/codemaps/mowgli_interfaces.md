@@ -126,7 +126,7 @@ None — this package builds no executables. Every type below is served/publishe
 | `/obstacle_tracker/clear_obstacle` | `srv/ClearObstacle` | `obstacle_tracker_node.cpp:149` | none in-repo |
 | `/calibrate_imu_yaw_node/calibrate` | `srv/CalibrateImuYaw` | `calibrate_imu_yaw_node.cpp:252` | GUI `gui/pkg/api/calibration.go:132,200` |
 | `/calibrate_imu_yaw_node/calibrate_dock` | `action/CalibrateDock` | `calibrate_imu_yaw_node.cpp:314-316` | none — GUI drives `~/dock_calibration/start` (`std_srvs/Trigger`, `:338`; `calibration.go:84`) and watches the status topic |
-| `/behavior_tree_node/goto` | `action/Goto` | `mowgli_behavior/include/mowgli_behavior/goto_action.hpp` (`GotoActionServer`) | none in-tree (external ROS clients) |
+| `/behavior_tree_node/goto` | `action/Goto` | `mowgli_behavior/include/mowgli_behavior/goto_action.hpp` (`GotoActionServer`) | `mowgli_monitoring` `mqtt_bridge_node` (`<prefix>/goto`) |
 | `/plan_coverage` | `action/PlanCoverage` | `ros2/src/mowgli_coverage/src/coverage_server.cpp:110` | `coverage_nodes.cpp:1914` (`PlanCoverageArea`) |
 
 ### Parameters
