@@ -97,6 +97,11 @@ from robot_config_util import (
 )
 
 
+# bringup depends on fusion_graph; keep simulator snapshot validation shared.
+sys.path.insert(0, os.path.join(get_package_share_directory("fusion_graph"), "launch"))
+from fusion_graph_simulation_geometry import simulation_geometry_parameters  # noqa: E402
+
+
 def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # Package directories
@@ -157,6 +162,10 @@ def generate_launch_description() -> LaunchDescription:
         "use_sim_time",
         default_value="false",
         description="Use simulation (Gazebo) clock when true.",
+    )
+    simulation_geometry_arg = DeclareLaunchArgument(
+        "simulation_geometry", default_value="",
+        description="Internal complete simulator datum/antenna snapshot; requires simulation time.",
     )
 
 
@@ -1300,6 +1309,7 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "use_sim_time": use_sim_time,
             "use_magnetometer": use_magnetometer,
+            "simulation_geometry": LaunchConfiguration("simulation_geometry"),
             # LiDAR-gated: no scanner -> no scan factors, and no subscription to
             # a topic nothing publishes. See lidar_gated() above.
             "use_lidar_map_anchor": lidar_gated(use_lidar_map_anchor),
@@ -1337,14 +1347,11 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {"use_sim_time": use_sim_time,
-             "datum_lat": datum_lat,
-             "datum_lon": datum_lon,
              # Lever arm from the same mowgli_robot.yaml source fusion_graph
              # reads (gps_x/gps_y). Without this cog_to_imu silently used its
              # hardcoded 0.30/0.0 default and de-biased COG with the wrong
              # lever arm on any non-default antenna mount.
-             "lever_arm_x": gps_x,
-             "lever_arm_y": gps_y,
+             **simulation_geometry_parameters(datum_lat, datum_lon, gps_x, gps_y),
              "enable_mag_cal": enable_mag_cal,
              "mag_calibration_path": mag_cal_path,
              "stationary_seed_rate_hz": cog_stationary_rate,
@@ -1522,6 +1529,7 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             use_sim_time_arg,
+            simulation_geometry_arg,
             use_lidar_arg,
             use_magnetometer_arg,
             use_lidar_map_anchor_arg,
