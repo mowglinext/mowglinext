@@ -5,6 +5,7 @@
 #include <memory>
 #include <thread>
 
+#include <nav2_costmap_2d/clear_costmap_service.hpp>
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <nav2_smac_planner/smac_planner_2d.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
@@ -66,12 +67,14 @@ protected:
   void SetUp() override
   {
     auto options = rclcpp::NodeOptions().parameter_overrides(std::vector<rclcpp::Parameter>{
-        {"plugins", std::vector<std::string>{"sensor", "inflation", "keepout"}},
+        {"plugins", std::vector<std::string>{"sensor", "inflation"}},
+        {"filters", std::vector<std::string>{"keepout"}},
         {"sensor.plugin", "mowgli_nav2_plugins::RecentObstacleLayer"},
         {"sensor.observation_sources", ""},
         {"sensor.footprint_clearing_enabled", false},
         {"inflation.plugin", "nav2_costmap_2d::InflationLayer"},
         {"inflation.inflation_radius", 0.68},
+        {"inflation.cost_scaling_factor", 7.0},
         {"keepout.plugin", "mowgli_nav2_plugins::GardenKeepoutLayer"},
         {"global_frame", "map"},
         {"robot_base_frame", "base_footprint"},
@@ -85,7 +88,8 @@ protected:
     ASSERT_EQ(costmap->on_configure(rclcpp_lifecycle::State()), nav2::CallbackReturn::SUCCESS);
     auto* plugins = costmap->getLayeredCostmap()->getPlugins();
     obstacles = std::dynamic_pointer_cast<mowgli_nav2_plugins::RecentObstacleLayer>((*plugins)[0]);
-    keepout = std::dynamic_pointer_cast<mowgli_nav2_plugins::GardenKeepoutLayer>((*plugins)[2]);
+    keepout = std::dynamic_pointer_cast<mowgli_nav2_plugins::GardenKeepoutLayer>(
+        (*costmap->getLayeredCostmap()->getFilters())[0]);
     ASSERT_TRUE(obstacles && keepout);
     planner_node = std::make_shared<nav2::LifecycleNode>("garden_planner");
     planner_node->declare_parameter("GridBased.smoother.max_its", 0);
@@ -115,6 +119,36 @@ protected:
     keepout->receiveMask(m);
     costmap->getLayeredCostmap()->updateMap(0, 0, 0);
     costmap->getLayeredCostmap()->updateMap(0, 0, 0);
+  }
+  void observation(double px, double py)
+  {
+    obstacles->clearStaticObservations(true, true);
+    sensor_msgs::msg::PointCloud2 cloud;
+    sensor_msgs::PointCloud2Modifier modifier(cloud);
+    modifier.setPointCloud2FieldsByString(1, "xyz");
+    modifier.resize(1);
+    sensor_msgs::PointCloud2Iterator<float> x(cloud, "x"), y(cloud, "y"), z(cloud, "z");
+    *x = px;
+    *y = py;
+    *z = .3;
+    geometry_msgs::msg::Point origin;
+    obstacles->addStaticObservation(nav2_costmap_2d::Observation(origin, cloud, 10, 0, 10, 0),
+                                    true,
+                                    GetParam());
+  }
+  unsigned updateAndCompareFullRebuild()
+  {
+    auto* layered = costmap->getLayeredCostmap();
+    layered->updateMap(0, 0, 0);
+    auto* grid = costmap->getCostmap();
+    const size_t cells = size_t{grid->getSizeInCellsX()} * grid->getSizeInCellsY();
+    const std::vector<unsigned char> bounded(grid->getCharMap(), grid->getCharMap() + cells);
+    unsigned x0, xn, y0, yn;
+    layered->getBounds(&x0, &xn, &y0, &yn);
+    keepout->reset();
+    layered->updateMap(0, 0, 0);
+    EXPECT_EQ(bounded, std::vector<unsigned char>(grid->getCharMap(), grid->getCharMap() + cells));
+    return (xn - x0) * (yn - y0);
   }
   unsigned char at(double x, double y)
   {
@@ -376,6 +410,50 @@ TEST_P(GardenCostmapTest, ExplicitRecoveryTogglePreservesGeometryAndReenablesBou
   EXPECT_EQ(at(0, 0), nav2_costmap_2d::LETHAL_OBSTACLE);
   apply(m);
   EXPECT_EQ(at(-3, 0), nav2_costmap_2d::LETHAL_OBSTACLE);
+}
+
+TEST_P(GardenCostmapTest, BoundedUpdatesPreserveMaskAndOldInflationExtent)
+{
+  auto m = mask(-10, -10, 400, 400);
+  carve(*m, -9, -9, 9, 9);
+  carve(*m, 2.5, -2, 3, 2, 100);
+  apply(m);
+  observation(1.5, 0);
+  EXPECT_LT(updateAndCompareFullRebuild(), 10000U);
+  // ceil(0.68 / 0.08) reaches nine cells, beyond continuous radius bounds.
+  EXPECT_GT(at(2.2, 0), 0);
+  EXPECT_EQ(at(2.4, 0), 0);  // the retained drawn wall must not be inflated
+  observation(-5, 0);
+  updateAndCompareFullRebuild();
+  EXPECT_EQ(at(1.5, 0), 0);
+  EXPECT_EQ(at(2.2, 0), 0);
+  EXPECT_EQ(at(-5, 0), nav2_costmap_2d::LETHAL_OBSTACLE);
+  obstacles->clearStaticObservations(true, true);
+  updateAndCompareFullRebuild();
+  EXPECT_EQ(at(-5, 0), 0);
+  EXPECT_EQ(at(-4.3, 0), 0);
+  EXPECT_EQ(at(2.7, 0), nav2_costmap_2d::LETHAL_OBSTACLE);
+}
+
+TEST_P(GardenCostmapTest, SelectiveClearInvalidatesAndRebuildsAllAuthorization)
+{
+  auto m = mask(-10, -10, 400, 400);
+  carve(*m, -9, -9, 9, 9);
+  apply(m);
+  nav2_costmap_2d::ClearCostmapService clearing(costmap, *costmap);
+  ASSERT_TRUE(clearing.clearEntirely({"sensor"}));
+  EXPECT_FALSE(keepout->isCurrent());
+  EXPECT_EQ(at(9.5, 0), nav2_costmap_2d::LETHAL_OBSTACLE);
+  costmap->getLayeredCostmap()->updateMap(0, 0, 0);
+  EXPECT_TRUE(keepout->isCurrent());
+  EXPECT_EQ(at(9.5, 0), nav2_costmap_2d::LETHAL_OBSTACLE);
+  EXPECT_EQ(at(0, 0), 0);
+  costmap->resetLayers();
+  EXPECT_FALSE(keepout->isCurrent());
+  EXPECT_EQ(at(0, 0), nav2_costmap_2d::LETHAL_OBSTACLE);
+  costmap->getLayeredCostmap()->updateMap(0, 0, 0);
+  EXPECT_TRUE(keepout->isCurrent());
+  EXPECT_EQ(at(9.5, 0), nav2_costmap_2d::LETHAL_OBSTACLE);
 }
 
 TEST_P(GardenCostmapTest, RemovedSensorMarksAndTheirInflationDoNotPersist)
