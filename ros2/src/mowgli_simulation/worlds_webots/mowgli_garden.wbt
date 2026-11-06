@@ -31,14 +31,27 @@ DirectionalLight {
   castShadows TRUE
 }
 
-Floor {
-  size 20 20
-  tileSize 1 1
-  appearance PBRAppearance {
-    baseColor 0.25 0.55 0.20
-    roughness 1.0
-    metalness 0
-  }
+# Native equivalent of R2025a Floor with this world's untextured appearance:
+# https://github.com/cyberbotics/webots/blob/R2025a/projects/objects/floors/protos/Floor.proto
+# The visible lawn is 20x20 m at z=0. As in Floor, the collision Plane is
+# infinite, static and uses the default contact material (no friction override).
+# Native nodes also work in stripped offline SDKs without Floor/Parquetry PROTOs.
+DEF GARDEN_GROUND Solid {
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0.25 0.55 0.20
+        roughness 1.0
+        metalness 0
+      }
+      geometry Plane { size 20 20 }
+    }
+  ]
+  name "floor"
+  model "floor"
+  boundingObject Plane { size 20 20 }
+  contactMaterial "default"
+  locked TRUE
 }
 
 # A static obstacle on the (+x, +y) side of the lawn so the controller
