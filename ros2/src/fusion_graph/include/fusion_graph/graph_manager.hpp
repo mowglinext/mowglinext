@@ -263,6 +263,7 @@ private:
   {
     double dx = 0.0;  // body-frame integration since last tick
     double dy = 0.0;
+    double wheel_travel_m = 0.0;  // sum of raw interval translation magnitudes
     double dtheta_wheel = 0.0;
     double dtheta_gyro = 0.0;
     double dt_total = 0.0;
