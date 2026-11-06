@@ -33,6 +33,48 @@ struct HardwareBridgeBladeStatusTestPeer
     float wz;
   };
 
+  static void input(HardwareBridgeNode& node, double vx, double wz = 0.0)
+  {
+    // Exercise the callback at its nominal first-step period without sleeps.
+    node.cmd_vel_pipeline_.last_shaped_ns_ = steadyNowNs() - 100'000'000;
+    auto msg = std::make_shared<geometry_msgs::msg::TwistStamped>();
+    msg->twist.linear.x = vx;
+    msg->twist.angular.z = wz;
+    node.on_cmd_vel(msg);
+  }
+  static void mode(HardwareBridgeNode& node, uint8_t mode, bool report = true)
+  {
+    if (report)
+    {
+      auto status = std::make_shared<mowgli_interfaces::msg::HighLevelStatus>();
+      status->state = mode;
+      node.on_high_level_status(status);
+    }
+    else
+    {
+      node.current_mode_ = mode;
+    }
+  }
+  static void staleStatus(HardwareBridgeNode& node)
+  {
+    node.last_high_level_status_steady_ns_ = steadyNowNs() - 3'000'000'000;
+  }
+  static uint8_t mode(const HardwareBridgeNode& node)
+  {
+    return node.current_mode_;
+  }
+  static double digCommand(const HardwareBridgeNode& node)
+  {
+    return node.last_cmd_vx_;
+  }
+  static void escaping(HardwareBridgeNode& node, bool active)
+  {
+    node.dig_escaping_ = active;
+  }
+  static void expireSlew(HardwareBridgeNode& node)
+  {
+    node.cmd_vel_pipeline_.last_shaped_ns_ = steadyNowNs() - 1'000'000'000;
+  }
   static std::string requested(const HardwareBridgeNode& node)
   {
     return node.blade_requested_direction_;
@@ -143,6 +185,10 @@ struct HardwareBridgeBladeStatusTestPeer
     node.on_emergency_stop(req,
                            std::make_shared<mowgli_interfaces::srv::EmergencyStop::Response>());
   }
+  static bool reopen(HardwareBridgeNode& node)
+  {
+    return node.serial_->open();
+  }
   static void disconnect(HardwareBridgeNode& node)
   {
     node.close_serial_for_reconnect();
@@ -233,6 +279,7 @@ protected:
     options.parameter_overrides({rclcpp::Parameter("serial_port", ptsname(master)),
                                  rclcpp::Parameter("lift_recovery_mode", true),
                                  rclcpp::Parameter("lift_blade_resume_delay_sec", 1.0)});
+    options.use_intra_process_comms(true);
     node = std::make_shared<HardwareBridgeNode>(options);
     drain();
   }
@@ -645,6 +692,156 @@ TEST_F(HardwareBridgeParametersTest, NonPositiveCmdVelSlewLimitFailsStartup)
                                rclcpp::Parameter("cmd_vel_angular_accel_limit", 0.0)});
 
   EXPECT_THROW(std::make_shared<HardwareBridgeNode>(options), std::invalid_argument);
+}
+
+class BridgePrecision : public BladeLiftRecovery
+{
+protected:
+  LlCmdVel input(double vx, uint8_t mode = HL_MODE_AUTONOMOUS, bool report = true)
+  {
+    Peer::mode(*node, mode, report);
+    Peer::input(*node, vx);
+    LlCmdVel result{};
+    unsigned count = 0;
+    for (const auto& bytes : drainPackets())
+    {
+      if (bytes.size() == sizeof(LlCmdVel) && bytes[0] == PACKET_ID_LL_CMD_VEL)
+      {
+        std::memcpy(&result, bytes.data(), sizeof(result));
+        ++count;
+      }
+    }
+    EXPECT_EQ(count, 1u);
+    EXPECT_FLOAT_EQ(Peer::digCommand(*node), result.linear_x);
+    return result;
+  }
+};
+
+TEST_F(BridgePrecision, AutonomousCreepStartsFromRestInBothDirections)
+{
+  for (double sign : {1.0, -1.0})
+  {
+    input(0.0);
+    const auto wire = input(sign * 0.03);
+    EXPECT_NEAR(wire.linear_x, sign * 0.03, 1e-6);
+  }
+}
+
+TEST_F(BridgePrecision, AutonomousNormalStartupKeepsFiniteAcceleration)
+{
+  EXPECT_NEAR(input(0.3).linear_x, 0.03, 1e-6);
+  EXPECT_NEAR(input(0.3).linear_x, 0.06, 1e-5);
+  EXPECT_FLOAT_EQ(input(0.0).linear_x, 0.0);
+  EXPECT_NEAR(input(0.3).linear_x, 0.03, 1e-6);
+}
+
+TEST_F(BridgePrecision, ManualModesKeepConfiguredInputAndWireDeadband)
+{
+  ASSERT_TRUE(node->set_parameter(rclcpp::Parameter("min_linear_vel", 0.08)).successful);
+  for (auto mode : {HL_MODE_IDLE, HL_MODE_RECORDING, HL_MODE_MANUAL_MOWING})
+  {
+    input(0.0, mode);
+    EXPECT_FLOAT_EQ(input(0.03, mode).linear_x, 0.0);
+    EXPECT_FLOAT_EQ(input(-0.03, mode).linear_x, 0.0);
+    EXPECT_FLOAT_EQ(input(0.3, mode).linear_x, 0.0);
+    EXPECT_FLOAT_EQ(input(0.3, mode).linear_x, 0.0);
+    EXPECT_NEAR(input(0.3, mode).linear_x, 0.09, 1e-5);
+  }
+}
+
+TEST_F(BridgePrecision, ModeHandoverCannotInheritSuppressedManualRamp)
+{
+  EXPECT_FLOAT_EQ(input(0.3, HL_MODE_RECORDING).linear_x, 0.0);
+  // This is a .03 internal ramp but an actual zero command on the wire.
+  EXPECT_NEAR(input(0.3).linear_x, 0.03, 1e-6);
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_MANUAL_MOWING).linear_x, 0.0);
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+}
+
+TEST_F(BridgePrecision, NullFallbackNeverGrantsPrecisionBeforeBtOrAfterBtNull)
+{
+  EXPECT_FLOAT_EQ(input(0.0, HL_MODE_NULL).linear_x, 0.0);
+  EXPECT_EQ(Peer::mode(*node), HL_MODE_NULL);
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_NULL, false).linear_x, 0.0);
+  EXPECT_EQ(Peer::mode(*node), HL_MODE_AUTONOMOUS);
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_NULL).linear_x, 0.0);
+  EXPECT_EQ(Peer::mode(*node), HL_MODE_AUTONOMOUS);
+  Peer::status(*node, EMERGENCY_BIT_LATCH);
+  drainPackets();
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_NULL).linear_x, 0.0);
+  EXPECT_EQ(Peer::mode(*node), HL_MODE_NULL);
+}
+
+TEST_F(BridgePrecision, StaleStatusAndReconnectRestoreInputDeadband)
+{
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+  Peer::staleStatus(*node);
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_AUTONOMOUS, false).linear_x, 0.0);
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+  Peer::disconnect(*node);
+  // Reopen only the existing PTY; no timers or physical serial device.
+  ASSERT_TRUE(Peer::reopen(*node));
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_AUTONOMOUS, false).linear_x, 0.0);
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+}
+
+TEST_F(BridgePrecision, ReversalPassesThroughZeroAndExplicitStopIsImmediate)
+{
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+  EXPECT_FLOAT_EQ(input(-0.03).linear_x, 0.0);
+  EXPECT_NEAR(input(-0.03).linear_x, -0.03, 1e-6);
+  EXPECT_FLOAT_EQ(input(0.0).linear_x, 0.0);
+}
+
+TEST_F(BridgePrecision, DigOwnsOutputAndResumptionStartsAtRest)
+{
+  for (int i = 0; i < 5; ++i)
+    input(0.3);
+  Peer::escaping(*node, true);
+  Peer::input(*node, 0.3);
+  EXPECT_TRUE(drainPackets().empty());
+  Peer::sendCmdVel(*node, 0.0, 0.0);
+  drainPackets();
+  Peer::escaping(*node, false);
+  EXPECT_NEAR(input(0.3).linear_x, 0.03, 1e-6);
+}
+
+TEST_F(BridgePrecision, AppliedTelemetryEqualsWrittenPacketAndFailedSendPublishesNothing)
+{
+  auto group = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
+  rclcpp::SubscriptionOptions options;
+  options.callback_group = group;
+  unsigned count = 0;
+  geometry_msgs::msg::TwistStamped applied;
+  auto sub = node->create_subscription<geometry_msgs::msg::TwistStamped>(
+      "/hardware_bridge/cmd_vel_applied",
+      rclcpp::QoS(10),
+      [&](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
+      {
+        applied = *msg;
+        ++count;
+      },
+      options);
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_callback_group(group, node->get_node_base_interface());
+  const auto wire = input(0.025);
+  executor.spin_some();
+  ASSERT_EQ(count, 1u);
+  EXPECT_DOUBLE_EQ(applied.twist.linear.x, wire.linear_x);
+  EXPECT_DOUBLE_EQ(applied.twist.angular.z, wire.angular_z);
+  closeMaster();
+  Peer::input(*node, 0.3);
+  executor.spin_some();
+  EXPECT_EQ(count, 1u);
+}
+
+TEST_F(BridgePrecision, FailedWriteDoesNotRecordAttemptedDigCommand)
+{
+  input(0.03);
+  const double before = Peer::digCommand(*node);
+  closeMaster();
+  Peer::input(*node, 0.3);
+  EXPECT_DOUBLE_EQ(Peer::digCommand(*node), before);
 }
 
 }  // namespace mowgli_hardware
