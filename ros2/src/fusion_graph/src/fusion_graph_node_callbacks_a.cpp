@@ -627,11 +627,8 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
         // autoloaded yaw is wrong.
         graph_->ForceAnchor(snap->node_index, anchor, 0.005, 5.0 * M_PI / 180.0);
         ResetLidarTiming();
-        // ForceAnchor shifts latest_.pose without bumping node_index;
-        // OnTimer's "node_index changed" check would miss it, leaving
-        // map→odom anchored at the pre-override correction. Force a
-        // refresh so the next OnTimer recomputes against fresh dr_*.
-        t_map_odom_anchor_valid_ = false;
+        // ForceAnchor publishes an estimate revision; OnTimer applies its
+        // rigid correction while retaining any DR tail beyond the head.
         rtk_autoload_override_done_ = true;
         RCLCPP_WARN(get_logger(),
                     "fusion_graph: RTK-Fixed override of autoloaded pose — "

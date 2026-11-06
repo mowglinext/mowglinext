@@ -67,8 +67,10 @@ std::optional<TickOutput> GraphManager::Tick(double now_s)
   const bool stationary =
       motion_xy_sq < params_.stationary_motion_thresh_m * params_.stationary_motion_thresh_m &&
       abs_dtheta < params_.stationary_motion_thresh_theta;
-  if (stationary && now_s - last_node_time_s_ < params_.stationary_node_period_s)
+  if (stationary && TrulyStationaryLocked() &&
+      now_s - last_node_time_s_ < params_.stationary_node_period_s)
   {
+    ApplyQueuedGnssLocked();
     return std::nullopt;
   }
 
@@ -124,11 +126,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   //       estimate is dominated by encoder slip and the gyro is strictly
   //       better. The wheel sigma_theta path only fires when no gyro
   //       sample arrived this tick (pre-cog seed window, IMU restart).
-  const double stationary_thresh_xy_m = params_.stationary_thresh_xy_m * tick_scale;
-  const double stationary_thresh_theta = params_.stationary_thresh_theta * tick_scale;
-  const bool wheel_stationary = std::abs(accum_.dx) < stationary_thresh_xy_m &&
-                                std::abs(accum_.dy) < stationary_thresh_xy_m &&
-                                std::abs(accum_.dtheta_wheel) < stationary_thresh_theta;
+  const bool wheel_stationary = WheelStationaryLocked();
   // Publish to AddGyroDelta so it can decide whether to EMA-update
   // the bias estimate from incoming samples. wheel_stationary_now_
   // stays at the latest tick's value until the next tick, so the
@@ -142,7 +140,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // through to the gyro path so yaw still tracks reality.
   const bool gyro_disagrees =
       accum_.max_abs_gyro_rad_per_s > params_.stationary_gyro_thresh_rad_per_s;
-  const bool truly_stationary = wheel_stationary && !gyro_disagrees;
+  const bool truly_stationary = TrulyStationaryLocked();
 
   double dtheta;
   double sigma_theta;
@@ -415,30 +413,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // 3. Queued unary factors. Wrap in Huber when caller flagged the
   // measurement as outlier-prone (RTK-Float / single fix on GPS;
   // magnetometer on yaw).
-  if (queue_.gnss)
-  {
-    gtsam::SharedNoiseModel noise = MakeDiagonal({
-        queue_.gnss->sigma,
-        queue_.gnss->sigma,
-    });
-    if (queue_.gnss->robust)
-    {
-      noise = gtsam::noiseModel::Robust::Create(gtsam::noiseModel::mEstimator::Huber::Create(
-                                                    params_.huber_k_gps),
-                                                noise);
-    }
-    const auto factor_key = queue_.gnss->target_node ? PoseKey(*queue_.gnss->target_node) : k_curr;
-    // A windowed asynchronous rebase may remove a historical target after
-    // QueueGnss validated it. Drop that stale observation rather than silently
-    // applying it to the current state at the wrong epoch.
-    if (!queue_.gnss->target_node || HasPoseAt(*queue_.gnss->target_node))
-    {
-      new_factors_.add(GnssLeverArmFactor(factor_key,
-                                          queue_.gnss->xy,
-                                          gtsam::Vector2(params_.lever_arm_x, params_.lever_arm_y),
-                                          noise));
-    }
-  }
+  AddQueuedGnssFactorLocked(new_factors_, next_index_);
   if (queue_.yaw)
   {
     gtsam::SharedNoiseModel noise = MakeDiagonal({queue_.yaw->sigma});
@@ -505,39 +480,8 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     }
   }
 
-  // 5. Marginal covariance — throttled. marginalCovariance is O(node
-  //    count) on the Bayes tree path and dominates CPU once the graph
-  //    passes a few thousand nodes. The value is only consumed by the
-  //    diagnostics topic + published Odometry, neither of which needs
-  //    10 Hz freshness — recomputing every Nth tick (default 10 → 1 Hz)
-  //    keeps the displayed σ accurate without burning CPU on every
-  //    Tick. Re-uses the previous tick's covariance when not due.
-  Eigen::Matrix3d cov = Eigen::Matrix3d::Identity() * 1.0;
-  ++ticks_since_cov_;
-  const bool refresh_cov = ticks_since_cov_ >= std::max(1, params_.cov_update_every_n);
-  if (refresh_cov)
-  {
-    try
-    {
-      cov = isam_.marginalCovariance(k_curr);
-    }
-    catch (const std::exception&)
-    {
-      // leave conservative default
-    }
-    ticks_since_cov_ = 0;
-  }
-  else if (latest_)
-  {
-    cov = latest_->covariance;
-  }
-
-  TickOutput out;
-  out.pose = PoseAt(next_index_);
-  out.covariance = cov;
-  out.node_index = next_index_;
-  out.timestamp = now_s;
-  latest_ = out;
+  RefreshLatestLocked(next_index_, now_s);
+  const auto out = *latest_;
 
   // 6. Reset for next tick.
   ++next_index_;
