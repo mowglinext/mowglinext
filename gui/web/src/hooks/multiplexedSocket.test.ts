@@ -57,6 +57,71 @@ describe('MultiplexedSocket recovery', () => {
         vi.restoreAllMocks();
     });
 
+    it('replaces an unresolved handshake after five seconds and restores active subscriptions', () => {
+        const {listener} = subscribe('highLevelStatus');
+        subscribe('map');
+        const old = current();
+        vi.advanceTimersByTime(4_999);
+        expect(old.close).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(old.close).toHaveBeenCalledTimes(1);
+        expect(socket.getStatus()).toBe('closed');
+
+        vi.advanceTimersByTime(1_000);
+        const replacement = current();
+        expect(replacement).not.toBe(old);
+        replacement.onopen?.();
+        expect(replacement.operations()).toEqual([
+            {op: 'subscribe', topic: 'highLevelStatus'}, {op: 'subscribe', topic: 'map'},
+        ]);
+        replacement.frame({topic: 'highLevelStatus', data: {state_name: 'IDLE'}});
+        expect(listener).toHaveBeenCalledWith({state_name: 'IDLE'}, true);
+    });
+
+    it('cancels the handshake deadline when a healthy socket opens', () => {
+        subscribe('map');
+        const ws = current();
+        expect(vi.getTimerCount()).toBe(1);
+        vi.advanceTimersByTime(4_999);
+        ws.onopen?.();
+        // A latched-only connection needs neither a handshake nor silence timer.
+        expect(vi.getTimerCount()).toBe(0);
+        vi.advanceTimersByTime(120_000);
+        expect(ws.close).not.toHaveBeenCalled();
+        expect(socket.getStatus()).toBe('open');
+    });
+
+    it.each(['onclose', 'onerror'] as const)('cancels the old handshake deadline after %s', event => {
+        subscribe('map');
+        const old = current();
+        vi.advanceTimersByTime(1_000);
+        old[event]?.();
+        expect(vi.getTimerCount()).toBe(1); // Only the existing reconnect backoff.
+        vi.advanceTimersByTime(1_000);
+        const replacement = current();
+        replacement.onopen?.();
+        expect(vi.getTimerCount()).toBe(0);
+        vi.advanceTimersByTime(5_000);
+        expect(replacement.close).not.toHaveBeenCalled();
+        expect(socket.getStatus()).toBe('open');
+    });
+
+    it('ignores an already queued handshake timeout from an intentionally retired socket', () => {
+        const schedule = vi.spyOn(window, 'setTimeout');
+        const {unsubscribe} = subscribe('map');
+        const oldDeadline = schedule.mock.calls.find(([, delay]) => delay === 5_000)?.[0];
+        expect(oldDeadline).toBeTypeOf('function');
+        unsubscribe();
+        subscribe('map');
+        const replacement = current();
+        replacement.onopen?.();
+
+        (oldDeadline as () => void)();
+        expect(replacement.close).not.toHaveBeenCalled();
+        expect(socket.getStatus()).toBe('open');
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
     it('recovers a silent open socket without waiting for close and restores active topics', () => {
         const {listener} = subscribe('status');
         subscribe('map');
@@ -234,6 +299,6 @@ describe('MultiplexedSocket recovery', () => {
         unregister();
         expect(socket.getStatus()).toBe('connecting');
         expect(FakeWebSocket.instances).toHaveLength(2);
-        expect(vi.getTimerCount()).toBe(0);
+        expect(vi.getTimerCount()).toBe(1); // The new socket's handshake deadline only.
     });
 });

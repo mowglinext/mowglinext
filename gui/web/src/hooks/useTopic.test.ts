@@ -1,5 +1,5 @@
 import {act, renderHook} from '@testing-library/react';
-import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 const subscribe = vi.fn();
 const unsubscribe = vi.fn();
@@ -54,5 +54,45 @@ describe('useTopic enabled flag', () => {
         expect(unsubscribe).toHaveBeenCalledTimes(1);
         // A hidden panel must not keep showing the last live sample as current.
         expect(result.current.data).toBe(initial);
+    });
+});
+
+
+describe('useTopic delivery timestamps', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-10-15T00:00:00Z'));
+        subscribe.mockReset();
+        unsubscribe.mockReset();
+    });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('preserves wall timestamps by default and offers monotonic delivery liveness', () => {
+        const listeners = new Map<string, (raw: unknown) => void>();
+        subscribe.mockImplementation((topic: string, listener: (raw: unknown) => void) => {
+            listeners.set(topic, listener);
+            return unsubscribe;
+        });
+        const {result} = renderHook(() => ({
+            wall: useTopic('wall', {}, {withTimestamp: true}),
+            monotonic: useTopic('monotonic', {}, {withTimestamp: true, timestampClock: 'monotonic'}),
+        }));
+        act(() => {
+            listeners.get('wall')?.({state: 3});
+            listeners.get('monotonic')?.({state: 3});
+        });
+        const firstWall = result.current.wall.lastMessageAt!;
+        const firstMonotonic = result.current.monotonic.lastMessageAt!;
+        expect(firstWall).toBe(Date.now());
+        expect(firstMonotonic).toBe(performance.now());
+
+        act(() => {
+            vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+            vi.advanceTimersByTime(500);
+            listeners.get('wall')?.({state: 4});
+            listeners.get('monotonic')?.({state: 4});
+        });
+        expect(result.current.wall.lastMessageAt).toBe(firstWall - 60 * 60 * 1000 + 500);
+        expect(result.current.monotonic.lastMessageAt).toBe(firstMonotonic + 500);
     });
 });

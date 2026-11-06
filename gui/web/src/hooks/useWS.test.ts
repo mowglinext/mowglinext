@@ -19,6 +19,7 @@ vi.mock('react-use-websocket', () => ({default: (uri: string | null, options: Op
     mock.dedicated = {uri, options};
     return {sendJsonMessage: mock.sendJsonMessage};
 }}));
+
 vi.mock('./multiplexedSocket.ts', () => ({
     getMultiplexedSocket: () => ({
         subscribe: mock.subscribe,
@@ -34,6 +35,13 @@ vi.mock('./multiplexedSocket.ts', () => ({
 import {useWS} from './useWS';
 
 describe('useWS multiplex teardown', () => {
+    it('does not queue outbound commands for a later connection', () => {
+        const {result} = renderHook(() => useWS(vi.fn(), vi.fn(), vi.fn()));
+        result.current.sendJsonMessage({twist: {}});
+        expect(mock.sendJsonMessage).toHaveBeenCalledWith({twist: {}}, false);
+        result.current.sendJsonMessage({twist: {linear: 1}}, true);
+        expect(mock.sendJsonMessage).toHaveBeenLastCalledWith({twist: {linear: 1}}, false);
+    });
     beforeEach(() => {
         mock.statusListeners.clear();
         mock.subscribe.mockReset();
@@ -149,9 +157,9 @@ describe('useWS dedicated base64 stream', () => {
         message(btoa('first line'));
         message(btoa('next line'));
         expect(onData.mock.calls).toEqual([['first line', true], ['next line', false]]);
-        expect(result.current.sendJsonMessage).toBe(mock.sendJsonMessage);
+        expect(typeof result.current.sendJsonMessage).toBe('function');
         result.current.sendJsonMessage({fixture: 'command'});
-        expect(mock.sendJsonMessage).toHaveBeenCalledExactlyOnceWith({fixture: 'command'});
+        expect(mock.sendJsonMessage).toHaveBeenCalledExactlyOnceWith({fixture: 'command'}, false);
         act(() => result.current.stop());
         expect(mock.dedicated.uri).toBeNull();
     });
