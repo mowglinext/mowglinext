@@ -56,6 +56,7 @@
   <test_depend>rosgraph_msgs</test_depend>
   <test_depend>yaml_cpp_vendor</test_depend>
   <test_depend>yaml-cpp</test_depend>
+  <test_depend>ament_cmake_ros</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>python3-yaml</test_depend>
 

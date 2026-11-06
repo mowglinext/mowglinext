@@ -334,8 +334,9 @@ controller_server:
         # --- RegulatedPurePursuitController (primary) params ---
         max_linear_vel: 0.30            # transit speed cap (m/s)
         # 0.16 kept conservative. The old host clamp (kMinLinVel=0.15) is gone:
-        # hardware_bridge now floors |vx| at the RUNTIME param min_linear_vel
-        # (hardware_bridge_node.cpp, default 0.05), so this MAY be lowered.
+        # min_linear_vel (default 0.05) is a soft clamp outside fresh BT AUTONOMOUS;
+        # autonomous precision targets retain finite slew without that clamp.
+        # Keep this independent conservative RPP approach setting unchanged.
         min_approach_linear_velocity: 0.16
         approach_velocity_scaling_dist: 0.6
         # Lookahead: velocity-scaled = lookahead_time × v, clamped to
