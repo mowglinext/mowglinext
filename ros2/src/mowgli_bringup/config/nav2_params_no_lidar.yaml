@@ -40,12 +40,10 @@ planner_server:
 global_costmap:
   global_costmap:
     ros__parameters:
-      # ORDER IS LOAD-BEARING: inflation_layer BEFORE keepout_filter, so the
-      # keepout mask (recorded boundary + drawn obstacles) is NOT inflated —
-      # only the static_layer cells are. See the global_costmap block in
-      # nav2_params_base.yaml; test_nav2_params.py pins this in both variants.
-      # fleet_layer sits before inflation_layer so a peer's footprint IS inflated.
-      plugins: ["fleet_layer", "inflation_layer", "keepout_filter"]
+      # Inflate fleet peers in the sensor grid, then apply authorization in the
+      # separate final grid; retained mask cells must never become inflation seeds.
+      plugins: ["fleet_layer", "inflation_layer"]
+      filters: ["keepout_filter"]
 
       # fleet_layer: the other fleet members' footprints as lethal cells
       # (docs/MULTI_ROBOT.md). Without a LiDAR nothing else on this robot can
