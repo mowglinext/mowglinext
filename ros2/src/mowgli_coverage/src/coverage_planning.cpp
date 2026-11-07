@@ -2092,7 +2092,8 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
     const std::vector<std::pair<double, double>>& pts,
     double min_turn_rad,
     const PivotJoinLimits& limits,
-    std::vector<bool>* is_twin)
+    std::vector<bool>* is_twin,
+    double min_turn_radius)
 {
   if (pts.size() < 3 || limits.sweep_radius <= 0.0)
   {
@@ -2109,6 +2110,64 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
   {
     return std::hypot(a.first - b.first, a.second - b.second) < cg::kPivotCornerMaxStepM;
   };
+  // A generated offset can spread one sharp corner across a short bevel.
+  // Classify same-direction turns together only where their intervening chord
+  // is shorter than a minimum-radius arc could have. Using the smaller turn
+  // at either end preserves sampled arcs at (or above) the minimum radius,
+  // including coarse samples. Existing twins break a cluster.
+  std::vector<double> turns(pts.size(), 0.0);
+  std::vector<bool> tight(pts.size(), false);
+  std::vector<bool> aggregate(pts.size(), false);
+  if (min_turn_radius > 0.0)
+  {
+    for (std::size_t i = 1; i + 1 < pts.size(); ++i)
+    {
+      if (!same(pts[i], pts[i - 1]) && !same(pts[i], pts[i + 1]))
+      {
+        const double incoming =
+            std::atan2(pts[i].second - pts[i - 1].second, pts[i].first - pts[i - 1].first);
+        const double outgoing =
+            std::atan2(pts[i + 1].second - pts[i].second, pts[i + 1].first - pts[i].first);
+        turns[i] = std::atan2(std::sin(outgoing - incoming), std::cos(outgoing - incoming));
+        const double angle = std::abs(turns[i]);
+        if (angle > cg::kPivotCornerMinTurnRad && angle <= min_turn_rad)
+        {
+          const double across = std::hypot(pts[i + 1].first - pts[i - 1].first,
+                                           pts[i + 1].second - pts[i - 1].second);
+          // Circumradius also protects irregularly sampled valid arcs: a short
+          // chord may have much longer neighbours on the SAME safe circle.
+          tight[i] = across + 1e-12 < 2.0 * min_turn_radius * std::sin(angle);
+        }
+      }
+    }
+    for (std::size_t first = 1; first + 1 < pts.size();)
+    {
+      std::size_t last = first;
+      double total = std::abs(turns[first]);
+      while (last + 2 < pts.size())
+      {
+        const double a = turns[last], b = turns[last + 1];
+        const double chord = std::hypot(pts[last + 1].first - pts[last].first,
+                                        pts[last + 1].second - pts[last].second);
+        const double minimum_chord =
+            2.0 * min_turn_radius * std::sin(0.5 * std::min(std::abs(a), std::abs(b)));
+        if (a * b <= 0.0 || !tight[last] || !tight[last + 1] || chord + 1e-12 >= minimum_chord)
+        {
+          break;
+        }
+        total += std::abs(b);
+        ++last;
+      }
+      if (last > first && total > min_turn_rad)
+      {
+        for (std::size_t k = first; k <= last; ++k)
+        {
+          aggregate[k] = true;
+        }
+      }
+      first = last + 1;
+    }
+  }
   std::vector<std::pair<double, double>> out;
   out.reserve(pts.size() + 16);
   out.push_back(pts.front());
@@ -2129,7 +2188,10 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
     const double outx = pts[i + 1].first - pts[i].first;
     const double outy = pts[i + 1].second - pts[i].second;
     const double turn = headingError(std::atan2(iny, inx), std::atan2(outy, outx));
-    if (turn > min_turn_rad && pivotSweepFits(pts[i].first, pts[i].second, limits))
+    // This retained zero-radius corner requires a stop even when a whole
+    // pivot disc does not fit. The twin is not a clearance certificate: FTC
+    // must check an executable signed arc at the actual pose before rotating.
+    if (turn > min_turn_rad || aggregate[i])
     {
       out.push_back(pts[i]);  // bit-exact twin: FTC stops here and rotates in place
       if (track)
@@ -2668,10 +2730,11 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     // A corner the fillet could not round is still a zero-radius corner. FTC
     // drives one as a curve unless it is a pivot corner, sweeping the nose wide
     // of the plan (field 2026-10-10: 65 such ring corners, FTC wedged against
-    // the hedge at three of them). Turn it in place instead, where the pivot
-    // sweep fits (pivotSweepFits, as for pivot joins). After the clamp, so the
-    // sweep is judged at the pose the robot will actually drive.
-    rounded = pivotSharpCorners(rounded, kSharpCornerPivotRad, pivot_limits, &is_twin);
+    // the hedge at three of them). Mark the required stopped reorientation;
+    // runtime checks must permit its actual signed arc. Unlike creating a new
+    // pivot join, classifying an existing corner cannot leave it unmarked when
+    // its conservative full-disc test fails.
+    rounded = pivotSharpCorners(rounded, kSharpCornerPivotRad, pivot_limits, &is_twin, min_radius);
     // Connector discontinuities were split before rounding, so every remaining
     // join in this sub-path is either part of an original segment, tangent to a
     // real connector arc, or an explicit pivot corner.
