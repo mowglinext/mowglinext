@@ -29,8 +29,8 @@ on:
   #      BLOCKED. A job skipped by an `if:` condition, in contrast, reports as
   #      skipped and satisfies branch protection — hence the `changes` job
   #      below, which moves the path filtering from the trigger into a job gate.
+  # Feature-stack PRs need the same gates; path filtering stays in the changes job.
   pull_request:
-    branches: [main, dev]
 
 concurrency:
   group: ros2-ci-${{ github.workflow }}-${{ github.ref }}
