@@ -321,6 +321,10 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
 - **`mow_angle_deg`** is a BT/blackboard param, not a `coverage_server` param: template
   `mowgli_robot.yaml:338` → `full_system.launch.py:250` → `behavior_tree_node.cpp:947`.
 
+## Charging stations
+
+`coverage_server` subscribes to `/map_server_node/transit_geometry` (latched) and plans around its `dock_body` rings: `buildCellFromGoal` grows each by `obstacle_margin` and `subtractKeepoutFromField` makes it a hole (inside the area), a notch (across the recorded line; a station cutting the area in two keeps the largest side and logs a WARN) or nothing (no overlap: the plan stays bit-identical). They also feed the pivot sweep limits. A plan fails after `kDockGeometryWait` if no snapshot ever arrived, the preview fails at once. They are deliberately NOT in `get_mowing_area` obstacles, which the GUI writes back to `areas.dat`.
+
 ## Pitfalls
 
 - Coverage-slot rules are CLAUDE.md Invariants 7 and 8 plus the "What NOT to Do" bans (no F2C turn

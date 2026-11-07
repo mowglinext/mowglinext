@@ -123,6 +123,9 @@ if(BUILD_TESTING)
     ${rclcpp_TARGETS} ${geometry_msgs_TARGETS} ${mowgli_interfaces_TARGETS})
   find_package(ament_cmake_pytest REQUIRED)
 
+  ament_add_pytest_test(test_cutting_tool_frame
+    test/test_cutting_tool_frame.py
+  )
   ament_add_pytest_test(test_sim_navsat_rtk_fix
     test/test_sim_navsat_rtk_fix.py
   )
@@ -140,6 +143,10 @@ if(BUILD_TESTING)
   )
   ament_add_pytest_test(test_webots_controller_remaps
     test/test_webots_controller_remaps.py
+  )
+
+  ament_add_pytest_test(test_webots_supervisor_clock
+    test/test_webots_supervisor_clock.py
   )
 
   # ---- test_firmware_wheel_model ----

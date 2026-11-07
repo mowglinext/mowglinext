@@ -29,6 +29,7 @@ func (remoteAccessFakeDocker) ContainerCreateService(context.Context, types.Serv
 }
 func (remoteAccessFakeDocker) ContainerRemove(context.Context, string, bool) error { return nil }
 func (remoteAccessFakeDocker) ContainerStart(context.Context, string) error        { return nil }
+func (remoteAccessFakeDocker) ContainerRestart(context.Context, string) error      { return nil }
 func (remoteAccessFakeDocker) ContainerStop(context.Context, string) error         { return nil }
 func (remoteAccessFakeDocker) ContainerInspect(context.Context, string) (types.ContainerDetails, error) {
 	return types.ContainerDetails{}, nil

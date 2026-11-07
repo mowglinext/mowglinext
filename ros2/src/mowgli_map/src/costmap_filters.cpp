@@ -485,12 +485,38 @@ void MapServerNode::publish_keepout_mask()
     }
   }
 
+  // The dock body is a real object: lethal, with the same body band a drawn
+  // obstacle gets, because the mask is the only body model a point planner has.
+  // The robot parks inside it, which refuses nothing: BackUp and docking_server
+  // check the LOCAL costmap, the transit planner lets a start in here plan its
+  // way out, and BoundaryRecovery runs with the keepout filter off.
+  if (has_dock_exclusion_ && dock_body_polygon_.points.size() >= 3)
+  {
+    stamp_window_cells(dock_body_polygon_, obstacle_band, 100, cell_hits_obstacle);
+  }
+  // Other fleet members' stations, before the carve-out: our corridor stays ours.
+  for (const auto& peer : peer_dock_rings_)
+  {
+    stamp_window_cells(peer.polygon,
+                       peer.margin_m,
+                       100,
+                       [margin = peer.margin_m](const geometry_msgs::msg::Point32& pt,
+                                                const geometry_msgs::msg::Polygon& ring)
+                       {
+                         return point_in_polygon(pt, ring) ||
+                                (margin > 0.0 &&
+                                 point_to_polygon_distance(static_cast<double>(pt.x),
+                                                           static_cast<double>(pt.y),
+                                                           ring) <= margin);
+                       });
+  }
+
   // Dock corridor carve-out: force every cell inside the corridor polygon
   // back to free (0), no matter what the previous passes set. Smac needs
   // a non-lethal lane through the corridor for post-undock transit, so
-  // this carve overrides obstacle_polygons_, the inner-margin buffer, and
-  // any classification-layer no-go that happens to overlap. The dock body
-  // itself is NOT carved — it stays lethal via OBSTACLE_PERMANENT.
+  // this carve overrides obstacle_polygons_, the inner-margin buffer, the
+  // dock body's band and any classification-layer no-go that happens to
+  // overlap. The dock body itself lies beyond the corridor and stays lethal.
   if (has_dock_exclusion_ && dock_corridor_polygon_.points.size() >= 3)
   {
     stamp_window_cells(dock_corridor_polygon_,
@@ -539,11 +565,15 @@ void MapServerNode::publish_transit_geometry()
     marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
     marker.action = visualization_msgs::msg::Marker::ADD;
     marker.pose.orientation.w = 1;
-    // For obstacle rings the line width carries the same explicit body margin
+    // For forbidden rings the line width carries the same explicit body margin
     // as the keepout mask; for allowed rings it is visualization only.
     marker.scale.x = margin;
+    // LINE_STRIP ignores scale.y. On the dock body it says how far the dock
+    // pose lies ahead of the ring's rear edge, the one number transit::dockFrame
+    // cannot recover from the rings.
+    marker.scale.y = kind == "dock_body" ? dock_body_rear_m_ : 0.0;
     marker.color.a = 1;
-    const bool forbidden = kind == "obstacle" || kind == "dock_body";
+    const bool forbidden = kind == "obstacle" || kind == "dock_body" || kind == "peer_dock";
     marker.color.g = forbidden ? 0 : 1;
     marker.color.r = forbidden ? 1 : 0;
     for (const auto& p : polygon.points)
@@ -567,10 +597,12 @@ void MapServerNode::publish_transit_geometry()
   if (has_dock_exclusion_)
   {
     append(dock_corridor_polygon_, "dock_corridor", 0.01);
-    // Its own namespace: still a forbidden ring for the transit planner, but a START inside it
-    // may plan its way out (the robot ends coverage units in front of the dock).
-    append(dock_body_polygon_, "dock_body", 0);
+    // Its own namespace: a forbidden ring like any obstacle, but a START inside it may plan its
+    // way out (a failed docking stops next to the station). coverage_server reads it too.
+    append(dock_body_polygon_, "dock_body", std::max(0.0, keepout_obstacle_margin_m_));
   }
+  for (const auto& peer : peer_dock_rings_)
+    append(peer.polygon, "peer_dock", peer.margin_m);
   transit_geometry_pub_->publish(snapshot);
 }
 

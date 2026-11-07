@@ -295,6 +295,20 @@ TEST_P(GardenCostmapTest, NarrowConnectionAndSoftBoundaryCostsSurvive)
                    .poses.empty());
 }
 
+TEST_P(GardenCostmapTest, MaskValuesKeepNav2CostQuantization)
+{
+  auto m = mask(0, 0, 101, 1);
+  m->info.resolution = 0.08;
+  for (int value = 0; value <= 100; ++value)
+    m->data[value] = static_cast<int8_t>(value);
+  apply(m);
+  ASSERT_TRUE(keepout->isCurrent());
+  for (int value = 0; value <= 100; ++value)
+    EXPECT_EQ(costmap->getCostmap()->getCost(value, 0),
+              static_cast<unsigned char>(std::lround(value * 254.0 / 100.0)))
+        << "mask value " << value;
+}
+
 TEST_P(GardenCostmapTest, StartupResizeAndEditStayClosedUntilApplied)
 {
   EXPECT_FALSE(keepout->isCurrent());

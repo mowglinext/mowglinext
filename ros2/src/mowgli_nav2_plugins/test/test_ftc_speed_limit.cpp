@@ -43,6 +43,11 @@ struct FTCSpeedLimitTestAccess
   {
     return controller.is_stalled_;
   }
+
+  static void SetOutsideArea(FTCController& controller, bool outside)
+  {
+    controller.outside_area_.store(outside);
+  }
 };
 }  // namespace mowgli_nav2_plugins
 
@@ -366,6 +371,65 @@ TEST_F(FtcSpeedLimit, ReverseEscapeObeysTheSignedExternalCap)
     reverse = std::min(reverse, command);
   }
   EXPECT_LT(reverse, 0.0);
+}
+
+// Boundary-safe reverse (retrace.hpp). Field 2026-10-26: FTC's reverse-escape took the mower from
+// 0.00 m to 0.33 m outside the recorded area. The reverse now needs the robot to be inside every
+// area AND the ground behind it to be a straight piece it just drove forward.
+class FtcBoundarySafeReverse : public FtcSpeedLimit
+{
+protected:
+  // Drive forward 1.5 m so there is a straight track behind the robot, then put a wall ahead.
+  void DriveThenWall()
+  {
+    SetParameter("check_obstacles", true);
+    SetParameter("enable_obstacle_deviation", true);
+    SetParameter("reverse_boundary_safe", true);
+    controller_.newPathReceived(StraightPlan(0.0));
+    for (int i = 0; i < 75; ++i)
+    {
+      robot_x_ += 0.02;
+      Tick();
+    }
+    controller_.newPathReceived(StraightPlan(robot_x_));
+    Wall(robot_x_ + 1.0);
+  }
+
+  double LowestCommand(int ticks = 20)
+  {
+    double lowest = 0.0;
+    for (int i = 0; i < ticks; ++i)
+    {
+      lowest = std::min(lowest, Tick());
+    }
+    return lowest;
+  }
+};
+
+TEST_F(FtcBoundarySafeReverse, ReversesOverGroundJustDrivenWhileInsideTheArea)
+{
+  DriveThenWall();
+  EXPECT_LT(LowestCommand(), 0.0) << "a straight forward drive behind the robot may be undone";
+}
+
+TEST_F(FtcBoundarySafeReverse, DoesNotReverseWhileOutsideTheRecordedArea)
+{
+  DriveThenWall();
+  mowgli_nav2_plugins::FTCSpeedLimitTestAccess::SetOutsideArea(controller_, true);
+  EXPECT_GE(LowestCommand(), 0.0) << "outside the area a reverse only takes the mower further out";
+}
+
+TEST_F(FtcBoundarySafeReverse, DoesNotReverseWithoutDrivenGroundBehind)
+{
+  SetParameter("check_obstacles", true);
+  SetParameter("enable_obstacle_deviation", true);
+  SetParameter("reverse_boundary_safe", true);
+  // The robot appears at 2.0 m (carried / re-anchored): nothing was driven to undo.
+  robot_x_ = 2.0;
+  SetTransform("odom", "base_footprint", robot_x_, false);
+  controller_.newPathReceived(StraightPlan(robot_x_));
+  Wall(3.0);
+  EXPECT_GE(LowestCommand(), 0.0);
 }
 
 TEST_F(FtcSpeedLimit, TurnFallbackReverseObeysTheSignedExternalCap)

@@ -45,6 +45,7 @@ struct Observations
   std::shared_ptr<mowgli_behavior::BTContext> context;
   Stage stage;
   bool release = false;
+  bool at_station = false;
   int held_starts = 0;
   int held_ticks = 0;
   int held_halts = 0;
@@ -123,6 +124,8 @@ private:
       observations_->context->undock_start_recorded = true;
     if (tag_ == "CalibrateHeadingFromUndock")
       observations_->context->undock_start_recorded = false;
+    if (tag_ == "IsAtDockStation")
+      return observations_->at_station ? Status::SUCCESS : Status::FAILURE;
     if (tag_ == "IsUndockInterrupted")
       return observations_->context->undock_start_recorded ? Status::SUCCESS : Status::FAILURE;
     if (tag_ == "IsCharging")
@@ -400,6 +403,26 @@ TEST_P(InterruptedUndockTest, AFailedResumeEndsInUndockFailedNotTheForwardSeed)
   EXPECT_GE(observations->starts["ClearCommand"], 1);
   EXPECT_EQ(observations->context->current_command, 0);
 }
+
+// Contact without charge (#515): Play must reverse off the station, not drive the
+// forward heading seed into it, and not be refused by the transit planner.
+class BackOutOfStationTest : public StartupPauseTest
+{
+};
+
+TEST_P(BackOutOfStationTest, PlayOnTheStationWithoutChargeReversesInsteadOfSeedingForward)
+{
+  observations->at_station = true;
+  auto tree = makeTree();
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(observations->held_starts, 1) << "the reverse is the third BackUp of the tree";
+  EXPECT_TRUE(observations->context->undock_start_recorded);
+  EXPECT_EQ(observations->starts["SeedYawFromMotion"], 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(StationWithoutCharge,
+                         BackOutOfStationTest,
+                         ::testing::Values(Stage{"BackUp", 3, false, true, true}));
 
 INSTANTIATE_TEST_SUITE_P(UndockReverse,
                          InterruptedUndockTest,
