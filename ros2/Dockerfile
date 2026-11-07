@@ -527,11 +527,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-lyrical-controller-manager
 WORKDIR /webots_ws
 RUN mkdir src && chown -R ubuntu:ubuntu /webots_ws
+# Round the upstream simulation epoch to nanoseconds; float-second truncation
+# can leave TF exactly 1 ns behind the next clock tick and cause false stops.
+COPY --chown=ubuntu:ubuntu ros2/patches/webots-supervisor-clock.patch /tmp/webots-supervisor-clock.patch
 USER ubuntu
 RUN git init -q src/webots_ros2 \
  && git -C src/webots_ros2 fetch --depth 1 https://github.com/cyberbotics/webots_ros2.git db4a77c84ee91445d39de9a631e5b57a888814e2 \
  && git -C src/webots_ros2 checkout -q --detach FETCH_HEAD \
  && git -C src/webots_ros2 submodule update --init --recursive \
+ && git -C src/webots_ros2 apply /tmp/webots-supervisor-clock.patch \
  && sed -i 's/CMAKE_CXX_STANDARD 17/CMAKE_CXX_STANDARD 20/' src/webots_ros2/webots_ros2_driver/CMakeLists.txt
 RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash && MAKEFLAGS=-j3 colcon build \
     --merge-install --packages-up-to webots_ros2_control --parallel-workers 2 \
@@ -548,7 +552,7 @@ RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash && MAKEFLAGS=-j3 colcon bui
 # target remains architecture-neutral, while this simulator target fails early
 # and clearly on unsupported Linux architectures.
 # =============================================================================
-FROM runtime AS simulation
+FROM runtime AS simulation-base
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
@@ -626,3 +630,16 @@ EXPOSE 8765
 EXPOSE 6080
 
 CMD ["ros2", "launch", "mowgli_bringup", "sim_full_system.launch.py", "headless:=true", "use_rviz:=false"]
+
+# Test the installed module AND executable from the complete simulator image.
+# Keep pytest and regression sources out of the distributed simulation target.
+FROM simulation-base AS simulation-clock-test
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pytest \
+ && rm -rf /var/lib/apt/lists/*
+COPY --chown=ubuntu:ubuntu ros2/src/mowgli_simulation/test/test_webots_supervisor_clock.py /opt/mowgli-tests/test_webots_supervisor_clock.py
+ENV MOWGLI_REQUIRE_WEBOTS_DRIVER=1 PYTHONDONTWRITEBYTECODE=1 USER=ubuntu
+USER ubuntu
+CMD ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "/opt/mowgli-tests/test_webots_supervisor_clock.py", "--junitxml=/results/webots-clock.xml"]
+
+# Preserve the public build target and default image, including its launch CMD.
+FROM simulation-base AS simulation
