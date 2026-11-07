@@ -296,6 +296,8 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  target_link_libraries(test_cmd_vel_slew ${mowgli_interfaces_TARGETS})
+
   # ---- test_battery_state_semantics ----
   ament_add_gtest(test_battery_state_semantics
     test/test_battery_state_semantics.cpp
