@@ -117,6 +117,9 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
 
+  ament_add_pytest_test(test_cutting_tool_frame
+    test/test_cutting_tool_frame.py
+  )
   ament_add_pytest_test(test_sim_navsat_rtk_fix
     test/test_sim_navsat_rtk_fix.py
   )
@@ -172,6 +175,10 @@ if(BUILD_TESTING)
   )
   target_compile_definitions(test_wheel_odom_interval PRIVATE
     WHEEL_ODOM_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config_webots/ros2_control.yaml"
+  )
+
+  ament_add_pytest_test(test_webots_supervisor_clock
+    test/test_webots_supervisor_clock.py
   )
 
   # ---- test_firmware_wheel_model ----

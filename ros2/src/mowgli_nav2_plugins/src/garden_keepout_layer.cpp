@@ -180,7 +180,8 @@ void GardenKeepoutLayer::updateCosts(
         {
           const int value =
               m.data[static_cast<size_t>(my) * m.info.width + static_cast<size_t>(mx)];
-          cost = static_cast<unsigned char>(std::lround(value * 254.0 / 100.0));
+          // Validated values are 0..100; round to Nav2 costs without per-cell libm calls.
+          cost = static_cast<unsigned char>((value * 254 + 50) / 100);
         }
       }
       const auto old_cost = map.getCost(x, y);

@@ -28,6 +28,7 @@
 #include "ament_index_cpp/get_package_share_path.hpp"
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/loggers/bt_cout_logger.h"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_behavior/action_nodes.hpp"
 #include "mowgli_behavior/battery_filter.hpp"
@@ -460,6 +461,24 @@ private:
     // previous session (the bridge outlives BT restarts) must not become a
     // skip zone of this one, nor look like "a dig just happened" to a
     // FollowStrip that is mid-goal when this node restarts.
+    context_->dock_station_zone.pivot_clear_m =
+        declare_parameter<double>("dock_no_pivot_distance_m", DockStationZone{}.pivot_clear_m);
+    context_->dock_station_zone.half_width_m =
+        declare_parameter<double>("dock_body_half_width_m", DockStationZone{}.half_width_m);
+    context_->dock_station_zone.front_m =
+        declare_parameter<double>("dock_body_front_m", DockStationZone{}.front_m);
+    docking_pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
+        "/map_server_node/docking_pose",
+        rclcpp::QoS(1).transient_local(),
+        [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg)
+        {
+          std::lock_guard<std::mutex> lock(context_->context_mutex);
+          context_->dock_x = msg->pose.position.x;
+          context_->dock_y = msg->pose.position.y;
+          context_->dock_yaw = 2.0 * std::atan2(msg->pose.orientation.z, msg->pose.orientation.w);
+          context_->dock_pose_known = true;
+        });
+
     context_->dig_skip_radius_m =
         declare_parameter<double>("dig_skip_radius_m", kDefaultDigSkipRadiusM);
     dig_event_sub_ = create_subscription<mowgli_interfaces::msg::DigEvent>(
@@ -552,6 +571,13 @@ private:
               std::sqrt(std::max({msg->pose.covariance[0], msg->pose.covariance[7], 0.0}));
           std::lock_guard<std::mutex> lock(context_->context_mutex);
           loc_obs_.fused_sigma_xy_m = sigma;
+          const auto& q = msg->pose.pose.orientation;
+          context_->fused_x = msg->pose.pose.position.x;
+          context_->fused_y = msg->pose.pose.position.y;
+          context_->fused_yaw =
+              std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+          context_->fused_pose_time = std::chrono::steady_clock::now();
+          context_->fused_pose_valid = true;
           updateLocalizationHealthLocked();
         });
 
@@ -922,6 +948,13 @@ private:
                 RCLCPP_INFO(get_logger(),
                             "HighLevelControl: resuming the area that was in progress "
                             "(coverage progress kept from the last session)");
+                // Continue the area the mower was working in, not the lowest incomplete one.
+                if (context_->current_area >= 0 &&
+                    context_->area_resume_pose_index.count(
+                        static_cast<uint32_t>(context_->current_area)) > 0)
+                {
+                  context_->resume_preferred_start = static_cast<uint32_t>(context_->current_area);
+                }
               }
             }
           }
@@ -1717,6 +1750,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::UInt64>::SharedPtr area_list_generation_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr dig_escalated_sub_;
   rclcpp::Subscription<mowgli_interfaces::msg::DigEvent>::SharedPtr dig_event_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr docking_pose_sub_;
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr mow_progress_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr fused_odom_sub_;
   // LocalizationGuard state. Both feeds write loc_obs_ under

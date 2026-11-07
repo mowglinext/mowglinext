@@ -284,6 +284,7 @@ if(BUILD_TESTING)
   target_link_libraries(test_cancel_on_halt
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
+    ${rcl_interfaces_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
@@ -763,6 +764,18 @@ if(BUILD_TESTING)
 
   target_link_libraries(test_strip_progress
     ${geometry_msgs_TARGETS}
+  )
+
+  # ---- test_dock_stall ----
+  # DockRobot cancels a dock approach that stands still (the garage edge over
+  # the dock, 2026-10-06); the detector is pure and ROS-free.
+  ament_add_gtest(test_dock_stall
+    test/test_dock_stall.cpp
+  )
+
+  target_include_directories(test_dock_stall PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
   )
 
   # ---- test_blocked_stretch ----

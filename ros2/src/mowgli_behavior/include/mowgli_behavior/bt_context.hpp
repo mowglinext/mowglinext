@@ -33,6 +33,7 @@
 #include "mowgli_behavior/blade_ready.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
+#include "mowgli_behavior/dock_alignment.hpp"
 #include "mowgli_behavior/fleet_yield.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_behavior/transit_avoidance.hpp"
@@ -427,6 +428,13 @@ struct BTContext
   /// indices afterwards), so idle fleet members do not all race for area 0.
   /// nullopt = plain ascending order. Ignored during a targeted run.
   std::optional<uint32_t> fleet_preferred_start;
+  /// The area that was in progress when the previous session ended unfinished (it has a resume
+  /// cursor): the next Start scans from here first and then wraps to the lower indices, the same
+  /// way fleet_preferred_start does. Without it the scan always began at the lowest incomplete
+  /// area, so a Play after the operator moved the mower sent it across the garden to an area it
+  /// had not started (field 2026-10-26). Kept until that area is completed or retired, so a
+  /// short interruption does not lose it; cleared by EndSession (a finished session).
+  std::optional<uint32_t> resume_preferred_start;
   /// Areas whose most recent FollowStrip pass ended because the area became
   /// excluded mid-mow (fleet yield, resume cursor saved). Consumed per area by
   /// the next GetNextUnmowedArea dispatch of that area, which exempts the pass
@@ -665,6 +673,15 @@ struct BTContext
   /// Latest GPS position in map frame (from /gps/absolute_pose)
   double gps_x{0.0};
   double gps_y{0.0};
+
+  /// Latest fused (GNSS-anchored) pose in the map frame, from /odometry/filtered_map, with
+  /// its receipt time. DockRobot's stall check reads it: a spinning wheel reports travel the
+  /// chassis never made, the fused pose does not.
+  double fused_x{0.0};
+  double fused_y{0.0};
+  double fused_yaw{0.0};
+  std::chrono::steady_clock::time_point fused_pose_time{};
+  bool fused_pose_valid{false};
 
   // -----------------------------------------------------------------------
   // GPS quality classification (derived from gps_quality / fix_type)
@@ -946,6 +963,9 @@ struct BTContext
   double dock_x{0.0};
   double dock_y{0.0};
   double dock_yaw{0.0};
+  /// False until map_server's latched /map_server_node/docking_pose arrives.
+  bool dock_pose_known{false};
+  DockStationZone dock_station_zone;
 
   // -----------------------------------------------------------------------
   // Legacy coverage path components (retained for potential future use).
