@@ -329,6 +329,19 @@ def test_full_system_injects_blade_auto_reverse() -> None:
     }) is False
 
 
+def test_full_system_injects_goto_timeout() -> None:
+    """COMMAND_GOTO's NavigateToPose time bound: without the injection the BT
+    silently runs its compiled 300 s default whatever mowgli_robot.yaml says."""
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    values = _node_parameter_values(call, "goto_timeout_sec")
+    assert len(values) == 1
+    expression = compile(ast.Expression(body=values[0]), "launch", "eval")
+    assert eval(expression, {"robot_params": {}}) == 300.0
+    assert eval(expression, {"robot_params": {"goto_timeout_sec": 0}}) == 0.0
+    assert eval(expression, {"robot_params": {"goto_timeout_sec": 120}}) == 120.0
+
+
 @pytest.mark.parametrize(
     "key,cast,default,configured",
     [

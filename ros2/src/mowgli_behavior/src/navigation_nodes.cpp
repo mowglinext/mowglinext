@@ -17,6 +17,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <mutex>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -292,23 +294,50 @@ BT::NodeStatus NavigateToPose::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
 
+  geometry_msgs::msg::PoseStamped target_pose;
   auto goal_res = getInput<std::string>("goal");
-  if (!goal_res)
+  if (goal_res)
   {
-    RCLCPP_ERROR(ctx->node->get_logger(),
-                 "NavigateToPose: missing required port 'goal': %s",
-                 goal_res.error().c_str());
-    return BT::NodeStatus::FAILURE;
+    try
+    {
+      target_pose = parsePoseString(goal_res.value(), ctx->node);
+    }
+    catch (const std::exception& ex)
+    {
+      RCLCPP_ERROR(ctx->node->get_logger(), "NavigateToPose: %s", ex.what());
+      return BT::NodeStatus::FAILURE;
+    }
+  }
+  else
+  {
+    // No 'goal' port: fall back to ctx->goto_target_pose (COMMAND_GOTO, set
+    // by ~/goto_pose). Read directly off the context, like current_transit_goal
+    // — not refreshed on the blackboard per tick, matching the rest of this
+    // codebase's pattern for dynamic poses.
+    std::optional<geometry_msgs::msg::PoseStamped> goto_pose;
+    {
+      std::lock_guard<std::mutex> lock(ctx->context_mutex);
+      goto_pose = ctx->goto_target_pose;
+    }
+    if (!goto_pose)
+    {
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "NavigateToPose: no 'goal' port and no ctx->goto_target_pose set");
+      return BT::NodeStatus::FAILURE;
+    }
+    target_pose = *goto_pose;
   }
 
-  geometry_msgs::msg::PoseStamped target_pose;
-  try
+  // Validated before anything is sent: 0 = no limit, otherwise a positive
+  // finite number of seconds. A negative or non-finite value is a
+  // configuration error, not "no limit" — refuse to navigate.
+  timeout_sec_ = 0.0;
+  getInput<double>("timeout_sec", timeout_sec_);
+  if (!std::isfinite(timeout_sec_) || timeout_sec_ < 0.0)
   {
-    target_pose = parsePoseString(goal_res.value(), ctx->node);
-  }
-  catch (const std::exception& ex)
-  {
-    RCLCPP_ERROR(ctx->node->get_logger(), "NavigateToPose: %s", ex.what());
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "NavigateToPose: invalid timeout_sec %f (0 = none, else > 0)",
+                 timeout_sec_);
     return BT::NodeStatus::FAILURE;
   }
 
@@ -324,22 +353,32 @@ BT::NodeStatus NavigateToPose::onStart()
   Nav2Goal::Goal goal_msg;
   goal_msg.pose = target_pose;
 
-  auto send_goal_options = rclcpp_action::Client<Nav2Goal>::SendGoalOptions{};
+  goal_handle_.reset();
   // Also ask for the result — see action_outcome.hpp for the lost-status race.
-  outcome_->Reset();
+  // A FRESH slot per goal, not Reset(): the CANCELED result of a goal halted
+  // just before this restart can arrive late, and through a shared slot it
+  // would make the new goal fail at once.
+  outcome_ = std::make_shared<ActionOutcomeSlot>();
+  // Fresh abandonment flag for this attempt — see cancel_goal.hpp. Cancels
+  // the goal on acceptance if onHalted() runs before the server answers.
+  abandonment_ = std::make_shared<GoalAbandonment>();
+
+  auto send_goal_options = rclcpp_action::Client<Nav2Goal>::SendGoalOptions{};
+  send_goal_options.goal_response_callback =
+      cancelWhenAbandoned<Nav2Goal>(action_client_, abandonment_);
   send_goal_options.result_callback = [slot = outcome_](const GoalHandle::WrappedResult& result)
   {
     slot->Record(OutcomeFromResultCode(result.code));
   };
 
   goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
-  goal_handle_.reset();
+  start_time_ = std::chrono::steady_clock::now();
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "NavigateToPose: goal sent (x=%.2f y=%.2f yaw=%.2f)",
               target_pose.pose.position.x,
               target_pose.pose.position.y,
-              0.0 /* yaw logged for info, already in quaternion */);
+              tf2::getYaw(target_pose.pose.orientation));
 
   return BT::NodeStatus::RUNNING;
 }
@@ -347,6 +386,27 @@ BT::NodeStatus NavigateToPose::onStart()
 BT::NodeStatus NavigateToPose::onRunning()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  // Real elapsed time on a monotonic clock, independent of use_sim_time and of
+  // ROS time jumps: a paused or reset sim clock must not stretch the limit.
+  if (timeout_sec_ > 0.0 &&
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time_).count() >=
+          timeout_sec_)
+  {
+    RCLCPP_WARN(ctx->node->get_logger(),
+                "NavigateToPose: no result after %.0f s — cancelling the goal",
+                timeout_sec_);
+    // Same path as a halt: cancels an accepted goal now, or one still awaiting
+    // the server's answer on acceptance (cancel_goal.hpp).
+    abandonGoal(action_client_,
+                goal_handle_,
+                goal_handle_future_,
+                abandonment_,
+                ctx->node->get_logger(),
+                "NavigateToPose");
+    goal_handle_.reset();
+    return BT::NodeStatus::FAILURE;
+  }
 
   // Resolve the goal handle the first time it is ready.
   if (!goal_handle_)
@@ -370,6 +430,7 @@ BT::NodeStatus NavigateToPose::onRunning()
   {
     case action_msgs::msg::GoalStatus::STATUS_SUCCEEDED:
       RCLCPP_INFO(ctx->node->get_logger(), "NavigateToPose: goal succeeded");
+      goal_handle_.reset();
       return BT::NodeStatus::SUCCESS;
 
     case action_msgs::msg::GoalStatus::STATUS_ABORTED:
@@ -389,12 +450,17 @@ void NavigateToPose::onHalted()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
 
-  if (goal_handle_)
-  {
-    RCLCPP_INFO(ctx->node->get_logger(), "NavigateToPose: canceling active goal");
-    cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "NavigateToPose");
-    goal_handle_.reset();
-  }
+  // abandonGoal() covers both cases: a handle already known (cancel now) and
+  // a goal still awaiting the server's answer (mark abandoned so
+  // cancelWhenAbandoned cancels it on late acceptance) — see cancel_goal.hpp.
+  // Also cancels a goal sent but not yet accepted (cancel_goal.hpp, PR #972).
+  abandonGoal(action_client_,
+              goal_handle_,
+              goal_handle_future_,
+              abandonment_,
+              ctx->node->get_logger(),
+              "NavigateToPose");
+  goal_handle_.reset();
 }
 
 // ---------------------------------------------------------------------------

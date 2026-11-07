@@ -13,6 +13,7 @@
 | 6 | `COMMAND_RECORD_CANCEL` | Cancel recording, discard trajectory |
 | 7 | `COMMAND_MANUAL_MOW` | Enter manual mowing mode (teleop + blade) |
 | 8 | `COMMAND_STOP` | Stop-in-place hold: mower off, halt, stay put (NOT dock — that is `COMMAND_HOME`). Routes to `StopHoldSequence`. Resumable via `COMMAND_START`. GUI Pause / Stop use this. |
+| 9 | `COMMAND_GOTO` | Point-to-point navigation (`GotoSequence`). **Refused on `~/high_level_control`** — a GOTO needs a target, so the only entry point is `~/goto_pose` (see [Point-to-point GOTO](#point-to-point-goto)) |
 | 254 | `COMMAND_RESET_EMERGENCY` | Reset latched emergency. **Declared constant only — no BT branch guards on 254.** The GUI re-arms via the `/hardware_bridge/emergency_stop` service (`MowerStatus.tsx`), and the BT auto-resets on dock with its `ResetEmergency` node |
 | 255 | `COMMAND_DELETE_MAPS` | Delete all maps. **Declared constant only — no BT branch guards on 255.** The GUI wipes areas via `/map_server_node/clear_map` |
 
@@ -112,6 +113,57 @@ callbacks share the existing default MutuallyExclusive group; ownership/status
 access also takes `context_mutex`. Checkpoint I/O and tree ticking happen outside
 that mutex. This service changes command intent only; existing tree, navigation,
 blade and firmware safety gates still govern actuation.
+
+## Point-to-point GOTO
+
+`~/goto_pose` (`mowgli_interfaces/srv/GotoPose`: `float64 x, y, yaw` in the `map` frame →
+`bool success`, `string reason`) sends the robot to an arbitrary pose, independent of the
+coverage planner. It drives `GotoSequence` (`COMMAND_GOTO` = 9); `~/high_level_control`
+refuses command 9.
+
+- **Acceptance** (`acceptGotoRequest`, `goto_request.hpp`, under `context_mutex`): only from a
+  settled, undocked rest state — tree parked in `IdleSequence`/`StopHoldSequence` (read from the
+  tree's node statuses, not the published name) or right after a GOTO ended (chaining), command
+  0 or 8. Refusals change nothing and return one reason: `invalid_pose`, `busy` (any mission, a
+  GOTO included, or a transition — no hot pre-emption: STOP, wait for IDLE, then request again),
+  `critical_dock_failure`, `critical_charge_hold`, `battery_charge_pending` (unfinished battery
+  dock/charge; STOP or HOME releases it), `docked` (GOTO does not undock),
+  `heading_not_calibrated`, `localization_degraded`, `battery_unknown`, `battery_low`,
+  `maintenance_active`, `unsupported_tree`.
+- **Accepted** = target stored, command 9, fleet ownership revoked (like every other accepted
+  operator command: a coordinator that paused mowing loses its RESUME right and must not assume it
+  still holds the robot) and the previous `stop_reason` cleared (like every command except STOP). `~/goto_pose` never
+  clears a battery-recovery latch (it refuses instead) and leaves `battery_charge_pending` as it is
+  (`docs/BATTERY_DOCK_RECOVERY.md`).
+- **Execution**: blade off and `StopMoving` before any motion; one `NavigateToPose` attempt
+  (default Nav2 tree, `AuthorizedTransitPlanner`; `BoundaryRecovery` is unreachable), bounded by
+  `goto_timeout_sec` (default 300 s, monotonic clock, 0 = no limit). No retry loop. No root guard
+  exempts command 9, except, as for mowing, the blade-off dock transit (`IsDocking`) in
+  `BoundaryGuard` and `LocalizationGuard`. Low battery (`battery_low_pct` /
+  `battery_critical_voltage`) halts the transit and docks once (a failed dock sets `stop_reason`
+  `DOCK_NAV_FAILED`; with a critical pack, `CriticalBatteryDock` may then try again); a
+  critical-battery dock ends the GOTO docked, without backing up, and clears command 9.
+- **Statuses** on `/behavior_tree_node/high_level_status`: `GOTO_ACTIVE` (2),
+  `GOTO_LOW_BATTERY_DOCKING` (2), then one terminal name — `GOTO_REACHED` (1), `GOTO_FAILED` (1),
+  `GOTO_LOW_BATTERY_DOCKED` (1), `GOTO_LOW_BATTERY_DOCK_FAILED` (0) or
+  `GOTO_CRITICAL_BATTERY_DOCKED` (1). The terminal name is published once, then the tree
+  returns to `IDLE` within about a tick; command changes (STOP, HOME…) halt the GOTO and cancel its
+  Nav2 goal without publishing a terminal name.
+- **Client sequence (v1)**: **subscribe to `high_level_status` first** (the publisher is reliable,
+  depth 10, volatile — a late subscriber gets nothing that was published before it matched) → call
+  `~/goto_pose` → check `success` → wait for `GOTO_ACTIVE` → wait for the next terminal name, or for a
+  non-GOTO state (interrupted). `GOTO_ACTIVE` is published on every accepted GOTO that reaches the
+  tree (after `SetMowerEnabled(false)` and the 0.5 s `StopMoving`), so even a very short GOTO is
+  observable by a subscriber that matched before the request; a STOP/HOME during that first 0.5 s
+  ends it with no GOTO status at all. The 1 Hz republisher only repeats the current state.
+- **Limitation**: the response carries no request ID and the status no correlation field, so a
+  client attributes a terminal state to its own request only by following the sequence above. The
+  result is one-shot, not durable, and can be missed by a client that was not already subscribed.
+- **Limitation**: one `NavigateToPose` attempt and one `goto_timeout_sec` budget per uninterrupted
+  run. A root guard that halts the tree mid-GOTO (emergency, sensor fault, localization hold…)
+  halts `GotoSequence`; once the guard clears with command 9 still set, the branch starts again from
+  the beginning, with a new goal and a fresh timeout. With `goto_timeout_sec: 0` the navigation is
+  not time-bounded at all.
 
 ## GUI Scheduler and the IrriSense Soil Gate
 The GUI's scheduler (`gui/pkg/providers/scheduler.go`) polls its `schedule:*` DB entries every minute and issues `COMMAND_START` (1) when one is due, after `safeToStart()` (no emergency, state not NULL/AUTONOMOUS/RECORDING). It then asks the soil provider (`types.ISoilProvider`, implemented by `gui/pkg/providers/irrisense.go`, the operator's **IrriSense Cloud** irrigation service polled every 10 min over its read-only `/api/ha/gardens/{id}` API with a read-only API token stored ONLY in the GUI key-value DB under `irrisense.*` — never in `mowgli_robot.yaml`). A zone is WET if enabled and (`deficit_mm ≤ wetDeficitMm` [2.0] OR `last_watered_at` within `dryAfterWateringHours` [3.0]); the garden is WET if ANY selected zone is (all enabled zones unless `irrisense.zoneIds` lists some) — pure rule in `irrisense_wetness.go`. The run is skipped ONLY when `Enabled && GateScheduler && Fresh && Wet` (`SoilStatus.BlocksScheduledMowing()`), and the skip is recorded on the schedule as `lastSkipReason` / `lastSkippedAt`. Everything else is **fail-open**: unreachable service, bad token, 429 (backed off per `Retry-After`), or a last good fetch older than `maxStaleMinutes` [90] reports `unknown` and the mow starts as before — a cloud outage must never keep the robot docked. Surface: `GET/PUT /api/irrisense/settings` (token write-only, masked on read), `GET /api/irrisense/status`, `GET /api/irrisense/gardens`; Settings → IrriSense section and the chip on the Schedule page.
