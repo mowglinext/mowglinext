@@ -24,6 +24,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -47,6 +48,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_nav2_plugins/ftc_blade_load.hpp"
 #include "mowgli_nav2_plugins/ftc_collision_monitor_hold.hpp"
+#include "mowgli_nav2_plugins/ftc_corner_geometry.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
@@ -139,6 +141,22 @@ private:
 
   /// Compute the look-ahead distance along the remaining straight path.
   double distanceLookahead() const;
+
+  // Local point approach for a forward-monotone prefix ending at an explicit
+  // corner. Recovery/deviation keep their existing output ownership.
+  std::optional<std::size_t> stopCornerApproach(bool starting = false) const;
+  double stopCornerTravel(std::size_t corner, double x, double y, double yaw) const;
+  std::optional<double> pivot_approach_speed_limit_;
+  std::optional<double> pivot_approach_response_limit_;
+  std::optional<std::pair<std::size_t, rclcpp::Time>> pivot_approach_start_;
+
+  // A geometry-qualified approach uses the same supported TF epoch as the
+  // point-bearing control. Complete replacements are ordered with output.
+  geometry_msgs::msg::Pose pivotMapPose() const;
+  std::optional<rclcpp::Time> pivot_pose_epoch_;
+  std::mutex corner_geometry_mutex_;
+  std::shared_ptr<const CornerGeometry> corner_geometry_;
+  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr corner_geometry_sub_;
 
   // ── Pivot corners (ftc_pivot.hpp) ─────────────────────────────────────────
 
@@ -670,6 +688,9 @@ private:
     /// straight after a corner is one swath spacing long, too short for the
     /// lateral loop to absorb a large heading error before the next pivot.
     double pivot_angle_tolerance_deg{10.0};
+    /// Declared upper bound on residual forward travel / speed after STOP.
+    /// This is a response assumption, not a calibrated physical stopping time.
+    double pivot_coast_time_bound_s{0.5};
     double goal_timeout{5.0};
     double max_follow_distance{1.0};
     /// Max longitudinal carrot lead (m); <= 0 derives it (ftc_carrot_lead.hpp).

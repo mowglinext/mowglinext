@@ -16,11 +16,15 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include <nav2_core/controller_exceptions.hpp>
 #include <nav2_costmap_2d/cost_values.hpp>
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <nav2_ros_common/lifecycle_node.hpp>
@@ -34,6 +38,27 @@ namespace mowgli_nav2_plugins
 {
 struct FTCSpeedLimitTestAccess
 {
+  static void Geometry(FTCController& controller,
+                       const visualization_msgs::msg::MarkerArray& message)
+  {
+    std::lock_guard lock(controller.corner_geometry_mutex_);
+    controller.corner_geometry_ =
+        std::make_shared<const CornerGeometry>(CornerGeometry::parse(message));
+  }
+  static std::pair<double, double> ApproachLimits(const FTCController& controller)
+  {
+    return {*controller.pivot_approach_speed_limit_, *controller.pivot_approach_response_limit_};
+  }
+  static int State(const FTCController& controller)
+  {
+    return static_cast<int>(controller.current_state_);
+  }
+
+  static std::size_t Index(const FTCController& controller)
+  {
+    return controller.current_index_;
+  }
+
   static bool TurnFallbackReversing(const FTCController& controller)
   {
     return controller.turnFallbackReversing();
@@ -42,6 +67,43 @@ struct FTCSpeedLimitTestAccess
   static bool Stalled(const FTCController& controller)
   {
     return controller.is_stalled_;
+  }
+  static void ApproachFixture(FTCController& controller, double body_distance, bool second = false)
+  {
+    controller.current_state_ = FTCController::PlannerState::FOLLOWING;
+    controller.current_index_ =
+        second ? controller.pivot_corners_.back() : controller.pivot_corners_.front();
+    tf2::fromMsg(controller.global_plan_[controller.current_index_].pose,
+                 controller.current_control_point_);
+    controller.local_control_point_.setIdentity();
+    controller.local_control_point_.translation().x() = body_distance;
+  }
+
+  static void ApproachStateTick(FTCController& controller)
+  {
+    (void)controller.update_planner_state();
+  }
+
+  static bool ApproachTimerArmed(const FTCController& controller)
+  {
+    return controller.pivot_approach_start_.has_value();
+  }
+
+  static bool SpliceApproachFallback(FTCController& controller)
+  {
+    TurnFallbackPlan plan;
+    plan.rejoin = 21;
+    plan.connector_m = 0.925;
+    return controller.spliceTurnFallback(plan, 0);
+  }
+
+  static void LeaveFallbackInitialPivot(FTCController& controller)
+  {
+    controller.current_state_ = FTCController::PlannerState::FOLLOWING;
+    controller.current_index_ = 1;
+    tf2::fromMsg(controller.global_plan_[1].pose, controller.current_control_point_);
+    controller.local_control_point_.setIdentity();
+    controller.local_control_point_.translation().x() = 0.925;
   }
 
   static void SetOutsideArea(FTCController& controller, bool outside)
@@ -76,6 +138,209 @@ nav_msgs::msg::Path StraightPlan(double first = 0.0)
     plan.poses.push_back(MakePose(x));
   }
   return plan;
+}
+
+visualization_msgs::msg::MarkerArray MowingBox(double x0 = -5,
+                                               double x1 = 15,
+                                               double y0 = -5,
+                                               double y1 = 15)
+{
+  visualization_msgs::msg::Marker m;
+  m.header.frame_id = "map";
+  m.ns = "area";
+  m.text = "mowing";
+  m.type = m.LINE_STRIP;
+  m.pose.orientation.w = 1;
+  for (const auto& xy :
+       std::vector<std::pair<double, double>>{{x0, y0}, {x1, y0}, {x1, y1}, {x0, y1}, {x0, y0}})
+  {
+    geometry_msgs::msg::Point p;
+    p.x = xy.first;
+    p.y = xy.second;
+    m.points.push_back(p);
+  }
+  visualization_msgs::msg::MarkerArray result;
+  result.markers.push_back(m);
+  return result;
+}
+
+TEST(CornerGeometry, RolesAndCompleteReplacementFailClosed)
+{
+  using Geometry = mowgli_nav2_plugins::CornerGeometry;
+  auto m = MowingBox(-3, -1, -1, 1);
+  EXPECT_TRUE(Geometry::parse(m).valid);
+  auto outer = MowingBox(-10, 10, -10, 10).markers.front();
+  outer.id = 1;
+  outer.text = "navigation";
+  m.markers.push_back(outer);
+  auto g = Geometry::parse(m);
+  EXPECT_TRUE(g.mowing.authorized({-2, 0}));
+  EXPECT_FALSE(g.mowing.authorized({0, 0}));
+  m.markers.front().text = "navigation";
+  EXPECT_FALSE(Geometry::parse(m).valid);
+  m.markers.front().text = "";
+  EXPECT_FALSE(Geometry::parse(m).valid);
+  m.markers.front().text = "mowing";
+  m.markers.front().header.frame_id = "odom";
+  EXPECT_FALSE(Geometry::parse(m).valid);
+  m.markers.front().header.frame_id = "map";
+  m.markers.front().points[0].x = NAN;
+  EXPECT_FALSE(Geometry::parse(m).valid);
+  EXPECT_FALSE(Geometry::parse({}).valid);
+  m = MowingBox();
+  m.markers[0].points = {m.markers[0].points[0],
+                         m.markers[0].points[2],
+                         m.markers[0].points[1],
+                         m.markers[0].points[3]};
+  EXPECT_FALSE(Geometry::parse(m).valid);
+}
+
+TEST(CornerGeometry, UnionCanCoverASeamButNavigationCannotCoverAGap)
+{
+  using Geometry = mowgli_nav2_plugins::CornerGeometry;
+  auto m = MowingBox(-3, -2, -1, 1);
+  auto second = MowingBox(-2, -1, -1, 1).markers[0];
+  second.id = 1;
+  m.markers.push_back(second);
+  EXPECT_TRUE(Geometry::parse(m).mowing.segmentAuthorized({-2.5, 0}, {-1.5, 0}));
+  m.markers[1].text = "navigation";
+  EXPECT_FALSE(Geometry::parse(m).mowing.segmentAuthorized({-2.5, 0}, {-1.5, 0}));
+}
+
+TEST(CornerGeometry, StoppingNeighborhoodRequiresOneStrictMowingInterior)
+{
+  using Geometry = mowgli_nav2_plugins::CornerGeometry;
+  const mowgli_nav2_plugins::transit::Ring body{{.53, .275},
+                                                {.53, -.275},
+                                                {-.17, -.275},
+                                                {-.17, .275}};
+  auto m = MowingBox(-1, 1, -1, 1);
+  auto g = Geometry::parse(m);
+  EXPECT_TRUE(g.stoppingNeighborhoodClear({0, 0}, .2, body));
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({0, 0}, 1, body));
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({1, 0}, 0, body));
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({0, 0}, NAN, body));
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({0, 0}, -.1, body));
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({NAN, 0}, .1, body));
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({0, 0}, .1, {}));
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({0, 0}, .1, {{0, 0}, {1, 1}, {0, 1}, {1, 0}}));
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({0, 0}, .1, {{0, 0}, {INFINITY, 0}, {0, 1}}));
+  // Outer containment belongs to the axle, so body overhang alone is allowed.
+  EXPECT_TRUE(
+      Geometry::parse(MowingBox(-.1, .1, -.1, .1)).stoppingNeighborhoodClear({0, 0}, .05, body));
+  m = MowingBox(-1, 0, -1, 1);
+  m.markers.push_back(MowingBox(0, 1, -1, 1).markers.front());
+  g = Geometry::parse(m);
+  EXPECT_TRUE(g.mowing.authorized({0, 0}));
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({0, 0}, .05, body));
+  m = MowingBox();
+  m.markers.front().text = "navigation";
+  EXPECT_FALSE(Geometry::parse(m).stoppingNeighborhoodClear({0, 0}, .05, body));
+  EXPECT_FALSE(Geometry::parse({}).stoppingNeighborhoodClear({0, 0}, .05, body));
+}
+
+TEST(CornerGeometry, StoppingNeighborhoodIncludesRawHolesAndFilledBodyAtEveryYaw)
+{
+  using Geometry = mowgli_nav2_plugins::CornerGeometry;
+  const mowgli_nav2_plugins::transit::Ring body{{.5, 0}, {0, .25}, {-.2, 0}};
+  auto m = MowingBox(-2, 2, -2, 2);
+  auto hole = MowingBox(.6, .601, -.001, .001).markers.front();
+  hole.ns = "obstacle";
+  m.markers.push_back(hole);
+  // Exact expanded-radius equality refuses. This thin ring misses both the
+  // current body and axle ray, but lies in the any-yaw filled-body neighborhood.
+  EXPECT_FALSE(Geometry::parse(m).stoppingNeighborhoodClear({0, 0}, .1, body));
+  m.markers.back().ns = "dock_body";
+  EXPECT_FALSE(Geometry::parse(m).stoppingNeighborhoodClear({0, 0}, .1, body));
+  m.markers.back() = MowingBox(-.01, .01, -.01, .01).markers.front();
+  m.markers.back().ns = "obstacle";
+  EXPECT_FALSE(Geometry::parse(m).stoppingNeighborhoodClear({0, 0}, .1, body));
+  m.markers.back() = MowingBox(1, 1.01, 1, 1.01).markers.front();
+  m.markers.back().ns = "obstacle";
+  EXPECT_TRUE(Geometry::parse(m).stoppingNeighborhoodClear({0, 0}, .1, body));
+}
+
+TEST(CornerGeometry, StoppingBudgetCertifiesClearanceAndContainingRingChoice)
+{
+  using Geometry = mowgli_nav2_plugins::CornerGeometry;
+  const mowgli_nav2_plugins::transit::Ring body{{.5, 0}, {0, .25}, {-.2, 0}};
+  const auto check = [&](const Geometry& g, mowgli_nav2_plugins::transit::Point axle, double r)
+  {
+    const auto budget = g.stoppingBudget(axle, r, body);
+    EXPECT_TRUE(budget);
+    if (budget)
+    {
+      EXPECT_GT(*budget, 0);
+      EXPECT_LE(*budget, r);
+      EXPECT_TRUE(g.stoppingNeighborhoodClear(axle, *budget, body));
+    }
+    return budget;
+  };
+  auto g = Geometry::parse(MowingBox(-1, 1, -1, 1));
+  ASSERT_TRUE(check(g, {0, 0}, .2));
+  EXPECT_DOUBLE_EQ(*g.stoppingBudget({0, 0}, .2, body), .2);
+  auto budget = check(g, {0, .99}, .02);
+  ASSERT_TRUE(budget);
+  EXPECT_LT(*budget, .01);
+  EXPECT_GT(*budget, .009);
+  // Actual positive 1.4 mm clearance remains a strict disk certificate.
+  budget = check(g, {0, 1 - .0014}, .02);
+  ASSERT_TRUE(budget);
+  EXPECT_LT(*budget, .0014);
+  EXPECT_FALSE(g.stoppingBudget({0, 1}, .02, body));
+  EXPECT_FALSE(g.stoppingBudget({0, 1.01}, .02, body));
+  auto m = MowingBox(-1, 1, -1, 1);
+  m.markers.push_back(MowingBox(-2, 2, -2, 2).markers.front());
+  budget = check(Geometry::parse(m), {0, 0}, 1.5);
+  ASSERT_TRUE(budget);
+  EXPECT_DOUBLE_EQ(*budget, 1.5);
+  m.markers.back().text = "navigation";
+  budget = check(Geometry::parse(m), {0, 0}, 1.5);
+  ASSERT_TRUE(budget);
+  EXPECT_LT(*budget, 1);
+  m = MowingBox(-2, 0, -1, 1);
+  m.markers.push_back(MowingBox(0, 2, -1, 1).markers.front());
+  EXPECT_FALSE(Geometry::parse(m).stoppingBudget({0, 0}, .02, body));
+}
+
+TEST(CornerGeometry, StoppingBudgetRawBodyRoomAndFloatingPointRefusal)
+{
+  using Geometry = mowgli_nav2_plugins::CornerGeometry;
+  const mowgli_nav2_plugins::transit::Ring body{{.5, 0}, {0, .25}, {-.2, 0}};
+  auto m = MowingBox(-3, 3, -3, 3);
+  auto hole = MowingBox(1.5, 1.501, -.001, .001).markers.front();
+  hole.ns = "obstacle";
+  m.markers.push_back(hole);
+  auto g = Geometry::parse(m);
+  EXPECT_FALSE(g.stoppingNeighborhoodClear({0, 0}, 1.2, body));
+  const auto budget = g.stoppingBudget({0, 0}, 1.2, body);
+  ASSERT_TRUE(budget);
+  EXPECT_LT(*budget, 1);
+  EXPECT_GT(*budget, .99);
+  EXPECT_TRUE(g.stoppingNeighborhoodClear({0, 0}, *budget, body));
+  for (double edge : {0.0, .5, .6})
+  {
+    m.markers.back() = MowingBox(edge - .001, edge + .001, -.001, .001).markers.front();
+    m.markers.back().ns = "dock_body";
+    if (edge == .6)
+    {
+      // A positive real room can round back to equality during the final
+      // proof. The helper must decline rather than iterate toward permission.
+      m.markers.back() = MowingBox(.6, .601, -.001, .001).markers.front();
+      m.markers.back().ns = "obstacle";
+    }
+    EXPECT_FALSE(Geometry::parse(m).stoppingBudget({0, 0}, 1.2, body));
+  }
+  g = Geometry::parse(MowingBox());
+  for (double r : std::vector<double>{0.0, -1.0, NAN, INFINITY})
+    EXPECT_FALSE(g.stoppingBudget({0, 0}, r, body));
+  EXPECT_FALSE(g.stoppingBudget({NAN, 0}, .1, body));
+  EXPECT_FALSE(g.stoppingBudget({0, 0}, .1, {{0, 0}, {1, 1}, {0, 1}, {1, 0}}));
+  EXPECT_FALSE(g.stoppingBudget({0, 0}, .1, {{0, 0}, {INFINITY, 0}, {0, 1}}));
+  EXPECT_FALSE(Geometry::parse({}).stoppingBudget({0, 0}, .1, body));
+  m = MowingBox();
+  m.markers.front().text = "navigation";
+  EXPECT_FALSE(Geometry::parse(m).stoppingBudget({0, 0}, .1, body));
 }
 
 // This fixture exercises the real controller with an empty configured costmap
@@ -155,7 +420,7 @@ protected:
     SetTransform("odom", "base_footprint", 0.0, false);
     controller_.configure(node_, kPlugin, tf_, costmap_);
     controller_.activate();
-    controller_.newPathReceived(StraightPlan());
+    StartPlan(StraightPlan());
   }
 
   void TearDown() override
@@ -173,6 +438,15 @@ protected:
   void SetParameter(const std::string& key, bool value)
   {
     ASSERT_TRUE(node_->set_parameter({std::string(kPlugin) + "." + key, value}).successful);
+  }
+
+  void StartPlan(const nav_msgs::msg::Path& plan)
+  {
+    controller_.newPathReceived(plan);
+    // Begin these command-bound tests at rest before injecting their isolated
+    // moving-odom feedback. PRE_ROTATE now correctly waits for translation.
+    controller_.computeVelocityCommands(
+        Pose{}, geometry_msgs::msg::Twist{}, nullptr, nav_msgs::msg::Path{}, Pose{});
   }
 
   double Tick()
@@ -360,7 +634,7 @@ TEST_F(FtcSpeedLimit, ReverseEscapeObeysTheSignedExternalCap)
   SetParameter("enable_obstacle_deviation", true);
   robot_x_ = 2.0;
   SetTransform("odom", "base_footprint", robot_x_, false);
-  controller_.newPathReceived(StraightPlan(robot_x_));
+  StartPlan(StraightPlan(robot_x_));
   Wall(3.0);
   controller_.setSpeedLimit(0.05, false);
   double reverse = 0.0;
@@ -385,13 +659,13 @@ protected:
     SetParameter("check_obstacles", true);
     SetParameter("enable_obstacle_deviation", true);
     SetParameter("reverse_boundary_safe", true);
-    controller_.newPathReceived(StraightPlan(0.0));
+    StartPlan(StraightPlan(0.0));
     for (int i = 0; i < 75; ++i)
     {
       robot_x_ += 0.02;
       Tick();
     }
-    controller_.newPathReceived(StraightPlan(robot_x_));
+    StartPlan(StraightPlan(robot_x_));
     Wall(robot_x_ + 1.0);
   }
 
@@ -427,7 +701,7 @@ TEST_F(FtcBoundarySafeReverse, DoesNotReverseWithoutDrivenGroundBehind)
   // The robot appears at 2.0 m (carried / re-anchored): nothing was driven to undo.
   robot_x_ = 2.0;
   SetTransform("odom", "base_footprint", robot_x_, false);
-  controller_.newPathReceived(StraightPlan(robot_x_));
+  StartPlan(StraightPlan(robot_x_));
   Wall(3.0);
   EXPECT_GE(LowestCommand(), 0.0);
 }
@@ -455,7 +729,7 @@ TEST_F(FtcSpeedLimit, TurnFallbackReverseObeysTheSignedExternalCap)
   {
     plan.poses.push_back(MakePose(x, 0.60, M_PI));
   }
-  controller_.newPathReceived(plan);
+  StartPlan(plan);
   Wall(3.45);
   controller_.setSpeedLimit(0.05, false);
   bool saw_fallback_reverse = false;
@@ -472,4 +746,590 @@ TEST_F(FtcSpeedLimit, TurnFallbackReverseObeysTheSignedExternalCap)
   }
   EXPECT_TRUE(saw_fallback_reverse);
 }
+
+// Public compute loop with true plant feedback. Controller: 10 Hz; numerical
+// integration: 50 Hz. Ideal and tau=0.07 s responses are declared test plants,
+// not robot calibration. Private access observes state only.
+class FtcPivotArrival : public FtcSpeedLimit, public ::testing::WithParamInterface<double>
+{
+protected:
+  using Access = mowgli_nav2_plugins::FTCSpeedLimitTestAccess;
+
+  void RobotTransform()
+  {
+    geometry_msgs::msg::TransformStamped transform;
+    transform.header.stamp = rclcpp::Time(time_ns_, RCL_ROS_TIME);
+    transform.header.frame_id = "odom";
+    transform.child_frame_id = "base_footprint";
+    transform.transform.translation.x = x_;
+    transform.transform.translation.y = y_;
+    transform.transform.rotation.z = std::sin(yaw_ / 2);
+    transform.transform.rotation.w = std::cos(yaw_ / 2);
+    ASSERT_TRUE(tf_->setTransform(transform, "arrival-plant", false));
+  }
+
+  nav_msgs::msg::Path CornerPlan(double sign = 1.0, double spacing = 0.6)
+  {
+    nav_msgs::msg::Path plan;
+    plan.header.frame_id = "map";
+    for (int i = 0; i <= 20; ++i)
+      plan.poses.push_back(MakePose(0.05 * i));
+    plan.poses.push_back(MakePose(1, 0, sign * M_PI / 2));
+    plan.poses.push_back(MakePose(1, sign * spacing, sign * M_PI / 2));
+    plan.poses.push_back(MakePose(1, sign * spacing, sign * M_PI));
+    for (int i = 1; i <= 20; ++i)
+      plan.poses.push_back(MakePose(1 - 0.05 * i, sign * spacing, sign * M_PI));
+    return plan;
+  }
+
+  geometry_msgs::msg::Twist Command()
+  {
+    time_ns_ += 100000000;
+    SetTime();
+    RobotTransform();
+    geometry_msgs::msg::Twist measured;
+    measured.linear.x = v_;
+    measured.angular.z = w_;
+    return controller_
+        .computeVelocityCommands(Pose{}, measured, nullptr, nav_msgs::msg::Path{}, Pose{})
+        .twist;
+  }
+
+  void Advance(const geometry_msgs::msg::Twist& command, double tau)
+  {
+    for (int i = 0; i < 5; ++i)
+    {
+      const double a = tau == 0 ? 0 : std::exp(-0.02 / tau);
+      const double ah = tau == 0 ? 0 : std::exp(-0.01 / tau);
+      const double v = command.linear.x + (v_ - command.linear.x) * ah;
+      const double w = command.angular.z + (w_ - command.angular.z) * ah;
+      const double delta = w * 0.02;
+      const double sinc = std::abs(delta) < 1e-12 ? 1 : std::sin(delta / 2) / (delta / 2);
+      x_ += v * 0.02 * sinc * std::cos(yaw_ + delta / 2);
+      y_ += v * 0.02 * sinc * std::sin(yaw_ + delta / 2);
+      yaw_ += delta;
+      v_ = command.linear.x + (v_ - command.linear.x) * a;
+      w_ = command.angular.z + (w_ - command.angular.z) * a;
+    }
+  }
+
+  void RunArrival(
+      double sign, double angle = 0, double spacing = 0.6, std::size_t trim = 0, double cap = .3)
+  {
+    auto plan = CornerPlan(sign, spacing);
+    // The captured first tip/start from the retained ring replay are tested
+    // separately outside the repository. This reachable approach also starts
+    // 125 mm off line and exercises the real point-bearing correction.
+    x_ = 0;
+    y_ = -sign * 0.125;
+    yaw_ = 0;
+    if (trim)
+    {
+      x_ = plan.poses[trim].pose.position.x;
+      y_ = plan.poses[trim].pose.position.y;
+      if (trim < 20)
+        y_ -= sign * .125;  // interrupted incoming leg retains a real lateral error
+      yaw_ =
+          2 * std::atan2(plan.poses[trim].pose.orientation.z, plan.poses[trim].pose.orientation.w);
+      plan.poses.erase(plan.poses.begin(), plan.poses.begin() + trim);
+    }
+    const auto transform = [angle](double& x, double& y)
+    {
+      const double ox = x;
+      x = std::cos(angle) * x - std::sin(angle) * y + 0.3;
+      y = std::sin(angle) * ox + std::cos(angle) * y - 0.4;
+    };
+    transform(x_, y_);
+    yaw_ += angle;
+    for (auto& p : plan.poses)
+    {
+      transform(p.pose.position.x, p.pose.position.y);
+      const double yaw = 2 * std::atan2(p.pose.orientation.z, p.pose.orientation.w) + angle;
+      p.pose.orientation.z = std::sin(yaw / 2);
+      p.pose.orientation.w = std::cos(yaw / 2);
+    }
+    double gx = 1, gy = 0;
+    transform(gx, gy);
+    RobotTransform();
+    controller_.newPathReceived(plan);
+    std::ofstream trace;
+    if (const char* dir = std::getenv("FTC_ARRIVAL_TRACE_DIR"))
+    {
+      const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
+      std::string name = info->name();
+      std::replace(name.begin(), name.end(), '/', '-');
+      trace.open(std::string(dir) + "/" + name + ".csv");
+      trace << "t,x,y,yaw,v,w,cmd_v,cmd_w,state,index,distance\n" << std::setprecision(17);
+    }
+    bool braked = false, pivoted = trim >= 20, left = false;
+    int completed = 0;
+    for (int tick = 0; tick < 700; ++tick)
+    {
+      const int before = Access::State(controller_);
+      const auto command = Command();
+      const int state = Access::State(controller_);
+      EXPECT_LE(command.linear.x, cap);
+      const double distance = std::hypot(x_ - gx, y_ - gy);
+      if (trace)
+        trace << tick * .1 << ',' << x_ << ',' << y_ << ',' << yaw_ << ',' << v_ << ',' << w_ << ','
+              << command.linear.x << ',' << command.angular.z << ',' << state << ','
+              << Access::Index(controller_) << ',' << distance << '\n';
+      if (!pivoted && state == 1 && command.linear.x > 0 && command.linear.x < .15)
+        braked = true;
+      if (!pivoted && state == 5)
+      {
+        EXPECT_LE(distance, 0.02);
+        pivoted = true;
+      }
+      if ((state == 0 || state == 5) && std::abs(v_) > .01)
+        EXPECT_DOUBLE_EQ(command.angular.z, 0.0);
+      if (pivoted && before == 5 && state == 1)
+      {
+        ++completed;
+        if (completed == (trim >= 20 ? 1 : 2))
+        {
+          left = true;
+          break;
+        }
+        pivoted = false;
+        gx = 1;
+        gy = sign * spacing;
+        transform(gx, gy);
+      }
+      Advance(command, GetParam());
+    }
+    if (trim < 20)
+      EXPECT_TRUE(braked);
+    EXPECT_TRUE(pivoted);
+    EXPECT_TRUE(left);
+  }
+
+  double x_{0}, y_{0}, yaw_{0}, v_{0}, w_{0};
+};
+
+TEST_P(FtcPivotArrival, CapturedInteriorTangentMicrometresUseRadialReserve)
+{
+  const double gx = -1.3250370444641841, gy = -0.67902344338509446;
+  const double incoming = -1.5737952311265353, outgoing = 3.138593749258152;
+  x_ = -1.3249271811646266;
+  y_ = -0.64721615459390824;
+  yaw_ = -1.5857167321048689;
+  RobotTransform();
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  plan.poses = {MakePose(gx - .3 * std::cos(incoming), gy - .3 * std::sin(incoming), incoming),
+                MakePose(gx, gy, incoming),
+                MakePose(gx, gy, outgoing),
+                MakePose(gx + .3 * std::cos(outgoing), gy + .3 * std::sin(outgoing), outgoing)};
+  Access::Geometry(controller_, MowingBox(-3, -1, -1, 1));
+  controller_.newPathReceived(plan);
+  Access::ApproachFixture(controller_, std::hypot(gx - x_, gy - y_));
+  const auto command = Command();
+  EXPECT_NEAR(command.linear.x, std::hypot(gx - x_, gy - y_) / .8, 1e-12);
+  EXPECT_EQ(Access::State(controller_), 1);
+  const auto cached = Access::ApproachLimits(controller_);
+  EXPECT_NEAR(cached.first, .0015178746472512962, 1e-12);
+  EXPECT_NEAR(cached.second, .0017347138825729101, 1e-12);
+  // Select the matching radial response reserve before testing feedback.
+  v_ = .01;
+  EXPECT_NEAR(Command().linear.x, std::hypot(gx - x_, gy - y_) / .8, 1e-12);
+  v_ = .05;
+  EXPECT_DOUBLE_EQ(Command().linear.x, 0);
+  v_ = 0;
+  Access::Geometry(controller_, MowingBox(x_ - .3, x_ + .0005, -1, 1));
+  EXPECT_NEAR(Command().linear.x, cached.first, 1e-12);
+  auto hole = MowingBox(-3, -1, -1, 1);
+  auto blocked = MowingBox(x_ + .1, x_ + .101, y_ + .1, y_ + .101).markers.front();
+  blocked.ns = "obstacle";
+  hole.markers.push_back(blocked);
+  Access::Geometry(controller_, hole);
+  EXPECT_NEAR(Command().linear.x, cached.first, 1e-12);
+  Access::Geometry(controller_, {});
+  EXPECT_NEAR(Command().linear.x, cached.first, 1e-12);
+  // Geometry qualification may alternate, but cannot renew this corner's clock.
+  SetParameter("goal_timeout", 1.0);
+  bool aborted = false;
+  for (int i = 0; i < 15; ++i)
+  {
+    Access::Geometry(controller_, i % 2 ? MowingBox(-3, -1, -1, 1) : hole);
+    try
+    {
+      (void)Command();
+    }
+    catch (const nav2_core::ControllerException&)
+    {
+      aborted = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(aborted);
+}
+
+TEST_P(FtcPivotArrival, CapturedInteriorConvergesWithinExistingApproachDeadline)
+{
+  const double gx = -1.3250370444641841, gy = -0.67902344338509446;
+  const double incoming = -1.5737952311265353, outgoing = 3.138593749258152;
+  x_ = -1.3249271811646266;
+  y_ = -0.64721615459390824;
+  yaw_ = -1.5857167321048689;
+  RobotTransform();
+  SetParameter("goal_timeout", 5.0);
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  plan.poses = {MakePose(gx - .3 * std::cos(incoming), gy - .3 * std::sin(incoming), incoming),
+                MakePose(gx, gy, incoming),
+                MakePose(gx, gy, outgoing),
+                MakePose(gx + .3 * std::cos(outgoing), gy + .3 * std::sin(outgoing), outgoing)};
+  Access::Geometry(controller_, MowingBox(-3, -1, -1, 1));
+  controller_.newPathReceived(plan);
+  Access::ApproachFixture(controller_, std::hypot(gx - x_, gy - y_));
+  bool arrived = false;
+  for (int tick = 0; tick < 50; ++tick)
+  {
+    const auto command = Command();
+    if (Access::State(controller_) == 5)
+    {
+      EXPECT_LE(std::hypot(gx - x_, gy - y_), .02);
+      arrived = true;
+      break;
+    }
+    Advance(command, GetParam());
+    EXPECT_GE(x_, -3 - 1e-8);
+    EXPECT_LE(x_, -1 + 1e-8);
+    EXPECT_GE(y_, -1 - 1e-8);
+    EXPECT_LE(y_, 1 + 1e-8);
+  }
+  EXPECT_TRUE(arrived);
+}
+
+TEST_P(FtcPivotArrival, CapturedOuterChamferUsesCertifiedClearanceReserve)
+{
+  const double gx = -2.9940096759401831, gy = 0.9973782762600798;
+  const double incoming = 1.5677974224632547, outgoing = 0.78539816339736279;
+  x_ = -2.9793589009967589;
+  y_ = 0.98231435823658197;
+  yaw_ = 2.3052855759549207;
+  RobotTransform();
+  nav_msgs::msg::Path plan;
+  plan.header.frame_id = "map";
+  plan.poses = {MakePose(gx - .3 * std::cos(incoming), gy - .3 * std::sin(incoming), incoming),
+                MakePose(gx, gy, incoming),
+                MakePose(gx, gy, outgoing),
+                MakePose(gx + .00367076 * std::cos(outgoing),
+                         gy + .00367076 * std::sin(outgoing),
+                         outgoing),
+                MakePose(gx + .1, gy, 0)};
+  Access::Geometry(controller_, MowingBox(-3, -1, -1, 1));
+  controller_.newPathReceived(plan);
+  Access::ApproachFixture(controller_, std::hypot(gx - x_, gy - y_));
+  const auto command = Command();
+  const double budget = std::nextafter(1 - y_ - mowgli_nav2_plugins::transit::kEpsilon, 0);
+  EXPECT_NEAR(command.linear.x, budget / .8, 1e-12);
+  EXPECT_EQ(Access::State(controller_), 1);
+  const auto cached = Access::ApproachLimits(controller_);
+  EXPECT_NEAR(cached.first, .0071761130929037797, 1e-12);
+  v_ = .01;  // above B's reserve, below the new matching reserve
+  EXPECT_NEAR(Command().linear.x, budget / .8, 1e-12);
+  v_ = .03;
+  EXPECT_DOUBLE_EQ(Command().linear.x, 0);
+  v_ = 0;
+  controller_.setSpeedLimit(.01, false);
+  EXPECT_DOUBLE_EQ(Command().linear.x, .01);
+  controller_.setSpeedLimit(0, false);
+  Access::Geometry(controller_, MowingBox(-3, -1, -1, y_ + .002));
+  EXPECT_NEAR(Command().linear.x, cached.first, 1e-12);
+  // The earlier 49s sample also changes, before the deadline is nearly spent.
+  x_ = -2.966923554580374;
+  y_ = 0.9672229516468057;
+  yaw_ = 2.232941996005764;
+  RobotTransform();
+  Access::Geometry(controller_, MowingBox(-3, -1, -1, 1));
+  controller_.newPathReceived(plan);
+  Access::ApproachFixture(controller_, std::hypot(gx - x_, gy - y_));
+  const double early_budget = std::nextafter(1 - y_ - mowgli_nav2_plugins::transit::kEpsilon, 0);
+  EXPECT_NEAR(Command().linear.x, early_budget / .8, 1e-12);
+}
+
+TEST_P(FtcPivotArrival, ApproachTimerUsesBodyAndCannotBeResetByRetreat)
+{
+  SetParameter("goal_timeout", 10.0);
+  controller_.newPathReceived(CornerPlan());
+  Access::ApproachFixture(controller_, .41);  // carrot is at the corner
+  Access::ApproachStateTick(controller_);
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 11000000000LL;
+  SetTime();
+  EXPECT_NO_THROW(Access::ApproachStateTick(controller_));
+  Access::ApproachFixture(controller_, .23);
+  Access::ApproachStateTick(controller_);
+  ASSERT_TRUE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 6000000000LL;
+  SetTime();
+  Access::ApproachFixture(controller_, .41);
+  EXPECT_NO_THROW(Access::ApproachStateTick(controller_));
+  time_ns_ += 4100000000LL;
+  SetTime();
+  EXPECT_THROW(Access::ApproachStateTick(controller_), nav2_core::ControllerException);
+  Access::ApproachFixture(controller_, .41, true);
+  EXPECT_NO_THROW(Access::ApproachStateTick(controller_));
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+  Access::ApproachFixture(controller_, .23, true);
+  Access::ApproachStateTick(controller_);
+  ASSERT_TRUE(Access::ApproachTimerArmed(controller_));
+  controller_.newPathReceived(CornerPlan());
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+}
+
+TEST_P(FtcPivotArrival, FallbackReplacementCannotInheritSameIndexApproachDeadline)
+{
+  SetParameter("goal_timeout", 10.0);
+  auto plan = CornerPlan();
+  for (auto& pose : plan.poses)
+    pose.pose.position.x *= .925;
+  yaw_ = -M_PI / 2;
+  RobotTransform();
+  controller_.newPathReceived(plan);
+  Access::ApproachFixture(controller_, .23);
+  Access::ApproachStateTick(controller_);
+  ASSERT_TRUE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 9000000000LL;
+  SetTime();
+  ASSERT_TRUE(Access::SpliceApproachFallback(controller_));
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 2000000000LL;
+  SetTime();
+  Access::LeaveFallbackInitialPivot(controller_);
+  EXPECT_NO_THROW(Access::ApproachStateTick(controller_));
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+}
+
+TEST_P(FtcPivotArrival, UnsupportedFrameAndExternalCapKeepFiniteBudgets)
+{
+  SetParameter("goal_timeout", 10.0);
+  auto plan = CornerPlan();
+  plan.header.frame_id = "odom";
+  controller_.newPathReceived(plan);
+  Access::ApproachFixture(controller_, .41);
+  Access::ApproachStateTick(controller_);
+  ASSERT_TRUE(Access::ApproachTimerArmed(controller_));
+  time_ns_ += 10100000000LL;
+  SetTime();
+  EXPECT_THROW(Access::ApproachStateTick(controller_), nav2_core::ControllerException);
+
+  controller_.newPathReceived(CornerPlan());
+  controller_.setSpeedLimit(.1, false);  // window is .08 m at this cap
+  Access::ApproachFixture(controller_, .1);
+  Access::ApproachStateTick(controller_);
+  EXPECT_FALSE(Access::ApproachTimerArmed(controller_));
+  Access::ApproachFixture(controller_, .07);
+  Access::ApproachStateTick(controller_);
+  EXPECT_TRUE(Access::ApproachTimerArmed(controller_));
+}
+
+TEST_P(FtcPivotArrival, BrakesAndReachesRadialTipLeft)
+{
+  RunArrival(1);
+}
+TEST_P(FtcPivotArrival, BrakesAndReachesRadialTipRight)
+{
+  RunArrival(-1);
+}
+TEST_P(FtcPivotArrival, RigidTransformPreservesArrival)
+{
+  RunArrival(1, .7);
+}
+TEST_P(FtcPivotArrival, CloseConsecutiveCorners)
+{
+  RunArrival(1, 0, .00367);
+}
+TEST_P(FtcPivotArrival, ResumedIncomingTwin)
+{
+  RunArrival(1, 0, .6, 20);
+}
+TEST_P(FtcPivotArrival, ResumedOutgoingTwin)
+{
+  RunArrival(1, 0, .6, 21);
+}
+
+TEST_P(FtcPivotArrival, TranslationHoldsPreRotateUntilStopped)
+{
+  auto plan = CornerPlan();
+  controller_.newPathReceived(plan);
+  v_ = .15;
+  yaw_ = -.5;
+  const auto command = Command();
+  EXPECT_DOUBLE_EQ(command.linear.x, 0);
+  EXPECT_DOUBLE_EQ(command.angular.z, 0);
+  EXPECT_EQ(Access::State(controller_), 0);
+}
+
+TEST_P(FtcPivotArrival, InterruptedIncomingApproach)
+{
+  // New path begins halfway along the incoming leg with an actual lateral
+  // error; PRE_ROTATE must align with the tip before handing back to FOLLOWING.
+  RunArrival(1, 0, .6, 18);
+}
+
+TEST_P(FtcPivotArrival, ExternalCapWinsDuringApproach)
+{
+  controller_.setSpeedLimit(.03, false);
+  RunArrival(1, 0, .6, 18, .03);
+}
+
+TEST_P(FtcPivotArrival, SettlingCannotResetPreRotateDeadline)
+{
+  SetParameter("goal_timeout", .3);
+  controller_.newPathReceived(CornerPlan());
+  v_ = .15;
+  for (int i = 0; i < 3; ++i)
+  {
+    const auto command = Command();
+    EXPECT_DOUBLE_EQ(command.linear.x, 0);
+    EXPECT_DOUBLE_EQ(command.angular.z, 0);
+  }
+  EXPECT_THROW(Command(), nav2_core::ControllerException);
+}
+
+TEST_P(FtcPivotArrival, StationaryLateralMissNeverCountsAsArrivalAndTimesOut)
+{
+  auto plan = CornerPlan();
+  plan.poses.erase(plan.poses.begin(), plan.poses.begin() + 18);
+  x_ = 1;
+  y_ = -.125;
+  yaw_ = M_PI / 2;
+  RobotTransform();
+  controller_.newPathReceived(plan);
+  bool threw = false;
+  for (int i = 0; i < 350; ++i)
+  {
+    try
+    {
+      Command();  // blocked plant: measured zero, pose unchanged
+      EXPECT_NE(Access::State(controller_), 5);
+    }
+    catch (const nav2_core::ControllerException&)
+    {
+      threw = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(threw);
+}
+
+TEST_P(FtcPivotArrival, MissingAndStaleTfRefuseApproach)
+{
+  auto plan = CornerPlan();
+  plan.poses.erase(plan.poses.begin(), plan.poses.begin() + 16);
+  x_ = .8;
+  RobotTransform();
+  controller_.newPathReceived(plan);
+  time_ns_ += 1000000000;
+  SetTime();
+  EXPECT_THROW(controller_.computeVelocityCommands(
+                   Pose{}, geometry_msgs::msg::Twist{}, nullptr, nav_msgs::msg::Path{}, Pose{}),
+               nav2_core::ControllerException);
+  tf_->clear();
+  EXPECT_THROW(controller_.computeVelocityCommands(
+                   Pose{}, geometry_msgs::msg::Twist{}, nullptr, nav_msgs::msg::Path{}, Pose{}),
+               nav2_core::ControllerException);
+}
+
+TEST_P(FtcPivotArrival, WrongPathFrameRefusesPivot)
+{
+  auto plan = CornerPlan();
+  plan.poses.erase(plan.poses.begin(), plan.poses.begin() + 20);
+  plan.header.frame_id = "odom";
+  for (auto& p : plan.poses)
+    p.header.frame_id = "odom";
+  controller_.newPathReceived(plan);
+  EXPECT_THROW(Command(), nav2_core::ControllerException);
+}
+
+TEST_P(FtcPivotArrival, FutureTfDoesNotForecastTheApproachCap)
+{
+  auto plan = CornerPlan();
+  plan.poses.erase(plan.poses.begin(), plan.poses.begin() + 18);
+  x_ = .96;
+  RobotTransform();
+  controller_.newPathReceived(plan);
+  controller_.computeVelocityCommands(
+      Pose{}, geometry_msgs::msg::Twist{}, nullptr, nav_msgs::msg::Path{}, Pose{});
+  time_ns_ += 100000000;
+  SetTime();
+  RobotTransform();
+  const auto now = time_ns_;
+  time_ns_ += 100000000;
+  x_ = .999;
+  RobotTransform();
+  time_ns_ = now;
+  SetTime();
+  const auto command = controller_
+                           .computeVelocityCommands(Pose{},
+                                                    geometry_msgs::msg::Twist{},
+                                                    nullptr,
+                                                    nav_msgs::msg::Path{},
+                                                    Pose{})
+                           .twist;
+  // Current distance .04 / declared .8 s horizon, rather than future .001.
+  EXPECT_NEAR(command.linear.x, .05, 1e-12);
+}
+
+TEST_P(FtcPivotArrival, TranslationSettlingRetainsPivotDeadline)
+{
+  controller_.newPathReceived(CornerPlan());
+  bool pivoted = false;
+  for (int i = 0; i < 300; ++i)
+  {
+    const auto command = Command();
+    if (Access::State(controller_) == 5)
+    {
+      pivoted = true;
+      break;
+    }
+    Advance(command, GetParam());
+  }
+  ASSERT_TRUE(pivoted);
+  SetParameter("goal_timeout", .3);
+  v_ = .15;  // persistent measured translation; rotation must remain inhibited
+  for (int i = 0; i < 2; ++i)
+  {
+    const auto command = Command();
+    EXPECT_DOUBLE_EQ(command.linear.x, 0);
+    EXPECT_DOUBLE_EQ(command.angular.z, 0);
+    EXPECT_EQ(Access::State(controller_), 5);
+  }
+  Command();
+  EXPECT_THROW(Command(), nav2_core::ControllerException);
+}
+
+TEST_P(FtcPivotArrival, ObstacleOverlayRetainsArrivalAndSettling)
+{
+  SetParameter("enable_obstacle_deviation", true);
+  RunArrival(1);
+}
+
+TEST_F(FtcSpeedLimit, InvalidStartupPivotCoastAssumptionIsRejected)
+{
+  auto invalid_node = std::make_shared<nav2::LifecycleNode>("invalid_controller", "");
+  invalid_node->declare_parameter(std::string(kPlugin) + ".pivot_coast_time_bound_s", 0.0);
+  mowgli_nav2_plugins::FTCController invalid;
+  EXPECT_THROW(invalid.configure(invalid_node, kPlugin, tf_, costmap_),
+               nav2_core::ControllerException);
+}
+
+TEST_F(FtcSpeedLimit, PivotCoastAssumptionHasValidatedDynamicRange)
+{
+  const std::string name = std::string(kPlugin) + ".pivot_coast_time_bound_s";
+  EXPECT_DOUBLE_EQ(node_->get_parameter(name).as_double(), .5);
+  for (double invalid : {0.0,
+                         -.1,
+                         2.01,
+                         std::numeric_limits<double>::quiet_NaN(),
+                         std::numeric_limits<double>::infinity()})
+    EXPECT_FALSE(node_->set_parameter({name, invalid}).successful);
+  for (double valid : {.01, .5, 2.0})
+    EXPECT_TRUE(node_->set_parameter({name, valid}).successful);
+}
+
+INSTANTIATE_TEST_SUITE_P(DeclaredPlants, FtcPivotArrival, ::testing::Values(0.0, 0.07));
 }  // namespace

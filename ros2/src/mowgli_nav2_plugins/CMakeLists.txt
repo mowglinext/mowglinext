@@ -18,6 +18,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 
 find_package(ament_cmake REQUIRED)
+find_package(Boost REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -49,6 +50,7 @@ add_library(${PROJECT_NAME} SHARED
   src/obstacle_deviation.cpp
   src/ftc_lattice_solver.cpp
   src/ftc_turn_fallback.cpp
+  src/ftc_corner_geometry.cpp
   src/ftc_controller.cpp
   src/ftc_controller_turn_fallback.cpp
   src/ftc_controller_plugin.cpp
@@ -65,6 +67,7 @@ target_include_directories(${PROJECT_NAME}
 
 target_include_directories(${PROJECT_NAME}
   SYSTEM PRIVATE
+    ${Boost_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIRS}
 )
 
