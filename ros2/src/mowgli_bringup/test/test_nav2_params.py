@@ -69,6 +69,23 @@ def test_transit_authorization_and_explicit_recovery_are_separate(overlay: str) 
         assert 'planner_id="BoundaryRecovery"' in stream.read()
 
 
+def test_navigate_recovery_never_uses_the_blind_backup() -> None:
+    """Nav2's BackUp reverses along the current heading and cannot see the boundary.
+
+    Field 2026-10-26: a 0.30 m recovery BackUp took the mower from 0.21 m to 0.57 m outside the
+    recorded area, a lethal boundary violation. Every BackUp in the two navigate trees must be
+    served by retrace_server (server_name="retrace"), which only undoes the last piece driven.
+    """
+    trees = os.path.join(os.path.dirname(__file__), "..", "..", "mowgli_behavior", "trees")
+    for filename in ("navigate_to_pose.xml", "navigate_to_pose_transit.xml"):
+        with open(os.path.join(trees, filename), encoding="utf-8") as stream:
+            xml = stream.read()
+        backups = re.findall(r"<BackUp\b[^>]*>", xml)
+        assert backups, f"{filename}: the recovery lost its BackUp step"
+        for tag in backups:
+            assert 'server_name="retrace"' in tag, f"{filename}: {tag} reverses blindly"
+
+
 # The coverage goal-checker was migrated off SimpleGoalChecker/StoppedGoalChecker
 # (commit 4bae0567) to PathProgressGoalChecker. The old "xy_goal_tolerance must
 # be <= mower_width" and "stateful must be true" guards belonged to the

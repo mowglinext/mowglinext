@@ -231,6 +231,11 @@
         <!-- Lethal path: stop immediately, latch -->
         <Sequence name="LethalBoundaryHandler">
           <IsLethalBoundaryViolation/>
+          <!-- A boundary stop interrupts a PASS, it does not make the area unmowable. Marked
+               FIRST (see PausingGuardsMarkTheHaltFirst) so the interrupted pass is not charged
+               to GetNextUnmowedArea's no-progress budget: field 2026-10-26, five boundary
+               recoveries in four minutes retired two areas at 0 swaths. -->
+          <MarkGuardHalt reason="boundary"/>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
           <PublishHighLevelStatus state="0" state_name="BOUNDARY_EMERGENCY_STOP"/>
@@ -249,6 +254,7 @@
 
         <!-- Soft path: stop, then route back to a known-inside pose -->
         <Sequence name="SoftBoundaryHandler">
+          <MarkGuardHalt reason="boundary"/>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
           <PublishHighLevelStatus state="2" state_name="BOUNDARY_RECOVERY"/>
@@ -706,6 +712,7 @@
                    then still faces the dock, and this 1 m FORWARD drive
                    would push it back onto it (ResumeInterruptedUndock). -->
               <Inverter><IsUndockInterrupted/></Inverter>
+              <Inverter><IsAtDockStation/></Inverter>
               <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
               <SeedYawFromMotion distance_m="1.0" speed_ms="0.2" timeout_sec="30.0"/>
               <!-- Drop stale obstacle marks projected during the pre-seed
@@ -791,6 +798,23 @@
                 </Inverter>
                 <BackUp backup_dist="{undock_remaining}" backup_speed="{undock_speed}"/>
               </Fallback>
+              <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
+              <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
+              <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
+              <ClearCostmap/>
+            </Sequence>
+            <!-- On the station without charge (contact lost, #515): a transit
+                 is refused from here (a pivot would hit the head) and the forward
+                 seed in NotDockedBranch would drive INTO it, so that branch stands
+                 down here. Reverse out as an undock. A failed reverse takes
+                 UndockFailed, then ResumeInterruptedUndock on the next start. -->
+            <Sequence name="BackOutOfStation">
+              <Inverter><IsCharging/></Inverter>
+              <IsAtDockStation/>
+              <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
+              <RecordUndockStart/>
+              <ClearCostmap/>
+              <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
               <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
               <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
               <CalibrateHeadingFromUndock min_displacement_m="0.5"/>

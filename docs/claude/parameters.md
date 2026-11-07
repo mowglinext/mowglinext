@@ -308,6 +308,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `obstacle_detection_range_m` (L611) | 2.0 | `FTC.obstacle_lookahead` = max(4, clamp(0.2, 5.0)/0.05 poses) L823 | Obstacles | launch |
 | `obstacle_clearance_margin` (L627) | 0.2 | `FTC.obstacle_clearance_margin` = clamp(0.0, 0.50) L831 | Obstacles | launch |
 | `obstacle_wait_timeout_s` (L632) | 2.5 | `FTC.obstacle_wait_timeout_s` = clamp(0.5, 60.0) L838 | Obstacles | launch |
+| `reverse_boundary_safe` | `true` (struct default `false`) | `FTC.reverse_boundary_safe` (`nav2_params_base.yaml`) | Obstacles | dynamic. A reverse (reverse-escape, turn-fallback reverse) only runs inside every recorded area over a straight forward piece just driven (`retrace.hpp`). |
 | `obstacle_reverse_enabled` (L651) | `true` | `FTC.obstacle_reverse_enabled` L844 | Obstacles | dynamic (FTC param callback, `ftc_controller.cpp:260`) |
 | `obstacle_reverse_max_dist_m` (L654) | 0.30 | clamp(0.0, 1.0) L845 | Obstacles | dynamic |
 | `obstacle_reverse_speed_mps` (L657) | 0.15 | clamp(0.0, 0.30) L847 | Obstacles | dynamic |
@@ -375,7 +376,7 @@ These fall back to a literal hardcoded in the launch file. Each is allow-listed 
 | `lidar_enabled` | `DEFAULT_LIDAR_ENABLED = False` (`robot_config_util.py:172`) | install-decided; absence is meaningful → loud startup warning (`warn_lidar_key_absent` L224) |
 | `connector_turn_radius` | 0.20 (`navigation.launch.py:403`) | `coverage_server` |
 | `fusion_graph_node_period_s` | 0.04 (`navigation.launch.py:139`) | `fusion_graph_node.node_period_s` (overrides `fusion_graph.yaml:23`'s 0.02) |
-| `dock_body_length_m` / `dock_body_width_m` | 0.80 / 0.55 (`full_system.launch.py:383–384`) | `map_server` dock polygon |
+| `dock_body_length_m` / `dock_body_width_m` | 0.80 (only lengthens: `robot_config_util.dock_body_extents` keeps nose + `DOCK_HEAD_DEPTH_M` inside) / 0.55 (`full_system.launch.py`) | `map_server` dock polygon; `dock_body_rear_m` is derived (docked rear bumper) |
 | `lethal_outside_areas` | `true` (`full_system.launch.py:416`) | `map_server` (also a static default in `map_server.yaml:96`) |
 | `enforce_boundary_margin_m` | 0.40, then **floored at `robot_config_util.chassis_circumscribed_radius(rp)`** = 0.597 m shipped (`full_system.launch.py`) | `map_server` (static default `map_server.yaml`, standalone runs only). The band must hold the whole footprint overhanging the recorded line — `chassis_safety_inset` is 0, so the CENTRE rides on the line and the body reaches 0.275 m sideways but **0.53 m forward** at a row end. Floor raised from `chassis_half_width` (a no-op: 0.275 < 0.40) 2026-09-17. **Trade-off:** the band is also how far outside the perimeter Smac will route, and it now exceeds `lethal_boundary_margin_m` (0.5) |
 | `lift_recovery_mode` / `lift_blade_resume_delay_sec` | `false` / 1.0 (`mowgli.launch.py:230–232`) | `hardware_bridge` — GUI section *Safety* |

@@ -176,8 +176,9 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
     return false;
   }
   // The reverse obeys the operator's reverse switch, like the reverse-escape.
-  const double max_reverse =
-      config_.obstacle_reverse_enabled ? config_.turn_fallback_max_reverse_m : 0.0;
+  const double max_reverse = config_.obstacle_reverse_enabled
+                                 ? reverseAllowedDistance(config_.turn_fallback_max_reverse_m)
+                                 : 0.0;
   std::size_t first = 0;
   TurnFallbackProblem problem;
   const auto t0 = std::chrono::steady_clock::now();
@@ -185,17 +186,28 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
       planTurnFallback(carrot_idx, guard, body, max_reverse, first, &problem);
   const double ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  // Where the plan pose the body cannot occupy lies (plan frame): the field logs gave only an
+  // index, which says nothing about WHAT is in the way. NaN when the index is outside the plan.
+  const std::size_t blocked_idx = first + plan.blocked;
+  const double blocked_x = blocked_idx < global_plan_.size()
+                               ? global_plan_[blocked_idx].pose.position.x
+                               : std::numeric_limits<double>::quiet_NaN();
+  const double blocked_y = blocked_idx < global_plan_.size()
+                               ? global_plan_[blocked_idx].pose.position.y
+                               : std::numeric_limits<double>::quiet_NaN();
   if (plan.verdict != TurnFallbackVerdict::kPlanned)
   {
     RCLCPP_WARN(logger_,
                 "FTCController: turn fallback not possible at idx=%u (%s%s%s): blockage at idx %zu "
-                "%.2f m ahead, plan turn %.0f deg, rear clear %.2f m, %zu candidates, %.1f ms — "
-                "WEDGED handling as before.",
+                "(%.2f, %.2f) %.2f m ahead, plan turn %.0f deg, rear clear %.2f m, %zu "
+                "candidates, %.1f ms — WEDGED handling as before.",
                 current_index_,
                 ToString(plan.verdict),
                 plan.why.empty() ? "" : ": ",
                 plan.why.c_str(),
-                first + plan.blocked,
+                blocked_idx,
+                blocked_x,
+                blocked_y,
                 plan.blocked_arc_m,
                 plan.turn_rad * 180.0 / M_PI,
                 plan.reverse_limit_m,
@@ -212,12 +224,15 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
   RCLCPP_WARN(
       logger_,
       "FTCController: TURN FALLBACK at idx=%u — the lattice is WEDGED by lethal cells under "
-      "the body at idx %zu (%.2f m ahead) in a %.0f deg turn of the plan. Plan: reverse "
+      "the body at idx %zu (%.2f, %.2f; %.2f m ahead) in a %.0f deg turn of the plan. Plan: "
+      "reverse "
       "%.2f m, pivot %+.0f deg, straight %.2f m, pivot %+.0f deg, rejoin idx %zu, "
       "skipping %.2f m of path. Clearances (m, -1 = leg not driven): reverse %.2f, pivot "
       "%.2f, straight %.2f, pivot %.2f; %zu candidates, %.1f ms.",
       current_index_,
-      first + plan.blocked,
+      blocked_idx,
+      blocked_x,
+      blocked_y,
       plan.blocked_arc_m,
       plan.turn_rad * 180.0 / M_PI,
       plan.reverse_m,

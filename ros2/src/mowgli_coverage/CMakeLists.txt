@@ -18,6 +18,7 @@ find_package(nav2_util REQUIRED)
 find_package(nav2_ros_common REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
 
@@ -68,6 +69,7 @@ target_link_libraries(${PROJECT_NAME}_core
   ${nav2_ros_common_TARGETS}
   ${nav_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
+  ${visualization_msgs_TARGETS}
   ${builtin_interfaces_TARGETS}
   ${mowgli_interfaces_TARGETS}
 )

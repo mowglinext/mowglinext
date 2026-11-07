@@ -67,6 +67,42 @@ inline DockContactDelta ComputeDockContactDelta(
   return DockContactDelta{dx * c + dy * s, -dx * s + dy * c, std::hypot(dx, dy)};
 }
 
+/// The stretch in front of the station where the robot cannot pivot without
+/// swinging its nose into the head, in the dock's own axes. Derived from the
+/// chassis in robot_config_util, injected by full_system.launch.py.
+struct DockStationZone
+{
+  /// How far behind the dock pose the zone starts (positive).
+  double pivot_clear_m{0.217};
+  double half_width_m{0.275};
+  /// Far end of the station, ahead of the dock pose.
+  double front_m{0.68};
+};
+
+inline constexpr double kDockStationMaxYawErrorRad = M_PI / 4.0;
+
+/// True when the robot stands on the station's approach line, nose toward it,
+/// too close to pivot. The transit planner refuses such a start because a pivot
+/// would hit the head, and it does not need one: the way out is straight back,
+/// and the way in is straight ahead. So docking skips the staging leg from here
+/// and an undock reverses. This is what keeps a contact without charge (#515)
+/// from blocking either.
+inline bool IsFacingStationInNoPivotZone(double robot_x,
+                                         double robot_y,
+                                         double robot_yaw,
+                                         double dock_x,
+                                         double dock_y,
+                                         double dock_yaw,
+                                         const DockStationZone& zone)
+{
+  const auto delta = ComputeDockContactDelta(robot_x, robot_y, dock_x, dock_y, dock_yaw);
+  const double yaw_error =
+      std::atan2(std::sin(robot_yaw - dock_yaw), std::cos(robot_yaw - dock_yaw));
+  return delta.along_m > -zone.pivot_clear_m && delta.along_m <= zone.front_m &&
+         std::abs(delta.cross_m) <= zone.half_width_m &&
+         std::abs(yaw_error) <= kDockStationMaxYawErrorRad;
+}
+
 /// Distance opennav_docking projects BACK along dock_pose_yaw to build the dock
 /// staging pose — mirrors `staging_x_offset` in nav2_params_base.yaml. Used only
 /// to express a yaw error as the lateral miss it causes at the START of the

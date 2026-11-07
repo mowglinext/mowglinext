@@ -698,6 +698,11 @@ protected:
   {
     factory.registerNodeType<mowgli_behavior::HasPowerSample>("HasPowerSample");
     factory.registerNodeType<mowgli_behavior::IsCharging>("IsCharging");
+    factory.registerSimpleCondition("IsAtDockStation",
+                                    [](BT::TreeNode&)
+                                    {
+                                      return BT::NodeStatus::FAILURE;
+                                    });
     factory.registerSimpleCondition("IsUndockInterrupted",
                                     [](BT::TreeNode&)
                                     {

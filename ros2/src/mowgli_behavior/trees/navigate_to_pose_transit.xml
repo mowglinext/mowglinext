@@ -107,7 +107,13 @@
                does, so it bought nothing here even when it "worked" — only risk,
                never recovery, next to a hedge specifically. -->
           <RoundRobin name="RecoveryActions" wrap_around="true">
-            <BackUp backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
+            <!-- server_name="retrace": undoes the last piece the robot drove, straight back (see
+                 mowgli_nav2_plugins/retrace.hpp). Nav2's own BackUp reverses along the current
+                 heading and cannot see the boundary: field 2026-10-26 it took the robot from
+                 0.21 m to 0.57 m outside the area (lethal boundary violation). When the last piece
+                 was not a clean straight line the action is refused and this RoundRobin moves on
+                 to clearing the costmaps / waiting. -->
+            <BackUp server_name="retrace" backup_dist="0.30" backup_speed="0.15" error_code_id="{backup_code_id}"/>
             <Sequence name="ClearingActions">
               <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
               <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>

@@ -42,6 +42,7 @@ Webots driver outputs (e.g. ``/wheel_odom_raw``, ``/imu``, ``/scan``,
 Phase 2 work — until that lands the helpers below may not see live data.
 """
 
+import json
 import os
 
 from ament_index_python.packages import get_package_share_directory
@@ -49,6 +50,7 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    OpaqueFunction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -56,6 +58,12 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 import yaml
+
+
+def _on_required_gnss_exit(context):
+    """Fail unexpected relay exits; preserve successful requested teardown."""
+    if not context.is_shutdown:
+        raise RuntimeError('Required GNSS quality relay exited unexpectedly')
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -124,6 +132,15 @@ def generate_launch_description() -> LaunchDescription:
         description="Webots execution mode: realtime | fast | pause.",
     )
 
+    gps_quality_pattern_arg = DeclareLaunchArgument(
+        'gps_quality_pattern',
+        default_value='',
+        description=(
+            'Simulated GNSS-quality cycle, e.g. '
+            '90,RTK_FIXED;30,RTK_FLOAT;10,NO_FIX. Empty keeps RTK-Fixed.'
+        ),
+    )
+
     # use_magnetometer comes from mowgli_robot.yaml via navigation.launch.py
     # — no need to declare it here. CLI override still propagates.
     # (There is no use_fusion_graph arg; fusion_graph_node is the sole,
@@ -175,6 +192,12 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "use_sim_time": "true",
             "use_lidar": use_lidar,
+            # Share one scenario snapshot with COG and both fusion graph modes.
+            # Otherwise an absent site datum self-seeds at the first antenna fix.
+            "simulation_geometry": json.dumps({
+                "datum_lat": datum_lat, "datum_lon": datum_lon,
+                "lever_arm_x": lever_arm_x, "lever_arm_y": lever_arm_y,
+            }, allow_nan=False),
             # cog_to_imu defaults are fine in sim now that the node
             # self-gates the stationary anchor on |wheel_omega| (won't
             # republish a stale forward-motion yaw while the robot is
@@ -332,6 +355,8 @@ def generate_launch_description() -> LaunchDescription:
         executable="sim_navsat_rtk_fix.py",
         name="sim_navsat_rtk_fix",
         output="screen",
+        # A rejected scenario must not leave the rest of the sim running.
+        on_exit=[OpaqueFunction(function=_on_required_gnss_exit)],
         parameters=[
             {
                 "use_sim_time": True,
@@ -342,13 +367,10 @@ def generate_launch_description() -> LaunchDescription:
                 "datum_lon": datum_lon,
                 "lever_arm_x": lever_arm_x,
                 "lever_arm_y": lever_arm_y,
-                # Realistic mowing scenario: 90 s RTK-Fixed (open sky),
-                # 30 s RTK-Float (light tree cover), 10 s no-fix (dense
-                # canopy / multipath). Empty pattern → always RTK_FIXED
-                # (σ=3 mm, no Python noise injection). Bias disabled while
-                # debugging fusion_graph; restore the cycle pattern once
-                # the baseline is clean.
-                "quality_pattern": "",
+                # Recovery scenarios use the existing relay; empty stays Fixed.
+                'quality_pattern': ParameterValue(
+                    LaunchConfiguration('gps_quality_pattern'), value_type=str
+                ),
                 "noise_seed": 42,
             }
         ],
@@ -494,6 +516,7 @@ def generate_launch_description() -> LaunchDescription:
             headless_arg,
             use_lidar_arg,
             mode_arg,
+            gps_quality_pattern_arg,
             # Subsystem includes
             simulation_launch,
             navigation_launch,

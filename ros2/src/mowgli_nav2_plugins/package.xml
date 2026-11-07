@@ -16,6 +16,7 @@
   <build_depend>boost</build_depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>rclcpp_action</depend>
   <depend>nav2_core</depend>
   <depend>nav2_costmap_2d</depend>
   <depend>nav2_util</depend>
@@ -24,6 +25,7 @@
   <depend>nav_msgs</depend>
   <depend>nav2_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>pluginlib</depend>
   <depend>tf2</depend>
