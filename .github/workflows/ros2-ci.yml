@@ -567,7 +567,10 @@ jobs:
             echo "No merge-base with origin/main — skipping."
             exit 0
           fi
+          # Webots .proto files are VRML, not clang-format's Protobuf language.
+          # Match the C/C++ gate without reformatting simulator scene sources.
           DIFF=$(git-clang-format-18 --binary clang-format-18 \
+                   --extensions c,cc,cpp,cxx,h,hh,hpp,hxx,ipp,inl \
                    --style=file:ros2/.clang-format --diff "$BASE" -- \
                    ros2/src 2>/dev/null || true)
           case "$DIFF" in
