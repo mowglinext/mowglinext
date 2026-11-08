@@ -423,6 +423,7 @@ endif()
 # ---------------------------------------------------------------------------
 
 ament_export_include_directories(include)
+ament_export_libraries(navsat_status_association)
 ament_export_dependencies(
   rclcpp
   nav_msgs

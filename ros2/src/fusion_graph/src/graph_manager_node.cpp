@@ -47,6 +47,7 @@ std::optional<TickOutput> GraphManager::Tick(double now_s)
   // entries after a bag loop / simulation reset.
   if (last_node_time_s_ > now_s)
   {
+    InvalidateGnssSupportLocked();
     queue_.lidar_map_xy.reset();
     last_node_time_s_ = now_s;
     node_time_index_.clear();
@@ -413,7 +414,8 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // 3. Queued unary factors. Wrap in Huber when caller flagged the
   // measurement as outlier-prone (RTK-Float / single fix on GPS;
   // magnetometer on yaw).
-  AddQueuedGnssFactorLocked(new_factors_, next_index_);
+  const bool gnss_added = AddQueuedGnssFactorLocked(new_factors_, next_index_);
+  const uint64_t gnss_token = gnss_added ? queue_.gnss->ingestion_token : 0;
   if (queue_.yaw)
   {
     gtsam::SharedNoiseModel noise = MakeDiagonal({queue_.yaw->sigma});
@@ -481,6 +483,7 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   }
 
   RefreshLatestLocked(next_index_, now_s);
+  AcknowledgeGnssLocked(gnss_token);
   const auto out = *latest_;
 
   // 6. Reset for next tick.

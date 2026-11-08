@@ -18,6 +18,7 @@
 // at our graph sizes (a few thousand nodes max per session).
 
 #pragma once
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <iosfwd>
@@ -57,6 +58,9 @@ struct TickOutput
   uint64_t node_index;  // monotonically increasing
   double timestamp;  // ROS time of the pose node, seconds
   uint64_t estimate_revision = 0;  // changes even when node_index does not
+  uint64_t graph_epoch = 0;
+  uint64_t applied_gnss_token = 0;
+  uint64_t applied_gnss_revision = 0;
 };
 
 // Lightweight stats snapshot for diagnostics.
@@ -129,7 +133,12 @@ public:
                  double y,
                  double sigma_xy,
                  bool robust = false,
-                 std::optional<uint64_t> target_node = std::nullopt);
+                 std::optional<uint64_t> target_node = std::nullopt,
+                 uint64_t ingestion_token = 0);
+
+  // Invalidate provenance without changing the numerical graph.
+  void InvalidateGnssSupport();
+  uint64_t GraphEpoch() const;
 
   // Yaw observation (COG or mag). sigma_yaw is rad. `robust` should be
   // true for magnetometer yaw (uncalibrated / heading-dependent bias),
@@ -308,6 +317,7 @@ private:
       double sigma;
       bool robust;
       std::optional<uint64_t> target_node;
+      uint64_t ingestion_token = 0;
     };
     struct Yaw
     {
@@ -374,6 +384,11 @@ private:
   // throttle that O(N) call without losing covariance freshness on
   // the diagnostics + odom outputs.
   int ticks_since_cov_ = 0;
+  std::atomic<uint64_t> graph_epoch_{0};
+  uint64_t applied_gnss_token_ = 0;
+  uint64_t applied_gnss_revision_ = 0;
+  void InvalidateGnssSupportLocked();
+  void AcknowledgeGnssLocked(uint64_t token);
   uint64_t estimate_revision_ = 0;  // never reset: distinguish re-seeded node IDs
   uint64_t successful_updates_ = 0;  // never reset
   uint64_t rebased_updates_ = 0;

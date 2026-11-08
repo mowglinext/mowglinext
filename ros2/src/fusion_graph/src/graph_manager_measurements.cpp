@@ -10,6 +10,42 @@
 
 namespace fusion_graph
 {
+void GraphManager::InvalidateGnssSupportLocked()
+{
+  ++graph_epoch_;
+  applied_gnss_token_ = 0;
+  applied_gnss_revision_ = 0;
+  if (queue_.gnss)
+    queue_.gnss->ingestion_token = 0;
+  if (latest_)
+  {
+    latest_->graph_epoch = graph_epoch_;
+    latest_->applied_gnss_token = 0;
+    latest_->applied_gnss_revision = 0;
+  }
+}
+
+void GraphManager::InvalidateGnssSupport()
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  InvalidateGnssSupportLocked();
+}
+
+uint64_t GraphManager::GraphEpoch() const
+{
+  return graph_epoch_.load(std::memory_order_acquire);
+}
+
+void GraphManager::AcknowledgeGnssLocked(uint64_t token)
+{
+  if (!latest_ || token == 0 || token <= applied_gnss_token_)
+    return;
+  applied_gnss_token_ = token;
+  applied_gnss_revision_ = latest_->estimate_revision;
+  latest_->applied_gnss_token = token;
+  latest_->applied_gnss_revision = applied_gnss_revision_;
+}
+
 bool GraphManager::WheelStationaryLocked() const
 {
   const double tick_scale = params_.node_period_s / kTunedNodePeriodS;
@@ -52,6 +88,7 @@ void GraphManager::ApplyQueuedGnssLocked()
     return;
   gtsam::NonlinearFactorGraph factors;
   const bool added = AddQueuedGnssFactorLocked(factors);
+  const uint64_t token = queue_.gnss->ingestion_token;
   queue_.gnss.reset();  // consume once, including a target removed by rebase
   if (!added || !ApplyIsamUpdateLocked(factors, gtsam::Values()))
     return;
@@ -59,7 +96,10 @@ void GraphManager::ApplyQueuedGnssLocked()
   // Historical factors can move the head too. No process state, other unary
   // queue, bias feedback or node epoch changes in this path.
   if (latest_)
+  {
     RefreshLatestLocked(latest_->node_index, latest_->timestamp);
+    AcknowledgeGnssLocked(token);
+  }
 }
 
 void GraphManager::RefreshLatestLocked(uint64_t node_index, double timestamp)
@@ -80,6 +120,13 @@ void GraphManager::RefreshLatestLocked(uint64_t node_index, double timestamp)
     }
     ticks_since_cov_ = 0;
   }
-  latest_ = TickOutput{PoseAt(node_index), cov, node_index, timestamp, ++estimate_revision_};
+  latest_ = TickOutput{PoseAt(node_index),
+                       cov,
+                       node_index,
+                       timestamp,
+                       ++estimate_revision_,
+                       graph_epoch_,
+                       applied_gnss_token_,
+                       applied_gnss_revision_};
 }
 }  // namespace fusion_graph

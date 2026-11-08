@@ -112,6 +112,7 @@ void GraphManager::Reset()
 
 void GraphManager::ResetLocked()
 {
+  InvalidateGnssSupportLocked();
   // Rebuild iSAM2 with the same parameters used in the constructor —
   // GTSAM has no public clear() API.
   gtsam::ISAM2Params p;
@@ -346,6 +347,7 @@ try
   auto restored = isam_;
   restored.update(fg, kept_values);
   isam_ = std::move(restored);
+  InvalidateGnssSupportLocked();
   estimate_dirty_ = true;
 
   next_index_ = next_idx;
@@ -390,6 +392,7 @@ try
     out.node_index = next_index_ - 1;
     out.timestamp = last_node_time_s_;
     out.estimate_revision = ++estimate_revision_;
+    out.graph_epoch = graph_epoch_;
     latest_ = out;
     // Persisted files store the latest timestamp but not a complete per-node
     // timeline. Index only the pose whose epoch is known; subsequent live

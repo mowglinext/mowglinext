@@ -145,6 +145,7 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
         // estimate with the physics-grounded COG heading. Keep xy at its
         // current σ-equivalent (5 mm) since only yaw is wrong.
         graph_->ForceAnchor(snap->node_index, anchor, 0.005, 1.0 * M_PI / 180.0);
+        SynchronizeSupportEpoch();
         // Re-datum dead reckoning to the re-anchored node. dr_* carries the
         // OLD (flipped) heading lineage; without this reset the map→odom
         // recompute cancels against the stale dr_yaw_ and odom→base keeps
@@ -273,6 +274,7 @@ void FusionGraphNode::OnSetPose(geometry_msgs::msg::PoseWithCovarianceStamped::C
   if (!graph_->IsInitialized())
   {
     graph_->Initialize(pose, this->now().seconds());
+    SynchronizeSupportEpoch();
     // Initialize updates latest_ but the map→odom anchor was either
     // never captured or based on a now-stale init pose; force OnTimer
     // to recompute it against the new snap.pose + current dr_*.
@@ -291,6 +293,7 @@ void FusionGraphNode::OnSetPose(geometry_msgs::msg::PoseWithCovarianceStamped::C
   if (!snap)
     return;
   graph_->ForceAnchor(snap->node_index, pose, sigma_xy, sigma_theta);
+  SynchronizeSupportEpoch();
   ResetLidarTiming();
   t_map_odom_anchor_valid_ = false;  // see comment above
 

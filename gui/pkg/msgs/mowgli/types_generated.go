@@ -4,6 +4,7 @@ package mowgli
 import (
 	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 	"github.com/mowglinext/mowglinext/pkg/msgs/nav"
+	"github.com/mowglinext/mowglinext/pkg/msgs/sensor"
 )
 
 // AbsolutePose matches mowgli_interfaces/msg/AbsolutePose.
@@ -113,6 +114,19 @@ type FirmwareParams struct {
 	ResetRequestId            uint32                         `json:"reset_request_id"`
 	StoreStatusSequence       uint32                         `json:"store_status_sequence"`
 	Params                    []FirmwareParam                `json:"params"`
+}
+
+// GnssFusionUpdate matches mowgli_interfaces/msg/GnssFusionUpdate.
+type GnssFusionUpdate struct {
+	Header                    geometry.Header                `json:"header"`
+	ProducerIncarnation       string                         `json:"producer_incarnation"`
+	GraphEpoch                uint64                         `json:"graph_epoch"`
+	EstimateRevision          uint64                         `json:"estimate_revision"`
+	PosePublished             bool                           `json:"pose_published"`
+	TfSupportStamp            geometry.Stamp                 `json:"tf_support_stamp"`
+	HasAppliedFix             bool                           `json:"has_applied_fix"`
+	AppliedFix                sensor.NavSatFix               `json:"applied_fix"`
+	AppliedRevision           uint64                         `json:"applied_revision"`
 }
 
 // GnssStatus matches mowgli_interfaces/msg/GnssStatus.
