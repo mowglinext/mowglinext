@@ -10,6 +10,7 @@
 #include <nav2_smac_planner/smac_planner_2d.hpp>
 #include <sensor_msgs/point_cloud2_iterator.hpp>
 
+#include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/authorized_transit_planner.hpp"
 #include "mowgli_nav2_plugins/garden_keepout_layer.hpp"
 #include <gtest/gtest.h>
@@ -110,6 +111,7 @@ protected:
     geometry_node.reset();
     keepout.reset();
     obstacles.reset();
+    mowgli_nav2_plugins_test::WaitForTfListenerSpinning(*costmap);
     costmap->on_cleanup(rclcpp_lifecycle::State());
     costmap.reset();
     planner_node.reset();
