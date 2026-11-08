@@ -32,6 +32,7 @@ import io
 import multiprocessing
 import pickle
 import threading
+import time
 import traceback
 from typing import Any
 
@@ -147,11 +148,20 @@ class _Client:
         self._conn = conn
         # The executor threads and the scenario thread may both touch the rig.
         self._mutex = threading.Lock()
+        self.slow_calls = collections.deque(maxlen=2000)
 
     def request(self, op, path=(), args=(), kwargs=None):
         with self._mutex:
+            started = time.monotonic()
             self._conn.send((op, tuple(path), tuple(args), kwargs or {}))
-            kind, value = self._conn.recv()
+            raw = self._conn.recv_bytes()
+            received = time.monotonic()
+            kind, value = pickle.loads(raw)
+            done = time.monotonic()
+            # Diagnostics only: calls whose round trip or unpickle exceeds 20 ms.
+            if done - started > 0.02:
+                self.slow_calls.append((started, op, '.'.join(str(k) for _, k in path),
+                                        len(raw), received - started, done - received))
         if kind == 'err':
             raise RemoteRigError(value)
         return kind, value

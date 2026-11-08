@@ -1231,14 +1231,15 @@ def _gc_timer(phase, info):
 gc.callbacks.append(_gc_timer)
 
 
-def _dump_probe_timing(probe, path):
+def _dump_probe_timing(probe, path, rig=None):
     """Probe-side monotonic stamps (CLOCK_MONOTONIC, same base as the native
     trace's mono_ns): what this process published and when it received the
     bridge's applied command. Uploaded with the other logs on failure."""
     with probe.lock:
         applied = [t for (t, _, _) in probe.applied]
     with open(path, 'w') as output:
-        json.dump(dict(published=list(probe.published), applied_rx=applied,
+        slow = list(rig._client.slow_calls) if rig is not None else []
+        json.dump(dict(published=list(probe.published), applied_rx=applied, slow_rig_calls=slow,
                        gc_pauses=list(_GC_PAUSES), gc_counts=gc.get_count(),
                        gc_stats=gc.get_stats()), output)
 
@@ -1273,7 +1274,7 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
             print(f'-- {esc} / s20_crash', flush=True)
             run_scenario(s20_crash, R, probe, rig, R, esc, bridge, fixture=rig)
     finally:
-        _dump_probe_timing(probe, os.path.join(logdir, f'probe-timing-{esc}.json'))
+        _dump_probe_timing(probe, os.path.join(logdir, f'probe-timing-{esc}.json'), rig)
         try:
             os.killpg(bridge.pid, signal.SIGKILL)
         except ProcessLookupError:
