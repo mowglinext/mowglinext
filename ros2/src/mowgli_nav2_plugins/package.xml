@@ -13,6 +13,7 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <build_depend>boost</build_depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>rclcpp_action</depend>

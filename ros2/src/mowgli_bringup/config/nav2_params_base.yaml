@@ -440,6 +440,10 @@ controller_server:
     # F2C route as one continuous goal — FTC tracks it; no per-swath feeding.
     FollowCoveragePath:
       plugin: "mowgli_nav2_plugins/FTCController"
+      # Private FTC approach assumption: residual forward travel / speed after
+      # STOP <= 0.5 s. Physical calibration is outstanding; no global deadband
+      # or angular-safety limits change. Only explicit pivot approaches use it.
+      pivot_coast_time_bound_s: 0.5
       # Carrot speed. BOTH are overridden at launch (navigation.launch.py):
       #   speed_fast = mowing_speed
       #   speed_slow = clamp(mowing_speed * turn_speed_ratio,

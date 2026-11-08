@@ -13,6 +13,19 @@ Global fixed-grid geometry and mandatory authorization are owned by `GardenKeepo
 current observation buffers. See [Garden global costmap](../../GARDEN_GLOBAL_COSTMAP.md)
 for geometry synchronization, recovery toggles, budgets and hardware acceptance.
 
+Explicit internal pivot arrival uses planar distance within the existing 20 mm
+radius. A local forward-monotone approach steers at the actual tip and bounds
+positive output below the ordinary minimum speed using `pivot_coast_time_bound_s`
+(default 0.5 s, range 0.01–2.0 s), a declared response assumption that still needs
+physical calibration. Approach/cap/arrival share a supported current map/base TF
+epoch; unsupported, stale or mismatched path frames refuse the pivot approach.
+Deviation, obstacle wait, reverse and turn fallback retain output ownership.
+PRE_ROTATE and PIVOT hold angular output until measured planar translation is
+at most 0.01 m/s, without resetting their deadlines. Eligible pinned approaches
+also use the existing goal timeout. This establishes local arrival/stopping
+behavior; outgoing path containment and public goal checking are separate.
+Regressions use the actual FTC in `test_ftc_speed_limit.cpp`.
+
 ## Where to look
 
 Normal transit planning is now `include/mowgli_nav2_plugins/authorized_transit_planner.hpp`
@@ -57,6 +70,16 @@ The Nav2 recovery's BackUp is NOT Nav2's: `navigate_to_pose.xml` / `navigate_to_
 | Register a new plugin class | `ros2/src/mowgli_nav2_plugins/ftc_controller_plugin.xml` / `goal_checker_plugin.xml`, `CMakeLists.txt` `pluginlib_export_plugin_description_file`, `package.xml` `<export>` |
 | Add a unit test | `CMakeLists.txt` `if(BUILD_TESTING)` block — pure helpers use `ament_add_gtest`; real-controller/node tests use `ament_add_ros_isolated_gtest` for DDS isolation |
 | Diagnose "strip aborted" (ControllerException) | throw sites: `ftc_controller.cpp:835` (crashed latch), `:957` (deviation TF), `:965` (legacy collision), `:973` (crash latched during PID), `:1357` (carrot TF), `:1717` (wait timeout) |
+
+Approach stopping can use `ftc_corner_geometry.{hpp,cpp}`'s sufficient disk
+certificate from the complete `/map_server_node/transit_geometry` publication.
+Only explicit `mowing` area roles authorize the axle disk; raw obstacle/dock rings
+must remain beyond that disk plus the filled body's maximum reach. The budget
+uses one containing MOW ring, existing epsilon and a final whole-disk recheck.
+Missing/invalid geometry or a failed certificate keeps the path-only bound. The
+supported pose epoch is shared with arrival, and a mutex orders certificate use
+and output against complete geometry replacement. This does not qualify pivot
+rotation/departure or create a general per-command geofence gate.
 
 ## Files
 
