@@ -28,6 +28,7 @@
 #include "mowgli_behavior/area_progress.hpp"
 #include "mowgli_behavior/blocked_stretch.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
+#include "mowgli_behavior/coverage_entry.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/coverage_preview.hpp"
 #include "mowgli_behavior/mow_coverage_plausibility.hpp"
@@ -43,6 +44,24 @@ namespace mowgli_behavior
 {
 namespace
 {
+
+// Recompute at every use: Nav2 success and a nearby path front are not mowing permission.
+bool coverageEntryContained(const std::shared_ptr<BTContext>& ctx,
+                            const BT::Blackboard::Ptr& blackboard)
+{
+  std::shared_ptr<CoverageEntryGeometry> geometry;
+  if (!ctx->tf_buffer || !blackboard->get("_coverage_entry_geometry", geometry) || !geometry)
+    return false;
+  try
+  {
+    const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    return geometry->contains(tf.transform.translation.x, tf.transform.translation.y);
+  }
+  catch (const tf2::TransformException&)
+  {
+    return false;
+  }
+}
 
 /// rclcpp_action's result code -> our ROS-free outcome (action_outcome.hpp).
 GoalOutcome OutcomeFromResultCode(const rclcpp_action::ResultCode code)
@@ -279,6 +298,11 @@ std::size_t forwardSkipIndex(const std::vector<geometry_msgs::msg::PoseStamped>&
 BT::NodeStatus FollowStrip::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::shared_ptr<CoverageEntryGeometry> geometry;
+  if (!config().blackboard->get("_coverage_entry_geometry", geometry) || !geometry)
+  {
+    config().blackboard->set("_coverage_entry_geometry", CoverageEntryGeometry::create(ctx->node));
+  }
   // A prior halted/terminal pass must never leave a live status overlay behind.
   ctx->coverage_scan_paused = false;
 
@@ -499,6 +523,7 @@ BT::NodeStatus FollowStrip::onStart()
   transit_pending_ = false;
   transit_abort_seen_ = false;
   transit_result_.reset();
+  transit_outcome_.reset();
   ctx->transiting = false;
   swath_goal_sent_ = false;
   follow_goal_ever_sent_ = false;
@@ -611,15 +636,11 @@ BT::NodeStatus FollowStrip::onStart()
   // booked by the first onRunning tick (unit_exhausted_by_dig_).
   unit_exhausted_by_dig_ = !skipUnitFrontPastDigZones(ctx);
 
-  // Spin the blade up now ONLY if the first unit is mowed from where the robot
-  // stands. A unit that must first be reached by a blade-off transit gets its
-  // blade from sendFollowGoal after the transit; spinning it up here just to
-  // cut it again in sendCurrentSwath cycled the blade on every retry of a
-  // START_OCCUPIED pass (2026-09-10).
+  // Every first-unit route, including the XML soft fallback and a direct
+  // FollowStrip retry, acquires the original start through the same coverage
+  // goal checker before blade spin-up. A nearby pose alone cannot prove rest.
   const double first_gap = distanceToSegmentStart(ctx);
-  const bool precision_ready = ctx->coverage_precision_ready && ctx->coverage_precision_ready();
-  const bool start_blade = precision_ready && !precision_paused_ && !unit_exhausted_by_dig_ &&
-                           bladeSpinupBeforeFirstUnit(first_gap);
+  const bool start_blade = false;
   // The coverage ATTEMPT begins here whether the blade spins up now or only
   // after a blade-off transit: the cross-hatch phase is consumed by trying, not
   // by physical rotation, so record it before the spin-up decision below.
@@ -663,6 +684,8 @@ BT::NodeStatus FollowStrip::onStart()
 
 double FollowStrip::distanceToSegmentStart(const std::shared_ptr<BTContext>& ctx) const
 {
+  if (!ctx->tf_buffer)
+    return std::numeric_limits<double>::max();
   if (swath_idx_ >= swaths_.size() || swaths_[swath_idx_].poses.empty())
   {
     return 0.0;
@@ -808,6 +831,17 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     return true;
   }
 
+  if (!coverageEntryContained(ctx, config().blackboard) ||
+      (!follow_goal_ever_sent_ &&
+       (!transit_outcome_ || transit_outcome_->Get() != GoalOutcome::kSucceeded)))
+  {
+    setBladeEnabled(false);
+    blade_dispatch_pending_ = false;
+    swath_goal_sent_ = false;
+    // Reacquire the unchanged unit start blade-off; do not advance or trim it.
+    return sendCurrentSwath(ctx);
+  }
+
   // Dig skip zones: drive only the run BEFORE the next zone. sendCurrentSwath
   // already moved the front past any zone, so run.start is 0 here — unless a
   // dig was recorded while the transit to this front was in flight, in which
@@ -849,6 +883,15 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
   setBladeEnabled(true);
   if (!bladeReadyForDispatch(ctx))
     return true;
+  // Readiness can span many ticks. Recompute permission at the final dispatch
+  // seam as well as before ON; the pose observed during spin-up is not a token.
+  if (!coverageEntryContained(ctx, config().blackboard))
+  {
+    setBladeEnabled(false);
+    blade_dispatch_pending_ = false;
+    swath_goal_sent_ = false;
+    return sendCurrentSwath(ctx);
+  }
   blade_dispatch_pending_ = false;
 
   Nav2FollowPath::Goal goal;
@@ -1020,7 +1063,14 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
     failed_transit = ctx->transit_to_strip_failed_at;
     ctx->transit_to_strip_failed_at.reset();
   }
-  if (coverageTransitRequired(gap, unit_boundary))
+  // Preserve the existing precision hold for a nearby first unit. Once
+  // support returns, sendFollowGoal still requires this attempt's arrival.
+  if (!coverageTransitRequired(gap, unit_boundary) &&
+      (!ctx->coverage_precision_ready || !ctx->coverage_precision_ready()))
+    return sendFollowGoal(ctx);
+
+  if (coverageTransitRequired(gap, unit_boundary) || !follow_goal_ever_sent_ ||
+      !coverageEntryContained(ctx, config().blackboard))
   {
     // SAFETY: force the blade OFF first, unconditionally, before any dispatch or
     // early return below — nothing may cross this gap blade-on.
@@ -1530,6 +1580,7 @@ BT::NodeStatus FollowStrip::onRunning()
     const auto nav_status = ResolveGoalStatus(nav_handle_->get_status(), transit_outcome_->Get());
     if (nav_status == action_msgs::msg::GoalStatus::STATUS_SUCCEEDED)
     {
+      transit_outcome_->Record(GoalOutcome::kSucceeded);
       transit_active_ = false;
       nav_handle_.reset();
       last_detour_stuck_point_.reset();  // the detour this transit was for succeeded
@@ -2210,6 +2261,7 @@ void FollowStrip::widenTransitDeadline(const std::shared_ptr<BTContext>& ctx)
 void FollowStrip::setBladeEnabled(bool enabled)
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  enabled = enabled && coverageEntryContained(ctx, config().blackboard);
   if (enabled)
     markCoverageStarted(*ctx, area_idx_);
 

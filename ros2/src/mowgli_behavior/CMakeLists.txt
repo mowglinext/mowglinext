@@ -18,6 +18,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 
 find_package(ament_cmake REQUIRED)
+find_package(Boost REQUIRED)
+include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -33,6 +35,10 @@ find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
+find_package(mowgli_nav2_plugins REQUIRED)
+find_package(visualization_msgs REQUIRED)
+# Use only the exported pure geometry headers, without linking the Nav2 plugin DSO.
+include_directories(SYSTEM ${mowgli_nav2_plugins_INCLUDE_DIRS})
 find_package(mowgli_localization REQUIRED)
 find_library(NAVSAT_STATUS_ASSOCIATION_LIBRARY navsat_status_association
   PATHS "${mowgli_localization_DIR}/../../../lib" NO_DEFAULT_PATH REQUIRED)
@@ -67,6 +73,7 @@ target_include_directories(behavior_tree_node PUBLIC
 )
 
 target_link_libraries(behavior_tree_node
+  ${visualization_msgs_TARGETS}
   ${ament_index_cpp_TARGETS}
   ${rclcpp_TARGETS}
   ${rclcpp_action_TARGETS}
@@ -157,6 +164,7 @@ if(BUILD_TESTING)
     ${mowgli_localization_INCLUDE_DIRS}
   )
   target_link_libraries(test_blade_services
+    ${visualization_msgs_TARGETS}
     ${ament_index_cpp_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
@@ -185,6 +193,7 @@ if(BUILD_TESTING)
     ${mowgli_localization_INCLUDE_DIRS}
   )
   target_link_libraries(test_fleet_yield_services
+    ${visualization_msgs_TARGETS}
     ${ament_index_cpp_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
@@ -214,6 +223,7 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_blade_direction PUBLIC include)
   target_link_libraries(test_blade_direction
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -430,6 +440,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_get_next_unmowed_area
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -588,6 +599,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_coverage_resume_location
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -622,6 +634,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_swath_progress
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -718,6 +731,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_follow_strip_dig
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
@@ -753,6 +767,7 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_transit_non_blocking
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}

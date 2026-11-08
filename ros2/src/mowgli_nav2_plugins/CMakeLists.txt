@@ -54,6 +54,7 @@ add_library(${PROJECT_NAME} SHARED
   src/ftc_controller.cpp
   src/ftc_controller_turn_fallback.cpp
   src/ftc_controller_plugin.cpp
+  src/coverage_entry_goal_checker.cpp
   src/path_progress_goal_checker.cpp
   src/garden_keepout_layer.cpp
   src/authorized_transit_planner.cpp
@@ -166,6 +167,22 @@ if(BUILD_TESTING)
 
   ament_add_ros_isolated_gtest(test_authorized_transit test/test_authorized_transit.cpp)
   target_link_libraries(test_authorized_transit ${PROJECT_NAME})
+
+  find_package(nav2_controller REQUIRED)
+  find_package(nav2_rotation_shim_controller REQUIRED)
+  find_package(nav2_regulated_pure_pursuit_controller REQUIRED)
+  find_library(ENTRY_SIMPLE_GOAL_CHECKER simple_goal_checker
+    PATHS "${nav2_controller_DIR}/../../../lib" NO_DEFAULT_PATH REQUIRED)
+  ament_add_ros_isolated_gtest(test_coverage_entry_goal_checker
+    test/test_coverage_entry_goal_checker.cpp)
+  target_compile_definitions(test_coverage_entry_goal_checker PRIVATE
+    MOWGLI_TRANSIT_PARAMS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../mowgli_bringup/config/nav2_params_base.yaml")
+  target_link_libraries(test_coverage_entry_goal_checker
+    ${PROJECT_NAME}
+    ${nav2_controller_TARGETS}
+    ${nav2_rotation_shim_controller_TARGETS}
+    ${nav2_regulated_pure_pursuit_controller_TARGETS}
+    ${ENTRY_SIMPLE_GOAL_CHECKER})
 
   ament_add_ros_isolated_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
   target_link_libraries(test_lyrical_goal_checker ${PROJECT_NAME})
@@ -369,6 +386,7 @@ endif()
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 ament_export_dependencies(
+  Boost
   rclcpp
   rclcpp_lifecycle
   nav2_core

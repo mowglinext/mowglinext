@@ -48,6 +48,7 @@
 #include "nav2_msgs/action/compute_path_to_pose.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
 #include "tf2_ros/buffer.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 #include <gtest/gtest.h>
 
 using mowgli_behavior::BTContext;
@@ -189,9 +190,38 @@ protected:
     ctx->helper_node = rclcpp::Node::make_shared("test_transit_non_blocking_helper");
     ctx->tf_buffer = std::make_shared<tf2_ros::Buffer>(ctx->node->get_clock());
     ctx->current_area = 0;
+    for (const auto [x, y] : {std::pair{-5.0f, -5.0f},
+                              std::pair{30.0f, -5.0f},
+                              std::pair{30.0f, 30.0f},
+                              std::pair{-5.0f, 30.0f}})
+    {
+      geometry_msgs::msg::Point32 point;
+      point.x = x;
+      point.y = y;
+      ctx->current_area_polygon.points.push_back(point);
+    }
     setRobot(0.0, 0.0);
 
     server_node = rclcpp::Node::make_shared("fake_nav2");
+    geometry_pub = server_node->create_publisher<visualization_msgs::msg::MarkerArray>(
+        "/map_server_node/transit_geometry", rclcpp::QoS(1).reliable().transient_local());
+    visualization_msgs::msg::MarkerArray geometry;
+    visualization_msgs::msg::Marker ring;
+    ring.header.frame_id = "map";
+    ring.ns = "area";
+    ring.text = "mowing";
+    ring.type = ring.LINE_STRIP;
+    ring.action = ring.ADD;
+    ring.pose.orientation.w = 1;
+    for (const auto& point : ctx->current_area_polygon.points)
+    {
+      geometry_msgs::msg::Point p;
+      p.x = point.x;
+      p.y = point.y;
+      ring.points.push_back(p);
+    }
+    geometry.markers.push_back(ring);
+    geometry_pub->publish(geometry);
     follow = std::make_unique<FakeActionServer<Follow>>(server_node, "/follow_path");
     navigate = std::make_unique<FakeActionServer<Navigate>>(server_node, "/navigate_to_pose");
 
@@ -278,6 +308,7 @@ protected:
   }
 
   std::shared_ptr<BTContext> ctx;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr geometry_pub;
   rclcpp::Node::SharedPtr server_node;
   std::unique_ptr<FakeActionServer<Follow>> follow;
   std::unique_ptr<FakeActionServer<Navigate>> navigate;
