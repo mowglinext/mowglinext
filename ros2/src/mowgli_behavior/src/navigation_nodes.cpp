@@ -358,6 +358,7 @@ BT::NodeStatus NavigateToPose::onStart()
   // A FRESH slot per goal, not Reset(): the CANCELED result of a goal halted
   // just before this restart can arrive late, and through a shared slot it
   // would make the new goal fail at once.
+  // Keep a delayed result owned by the navigation attempt that produced it.
   outcome_ = std::make_shared<ActionOutcomeSlot>();
   // Fresh abandonment flag for this attempt — see cancel_goal.hpp. Cancels
   // the goal on acceptance if onHalted() runs before the server answers.

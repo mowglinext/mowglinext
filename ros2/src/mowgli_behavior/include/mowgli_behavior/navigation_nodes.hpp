@@ -206,6 +206,7 @@ public:
 private:
   std::chrono::steady_clock::time_point start_time_;
   double timeout_sec_{0.0};
+  friend struct NavigateToPoseOutcomeTestAccess;
   rclcpp_action::Client<Nav2Goal>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
