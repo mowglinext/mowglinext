@@ -3343,9 +3343,7 @@ private:
     dig_escaping_ = false;
     dig_escape_state_ = DigEscapeState{};
     dig_invalidate_baselines();
-    have_shaped_cmd_vel_ = false;
-    last_shaped_cmd_vx_ = 0.0;
-    last_shaped_cmd_wz_ = 0.0;
+    cmd_vel_pipeline_.reset();
     last_cmd_vx_ = 0.0;
     last_cmd_wz_ = 0.0;
     if (!serial_ || !serial_->is_open())
