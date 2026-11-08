@@ -62,7 +62,9 @@
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_behavior/unit_resume.hpp"
 #include "mowgli_interfaces/srv/mower_control.hpp"
+#include "nav2_msgs/action/compute_path_to_pose.hpp"
 #include "tf2_ros/buffer.hpp"
 #include <gtest/gtest.h>
 
@@ -246,6 +248,14 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex_);
     handles_.at(i)->abort(std::make_shared<typename ActionT::Result>());
+  }
+
+  void abortWithCode(std::size_t i, uint16_t error_code)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto result = std::make_shared<typename ActionT::Result>();
+    result->error_code = error_code;
+    handles_.at(i)->abort(result);
   }
 
 private:
@@ -1453,6 +1463,81 @@ TEST_F(FollowStripDigTest, NearEndAbortPreservesResumeWithoutCompleting)
   EXPECT_LT(ctx->coverage_percent, 100.0f);
   EXPECT_TRUE(ctx->area_completed_swaths[0].empty());
   EXPECT_TRUE(ctx->completed_areas.empty());
+}
+
+// One bad spot must not cost the zone. The robot makes no headway at all here (every resume aborts
+// where it lands), which spends the no-progress budget; the far side of the stretch is still tried.
+TEST_F(FollowStripDigTest, SpentResumeBudgetLeapsPastTheStretchInsteadOfDroppingTheUnit)
+{
+  startFollowStrip({straightUnit(0.0, 60.0)});
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return follow->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+
+  const std::size_t aborts_to_spend_the_budget = 6;
+  for (std::size_t i = 0; i < aborts_to_spend_the_budget; ++i)
+  {
+    follow->abort(i);
+    ASSERT_EQ(tickUntil(
+                  [&]()
+                  {
+                    return navigate->goalCount() == i + 1;
+                  },
+                  5.0),
+              BT::NodeStatus::RUNNING)
+        << "abort " << i << " must lead to a resume, not the end of the unit";
+    const double target_x = navigate->goal(i)->pose.pose.position.x;
+    setRobot(target_x, 0.0);
+    navigate->succeed(i);
+    ASSERT_EQ(tickUntil(
+                  [&]()
+                  {
+                    return follow->goalCount() == i + 2;
+                  },
+                  10.0),
+              BT::NodeStatus::RUNNING);
+  }
+
+  // Five steps of 0.8 m, then the sixth step (0.8 m) plus the leap. Each of the seven skips stops
+  // on the first pose at or past its distance, so it can overshoot by up to one pose.
+  const double last_resume_x = navigate->goal(aborts_to_spend_the_budget - 1)->pose.pose.position.x;
+  const double min_resume_x = 6.0 * 0.8 + mowgli_behavior::kUnitResumeLeapM;
+  EXPECT_GE(last_resume_x, min_resume_x - 1e-6);
+  EXPECT_LE(last_resume_x, min_resume_x + 7.0 * kStep + 1e-6);
+  EXPECT_TRUE(ctx->area_completed_swaths[0].empty()) << "the skipped stretch was not mowed";
+}
+
+// The robot's own pose blocks every plan. The unit mowed on an earlier pass is not dispatched, so
+// it must not hide that from the recovery and the exemption, or the area is retired for it.
+TEST_F(FollowStripDigTest, StartOccupiedIsRecognisedWhenAnEarlierUnitIsAlreadyDone)
+{
+  ctx->area_completed_swaths[0] = {0};
+  startFollowStrip({straightUnit(0.0, 10.0), straightUnit(10.0, 20.0)});
+  setRobot(0.0, 0.0);
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+
+  navigate->abortWithCode(0, nav2_msgs::action::ComputePathToPose::Result::START_OCCUPIED);
+
+  EXPECT_EQ(tickUntil(
+                []()
+                {
+                  return false;
+                },
+                5.0),
+            BT::NodeStatus::FAILURE);
+  EXPECT_TRUE(ctx->coverage_start_blocked);
+  ASSERT_TRUE(ctx->start_blocked_area.has_value());
+  EXPECT_EQ(*ctx->start_blocked_area, 0u);
 }
 
 // A transit goal the server has not answered yet has no handle to cancel. Halting right after
