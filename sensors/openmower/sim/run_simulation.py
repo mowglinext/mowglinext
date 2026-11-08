@@ -132,6 +132,21 @@ class Probe(Node):
         # (callback name, monotonic s) of every scheduled publication, so a
         # failing run shows whether this process or the delivery stalled.
         self.published = collections.deque(maxlen=20000)
+        self.slow_publish = collections.deque(maxlen=2000)
+        # Pure-Python liveness probe (no DDS): wakes every 10 ms and records how
+        # late, to tell a frozen process from a blocked publish().
+        self.heartbeat_late = collections.deque(maxlen=2000)
+
+        def _heartbeat():
+            due = time.monotonic()
+            while True:
+                due += 0.01
+                time.sleep(max(0.0, due - time.monotonic()))
+                late = time.monotonic() - due
+                if late > 0.05:
+                    self.heartbeat_late.append((due, late))
+                    due = time.monotonic()
+        threading.Thread(target=_heartbeat, name='om-sim-probe-heartbeat', daemon=True).start()
         self._publishing = threading.Event()
         self._publishing.set()
         self._publisher_thread = threading.Thread(
@@ -148,8 +163,12 @@ class Probe(Node):
             for i, (period, publish) in enumerate(periods):
                 if now >= due[i]:
                     try:
+                        before = time.monotonic()
                         publish()
-                        self.published.append((publish.__name__, time.monotonic()))
+                        after = time.monotonic()
+                        self.published.append((publish.__name__, after))
+                        if after - before > 0.05:
+                            self.slow_publish.append((before, publish.__name__, after - before))
                     except Exception:  # keep publishing; a dead thread would read as a stalled BT
                         traceback.print_exc()
                     due[i] = max(due[i] + period, now)
@@ -1240,6 +1259,8 @@ def _dump_probe_timing(probe, path, rig=None):
     with open(path, 'w') as output:
         slow = list(rig._client.slow_calls) if rig is not None else []
         json.dump(dict(published=list(probe.published), applied_rx=applied, slow_rig_calls=slow,
+                       slow_publish=list(probe.slow_publish),
+                       heartbeat_late=list(probe.heartbeat_late),
                        gc_pauses=list(_GC_PAUSES), gc_counts=gc.get_count(),
                        gc_stats=gc.get_stats()), output)
 
