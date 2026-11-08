@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import gc
 import json
 import math
 import os
@@ -1215,6 +1216,21 @@ SCENARIOS = [s01_boot, s02_boot_latch, s03_straight, s04_pivot, s05_slew, s06_cm
              s17_old_firmware, s18_buttons, s19_contract]
 
 
+_GC_PAUSES = []  # (start monotonic s, duration s, generation) of collections > 20 ms
+_gc_started = {}
+
+
+def _gc_timer(phase, info):
+    now = time.monotonic()
+    if phase == 'start':
+        _gc_started['t'] = now
+    elif 't' in _gc_started and now - _gc_started['t'] > 0.02:
+        _GC_PAUSES.append((_gc_started['t'], now - _gc_started['t'], info.get('generation')))
+
+
+gc.callbacks.append(_gc_timer)
+
+
 def _dump_probe_timing(probe, path):
     """Probe-side monotonic stamps (CLOCK_MONOTONIC, same base as the native
     trace's mono_ns): what this process published and when it received the
@@ -1222,7 +1238,9 @@ def _dump_probe_timing(probe, path):
     with probe.lock:
         applied = [t for (t, _, _) in probe.applied]
     with open(path, 'w') as output:
-        json.dump(dict(published=list(probe.published), applied_rx=applied), output)
+        json.dump(dict(published=list(probe.published), applied_rx=applied,
+                       gc_pauses=list(_GC_PAUSES), gc_counts=gc.get_count(),
+                       gc_stats=gc.get_stats()), output)
 
 
 def run_one(esc: str, R: Report, logdir: str, only=None):
