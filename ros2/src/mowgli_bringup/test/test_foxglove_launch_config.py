@@ -78,6 +78,7 @@ def _build(filename, **overrides):
             "DEFAULT_TOOL_WIDTH_M",
             "chassis_circumscribed_radius",
             "chassis_footprint",
+            "coverage_entry_tolerance",
             "dig_proposal_radius",
             "dig_skip_radius",
             "dock_body_extents",
