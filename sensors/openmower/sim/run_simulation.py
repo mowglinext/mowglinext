@@ -20,6 +20,7 @@ Exit status 0 only when every check passes.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import math
 import os
@@ -127,6 +128,9 @@ class Probe(Node):
         # these timers for 0.8-1.7 s (6 s once). The bridge then correctly
         # treated cmd_vel as stale (1 s), held the wheels and re-ramped, and the
         # scenario measured that instead of the bridge.
+        # (callback name, monotonic s) of every scheduled publication, so a
+        # failing run shows whether this process or the delivery stalled.
+        self.published = collections.deque(maxlen=20000)
         self._publishing = threading.Event()
         self._publishing.set()
         self._publisher_thread = threading.Thread(
@@ -144,6 +148,7 @@ class Probe(Node):
                 if now >= due[i]:
                     try:
                         publish()
+                        self.published.append((publish.__name__, time.monotonic()))
                     except Exception:  # keep publishing; a dead thread would read as a stalled BT
                         traceback.print_exc()
                     due[i] = max(due[i] + period, now)
@@ -1210,6 +1215,16 @@ SCENARIOS = [s01_boot, s02_boot_latch, s03_straight, s04_pivot, s05_slew, s06_cm
              s17_old_firmware, s18_buttons, s19_contract]
 
 
+def _dump_probe_timing(probe, path):
+    """Probe-side monotonic stamps (CLOCK_MONOTONIC, same base as the native
+    trace's mono_ns): what this process published and when it received the
+    bridge's applied command. Uploaded with the other logs on failure."""
+    with probe.lock:
+        applied = [t for (t, _, _) in probe.applied]
+    with open(path, 'w') as output:
+        json.dump(dict(published=list(probe.published), applied_rx=applied), output)
+
+
 def run_one(esc: str, R: Report, logdir: str, only=None):
     print(f'\n========== {esc} ==========', flush=True)
     workdir = tempfile.mkdtemp(prefix=f'omsim-{esc}-')
@@ -1240,6 +1255,7 @@ def run_one(esc: str, R: Report, logdir: str, only=None):
             print(f'-- {esc} / s20_crash', flush=True)
             run_scenario(s20_crash, R, probe, rig, R, esc, bridge, fixture=rig)
     finally:
+        _dump_probe_timing(probe, os.path.join(logdir, f'probe-timing-{esc}.json'))
         try:
             os.killpg(bridge.pid, signal.SIGKILL)
         except ProcessLookupError:
