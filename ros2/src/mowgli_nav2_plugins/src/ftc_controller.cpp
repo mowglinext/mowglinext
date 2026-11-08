@@ -1207,6 +1207,11 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
 
   // 2. Update the state machine.
   const PlannerState new_state = update_planner_state();
+  if (is_crashed_)
+  {
+    throw nav2_core::ControllerException(
+        "FTCController: terminal failure in planner state machine.");
+  }
   const bool entering_pivot =
       new_state == PlannerState::PIVOT && current_state_ != PlannerState::PIVOT;
   if (new_state != current_state_)
