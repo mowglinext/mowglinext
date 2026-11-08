@@ -303,6 +303,7 @@ TEST_F(HardwareBridgeParametersTest, BladeDirectionTracksWrittenCommandsAndClear
   options.parameter_overrides({rclcpp::Parameter("serial_port", ptsname(master))});
   auto node = std::make_shared<HardwareBridgeNode>(options);
   using Peer = HardwareBridgeBladeStatusTestPeer;
+  Peer::handshake(*node, kMowgliProtocolVersion);
   EXPECT_EQ(Peer::requested(*node), "unknown");
   Peer::send(*node, 1, 1);
   EXPECT_EQ(Peer::requested(*node), "reverse");
@@ -334,6 +335,9 @@ protected:
                                  rclcpp::Parameter("lift_blade_resume_delay_sec", 1.0)});
     options.use_intra_process_comms(true);
     node = std::make_shared<HardwareBridgeNode>(options);
+    // The board under test speaks this image's protocol; the firmware
+    // interlock is exercised separately (FirmwareInterlock* below).
+    Peer::handshake(*node, kMowgliProtocolVersion);
     drain();
   }
   void TearDown() override
