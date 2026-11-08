@@ -46,6 +46,7 @@
 #include <nav2_ros_common/lifecycle_node.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
@@ -199,6 +200,7 @@ public:
   {
     ftc_.deactivate();
     ftc_.cleanup();
+    mowgli_nav2_plugins_test::WaitForTfListenerSpinning(*costmap_);
     costmap_->cleanup();
     executor_.remove_node(probe_);
   }

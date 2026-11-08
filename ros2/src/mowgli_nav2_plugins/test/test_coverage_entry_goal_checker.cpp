@@ -8,6 +8,7 @@
 #include <nav2_rotation_shim_controller/nav2_rotation_shim_controller.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/coverage_entry_goal_checker.hpp"
 #include <gtest/gtest.h>
 #include <rcl/time.h>
@@ -113,6 +114,7 @@ struct Harness
   {
     shim.deactivate();
     shim.cleanup();
+    mowgli_nav2_plugins_test::WaitForTfListenerSpinning(*cm);
     cm->cleanup();
   }
   void time()

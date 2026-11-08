@@ -4,6 +4,7 @@
 #include <cstring>
 #include <iostream>
 
+#include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/authorized_transit_planner.hpp"
 #include "mowgli_nav2_plugins/transit_raster.hpp"
 #include <gtest/gtest.h>
@@ -336,6 +337,7 @@ protected:
   {
     planner_.deactivate();
     planner_.cleanup();
+    mowgli_nav2_plugins_test::WaitForTfListenerSpinning(*map_);
     map_->on_cleanup(rclcpp_lifecycle::State());
   }
   // Empty: the costmap's default radius footprint.

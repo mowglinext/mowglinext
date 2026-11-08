@@ -172,6 +172,12 @@ protected:
     Gnss();
     Tick();
     Pump(30ms);
+    // Delivery to the listener is DDS, not instant on a loaded runner. Let the
+    // setup's own messages land here, before any test samples a baseline count.
+    const auto delivered = std::chrono::steady_clock::now() + 2s;
+    while ((map_count == 0 || tf_count == 0 || positive_count == 0) &&
+           std::chrono::steady_clock::now() < delivered)
+      Pump(5ms);
     ASSERT_GT(map_count, 0u);
     ASSERT_GT(tf_count, 0u);
     ASSERT_GT(positive_count, 0u);

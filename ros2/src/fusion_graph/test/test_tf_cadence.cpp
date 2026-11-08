@@ -325,6 +325,11 @@ class Inline : public Cadence
 TEST_F(Inline, NoDedicatedWriter)
 {
   EXPECT_FALSE(fg::FusionGraphNodeTestAccess::Thread(*node));
+  // Seed() published inline; the listener's own spin thread still has to
+  // receive it over DDS, which a loaded runner does not do instantly.
+  const auto ready = Steady::now() + 2s;
+  while (Latest() != 226800000000 && Steady::now() < ready)
+    std::this_thread::sleep_for(100us);
   EXPECT_EQ(Latest(), 226800000000);
 }
 

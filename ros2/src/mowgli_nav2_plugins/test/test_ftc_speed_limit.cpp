@@ -33,6 +33,7 @@
 #include <nav2_ros_common/lifecycle_node.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
 #include <gtest/gtest.h>
 #include <rcl/time.h>
@@ -629,6 +630,7 @@ protected:
   {
     controller_.deactivate();
     controller_.cleanup();
+    mowgli_nav2_plugins_test::WaitForTfListenerSpinning(*costmap_);
     costmap_->cleanup();
   }
 
