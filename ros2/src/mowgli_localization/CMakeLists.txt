@@ -326,12 +326,12 @@ if(BUILD_TESTING)
   )
 
   # ---- test_costmap_scan_filter ----
-  # Re-implements the static helper so we don't drag rclcpp/main symbols
-  # into the test binary; the helper is small enough to keep in sync by
-  # eye and a regression there will trigger a test failure here.
+  # The ground filter is tested through the production header
+  # (scan_ground_filter.hpp); the other helpers are still mirrored here.
   ament_add_gtest(test_costmap_scan_filter
     test/test_costmap_scan_filter.cpp
   )
+  target_include_directories(test_costmap_scan_filter PRIVATE ${INCLUDE_DIR})
   target_link_libraries(test_costmap_scan_filter
     ${sensor_msgs_TARGETS}
   )
