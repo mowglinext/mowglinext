@@ -26,6 +26,25 @@ also use the existing goal timeout. This establishes local arrival/stopping
 behavior; outgoing path containment and public goal checking are separate.
 Regressions use the actual FTC in `test_ftc_speed_limit.cpp`.
 
+A planner twin requires a stopped reorientation; it does not certify clearance.
+At each stopped PRE_ROTATE or PIVOT, `cornerRotationGate` checks the shortest signed arc
+against the actual body/raw holes (`CornerGeometry::rotationClear`) and the local
+filled-footprint raster. Only when that arc is blocked may it check the opposite
+arc, up to one revolution. This also supports a precision restart whose opening
+twin enters PRE_ROTATE. Existing completion tolerances and deadlines remain unchanged.
+`DirectedPivotSweepYaws` probes the selected whole interval without wrapping it.
+The per-tick checked turn controls P and the output sign/horizon bound; the
+geometry snapshot must still match at output. Ordinary short-arc I/D history,
+completion/restart tolerances and all hold/abort deadlines remain unchanged.
+A supported axle outside all mowing areas holds zero under the existing rotation
+state deadline; it does not start obstacle recovery. An already-active obstacle
+keeps its deadline during that authority loss. Physical-obstacle recovery and
+its existing probation/accounting remain unchanged.
+
+
+Terminal FSM failures throw before any recovery output (#1060), including a
+failed FOLLOWING resync while reverse escape is active.
+
 ## Where to look
 
 Normal transit planning is now `include/mowgli_nav2_plugins/authorized_transit_planner.hpp`
@@ -41,7 +60,7 @@ The Nav2 recovery's BackUp is NOT Nav2's: `navigate_to_pose.xml` / `navigate_to_
 | Carrot speed target / accel ramp / carrot lead cap (1.0 m) | `ros2/src/mowgli_nav2_plugins/src/ftc_controller.cpp` `update_control_point()` (L1176) + `distanceLookahead()` (L1144) |
 | PID mix, forward_only clamp, min_speed floor, stall cap, oscillation override | `ftc_controller.cpp` `calculate_velocity_commands()` (L1407) |
 | FSM transitions / timeouts (`PRE_ROTATE → FOLLOWING → WAITING_FOR_GOAL_APPROACH → POST_ROTATE → FINISHED`, plus `FOLLOWING ⇄ PIVOT` at planner corners) | `ftc_controller.cpp` `update_planner_state()`; enum at `include/mowgli_nav2_plugins/ftc_controller.hpp` (`PIVOT` appended last so the logged numbers of the other states did not change: PIVOT = 5) |
-| **In-place pivots at planner corners** (pivot joins, field 2026-09-21) | corner contract `ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp` (two consecutive poses at the same position: incoming then outgoing heading); pure helpers `include/mowgli_nav2_plugins/ftc_pivot.hpp` (`FindPivotCorners`, `PivotLeg`, `ClipWindowToCorner`, `PivotArrived` 2 cm, `PivotAligned`, `PivotSweepYaws`); controller: corners found in `newPathReceived` (`pivot_corners_`, plan opening on a corner starts at its outgoing twin), carrot CAPPED at the next corner in `update_control_point()`, FOLLOWING → PIVOT in `update_planner_state()` once base_link is within 2 cm (never mid reverse-escape / obstacle hold), `enterPivot()` / `leavePivot()`, PIVOT branch of `computeVelocityCommands()` (no deviation planner, `pivotSweepGate()` → `pivotSweepBlocked()` = rotated footprint vs TRUE-lethal local cells, else PRE_ROTATE's angular PID + oscillation override); tests `test/test_ftc_pivot.cpp` |
+| **In-place pivots at planner corners** (pivot joins, field 2026-09-21) | corner contract `ros2/src/mowgli_interfaces/include/mowgli_interfaces/coverage_geometry.hpp` (two consecutive poses at the same position: incoming then outgoing heading); pure helpers `include/mowgli_nav2_plugins/ftc_pivot.hpp` (`FindPivotCorners`, `PivotLeg`, `ClipWindowToCorner`, `PivotArrived` 2 cm, `PivotAligned`, `PivotSweepYaws`, `DirectedPivotSweepYaws`); controller: corners found in `newPathReceived` (`pivot_corners_`, plan opening on a corner starts at its outgoing twin), carrot CAPPED at the next corner in `update_control_point()`, FOLLOWING → PIVOT in `update_planner_state()` once base_link is within 2 cm (never mid reverse-escape / obstacle hold), `enterPivot()` / `leavePivot()`, PIVOT branch of `computeVelocityCommands()` (no deviation planner, `pivotSweepGate()` → `pivotSweepBlocked()` = rotated footprint vs TRUE-lethal local cells, else PRE_ROTATE's angular PID + oscillation override); tests `test/test_ftc_pivot.cpp` |
 | Where a fresh plan starts tracking (idx 0 vs legacy nearest snap) | `ftc_controller.cpp` `newPathReceived()` (L616) + `include/mowgli_nav2_plugins/ftc_start_index.hpp` `ChooseStartIndex` |
 | Anti-wheelspin stall (crawl at `stall_crawl_speed`, freeze carrot) | `include/mowgli_nav2_plugins/ftc_stall.hpp` `StallDecision`; consumed in `update_control_point()` and `calculate_velocity_commands()` (`is_stalled_`) |
 | Blade-load slowdown (scale carrot speed by blade RPM sag, fail-open) | `include/mowgli_nav2_plugins/ftc_blade_load.hpp` `BladeLoadDecision`; `applyBladeLoad()` in `update_control_point()`, `is_blade_limited_` lowers the `min_speed_mps` floor in `calculate_velocity_commands()`; telemetry from `/hardware_bridge/status` |
@@ -70,16 +89,6 @@ The Nav2 recovery's BackUp is NOT Nav2's: `navigate_to_pose.xml` / `navigate_to_
 | Register a new plugin class | `ros2/src/mowgli_nav2_plugins/ftc_controller_plugin.xml` / `goal_checker_plugin.xml`, `CMakeLists.txt` `pluginlib_export_plugin_description_file`, `package.xml` `<export>` |
 | Add a unit test | `CMakeLists.txt` `if(BUILD_TESTING)` block — pure helpers use `ament_add_gtest`; real-controller/node tests use `ament_add_ros_isolated_gtest` for DDS isolation |
 | Diagnose "strip aborted" (ControllerException) | throw sites: `ftc_controller.cpp:835` (crashed latch), `:957` (deviation TF), `:965` (legacy collision), `:973` (crash latched during PID), `:1357` (carrot TF), `:1717` (wait timeout) |
-
-Approach stopping can use `ftc_corner_geometry.{hpp,cpp}`'s sufficient disk
-certificate from the complete `/map_server_node/transit_geometry` publication.
-Only explicit `mowing` area roles authorize the axle disk; raw obstacle/dock rings
-must remain beyond that disk plus the filled body's maximum reach. The budget
-uses one containing MOW ring, existing epsilon and a final whole-disk recheck.
-Missing/invalid geometry or a failed certificate keeps the path-only bound. The
-supported pose epoch is shared with arrival, and a mutex orders certificate use
-and output against complete geometry replacement. This does not qualify pivot
-rotation/departure or create a general per-command geofence gate.
 
 ## Files
 
@@ -246,7 +255,7 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` (L128) runs `colcon bui
 - The global costmap is used for CONFINEMENT ONLY (it rejects lateral OFFSET candidates that leave the zone). It is **not** an obstacle source and it no longer SUBTRACTS from one: `ignore_obstacles_outside_zone` (the issue-#517 zone mask) was removed 2026-09-17 after FTC drove into the same mapped tree twice on 2026-09-16 — `keepout_filter` stamps drawn obstacles lethal globally, so the mask deleted exactly the obstacles the operator had mapped. Detection = plain local-costmap threshold (`ObstacleDeviation::isObstacleCell`).
 - `speed_fast` set outside [0, 2.0] via `set_parameters` is rejected (`result.successful=false`) — SetNavMode does not check the result.
 - PID errors are in `base_link` (rear axle, Invariant 2), while Nav2's `robot_base_frame` is `base_footprint`; `max_goal_distance_error` is measured from base_link.
-- **Pivots** happen about base_link (the REAR axle): the front of the body sweeps a disc of the chassis circumscribed radius. The planner only emits a corner where that disc fits the recorded line + soft band and clears drawn obstacles; FTC adds the LiDAR check (`pivotSweepGate`, same hold-then-abort as every obstacle stop). Never let anything but an explicit corner twin trigger PIVOT (ordinary curvature must stay FOLLOWING), never apply `lateral_deviation_` in PIVOT, and never run the deviation planners there (reverse-escape must not engage mid-rotation).
+- **Pivots** happen about base_link (the REAR axle). New planner pivot joins still require a fitting full chassis disc. Retained sharp corners receive required-stop twins even where that conservative disc fails; each rotation needs a checked signed body arc against raw holes and the local costmap at the supported actual pose. A marker alone does not establish drivability; denied arcs retain finite hold/abort behavior. Never let anything but an explicit corner twin trigger PIVOT (ordinary curvature must stay FOLLOWING), never apply `lateral_deviation_` in PIVOT, and never run the deviation planners there (reverse-escape must not engage mid-rotation).
 - A lateral skirt must be back on the line AT a corner: the lattice plans the corner pose as a zero-offset station (hard constraint) and releases its return debounce once the remaining path is only what the return needs; an obstacle that leaves no room to return before the corner therefore WEDGES (reverse-escape / wait / abort to the BT) where a split plan used to end the sub-path at the offset. When the carrot sits on the corner the target offset is forced to 0.
 - The obstacle windows (legacy `window`, lattice stations behind AND ahead) stop at the pivot corners (`ClipWindowToCorner`, `PivotLeg`): an obstacle on the next leg is examined once the robot has pivoted onto it — the rotation itself is covered by the sweep gate.
 - **Turn fallback.** It only ever REPLACES the WEDGED path at its onset (FOLLOWING, lattice infeasible, no reverse-escape / hold active, re-armed 1 m past the previous rejoin) and only for a blockage in a turn; anything it cannot do safely returns false and the WEDGED → reverse-escape → hold → abort path runs unchanged. Its motions are executed by the EXISTING PIVOT / FOLLOWING states on runtime corners spliced into `global_plan_` — do not add motion code for it. Everything it plans must be checked with what executes it (pivot: real footprint vs 254, FOLLOWING: the lattice body) or the executing checks will stop it half-way. `global_plan_` indices change at a splice (prefix dropped): anything index-based (`reverse_engaged_index_`, `pivot_corners_`) is reset there. The rejoin is signalled to the progress trackers on `progress_plan_pub_`, never by `global_plan_pub_` (a different topic — see "Where to look"). It pivots where the robot stands when the lattice wedges (~1.2 m before the blockage), so the drivable end of the approach swath is skipped too; moving the first pivot forward along the plan is a possible follow-up.

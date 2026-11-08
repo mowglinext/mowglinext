@@ -188,6 +188,26 @@ TEST(FtcPivot, ArrivalAndAlignment)
   EXPECT_TRUE(PivotAligned(2.0 * M_PI + 0.05, tol)) << "wrapped, like PRE_ROTATE";
 }
 
+TEST(FtcPivot, DirectedSweepKeepsBothLongArcsAndTheirEndpoints)
+{
+  for (double sign : {-1.0, 1.0})
+    for (double from : {0.0, M_PI - .1, -M_PI + .1})
+    {
+      const double turn = sign * (M_PI + .7);
+      const auto yaws = DirectedPivotSweepYaws(from, turn, .05);
+      ASSERT_GT(yaws.size(), 2u);
+      EXPECT_DOUBLE_EQ(yaws.front(), from);
+      EXPECT_NEAR(yaws.back(), from + turn, 1e-15);
+      for (std::size_t i = 1; i < yaws.size(); ++i)
+      {
+        EXPECT_GT(sign * (yaws[i] - yaws[i - 1]), 0);
+        EXPECT_LE(std::abs(yaws[i] - yaws[i - 1]), .05 + 1e-15);
+      }
+    }
+  EXPECT_TRUE(DirectedPivotSweepYaws(0, 2 * M_PI + .01, .1).empty());
+  EXPECT_TRUE(DirectedPivotSweepYaws(0, NAN, .1).empty());
+}
+
 TEST(FtcPivot, SweepYawsCoverTheShortestRotation)
 {
   const auto yaws = PivotSweepYaws(0.0, M_PI / 2, 0.1);

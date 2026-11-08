@@ -183,6 +183,7 @@ void FTCController::cleanup()
   {
     std::lock_guard lock(corner_geometry_mutex_);
     corner_geometry_.reset();
+    checked_corner_geometry_.reset();
   }
   pivot_pose_epoch_.reset();
   boundary_costmap_sub_.reset();
@@ -1156,14 +1157,14 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   cmd_vel.header.frame_id = "base_link";
   cmd_vel.header.stamp = clock_->now();
 
-  // Keep the chosen approach certificate and output selection ordered before
-  // a complete geometry replacement. Missing/invalid geometry retains the
-  // original path-only stopping bounds.
-  std::unique_lock geometry_lock(corner_geometry_mutex_, std::defer_lock);
+  // A successful rotation handoff and its output selection are ordered before
+  // complete geometry replacement. Refused handoffs release this lock and keep
+  // the rotation state/deadline so a later publication can be re-evaluated.
+  std::unique_lock departure_lock(corner_geometry_mutex_, std::defer_lock);
 
   // Apply the hard linear cap at every output boundary, after movement floors
   // and including reverse escape / turn-fallback commands that bypass the PID.
-  const auto bounded_command = [this, &cmd_vel, &geometry_lock]()
+  const auto bounded_command = [this, &cmd_vel, &departure_lock]()
   {
     const double max_speed = maxLinearSpeed();
     cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
@@ -1184,8 +1185,8 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
         transit::Ring body;
         for (const auto& p : costmap_ros_->getRobotFootprint())
           body.push_back({p.x, p.y});
-        if (!geometry_lock.owns_lock())
-          geometry_lock.lock();
+        if (!departure_lock.owns_lock())
+          departure_lock.lock();
         // A certified disk can provide more stopping travel than either
         // outgoing coordinate plane. Keep B's cached bounds and exact fallback.
         if (corner_geometry_)
@@ -1210,6 +1211,25 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
         else
           cmd_vel.twist.linear.x = std::min(cmd_vel.twist.linear.x, speed_limit);
       }
+    }
+    // Rotation outputs stay inside the checked direction and arc even with
+    // adverse I/D, oscillation override or recovery slew. T is the declared
+    // intended interval, never the preceding callback's measured dt.
+    if ((current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT) &&
+        cmd_vel.twist.angular.z != 0)
+    {
+      std::unique_lock lock(corner_geometry_mutex_, std::defer_lock);
+      if (!departure_lock.owns_lock())
+        lock.lock();
+      const double turn = checked_corner_turn_.value_or(0.0);
+      if (!checked_corner_geometry_ || checked_corner_geometry_ != corner_geometry_ ||
+          !(cmd_vel.twist.angular.z * turn > 0))
+        cmd_vel.twist = geometry_msgs::msg::Twist{};
+      else
+        cmd_vel.twist.angular.z =
+            std::copysign(std::min(std::abs(cmd_vel.twist.angular.z),
+                                   std::abs(turn) / kIntendedCommandHorizonSec),
+                          turn);
     }
     last_cmd_fwd_speed_ = cmd_vel.twist.linear.x;
     return cmd_vel;
@@ -1269,8 +1289,11 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   // (transit FollowPath) is unaffected either way. (void) the unused arg.
   (void)goal_checker;
 
-  // 1. Advance the carrot; compute lat/lon/angle errors in base_link.
   pivot_pose_epoch_.reset();
+  checked_corner_geometry_.reset();
+  checked_corner_turn_.reset();
+
+  // 1. Advance the carrot; compute lat/lon/angle errors in base_link.
   update_control_point(safe_dt);
 
   RCLCPP_INFO_THROTTLE(logger_,
@@ -1292,14 +1315,25 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   // 2. Update the state machine.
   PlannerState new_state = update_planner_state();
   // Timeouts are terminal before any recovery path can emit another command.
-  if (is_crashed_ &&
-      (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT))
-    throw nav2_core::ControllerException("FTCController: robot has crashed / collision detected.");
+  if (is_crashed_)
+  {
+    throw nav2_core::ControllerException(
+        "FTCController: terminal failure in planner state machine.");
+  }
   const bool settling_rotation =
       (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT) &&
       !(std::hypot(velocity.linear.x, velocity.linear.y) <= kStoppedTranslationMps);
-  if (settling_rotation && new_state == PlannerState::FOLLOWING)
-    new_state = current_state_;
+  if ((current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT) &&
+      new_state == PlannerState::FOLLOWING)
+  {
+    departure_lock.lock();
+    if (settling_rotation || !corner_geometry_ || !corner_geometry_->valid ||
+        !rotationDeparturePermitted(*corner_geometry_))
+    {
+      new_state = current_state_;
+      departure_lock.unlock();
+    }
+  }
   const bool entering_pivot =
       new_state == PlannerState::PIVOT && current_state_ != PlannerState::PIVOT;
   if (new_state != current_state_)
@@ -1343,6 +1377,16 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   if (settling_rotation)
     return bounded_command();
 
+  // Rotation/departure also applies with the shipped no-LiDAR overlay. Do
+  // not enable deviation, its lattice or its sensors to reach this gate.
+  if (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT)
+  {
+    if (!cornerRotationGate(safe_dt))
+      return bounded_command();
+    calculate_velocity_commands(safe_dt, cmd_vel);
+    return bounded_command();
+  }
+
   // 3. Collision check + lateral-deviation update.
   // When enable_obstacle_deviation is true, we never throw on a lookahead
   // collision: instead the carrot is laterally offset until the obstacle
@@ -1373,23 +1417,6 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     if (turnFallbackReversing())
     {
       turnFallbackReverseTick(safe_dt, cmd_vel);
-      return bounded_command();
-    }
-    if (current_state_ == PlannerState::PIVOT)
-    {
-      // A pivot applies NO lateral offset (the offset is defined against the
-      // path heading, which is discontinuous at a corner) and the deviation
-      // planners reason about path poses the rotating robot is not on, so
-      // neither runs here — and the reverse-escape can therefore never engage
-      // mid-rotation. The only obstacle question is whether the rotation
-      // itself sweeps the body into something the LiDAR sees; the planner
-      // already checked the sweep against the recorded boundary and drawn
-      // obstacles.
-      if (!pivotSweepGate(safe_dt))
-      {
-        return bounded_command();  // zero-velocity hold (waitOrThrow throws after timeout)
-      }
-      calculate_velocity_commands(safe_dt, cmd_vel);
       return bounded_command();
     }
     updateLateralDeviation(safe_dt);
@@ -1981,8 +2008,9 @@ void FTCController::update_control_point(double dt)
   pivot_approach_response_limit_.reset();
   const auto approach = stopCornerApproach(current_state_ == PlannerState::PRE_ROTATE);
   const auto corner = nextPivotCorner();
-  const bool corner_pose =
-      approach || current_state_ == PlannerState::PIVOT || (corner && current_index_ == *corner);
+  const bool corner_pose = approach || current_state_ == PlannerState::PRE_ROTATE ||
+                           current_state_ == PlannerState::PIVOT ||
+                           (corner && current_index_ == *corner);
   Eigen::Affine3d target = current_control_point_;
   if (approach)
     tf2::fromMsg(global_plan_[*approach].pose, target);
@@ -2229,6 +2257,12 @@ void FTCController::calculate_velocity_commands(double dt,
       // stall_crawl_speed, which still clears the firmware wheel deadband.
       cmd_vel.twist.linear.x =
           ClampForwardToMovementRamp(lin_speed, current_movement_speed_, config_.min_speed_mps);
+      // Point-bearing corner approach must be able to rotate toward an aside
+      // target without the normal driving floor forcing a pursuit orbit.
+      if (cmd_vel.twist.linear.x > 0.0 && stopCornerApproach())
+      {
+        cmd_vel.twist.linear.x = std::min(cmd_vel.twist.linear.x, lin_speed);
+      }
     }
   }
   else
@@ -2261,14 +2295,12 @@ void FTCController::calculate_velocity_commands(double dt,
   else
   {
     // Pure angle PID during rotation states (no lateral contribution).
-    // Use the GEOMETRIC angle wrapped to (-π, π] for the proportional
-    // term. angle_error_ is the unwrap accumulator — useful for
-    // derivative continuity around the ±π boundary (issue #200), but
-    // catastrophic for the P term if the robot's net rotation since
-    // setPlan exceeds π: kp_ang × (-3π) saturates angular cmd at the
-    // wrong sign, so the robot keeps spinning the wrong way and the
-    // accumulator drifts further away from zero each tick.
-    const double angle_for_pid = std::atan2(std::sin(angle_error_), std::cos(angle_error_));
+    // P follows this tick's checked directed arc, which may exceed pi. Keep
+    // the original geometric error for I/D and handoff tolerances; its unwrap
+    // accumulator must never become an unbounded proportional turn target.
+    const bool directed_long = checked_corner_turn_ && std::abs(*checked_corner_turn_) > M_PI;
+    const double angle_for_pid =
+        directed_long ? *checked_corner_turn_ : WrapPivotAngle(angle_error_);
     double ang_speed =
         angle_for_pid * config_.kp_ang + i_angle_error_ * config_.ki_ang + d_angle * config_.kd_ang;
 
@@ -2288,7 +2320,7 @@ void FTCController::calculate_velocity_commands(double dt,
     const bool is_oscillating = checkOscillation(cmd_vel);
     if (is_oscillating)
     {
-      const double sign = (angle_error_ >= 0.0) ? 1.0 : -1.0;
+      const double sign = ((directed_long ? angle_for_pid : angle_error_) >= 0.0) ? 1.0 : -1.0;
       cmd_vel.twist.angular.z = sign * config_.max_cmd_vel_ang;
     }
   }
@@ -2395,14 +2427,14 @@ void FTCController::leavePivot()
 geometry_msgs::msg::Pose FTCController::pivotMapPose() const
 {
   if (!pivot_pose_epoch_ || plan_header_.frame_id != "map")
-    throw nav2_core::ControllerException("FTCController: no supported pivot pose");
+    throw nav2_core::ControllerException("FTCController: no supported rotation pose");
   const auto tf = tf_buffer_->lookupTransform("map", "base_link", *pivot_pose_epoch_);
   const auto& t = tf.transform;
   const auto& q = t.rotation;
   const double norm = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
   if (!std::isfinite(t.translation.x) || !std::isfinite(t.translation.y) ||
       !std::isfinite(t.translation.z) || !std::isfinite(norm) || std::abs(norm - 1) > 1e-3)
-    throw nav2_core::ControllerException("FTCController: invalid pivot pose");
+    throw nav2_core::ControllerException("FTCController: invalid rotation pose");
   geometry_msgs::msg::Pose pose;
   pose.position.x = t.translation.x;
   pose.position.y = t.translation.y;
@@ -2410,64 +2442,193 @@ geometry_msgs::msg::Pose FTCController::pivotMapPose() const
   return pose;
 }
 
-bool FTCController::pivotSweepBlocked()
+bool FTCController::rotationRestartPermitted(const geometry_msgs::msg::Pose& pose,
+                                             const CornerGeometry& geometry) const
 {
-  if (costmap_map_ == nullptr || costmap_ros_ == nullptr)
-  {
+  const transit::Point start{pose.position.x, pose.position.y};
+  if (!geometry.valid || !geometry.mowing.authorized(start))
     return false;
-  }
-  const ObstacleDeviation::Footprint footprint = costmap_ros_->getRobotFootprint();
-  if (footprint.size() < 3)
+  const double yaw = tf2::getYaw(pose.orientation);
+  if (const auto corner = stopCornerApproach(true))
   {
-    return false;  // no polygon: cannot assert (currentBodyInLethal has the same posture)
+    // An interrupted approach is still capped by B's actual closing travel.
+    // At zero travel this is a stopped handoff to PIVOT, not a cruise restart.
+    const double travel = stopCornerTravel(*corner, start.x, start.y, yaw);
+    if (travel == 0)
+      return std::abs(last_measured_fwd_speed_) <= kStoppedTranslationMps;
+    return geometry.mowing.segmentAuthorized(start,
+                                             {start.x + travel * std::cos(yaw),
+                                              start.y + travel * std::sin(yaw)});
   }
-  geometry_msgs::msg::PoseStamped robot_pose;
-  if (!costmap_ros_->getRobotPose(robot_pose))
+  // PRE_ROTATE also owns the initial rendezvous with a distant path. That
+  // ordinary FOLLOWING correction is outside the local corner contract. Apply
+  // the outgoing-prefix rule once the axle is on this leg (the same existing
+  // radial arrival band), or when B owns an interrupted corner approach above.
+  if (current_state_ == PlannerState::PRE_ROTATE && current_index_ + 1 < global_plan_.size())
   {
-    return false;
-  }
-  // Probe spacing: the arc the farthest footprint vertex travels between two
-  // probes stays within one costmap cell — derived from the live footprint.
-  double reach = 0.0;
-  for (const auto& v : footprint)
-  {
-    reach = std::max(reach, std::hypot(v.x, v.y));
-  }
-  const double step = (reach > 0.0) ? costmap_map_->getResolution() / reach : 0.0;
-  // angle_error_ is the remaining rotation (carrot heading relative to the
-  // robot); the angular PID turns the short way, like these probes.
-  const double yaw_now = tf2::getYaw(robot_pose.pose.orientation);
-  const double remaining = WrapPivotAngle(angle_error_);
-
-  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap_map_->getMutex());
-  for (const double yaw : PivotSweepYaws(yaw_now, yaw_now + remaining, step))
-  {
-    geometry_msgs::msg::PoseStamped probe = robot_pose;
-    tf2::Quaternion q;
-    q.setRPY(0.0, 0.0, yaw);
-    probe.pose.orientation = tf2::toMsg(q);
-    if (ObstacleDeviation::footprintBlocked(*costmap_map_,
-                                            probe,
-                                            0.0,
-                                            footprint,
-                                            ObstacleDeviation::BoundaryGuard{},
-                                            ObstacleDeviation::kLethalOnlyThreshold))
-    {
+    const auto& a = global_plan_[current_index_].pose.position;
+    const auto& b = global_plan_[current_index_ + 1].pose.position;
+    if (transit::edgeDistance(start, {a.x, a.y}, {b.x, b.y}) > kPivotArrivalToleranceM)
       return true;
-    }
+  }
+  const auto& origin = global_plan_[current_index_].pose.position;
+  const double heading = tf2::getYaw(global_plan_[current_index_].pose.orientation);
+  const auto next_stop = nextPivotCorner();
+  double straight = 0;
+  for (std::size_t i = current_index_ + 1; i < global_plan_.size(); ++i)
+  {
+    const auto& next = global_plan_[i].pose;
+    const double dx = next.position.x - origin.x, dy = next.position.y - origin.y;
+    const double along = dx * std::cos(heading) + dy * std::sin(heading);
+    const double lateral = -dx * std::sin(heading) + dy * std::cos(heading);
+    // Same construction-noise allowance as IsStraightForwardPlan.
+    if (!std::isfinite(along) || !std::isfinite(lateral) || std::abs(lateral) > 1e-6 ||
+        along + 1e-6 < straight ||
+        std::abs(WrapPivotAngle(tf2::getYaw(next.orientation) - heading)) > 1e-6)
+      break;
+    straight = along;
+    if (next_stop && i == *next_stop)
+      break;
+  }
+  const double direction = std::cos(yaw - heading);
+  if (!(direction > 0))
+    return false;
+  const double advanced =
+      (start.x - origin.x) * std::cos(heading) + (start.y - origin.y) * std::sin(heading);
+  // The actual axle can be ahead of the outgoing twin. Never restart a whole
+  // leg at that pose, or demand a cruise response across a millimetre bevel.
+  const double remaining =
+      std::min(config_.avoidance_horizon_m, std::max(0.0, straight - advanced) / direction);
+  return geometry.mowing.segmentAuthorized(start,
+                                           {start.x + remaining * std::cos(yaw),
+                                            start.y + remaining * std::sin(yaw)});
+}
+
+bool FTCController::rotationDeparturePermitted(const CornerGeometry& geometry)
+{
+  // Caller retains corner_geometry_mutex_ through the state/output handoff.
+  const auto pose = pivotMapPose();
+  transit::Ring body;
+  for (const auto& p : costmap_ros_->getRobotFootprint())
+    body.push_back({p.x, p.y});
+  return rotationRestartPermitted(pose, geometry) &&
+         geometry.rotationClear({pose.position.x, pose.position.y},
+                                tf2::getYaw(pose.orientation),
+                                0,
+                                body) &&
+         !localRotationBlocked(0);
+}
+
+bool FTCController::localRotationBlocked(double turn)
+{
+  if (!costmap_ros_ || !costmap_map_ || !pivot_pose_epoch_)
+    return true;
+  const auto footprint = costmap_ros_->getRobotFootprint();
+  if (footprint.size() < 3)
+    return true;
+  // Same supported epoch as map readiness, rather than getRobotPose's latest
+  // (possibly future) transform. Keep the existing filled-footprint raster.
+  const auto tf = tf_buffer_->lookupTransform(costmap_ros_->getGlobalFrameID(),
+                                              "base_link",
+                                              *pivot_pose_epoch_);
+  geometry_msgs::msg::PoseStamped probe;
+  probe.header = tf.header;
+  probe.pose.position.x = tf.transform.translation.x;
+  probe.pose.position.y = tf.transform.translation.y;
+  double reach = 0;
+  for (const auto& p : footprint)
+    reach = std::max(reach, std::hypot(p.x, p.y));
+  const double yaw_now = tf2::getYaw(tf.transform.rotation);
+  std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap_map_->getMutex());
+  const double step = costmap_map_->getResolution() / reach;
+  const auto yaws = std::abs(turn) > M_PI ? DirectedPivotSweepYaws(yaw_now, turn, step)
+                                          : PivotSweepYaws(yaw_now, yaw_now + turn, step);
+  if (yaws.empty())
+    return true;
+  for (double yaw : yaws)
+  {
+    tf2::Quaternion q;
+    q.setRPY(0, 0, yaw);
+    probe.pose.orientation = tf2::toMsg(q);
+    if (ObstacleDeviation::footprintBlocked(
+            *costmap_map_, probe, 0, footprint, {}, ObstacleDeviation::kLethalOnlyThreshold))
+      return true;
   }
   return false;
 }
 
-bool FTCController::pivotSweepGate(double dt)
+bool FTCController::cornerRotationGate(double dt)
 {
-  if (pivotSweepBlocked())
+  std::shared_ptr<const CornerGeometry> geometry;
   {
-    // Same bounded hold as every other obstacle stop: zero velocity, then a
-    // ControllerException after obstacle_wait_timeout_s so the BT's detour /
-    // resume logic takes over. Never rotate into a LiDAR-seen obstacle.
-    waitOrThrowForObstacle("obstacle inside the pivot sweep");
+    std::lock_guard lock(corner_geometry_mutex_);
+    geometry = corner_geometry_;
+  }
+  if (!geometry || !geometry->valid)
+    return false;  // Original PRE/PIVOT deadline remains authoritative.
+  const auto pose = pivotMapPose();
+  // Missing positional mowing authority is not an observed obstacle. Keep
+  // zero under the original PRE/PIVOT deadline without arming obstacle wait.
+  // A previously observed, still-active obstacle retains its own deadline.
+  if (!geometry->mowing.authorized({pose.position.x, pose.position.y}))
+  {
+    if (obstacle_waiting_)
+      waitOrThrowForObstacle("waiting for mowing authority during an obstacle hold");
     return false;
+  }
+  const double yaw = tf2::getYaw(pose.orientation);
+  transit::Ring body;
+  for (const auto& p : costmap_ros_->getRobotFootprint())
+    body.push_back({p.x, p.y});
+  const auto clear = [&](double turn)
+  {
+    return geometry->rotationClear({pose.position.x, pose.position.y}, yaw, turn, body) &&
+           !localRotationBlocked(turn);
+  };
+  const double original = WrapPivotAngle(angle_error_);
+  const double tolerance =
+      (current_state_ == PlannerState::PIVOT ? config_.pivot_angle_tolerance_deg
+                                             : config_.max_goal_angle_error) *
+      M_PI / 180;
+  double turn = original;
+  if (std::abs(original) < tolerance && !rotationRestartPermitted(pose, *geometry))
+  {
+    bool heading_exists = false, selected = false;
+    for (double offset : {-tolerance / 2, tolerance / 2})
+    {
+      const double candidate = WrapPivotAngle(original + offset);
+      auto target = pose;
+      tf2::Quaternion q;
+      q.setRPY(0, 0, yaw + candidate);
+      target.orientation = tf2::toMsg(q);
+      if (!rotationRestartPermitted(target, *geometry))
+        continue;
+      heading_exists = true;
+      if (!clear(candidate))
+        continue;
+      turn = candidate;
+      selected = true;
+      break;
+    }
+    if (heading_exists && !selected)
+    {
+      waitOrThrowForObstacle("blocked finite corner rotation");
+      return false;
+    }
+  }
+  if (!clear(turn))
+  {
+    // A retained sharp corner must stop even where its full disc does not fit.
+    // A goal resumed at an opening twin enters PRE_ROTATE. Both stopped
+    // rotation states need the same checked alternative when the short arc
+    // is blocked; no new state, tolerance or deadline is granted.
+    const double opposite = turn - std::copysign(2 * M_PI, turn);
+    if (!clear(opposite))
+    {
+      waitOrThrowForObstacle("obstacle inside the pivot sweep");
+      return false;
+    }
+    turn = opposite;
   }
   if (obstacle_waiting_)
   {
@@ -2477,10 +2638,23 @@ bool FTCController::pivotSweepGate(double dt)
       holdObstacleMotion();
       return false;
     }
-    RCLCPP_INFO(logger_, "FTCController: pivot sweep clear, resuming the pivot.");
     obstacle_waiting_ = false;
-    obstacle_followable_time_ = 0.0;
+    obstacle_followable_time_ = 0;
   }
+  // Preserve the established short/bias arithmetic and I/D history exactly.
+  // A checked opposite arc instead needs a directed P target separate from the
+  // original geometric error used by completion and derivative bookkeeping.
+  if (std::abs(turn) <= M_PI)
+  {
+    angle_error_ = turn;
+    angle_error_raw_prev_ = std::numeric_limits<double>::quiet_NaN();
+    checked_corner_turn_ = WrapPivotAngle(turn);  // old output-bound arithmetic
+  }
+  else
+  {
+    checked_corner_turn_ = turn;
+  }
+  checked_corner_geometry_ = std::move(geometry);
   return true;
 }
 

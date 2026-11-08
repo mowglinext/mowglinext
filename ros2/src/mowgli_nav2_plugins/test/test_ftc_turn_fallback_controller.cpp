@@ -52,6 +52,20 @@
 #include <gtest/gtest.h>
 #include <rcl/time.h>
 
+namespace mowgli_nav2_plugins
+{
+struct FTCSpeedLimitTestAccess
+{
+  static void FreeMowingGeometry(FTCController& c)
+  {
+    auto g = std::make_shared<CornerGeometry>();
+    g->valid = true;
+    g->mowing.allowed = {{{-5, -5}, {15, -5}, {15, 15}, {-5, 15}}};
+    c.corner_geometry_ = std::move(g);
+  }
+};
+}  // namespace mowgli_nav2_plugins
+
 namespace
 {
 
@@ -168,6 +182,7 @@ public:
 
     ftc_.configure(node_, kPlugin, tf_, costmap_);
     ftc_.activate();
+    mowgli_nav2_plugins::FTCSpeedLimitTestAccess::FreeMowingGeometry(ftc_);
 
     probe_ = std::make_shared<rclcpp::Node>("progress_probe");
     probe_sub_ = probe_->create_subscription<nav_msgs::msg::Path>(
