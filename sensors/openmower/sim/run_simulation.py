@@ -61,6 +61,7 @@ ROBOT_TEMPLATE = os.path.normpath(os.path.join(
 BACKEND_DEFAULTS = os.path.join(os.path.dirname(ROBOT_TEMPLATE), 'backends', 'openmower.yaml')
 DRIVES = ('left', 'right')
 HLS_PERIOD_S = 0.5  # Original 2 Hz publication cadence, also the stale observation unit.
+CMD_PERIOD_S = 0.05  # cmd_vel at 20 Hz, as a controller would publish it.
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +98,7 @@ class Probe(Node):
         self.imu = []
         self.applied = []
         self.hlc_commands = []
-        self.cmd = None          # (vx, wz) published at 20 Hz while set
+        self.cmd = None          # (vx, wz) published at 20 Hz while set (_publish_loop)
         self.hl_state = None     # published at 2 Hz while set
         rel = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -120,8 +121,38 @@ class Probe(Node):
         self.reboot = self.create_client(Trigger, '/hardware_bridge/reboot_board')
         self.fw_debug = self.create_client(SetBool, '/hardware_bridge/set_firmware_debug')
         self.get_params = self.create_client(GetParameters, '/hardware_bridge/get_parameters')
-        self.create_timer(0.05, self._publish_cmd)
-        self.create_timer(HLS_PERIOD_S, self._publish_hl)
+        # What the BT and the velocity mux would publish, on a dedicated thread
+        # rather than executor timers: the executor also runs the 50-100 Hz
+        # IMU/odom/applied subscriptions, and on a loaded runner it starved
+        # these timers for 0.8-1.7 s (6 s once). The bridge then correctly
+        # treated cmd_vel as stale (1 s), held the wheels and re-ramped, and the
+        # scenario measured that instead of the bridge.
+        self._publishing = threading.Event()
+        self._publishing.set()
+        self._publisher_thread = threading.Thread(
+            target=self._publish_loop, name='om-sim-probe-publisher', daemon=True)
+        self._publisher_thread.start()
+
+    def _publish_loop(self):
+        """cmd_vel at 20 Hz and HighLevelStatus at 1/HLS_PERIOD_S, on a fixed
+        monotonic schedule; an overrun skips ahead rather than bursting."""
+        periods = ((CMD_PERIOD_S, self._publish_cmd), (HLS_PERIOD_S, self._publish_hl))
+        due = [time.monotonic()] * len(periods)
+        while self._publishing.is_set():
+            now = time.monotonic()
+            for i, (period, publish) in enumerate(periods):
+                if now >= due[i]:
+                    try:
+                        publish()
+                    except Exception:  # keep publishing; a dead thread would read as a stalled BT
+                        traceback.print_exc()
+                    due[i] = max(due[i] + period, now)
+            time.sleep(max(0.0, min(due) - time.monotonic()))
+
+    def destroy_node(self):
+        self._publishing.clear()
+        self._publisher_thread.join(timeout=2.0)
+        return super().destroy_node()
 
     def _keeper(self, key):
         def cb(msg):
