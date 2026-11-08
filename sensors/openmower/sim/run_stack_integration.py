@@ -37,7 +37,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from openmower_v1_emulator import OpenMowerV1Rig  # noqa: E402
+from rig_process import RemoteRig  # noqa: E402
 from run_simulation import (  # noqa: E402
     AUTONOMOUS, Probe, Report, estop, spin_in_background, start_bridge, wait_for)
 
@@ -94,7 +94,7 @@ def main():
     S = 'HARDWARE_BACKEND=openmower'
     print(f'\n== {S} ==', flush=True)
     workdir = tempfile.mkdtemp(prefix='omstack-')
-    rig = OpenMowerV1Rig(workdir, 'xesc_2040')
+    rig = RemoteRig(workdir, 'xesc_2040')
     rig.start()
     stack = launch_mowgli('openmower', os.path.join(logdir, 'stack-openmower.log'))
     bridge = start_bridge(rig, 'xesc_2040', workdir, os.path.join(logdir, 'stack-bridge.log'))

@@ -46,7 +46,8 @@ from std_msgs.msg import Bool
 from std_srvs.srv import SetBool, Trigger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from openmower_v1_emulator import HEARTBEAT_MILLIS, OpenMowerV1Rig  # noqa: E402
+from openmower_v1_emulator import HEARTBEAT_MILLIS  # noqa: E402
+from rig_process import RemoteRig  # noqa: E402
 from measurements import calibration_attempt, drives_running, odometry_mean, run_scenario  # noqa: E402
 from native_trace import NativeTrace, blade_receipts, commanded_zero, heartbeat_cadence, matching_blade_write, stale_blade_window, wheel_recovery  # noqa: E402
 
@@ -1181,7 +1182,7 @@ SCENARIOS = [s01_boot, s02_boot_latch, s03_straight, s04_pivot, s05_slew, s06_cm
 def run_one(esc: str, R: Report, logdir: str, only=None):
     print(f'\n========== {esc} ==========', flush=True)
     workdir = tempfile.mkdtemp(prefix=f'omsim-{esc}-')
-    rig = OpenMowerV1Rig(workdir, esc)
+    rig = RemoteRig(workdir, esc)
     rig.start()
     bridge_log = os.path.join(logdir, f'bridge-{esc}.log')
     bridge = start_bridge(rig, esc, workdir, bridge_log)
@@ -1227,7 +1228,7 @@ def run_gui_config(R: Report, logdir: str):
     S = 'gui config'
     print(f'\n========== {S} ==========', flush=True)
     workdir = tempfile.mkdtemp(prefix='omsim-gui-')
-    rig = OpenMowerV1Rig(workdir, 'xesc_2040')
+    rig = RemoteRig(workdir, 'xesc_2040')
     rig.start()
     yaml_keys = (f"    openmower_ll_port: \"{rig.paths['ll']}\"\n"
                  '    openmower_xesc_type: "xesc_2040"\n'
@@ -1269,11 +1270,12 @@ def run_gui_config(R: Report, logdir: str):
 
 
 def main():
-    # The emulator thread stands in for microcontrollers that answer within a
-    # millisecond, but it shares the GIL with the probe's executor threads.
-    # With Python's default 5 ms switch interval a starved runner made it
-    # answer tens of ms late, and the bridge's (correct) timing then measured
-    # the EMULATOR's latency as speed noise. Switch every 0.5 ms instead.
+    # The emulator stands in for microcontrollers that answer within a
+    # millisecond. It runs in its own process (rig_process.RemoteRig): sharing
+    # the GIL with this probe's executor threads starved it for up to ~0.5 s on
+    # a GitHub runner, long enough for the bridge to (correctly) declare the
+    # LowLevel board lost mid-scenario. The short switch interval stays for the
+    # probe's own timing; the rig process sets the same one for its threads.
     sys.setswitchinterval(0.0005)
     ap = argparse.ArgumentParser()
     ap.add_argument('--esc', choices=['xesc_mini', 'xesc_2040', 'both'], default='both')
