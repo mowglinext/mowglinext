@@ -2972,7 +2972,7 @@ TEST_F(CompleteEntryReplay, OutsideDuringSpinupCutsBladeAndReacquiresOriginalUni
                 1.),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 0u);
-  EXPECT_TRUE(hasBladeRequest(false, requests));
+  EXPECT_TRUE(waitForBladeRequest(false, requests));  // The OFF is an asynchronous service request.
   EXPECT_EQ(navigate->goal(1)->pose.pose, entryTestPath().poses.front().pose);
   EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
   EXPECT_TRUE(ctx->area_completed_swaths[1].empty());
@@ -3358,7 +3358,7 @@ TEST_F(CoverageEntryUnion, DriftOutsideWholeUnionTurnsOffAndReacquires)
                 1.),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 0u);
-  EXPECT_TRUE(hasBladeRequest(false, before));
+  EXPECT_TRUE(waitForBladeRequest(false, before));  // The OFF is an asynchronous service request.
   EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
   EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
 }
@@ -3385,7 +3385,7 @@ TEST_F(CoverageEntryUnion, ValidToEmptyRevokesWhileWaitingForBlade)
                 1.),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 0u);
-  EXPECT_TRUE(hasBladeRequest(false, before));
+  EXPECT_TRUE(waitForBladeRequest(false, before));  // The OFF is an asynchronous service request.
   EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
 }
 TEST_F(CoverageEntryUnion, ValidToMalformedRevokesWhileWaitingForBlade)
@@ -3412,6 +3412,6 @@ TEST_F(CoverageEntryUnion, ValidToMalformedRevokesWhileWaitingForBlade)
                 1.),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 0u);
-  EXPECT_TRUE(hasBladeRequest(false, before));
+  EXPECT_TRUE(waitForBladeRequest(false, before));  // The OFF is an asynchronous service request.
   EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
 }
