@@ -211,6 +211,16 @@ CI: `.github/workflows/ros2-ci.yml` builds the whole workspace and runs `colcon 
 - `webots_ros2_driver` / `webots_ros2_control` are built from the pinned source revision in `ros2/Dockerfile` (`webots-driver-builder`); the simulation stage patches `utils.is_wsl()` for Docker. Re-check that patch when updating the driver.
 - `ros2/foxglove/mowgli_sim.json` is an exported Foxglove layout (edit in Foxglove, re-export).
 
+### Autonomous precision soft-deadband policy
+
+`sim_actuation_node.cpp` subscribes to `/behavior_tree_node/high_level_status` and
+uses `mowgli_interfaces/linear_command_policy.hpp`: fresh BT AUTONOMOUS (2 s,
+monotonic receipt age) passes deliberate sub-0.05 m/s linear targets, including
+startup. Before BT status, in other modes and after expiry, its original soft
+linear clamp remains. The sim node has no firmware-mode fallback. This mirrors
+the host precision exception, not STM32 serial/slew dynamics or physical slow
+motion. Per-wheel stiction, command timeout and the ideal-model switch are unchanged.
+
 ## Declared GNSS-quality scenarios
 
 Use `ros2 launch mowgli_bringup sim_full_system.launch.py

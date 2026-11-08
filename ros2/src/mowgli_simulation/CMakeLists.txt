@@ -63,6 +63,7 @@ target_include_directories(sim_actuation_node
 )
 
 target_link_libraries(sim_actuation_node
+  ${mowgli_interfaces_TARGETS}
   ${rclcpp_TARGETS}
   ${geometry_msgs_TARGETS}
 )
@@ -115,6 +116,11 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_ros REQUIRED)
+  ament_add_ros_isolated_gtest(test_sim_actuation test/test_sim_actuation.cpp)
+  target_include_directories(test_sim_actuation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(test_sim_actuation
+    ${rclcpp_TARGETS} ${geometry_msgs_TARGETS} ${mowgli_interfaces_TARGETS})
   find_package(ament_cmake_pytest REQUIRED)
 
   ament_add_pytest_test(test_cutting_tool_frame
