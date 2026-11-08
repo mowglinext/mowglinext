@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 
 #include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/authorized_transit_planner.hpp"
@@ -81,6 +82,24 @@ TEST(TransitGeometry, ObstaclesRejectWholeSegmentsIncludingMargin)
   EXPECT_FALSE(geometry.segmentClear({-2, 0}, {2, 0}));
   EXPECT_FALSE(geometry.segmentClear({-2, 1.05}, {2, 1.05}));
   EXPECT_TRUE(geometry.segmentClear({-2, 1.2}, {2, 1.2}));
+}
+
+// Coverage entry only: the planner grows the outermost ring's field outward by
+// op_width/2, so its starts may sit just outside the recorded line.
+TEST(TransitGeometry, AuthorizedWithinExtendsOnlyTheAllowedRingAndNeverObstacles)
+{
+  Geometry geometry;
+  geometry.allowed = {rectangle(0, 0, 2, 2)};
+  geometry.blocked = {rectangle(0.9, 0.9, 1.1, 1.1)};
+  EXPECT_TRUE(geometry.authorizedWithin({1, 0.5}, 0.0));
+  EXPECT_FALSE(geometry.authorizedWithin({-0.05, 1}, 0.0));  // exact rule unchanged
+  EXPECT_FALSE(geometry.authorized({-0.05, 1}));
+  EXPECT_TRUE(geometry.authorizedWithin({-0.05, 1}, 0.13));
+  EXPECT_FALSE(geometry.authorizedWithin({-0.20, 1}, 0.13));
+  EXPECT_FALSE(geometry.authorizedWithin({-0.05, 1}, -1.0));
+  EXPECT_FALSE(geometry.authorizedWithin({-0.05, 1}, std::numeric_limits<double>::quiet_NaN()));
+  // Tolerance widens permission, never an obstacle: the hole stays forbidden.
+  EXPECT_FALSE(geometry.clear({1, 1}));
 }
 
 TEST(TransitGeometry, StartExemptRingsAreBlockedUntilTheyAreLeftOut)

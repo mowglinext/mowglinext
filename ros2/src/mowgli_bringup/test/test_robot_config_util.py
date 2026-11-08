@@ -1052,3 +1052,26 @@ def test_dock_no_pivot_zone_covers_the_planner_refusal():
     assert _util.dock_no_pivot_distance({}) == pytest.approx(0.217, abs=0.002)
     # Longer nose reach, longer sweep: it follows the chassis.
     assert _util.dock_no_pivot_distance({"chassis_width": 0.70}) > _util.dock_no_pivot_distance({})
+
+
+def test_coverage_entry_tolerance_is_the_planners_outward_field_growth():
+    """The outermost ring is planned on a field grown outward by
+    op_width/2 - chassis_safety_inset (Invariant 7), and FTC tracks it to
+    FTC_TRACKING_SLACK_M. The entry/blade tolerance must cover exactly that."""
+    shipped = _util.coverage_entry_tolerance({})
+    assert shipped == pytest.approx((0.18 - 0.02) / 2 + _util.FTC_TRACKING_SLACK_M)
+    assert shipped == pytest.approx(0.13)
+
+
+def test_coverage_entry_tolerance_shrinks_with_the_boundary_inset():
+    # An inset of op_width/2 or more already keeps the ring inside the line:
+    # only tracking slack is left.
+    assert _util.coverage_entry_tolerance({"chassis_safety_inset": 0.2}) == pytest.approx(
+        _util.FTC_TRACKING_SLACK_M)
+    assert _util.coverage_entry_tolerance({"chassis_safety_inset": 0.04}) == pytest.approx(
+        0.04 + _util.FTC_TRACKING_SLACK_M)
+
+
+def test_coverage_entry_tolerance_follows_the_cut_width():
+    wider = _util.coverage_entry_tolerance({"tool_width": 0.30})
+    assert wider == pytest.approx((0.30 - 0.02) / 2 + _util.FTC_TRACKING_SLACK_M)

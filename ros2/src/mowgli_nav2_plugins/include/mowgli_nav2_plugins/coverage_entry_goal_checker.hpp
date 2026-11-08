@@ -29,6 +29,7 @@ public:
                      double& path_length) override;
 
 private:
+  double entryTolerance() const;
   bool arrived(const geometry_msgs::msg::Pose& query,
                const geometry_msgs::msg::Pose& goal,
                double coast_radius);

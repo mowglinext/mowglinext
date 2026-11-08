@@ -245,48 +245,50 @@ protected:
                                       blackboard);
   }
 
-  // Verify the new blade-off entry phase separately, then leave its final
-  // mowing-intent request for the existing direction assertions below.
+  // Start coverage up to its first mowing-intent request, checking the setup
+  // OFFs carry the selected direction, and leave that request for the direction
+  // assertions below.
   void startCheckedCoverage(BT::Tree& coverage, uint8_t direction)
   {
-    const auto before = entry_goals;
-    ASSERT_EQ(coverage.tickOnce(), BT::NodeStatus::RUNNING);
-    auto* strip = dynamic_cast<FollowStrip*>(coverage.rootNode());
-    ASSERT_NE(strip, nullptr);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    // The fake navigator can finish before transient-local discovery delivers
-    // the permission map. Establish that fixture input before consuming arrival;
-    // otherwise the production containment check correctly reacquires entry.
+    // Direction is under test here, not entry (test_follow_strip_dig covers
+    // that). Consume the permission snapshot BEFORE the first tick so the axle
+    // (map origin) is contained: FollowStrip then takes the nearby first unit
+    // directly, with no blade-off entry transit (as before #1084).
     std::shared_ptr<CoverageEntryGeometry> geometry;
-    ASSERT_TRUE(blackboard->get("_coverage_entry_geometry", geometry));
-    ASSERT_NE(geometry, nullptr);
+    if (!blackboard->get("_coverage_entry_geometry", geometry) || !geometry)
+    {
+      geometry = CoverageEntryGeometry::create(ctx->node);
+      blackboard->set("_coverage_entry_geometry", geometry);
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (!geometry->contains(0.0, 0.0) && std::chrono::steady_clock::now() < deadline)
     {
       executor.spin_some();
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     ASSERT_TRUE(geometry->contains(0.0, 0.0));
-    while ((entry_goals == before || !FollowStripOutcomeTestAccess::entryComplete(*strip)) &&
-           std::chrono::steady_clock::now() < deadline)
+    const auto before = entry_goals;
+    // Tick until the request after the setup OFFs (the ON, or its operator-OFF
+    // override) is out; stop there, before the legacy readiness timer dispatches
+    // to the rejecting fake follow server.
+    const auto off_then_next = [&]
     {
-      executor.spin_some();
+      return requests.size() >= 2;
+    };
+    while (!off_then_next() && std::chrono::steady_clock::now() < deadline)
+    {
       ASSERT_EQ(coverage.tickOnce(), BT::NodeStatus::RUNNING);
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    ASSERT_EQ(entry_goals, before + 1);
-    ASSERT_TRUE(FollowStripOutcomeTestAccess::entryComplete(*strip));
-    while (requests.size() < 3 && std::chrono::steady_clock::now() < deadline)
-    {
       executor.spin_some();
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    ASSERT_EQ(requests.size(), 3u);
-    for (std::size_t i = 0; i < 2; ++i)
+    ASSERT_TRUE(off_then_next());
+    EXPECT_EQ(entry_goals, before);  // contained nearby first unit: no entry transit
+    for (std::size_t i = 0; i + 1 < requests.size(); ++i)
     {
       EXPECT_EQ(requests[i].mow_enabled, 0u);
       EXPECT_EQ(requests[i].mow_direction, direction);
     }
-    requests.erase(requests.begin(), requests.begin() + 2);
+    requests.erase(requests.begin(), requests.end() - 1);
   }
 
   void expectRequest(uint8_t enabled, uint8_t direction)

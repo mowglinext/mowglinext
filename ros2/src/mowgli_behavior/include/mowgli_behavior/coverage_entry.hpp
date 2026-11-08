@@ -15,6 +15,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -32,6 +34,16 @@ public:
   static std::shared_ptr<CoverageEntryGeometry> create(const rclcpp::Node::SharedPtr& node)
   {
     auto cache = std::make_shared<CoverageEntryGeometry>();
+    // coverage_entry_tolerance_m: how far outside the recorded line the axle
+    // still counts as inside (robot_config_util.coverage_entry_tolerance — the
+    // planner's own outward field growth for the outermost ring). Undeclared
+    // (unit tests) or invalid keeps the exact line.
+    if (node->has_parameter("coverage_entry_tolerance_m"))
+    {
+      const double tolerance = node->get_parameter("coverage_entry_tolerance_m").as_double();
+      if (std::isfinite(tolerance) && tolerance > 0.0)
+        cache->tolerance_ = std::min(tolerance, kMaxEntryToleranceM);
+    }
     cache->subscription_ = node->create_subscription<visualization_msgs::msg::MarkerArray>(
         "/map_server_node/transit_geometry",
         rclcpp::QoS(1).reliable().transient_local(),
@@ -57,10 +69,18 @@ public:
       std::lock_guard<std::mutex> lock(mutex_);
       snapshot = snapshot_;
     }
-    return snapshot && snapshot->contains({x, y});
+    return snapshot && snapshot->contains({x, y}, tolerance_);
+  }
+
+  double tolerance() const
+  {
+    return tolerance_;
   }
 
 private:
+  // A tolerance is a geometric allowance, never a way to disable the check.
+  static constexpr double kMaxEntryToleranceM = 0.5;
+  double tolerance_{0.0};
   mutable std::mutex mutex_;
   std::shared_ptr<const mowgli_nav2_plugins::MowingGeometry> snapshot_;
   rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr subscription_;

@@ -294,6 +294,24 @@ struct Geometry
                          return inside(p, r);
                        });
   }
+  /// authorized(), or within `tolerance` of an allowed ring. COVERAGE ENTRY ONLY
+  /// (FollowStrip's entry/blade checks, the entry goal checker, FTC's rotation
+  /// gates): the planner itself puts the outermost ring's centreline up to
+  /// op_width/2 outside the recorded line (coverage_entry_tolerance_m). Transit
+  /// planning keeps the exact authorized().
+  bool authorizedWithin(Point p, double tolerance) const
+  {
+    if (authorized(p))
+      return true;
+    if (!(tolerance > 0))  // NaN and <= 0 keep the exact rule
+      return false;
+    return std::any_of(allowed.begin(),
+                       allowed.end(),
+                       [&](const auto& r)
+                       {
+                         return ringDistance(p, r) <= tolerance;
+                       });
+  }
   bool clear(Point p) const
   {
     for (std::size_t i = 0; i < blocked.size(); ++i)

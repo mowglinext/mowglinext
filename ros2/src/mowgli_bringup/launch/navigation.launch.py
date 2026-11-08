@@ -77,6 +77,7 @@ from robot_config_util import (
     chassis_circumscribed_radius,
     chassis_footprint,  # noqa: E402
     chassis_half_width,
+    coverage_entry_tolerance,
     DEFAULT_CHASSIS_WIDTH_M,
     DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO,
     DEFAULT_BLADE_LOAD_RPM_FULL,
@@ -823,6 +824,11 @@ def generate_launch_description() -> LaunchDescription:
                   .setdefault("ros__parameters", {})
                   .setdefault("FollowCoveragePath", {}))
         fcp["speed_fast"] = mowing_speed
+        # Coverage-entry / blade / rotation-gate tolerance outside the recorded
+        # line (robot_config_util.coverage_entry_tolerance). FTC's gates and the
+        # transit tree's coverage_entry_goal_checker (which reads this key from
+        # controller_server) share it with behavior_tree_node.
+        fcp["coverage_entry_tolerance_m"] = coverage_entry_tolerance(rt_rp)
         # FTC hard-clamps its final longitudinal command to ±max_cmd_vel_speed
         # (ftc_controller.cpp). speed_fast only sets the carrot target, so any
         # mowing_speed above the base max_cmd_vel_speed (0.30) was silently

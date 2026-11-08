@@ -15,9 +15,10 @@ struct MowingGeometry
   bool valid{false};
   transit::Geometry mowing;
 
-  bool contains(transit::Point axle) const
+  /// `tolerance`: coverage_entry_tolerance_m (0 keeps the exact recorded line).
+  bool contains(transit::Point axle, double tolerance = 0.0) const
   {
-    return valid && mowing.authorized(axle) && mowing.clear(axle);
+    return valid && mowing.authorizedWithin(axle, tolerance) && mowing.clear(axle);
   }
 
   static MowingGeometry parse(const visualization_msgs::msg::MarkerArray& message)

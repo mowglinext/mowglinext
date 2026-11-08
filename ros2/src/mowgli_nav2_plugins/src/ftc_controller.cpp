@@ -78,7 +78,9 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
       "/map_server_node/transit_geometry",
       [this](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
       {
-        auto geometry = std::make_shared<const CornerGeometry>(CornerGeometry::parse(*message));
+        auto parsed = CornerGeometry::parse(*message);
+        parsed.entry_tolerance = config_.coverage_entry_tolerance_m;
+        auto geometry = std::make_shared<const CornerGeometry>(std::move(parsed));
         std::lock_guard lock(corner_geometry_mutex_);
         corner_geometry_ = std::move(geometry);
       },
@@ -301,6 +303,15 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.max_goal_distance_error = declare_double("max_goal_distance_error", 1.0);
   config_.max_goal_angle_error = declare_double("max_goal_angle_error", 10.0);
   config_.pivot_angle_tolerance_deg = declare_double("pivot_angle_tolerance_deg", 10.0);
+  // Injected by navigation.launch.py (robot_config_util.coverage_entry_tolerance);
+  // also read by the transit tree's coverage_entry_goal_checker. 0 = exact line.
+  config_.coverage_entry_tolerance_m = declare_double("coverage_entry_tolerance_m", 0.0);
+  if (!std::isfinite(config_.coverage_entry_tolerance_m) ||
+      config_.coverage_entry_tolerance_m < 0.0 || config_.coverage_entry_tolerance_m > 0.5)
+  {
+    throw nav2_core::ControllerException(
+        plugin_name_ + ".coverage_entry_tolerance_m must be finite and in [0, 0.5]");
+  }
   config_.pivot_coast_time_bound_s = declare_double("pivot_coast_time_bound_s", 0.5);
   if (!std::isfinite(config_.pivot_coast_time_bound_s) || config_.pivot_coast_time_bound_s < 0.01 ||
       config_.pivot_coast_time_bound_s > 2.0)
@@ -2446,7 +2457,7 @@ bool FTCController::rotationRestartPermitted(const geometry_msgs::msg::Pose& pos
                                              const CornerGeometry& geometry) const
 {
   const transit::Point start{pose.position.x, pose.position.y};
-  if (!geometry.valid || !geometry.mowing.authorized(start))
+  if (!geometry.valid || !geometry.mowing.authorizedWithin(start, geometry.entry_tolerance))
     return false;
   const double yaw = tf2::getYaw(pose.orientation);
   if (const auto corner = stopCornerApproach(true))
@@ -2570,7 +2581,8 @@ bool FTCController::cornerRotationGate(double dt)
   // Missing positional mowing authority is not an observed obstacle. Keep
   // zero under the original PRE/PIVOT deadline without arming obstacle wait.
   // A previously observed, still-active obstacle retains its own deadline.
-  if (!geometry->mowing.authorized({pose.position.x, pose.position.y}))
+  if (!geometry->mowing.authorizedWithin({pose.position.x, pose.position.y},
+                                         geometry->entry_tolerance))
   {
     if (obstacle_waiting_)
       waitOrThrowForObstacle("waiting for mowing authority during an obstacle hold");

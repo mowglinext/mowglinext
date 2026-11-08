@@ -13,6 +13,10 @@ struct CornerGeometry
 {
   bool valid{false};
   transit::Geometry mowing;
+  /// coverage_entry_tolerance_m, set by FTC after parse: how far outside the
+  /// recorded line the axle still has mowing authority (the planner grows the
+  /// outermost ring's field outward by op_width/2). 0 = exact line.
+  double entry_tolerance{0.0};
   static CornerGeometry parse(const visualization_msgs::msg::MarkerArray& message);
   // Sufficient interior certificate for a full radial stopping budget. Outer
   // permission constrains the axle; RAW holes constrain the filled body at any yaw.

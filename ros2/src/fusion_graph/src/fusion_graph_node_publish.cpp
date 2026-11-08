@@ -179,13 +179,32 @@ bool FusionGraphNode::MotionPublicationAllowedLocked(int64_t now_ns, int64_t tar
   const bool allowed = motion_support_.Allows(now_ns,
                                               target_ns,
                                               motion_clock_epoch_.load(std::memory_order_acquire));
+  if (!motion_support_.lost() && motion_loss_reported_)
+  {
+    // Both streams have been continuous for kMotionRecoveryNs again. The next
+    // positive fact (RecordSupportOdom) supersedes the negative one; a later
+    // loss is reported afresh.
+    motion_loss_reported_ = false;
+    RCLCPP_WARN(get_logger(),
+                "fusion_graph: wheel + IMU input continuous again for %.1f s — motion "
+                "publication (odom->base_footprint, map->odom, odometry) resumed "
+                "(recovery #%llu)",
+                static_cast<double>(kMotionRecoveryNs) * 1e-9,
+                static_cast<unsigned long long>(motion_support_.recoveries()));
+  }
   if (motion_support_.lost() && !motion_loss_reported_)
   {
     motion_loss_reported_ = true;
     support_odom_.reset();
     support_tf_.reset();
-    // A negative retained fact supersedes the last positive publication. Keep
-    // graph/DR state for diagnosis; no returning input can clear the latch.
+    RCLCPP_ERROR(get_logger(),
+                 "fusion_graph: wheel/IMU input gap >= %.1f s — withholding all motion "
+                 "publication until both streams are continuous for %.1f s",
+                 static_cast<double>(kMotionSupportGapNs) * 1e-9,
+                 static_cast<double>(kMotionRecoveryNs) * 1e-9);
+    // A negative retained fact supersedes the last positive publication. Graph
+    // and DR state are kept, so publication resumes once both inputs have been
+    // continuous for kMotionRecoveryNs (MotionInputSupport).
     mowgli_interfaces::msg::GnssFusionUpdate msg;
     msg.header.stamp = rclcpp::Time(now_ns, get_clock()->get_clock_type());
     msg.header.frame_id = map_frame_;

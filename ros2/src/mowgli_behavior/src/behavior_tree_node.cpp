@@ -512,6 +512,9 @@ private:
 
     context_->dig_skip_radius_m =
         declare_parameter<double>("dig_skip_radius_m", kDefaultDigSkipRadiusM);
+    // Injected by full_system.launch.py (robot_config_util.coverage_entry_tolerance);
+    // read by CoverageEntryGeometry::create. 0 keeps the exact recorded line.
+    declare_parameter<double>("coverage_entry_tolerance_m", 0.0);
     dig_event_sub_ = create_subscription<mowgli_interfaces::msg::DigEvent>(
         "/hardware_bridge/dig_event",
         rclcpp::QoS(10),
