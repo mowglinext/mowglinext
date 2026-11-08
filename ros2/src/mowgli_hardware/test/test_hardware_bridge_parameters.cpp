@@ -192,6 +192,59 @@ struct HardwareBridgeBladeStatusTestPeer
   static void disconnect(HardwareBridgeNode& node)
   {
     node.close_serial_for_reconnect();
+  }  // Feed a CONFIG_RSP as if the board had answered the version handshake.
+  static void handshake(HardwareBridgeNode& node, uint8_t protocol)
+  {
+    LlConfigRsp packet{};
+    packet.type = PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP;
+    packet.protocol_version = protocol;
+    packet.fw_version_major = 1;
+    node.handle_config_rsp(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+  }
+  static void rearmHandshake(HardwareBridgeNode& node)
+  {
+    node.rearm_firmware_handshake();
+  }
+  static bool actuationAllowed(const HardwareBridgeNode& node)
+  {
+    return node.actuation_allowed();
+  }
+  static bool controlResult(HardwareBridgeNode& node, uint8_t on, uint8_t direction)
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
+    req->mow_enabled = on;
+    req->mow_direction = direction;
+    auto res = std::make_shared<mowgli_interfaces::srv::MowerControl::Response>();
+    node.on_mower_control(req, res);
+    return res->success;
+  }
+  static void cmdVel(HardwareBridgeNode& node, double vx, double wz)
+  {
+    auto msg = std::make_shared<geometry_msgs::msg::TwistStamped>();
+    msg->twist.linear.x = vx;
+    msg->twist.angular.z = wz;
+    node.on_cmd_vel(msg);
+  }
+  static void setMode(HardwareBridgeNode& node, uint8_t mode)
+  {
+    node.current_mode_ = mode;
+    node.send_high_level_state();
+  }
+  static uint8_t currentMode(const HardwareBridgeNode& node)
+  {
+    return node.current_mode_;
+  }
+  static bool mowEnabled(const HardwareBridgeNode& node)
+  {
+    return node.mow_enabled_;
+  }
+  static bool emergencyActive(const HardwareBridgeNode& node)
+  {
+    return node.emergency_active_;
+  }
+  static bool digEscapeAllowed(const HardwareBridgeNode& node)
+  {
+    return node.dig_escape_allowed();
   }
 };
 
