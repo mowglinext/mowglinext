@@ -101,7 +101,7 @@ controller_server:
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker",
-                           "coverage_axis_goal_checker"]
+                           "coverage_axis_goal_checker", "coverage_entry_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
     path_handler_plugins: ["PathHandler"]
     PathHandler:
@@ -149,6 +149,9 @@ controller_server:
     # the end of a path (use_rotate_to_heading: false) and the 1 Hz
     # replan-if-invalid loop made a 0.40 m transit with a ±0.10 rad yaw goal
     # spin on the spot for 164 s (field 2026-09-12).
+    coverage_entry_goal_checker:
+      plugin: "mowgli_nav2_plugins/CoverageEntryGoalChecker"
+
     transit_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.30

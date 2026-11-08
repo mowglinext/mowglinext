@@ -4,9 +4,23 @@
 > `HighLevelControl`/`HighLevelStatus` surface the GUI talks to, and runs every safety guard (emergency, sensor, boundary,
 > localization), the mow / home / record / manual / stop / idle branches, docking + undocking, and the disk-persisted
 > coverage-resume state (`coverage_resume.txt`, incl. `current_command`). It also ships `trees/navigate_to_pose.xml`,
-> the Nav2 `bt_navigator` tree used for every `/navigate_to_pose` goal.
+> the default Nav2 `bt_navigator` tree; coverage transits select `navigate_to_pose_transit.xml` per goal.
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
+
+`FollowStrip` begins blade-off and requires its own checked first-entry transit,
+including direct retries and the outer tree's soft transit fallback. The
+coverage-only goal checker supplies contained, settled arrival; proximity alone
+does not authorize cutting. `coverage_entry.hpp` consumes the existing complete
+MOW geometry publication through the shared `mowing_geometry.hpp` parser. It
+checks outer-union membership and every raw forbidden ring before ON and
+immediately before each FTC request; selected area remains planning identity.
+Missing, empty or malformed snapshots deny admission. If the pose leaves the
+MOW union during readiness, the blade turns off and the original
+unit is reacquired without trimming its path or advancing its cursor. Precision
+support still gates the nearby first unit before navigation resumes. The added
+first-entry route needs occupied-start recovery coverage as well as ordinary
+entry tests; component success does not establish full-mission availability.
 
 ## Where to look
 | Task | Start here |

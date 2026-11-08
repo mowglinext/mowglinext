@@ -2,18 +2,11 @@
   navigate_to_pose_transit.xml — Nav2 BT for COVERAGE transits only
   (FollowStrip sub-path boundary / detour transits, TransitToStrip).
 
-  Identical to navigate_to_pose.xml except for the goal checker:
-  `transit_goal_checker` (xy 0.30 m, yaw ignored) instead of the default
-  `stopped_goal_checker` (yaw ±0.10 rad, kept for opennav_docking's staging
-  approach, which needs the heading).
-
-  Field 2026-09-12: a 0.40 m sub-path-boundary transit demanded ±5.7° of final
-  heading. RPP cannot pivot at the end of a path (use_rotate_to_heading: false,
-  hardware-confirmed 2026-06-20) and RotationShim only pivots at the start, so
-  RPP overshot the goal, IsPathValid failed, the tree replanned from the new
-  pose at 1 Hz, the shim pivoted again — the robot turned on the spot for
-  164 s until the operator sent HOME. Coverage does not need a final heading:
-  FTC does its own PRE_ROTATE at the start of the next sub-path.
+  Uses the coverage_entry_goal_checker literal for every FollowPath action.
+  Arrival requires mowing-area containment, settled translation and a contained
+  residual coast, while preserving the original 0.30 m XY approach radius.
+  The pose-aware XY hook keeps RotationShim/RPP approaching while outside MOW.
+  The ordinary navigation tree and stopped_goal_checker are unchanged.
 
   Selected per goal through NavigateToPose.behavior_tree by the coverage nodes
   (see FollowStrip::transitBehaviorTree). Everything else (replan only if the
@@ -25,7 +18,6 @@
     <RecoveryNode number_of_retries="6" name="NavigateRecovery">
       <PipelineSequence name="NavigateWithReplanning">
         <ControllerSelector selected_controller="{selected_controller}" default_controller="FollowPath" topic_name="controller_selector"/>
-        <GoalCheckerSelector selected_goal_checker="{selected_goal_checker}" default_goal_checker="transit_goal_checker" topic_name="goal_checker_selector"/>
         <PlannerSelector selected_planner="{selected_planner}" default_planner="GridBased" topic_name="planner_selector"/>
         <RateController hz="1.0">
           <!--
@@ -62,7 +54,7 @@
           </Fallback>
         </RateController>
         <RecoveryNode number_of_retries="1" name="FollowPath">
-          <FollowPath path="{path}" controller_id="{selected_controller}" goal_checker_id="{selected_goal_checker}" error_code_id="{follow_path_error_code}"/>
+          <FollowPath path="{path}" controller_id="{selected_controller}" goal_checker_id="coverage_entry_goal_checker" error_code_id="{follow_path_error_code}"/>
           <Sequence>
             <WouldAControllerRecoveryHelp error_code="{follow_path_error_code}"/>
             <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>

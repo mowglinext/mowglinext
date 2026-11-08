@@ -23,7 +23,7 @@ import threading
 import time
 import unittest
 
-from geometry_msgs.msg import Point32, PoseStamped, TransformStamped
+from geometry_msgs.msg import Point, Point32, PoseStamped, TransformStamped
 import launch
 import launch_testing.actions
 import launch_testing.markers
@@ -41,6 +41,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Bool
 from tf2_ros import StaticTransformBroadcaster
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 @launch_testing.markers.keep_alive
@@ -81,6 +82,7 @@ class TestCoverageProcessRestart(unittest.TestCase):
           </Sequence>
         </BehaviorTree></root>""")
         self.units = [straight_unit(0.0, 10.0), straight_unit(10.0, 20.0)]
+        self.area_corners = ((-1.0, -1.0), (21.0, -1.0), (21.0, 1.0), (-1.0, 1.0))
         self.processes = []
         self.follow_goals = []
         self.transit_goals = []
@@ -144,6 +146,24 @@ class TestCoverageProcessRestart(unittest.TestCase):
             QoSProfile(depth=10, durability=DurabilityPolicy.TRANSIENT_LOCAL),
         )
         self.precision_timer = self.node.create_timer(0.1, self.publish_precision)
+        self.geometry_pub = self.node.create_publisher(
+            MarkerArray, '/map_server_node/transit_geometry',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
+        area = Marker()
+        area.header.frame_id = 'map'
+        area.ns = 'area'
+        area.id = 502
+        area.type = Marker.LINE_STRIP
+        area.action = Marker.ADD
+        area.text = 'mowing'
+        area.pose.orientation.w = 1.0
+        area.scale.x = 0.02
+        area.points = [
+            Point(x=x, y=y) for x, y in (*self.area_corners, self.area_corners[0])
+        ]
+        # This is the complete fake map: one MOW area, no forbidden rings.
+        self.geometry_pub.publish(MarkerArray(markers=[area]))
         self.executor = MultiThreadedExecutor(num_threads=4)
         self.executor.add_node(self.node)
         self.spinner = threading.Thread(target=self.executor.spin)
@@ -208,7 +228,7 @@ class TestCoverageProcessRestart(unittest.TestCase):
         response.area.name = 'test_lawn'
         response.area.area.points = [
             Point32(x=x, y=y)
-            for x, y in ((-1.0, -1.0), (21.0, -1.0), (21.0, 1.0), (-1.0, 1.0))
+            for x, y in self.area_corners
         ]
         return response
 
@@ -244,6 +264,17 @@ class TestCoverageProcessRestart(unittest.TestCase):
 
     def execute_follow(self, handle):
         return self.execute_goal(handle, self.follow_goals, FollowPath.Result)
+
+    def complete_transit(self, index):
+        request, complete = self.transit_goals[index]
+        transform = TransformStamped()
+        transform.header.frame_id = 'map'
+        transform.child_frame_id = 'base_footprint'
+        transform.transform.translation.x = request.pose.pose.position.x
+        transform.transform.translation.y = request.pose.pose.position.y
+        transform.transform.rotation = request.pose.pose.orientation
+        self.tf.sendTransform(transform)
+        complete.set()
 
     def execute_transit(self, handle):
         return self.execute_goal(handle, self.transit_goals, NavigateToPose.Result)
@@ -294,12 +325,17 @@ class TestCoverageProcessRestart(unittest.TestCase):
         self.assertEqual(len(self.follow_goals), 0)  # missing precision still denies dispatch
         self.precision_enabled.set()
         self.wait_until(
+            lambda: len(self.transit_goals) == 1, 'Checked first entry not dispatched'
+        )
+        self.assertEqual(self.transit_goals[0][0].pose.pose.position.x, 0.0)
+        self.complete_transit(0)
+        self.wait_until(
             lambda: len(self.follow_goals) == 1, 'First subpath not dispatched'
         )
         self.assertEqual(self.follow_goals[0][0].path.poses, self.units[0].poses)
         self.follow_goals[0][1].set()
         self.wait_until(
-            lambda: len(self.transit_goals) == 1, 'Transition not dispatched'
+            lambda: len(self.transit_goals) == 2, 'Transition not dispatched'
         )
 
         # Crash after completion is written and the cursor erased, while the
@@ -329,10 +365,10 @@ class TestCoverageProcessRestart(unittest.TestCase):
         second, log = self.start_process()  # no second START; test boot restoration
         self.assertNotEqual(first.pid, second.pid)
         self.wait_until(
-            lambda: len(self.transit_goals) == 2, 'Restart did not resume next subpath'
+            lambda: len(self.transit_goals) == 3, 'Restart did not resume next subpath'
         )
         self.assertEqual(len(self.follow_goals), 1)  # completed work was not repeated
-        self.assertEqual(self.transit_goals[1][0].pose.pose.position.x, 10.0)
+        self.assertEqual(self.transit_goals[2][0].pose.pose.position.x, 10.0)
         self.wait_until(
             lambda: True in self.resume_values, 'GUI resume signal was false'
         )
@@ -343,7 +379,7 @@ class TestCoverageProcessRestart(unittest.TestCase):
             ),
             'Restart resume log was not emitted',
         )
-        self.transit_goals[1][1].set()
+        self.complete_transit(2)
         self.wait_until(
             lambda: len(self.follow_goals) == 2, 'Next subpath not followed'
         )
