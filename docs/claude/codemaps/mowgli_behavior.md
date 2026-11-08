@@ -284,3 +284,23 @@ Publishes none. `ctx->tf_buffer` (`behavior_tree_node.cpp` :82) is used to look 
 - BehaviorTree.CPP v4 and Nav2 (`nav2_msgs`, `bt_navigator` stock nodes used by `navigate_to_pose.xml`) are system packages, not vendored here.
 - **DIG_OBSTRUCTION exit:** `HomeSequence` needs NO dig-keepout clean-up (the `DiscardNearbyDigKeepouts` node and its map_server service were removed): a dig never stamps the keepout mask, so HOME can always plan. `test/test_dig_obstruction_recovery.cpp` (structural) pins that the tag is gone, that COMMAND_HOME bypasses `DigObstructionGuard`, and that the hold publishes state 1.
 - **Dig skip zones (issue #500 protection, Invariant 16):** `include/mowgli_behavior/dig_skip.hpp` (pure: `recordDigPoint`, `insideDigZone`, `nextDrivableRun`, `DigSettleStep`). `behavior_tree_node.cpp` subscribes to `/hardware_bridge/dig_event` (**VOLATILE**) → `BTContext::session_dig_points` + `dig_event_count` (under `context_mutex`; points cleared by `EndSession`, the counter is a monotonic edge detector); `dig_skip_radius_m` is injected by `full_system.launch.py` (`robot_config_util.dig_skip_radius`). `FollowStrip` (`coverage_nodes.cpp`): `stepDigRecovery` (a dig while a goal of ours is active → cancel it, blade off, wait for the bridge's reverse to settle, `DecideUnitResume`, `trimUnitAt` past the zone, blade-off transit), `skipUnitFrontPastDigZones` (called by `sendCurrentSwath` and `onStart`), goal truncation in `sendFollowGoal` (`truncated_at_`: reaching the cut is NOT the end of the unit), `unit_exhausted_by_dig_` (nothing drivable left → unit booked). Tests: `test/test_dig_skip.cpp` (pure), `test/test_follow_strip_dig.cpp` (tick-level, fake `/follow_path` + `/navigate_to_pose` servers). Never move this into a costmap — a keepout under the robot refuses every plan from its own pose.
+
+## Precision support during coverage
+
+`PrecisionCoverageSupport` joins original `/gps/fix` and `/gps/status` through
+`mowgli_localization::NavSatStatusAssociation` before comparing the immutable
+raw fix with `/fusion_graph/gnss_update`. Its 50 ms association window is not a
+commit deadline: completed pairs and graph reports are retained separately.
+Coverage requires fresh stable Fixed quality, a matching committed Fixed fix,
+and a published TF support epoch that is already available in the TF buffer.
+Fix age uses both the original observation stamp and the first raw fix delivery
+in the monotonic clock. Report repetition, duplicates and graph revision
+changes do not renew either age. A non-Fixed status immediately revokes the
+coverage prerequisite even when the position sequence has not changed.
+
+FollowStrip applies this prerequisite only to coverage ownership and dispatch.
+It stops the blade and continuously sends emergency-lane zeros, abandons a
+pending or active FollowCoveragePath goal, and waits for its terminal result
+before resuming the persisted cursor. A blade-off transit retains its existing
+coarse localization policy. These observations establish provenance, not a
+true-position error bound.

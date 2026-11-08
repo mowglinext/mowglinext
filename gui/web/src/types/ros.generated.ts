@@ -105,6 +105,21 @@ export type LaserScan = {
   intensities?: number[];
 };
 
+export type NavSatFix = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  status?: NavSatStatus;
+  latitude?: number;
+  longitude?: number;
+  altitude?: number;
+  position_covariance?: number[];
+  position_covariance_type?: number;
+};
+
+export type NavSatStatus = {
+  status?: number;
+  service?: number;
+};
+
 export type Marker = {
   ns?: string;
   id?: number;
@@ -276,6 +291,18 @@ export type FirmwareParams = {
   reset_request_id?: number;
   store_status_sequence?: number;
   params?: FirmwareParam[];
+};
+
+export type GnssFusionUpdate = {
+  header?: { stamp: { sec: number; nanosec: number }; frame_id: string };
+  producer_incarnation?: string;
+  graph_epoch?: number;
+  estimate_revision?: number;
+  pose_published?: boolean;
+  tf_support_stamp?: { sec: number; nanosec: number };
+  has_applied_fix?: boolean;
+  applied_fix?: NavSatFix;
+  applied_revision?: number;
 };
 
 export const enum GnssStatusConstants {

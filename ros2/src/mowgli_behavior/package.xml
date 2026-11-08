@@ -28,6 +28,7 @@
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>mowgli_interfaces</depend>
+  <depend>mowgli_localization</depend>
   <depend>rcl_interfaces</depend>
 
 

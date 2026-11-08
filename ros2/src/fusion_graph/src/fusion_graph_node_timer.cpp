@@ -24,7 +24,14 @@ namespace fusion_graph
 
 void FusionGraphNode::OnTimer()
 {
-  const double now_s = this->now().seconds();
+  const auto now = this->now();
+  const double now_s = now.seconds();
+  if (support_last_ros_time_ns_ && now.nanoseconds() < *support_last_ros_time_ns_)
+  {
+    graph_->InvalidateGnssSupport();
+    SynchronizeSupportEpoch();
+  }
+  support_last_ros_time_ns_ = now.nanoseconds();
 
   // Boot dock-seed fallback. The normal init paths are (a) is_charging →
   // SeedFromDockPose, and (b) GPS xy + COG/mag yaw → TrySeedInitialPose.
@@ -136,6 +143,7 @@ void FusionGraphNode::OnTimer()
   //      the publish rate at OnTimer cadence (vs. only on new-node)
   //      stops Nav2 from rejecting stale lookups during stationary
   //      windows.
+  SynchronizeSupportEpoch();
   if (auto snap = graph_->LatestSnapshot())
   {
     {
@@ -157,6 +165,7 @@ void FusionGraphNode::OnTimer()
       last_anchored_estimate_revision_ = snap->estimate_revision;
       last_anchored_graph_pose_ = snap->pose;
       t_map_odom_anchor_valid_ = true;
+      support_anchor_snapshot_ = *snap;
     }
     // Odom re-base: once the robot has driven odom_rebase_dist_m from the odom
     // origin, reset the odom POSITION onto the robot (heading kept) and shift

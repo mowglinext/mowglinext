@@ -246,3 +246,21 @@ GNSS source-stamp association remains the existing newest-node-at-or-before
 approximation. This update does not create acquisition states or perform
 wheel-based temporal transport, and the one-slot GNSS queue does not promise
 lossless ingestion above the timer cadence.
+
+## Committed GNSS publication provenance
+
+`/fusion_graph/gnss_update` reports the exact raw NavSatFix whose factor most
+recently committed into the current graph lineage, plus the revision of that
+commit. A queue entry, seed prior, or received status is not an acknowledgement.
+The graph carries opaque ingestion tokens; the node retains a bounded pending
+raw-fix cache and separately pins the committed message. Missing raw data fails
+closed. No GNSS status or receiver sequence is inferred here.
+
+The report names a coherent map-odometry publication and the actual sent
+map-to-odom TF sample for the same epoch and revision. The dedicated TF thread
+records its own sent watermark; its forward TF stamp remains the existing lead,
+so consumers must wait for that support time. Reset, load, authoritative pose
+override and clock discontinuity invalidate the epoch; ordinary graph rebase
+preserves the original committed fix and its observation age. Observer mode
+cannot claim owned TF support. These facts establish provenance and output
+publication, not positional accuracy or permission to move.

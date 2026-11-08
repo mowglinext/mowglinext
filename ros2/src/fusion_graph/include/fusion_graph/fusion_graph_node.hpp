@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -53,6 +54,7 @@
 #include <Eigen/Core>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <mowgli_interfaces/gnss_observation_freshness.hpp>
+#include <mowgli_interfaces/msg/gnss_fusion_update.hpp>
 #include <mowgli_interfaces/msg/high_level_status.hpp>
 #include <mowgli_interfaces/msg/status.hpp>
 #include <sophus/se2.hpp>
@@ -127,6 +129,10 @@ private:
 
   // Publish TF map->odom and /odometry/filtered_map.
   void PublishOutputs(const TickOutput& out);
+  void SynchronizeSupportEpoch();
+  void RememberSupportFix(uint64_t token, const sensor_msgs::msg::NavSatFix& fix);
+  void PublishSupportLocked();
+  void RecordSupportOdom(const TickOutput& out, const builtin_interfaces::msg::Time& stamp);
   // Dedicated-thread TF broadcast loop (see tf_broadcast_rate_hz_).
   void TfBroadcastLoop();
   // Publishes /odometry/filtered + odom→base_footprint TF from the
@@ -548,6 +554,26 @@ private:
   // Set tf_broadcast_rate_hz <= 0 to disable the thread and fall
   // back to inline OnTimer publishing.
   std::mutex tf_state_mu_;
+  struct SupportOdom
+  {
+    TickOutput snapshot;
+    builtin_interfaces::msg::Time stamp;
+  };
+  struct SupportTf
+  {
+    uint64_t epoch;
+    uint64_t revision;
+    builtin_interfaces::msg::Time stamp;
+  };
+  std::optional<TickOutput> support_anchor_snapshot_;
+  std::optional<SupportOdom> support_odom_;
+  std::optional<SupportTf> support_tf_;
+  std::deque<std::pair<uint64_t, sensor_msgs::msg::NavSatFix>> support_pending_fixes_;
+  std::optional<std::pair<uint64_t, sensor_msgs::msg::NavSatFix>> support_applied_fix_;
+  uint64_t support_epoch_ = std::numeric_limits<uint64_t>::max();
+  uint64_t next_ingestion_token_ = 0;
+  std::optional<int64_t> support_last_ros_time_ns_;
+  std::string producer_incarnation_;
   double tf_broadcast_rate_hz_ = 20.0;
   std::thread tf_thread_;
   std::atomic<bool> tf_thread_stop_{false};
@@ -574,6 +600,7 @@ private:
   std::string graph_save_prefix_;
   // Publishers.
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
+  rclcpp::Publisher<mowgli_interfaces::msg::GnssFusionUpdate>::SharedPtr pub_gnss_update_;
   // /odometry/filtered — local-frame dead reckoning (REP-105 odom),
   // replaces what ekf_odom_node used to publish. Same topic name so
   // Nav2 / GUI consumers need no rewiring.

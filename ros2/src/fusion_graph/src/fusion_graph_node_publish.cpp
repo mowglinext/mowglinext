@@ -42,6 +42,7 @@ bool FusionGraphNode::TrySeedInitialPose()
   graph_->Initialize(gtsam::Pose2(seed_xy_->x(), seed_xy_->y(), *seed_yaw_),
                      this->now().seconds(),
                      prior_override);
+  SynchronizeSupportEpoch();
   t_map_odom_anchor_valid_ = false;
   RCLCPP_INFO(get_logger(),
               "fusion_graph: initialized at (%.3f, %.3f, %.3f rad)%s",
@@ -129,6 +130,87 @@ void FusionGraphNode::PublishLocalOdom()
   pub_local_odom_->publish(odom);
 }
 
+void FusionGraphNode::SynchronizeSupportEpoch()
+{
+  const auto epoch = graph_->GraphEpoch();
+  std::lock_guard<std::mutex> lock(tf_state_mu_);
+  if (support_epoch_ == epoch)
+    return;
+  support_epoch_ = epoch;
+  support_anchor_snapshot_.reset();
+  support_odom_.reset();
+  support_tf_.reset();
+  support_pending_fixes_.clear();
+  support_applied_fix_.reset();
+  mowgli_interfaces::msg::GnssFusionUpdate msg;
+  msg.header.stamp = this->now();
+  msg.header.frame_id = map_frame_;
+  msg.producer_incarnation = producer_incarnation_;
+  msg.graph_epoch = epoch;
+  pub_gnss_update_->publish(msg);
+}
+
+void FusionGraphNode::RememberSupportFix(uint64_t token, const sensor_msgs::msg::NavSatFix& fix)
+{
+  std::lock_guard<std::mutex> lock(tf_state_mu_);
+  support_pending_fixes_.emplace_back(token, fix);
+  while (support_pending_fixes_.size() > 32)
+    support_pending_fixes_.pop_front();
+}
+
+// Caller holds tf_state_mu_. Neither publication alone confers support.
+void FusionGraphNode::PublishSupportLocked()
+{
+  if (!primary_mode_ || !support_odom_ || !support_tf_)
+    return;
+  const auto& snap = support_odom_->snapshot;
+  if (snap.graph_epoch != support_epoch_ || snap.graph_epoch != graph_->GraphEpoch() ||
+      support_tf_->epoch != snap.graph_epoch || support_tf_->revision != snap.estimate_revision)
+    return;
+  mowgli_interfaces::msg::GnssFusionUpdate msg;
+  msg.header.stamp = support_odom_->stamp;
+  msg.header.frame_id = map_frame_;
+  msg.producer_incarnation = producer_incarnation_;
+  msg.graph_epoch = snap.graph_epoch;
+  msg.estimate_revision = snap.estimate_revision;
+  msg.tf_support_stamp = support_tf_->stamp;
+  if (snap.applied_gnss_token != 0 && support_applied_fix_ &&
+      support_applied_fix_->first == snap.applied_gnss_token)
+  {
+    msg.pose_published = true;
+    msg.has_applied_fix = true;
+    msg.applied_fix = support_applied_fix_->second;
+    msg.applied_revision = snap.applied_gnss_revision;
+  }
+  if (!msg.pose_published)
+  {
+    msg.header.stamp = this->now();
+    msg.tf_support_stamp = builtin_interfaces::msg::Time{};
+  }
+  pub_gnss_update_->publish(msg);
+}
+
+void FusionGraphNode::RecordSupportOdom(const TickOutput& out,
+                                        const builtin_interfaces::msg::Time& stamp)
+{
+  std::lock_guard<std::mutex> lock(tf_state_mu_);
+  if (out.graph_epoch != support_epoch_ || out.graph_epoch != graph_->GraphEpoch())
+    return;
+  if (out.applied_gnss_token != 0 &&
+      (!support_applied_fix_ || support_applied_fix_->first != out.applied_gnss_token))
+  {
+    support_applied_fix_.reset();
+    for (const auto& item : support_pending_fixes_)
+      if (item.first == out.applied_gnss_token)
+      {
+        support_applied_fix_ = item;
+        break;
+      }
+  }
+  support_odom_ = SupportOdom{out, stamp};
+  PublishSupportLocked();
+}
+
 void FusionGraphNode::PublishOutputs(const TickOutput& out)
 {
   // Extrapolate the last-node pose through current odom integration
@@ -178,6 +260,7 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   odom.pose.covariance[21] = 1e-9;
   odom.pose.covariance[28] = 1e-9;
   pub_odom_->publish(odom);
+  RecordSupportOdom(out, odom.header.stamp);
 
   // Rebaseline the high-rate extrapolator (item #15). The fast
   // publisher will project yaw forward from this pose until the
@@ -252,6 +335,16 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   t_map_odom.child_frame_id = odom_frame_;
   t_map_odom.transform = tf2::toMsg(T_map_odom);
   tf_broadcaster_->sendTransform(t_map_odom);
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    if (out.graph_epoch == support_epoch_ && out.graph_epoch == graph_->GraphEpoch())
+    {
+      if (!support_tf_ || support_tf_->epoch != out.graph_epoch ||
+          support_tf_->revision != out.estimate_revision)
+        support_tf_ = SupportTf{out.graph_epoch, out.estimate_revision, t_map_odom.header.stamp};
+      PublishSupportLocked();
+    }
+  }
 }
 
 gtsam::Pose2 FusionGraphNode::SlewPublishedAnchor(const gtsam::Pose2& target,
@@ -319,6 +412,7 @@ void FusionGraphNode::TfBroadcastLoop()
     double vx_eff;
     bool anchor_valid;
     gtsam::Pose2 anchor;
+    std::optional<TickOutput> anchor_snapshot;
     {
       std::lock_guard<std::mutex> lock(tf_state_mu_);
       x = dr_x_;
@@ -328,6 +422,7 @@ void FusionGraphNode::TfBroadcastLoop()
       vx_eff = dr_last_vx_eff_;
       anchor_valid = t_map_odom_anchor_valid_;
       anchor = t_map_odom_anchor_;
+      anchor_snapshot = support_anchor_snapshot_;
     }
 
     // Honest forward-stamp: advance the DR pose by the lead so the now()+lead
@@ -371,6 +466,19 @@ void FusionGraphNode::TfBroadcastLoop()
     }
 
     tf_broadcaster_->sendTransform(transforms);
+    if (anchor_valid && anchor_snapshot)
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      if (anchor_snapshot->graph_epoch == support_epoch_ &&
+          anchor_snapshot->graph_epoch == graph_->GraphEpoch())
+      {
+        if (!support_tf_ || support_tf_->epoch != anchor_snapshot->graph_epoch ||
+            support_tf_->revision != anchor_snapshot->estimate_revision)
+          support_tf_ =
+              SupportTf{anchor_snapshot->graph_epoch, anchor_snapshot->estimate_revision, stamp};
+        PublishSupportLocked();
+      }
+    }
   }
 }
 }  // namespace fusion_graph
