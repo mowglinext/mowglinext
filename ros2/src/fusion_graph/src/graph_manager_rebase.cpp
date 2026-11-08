@@ -30,6 +30,14 @@
 
 namespace fusion_graph
 {
+bool GraphManager::RebaseDue(uint64_t budget) const
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  return initialized_ && !rebase_in_progress_ &&
+         (next_index_ - rebased_nodes_ >= budget ||
+          successful_updates_ - rebased_updates_ >= budget);
+}
+
 void GraphManager::RebaseISAM2()
 {
   // Phase 1: snapshot under the lock. The heavy work (building the
@@ -44,6 +52,9 @@ void GraphManager::RebaseISAM2()
   gtsam::Values estimate_snapshot;
   int relinearize_skip = 1;
   uint64_t cutoff_index = 0;
+  uint64_t snapshot_updates = 0;
+  uint64_t snapshot_nodes = 0;
+  uint64_t generation = 0;
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (rebase_in_progress_)
@@ -61,6 +72,9 @@ void GraphManager::RebaseISAM2()
     // window is measured from the newest node at snapshot time.
     if (params_.max_graph_nodes > 0 && next_index_ > params_.max_graph_nodes)
       cutoff_index = next_index_ - params_.max_graph_nodes;
+    snapshot_updates = successful_updates_;
+    snapshot_nodes = next_index_;
+    generation = ++rebase_generation_;
     rebase_in_progress_ = true;
     rebase_pending_factors_.resize(0);
     rebase_pending_values_.clear();
@@ -89,9 +103,14 @@ void GraphManager::RebaseISAM2()
     // the key. Non-pose keys (if any) fall through the window check
     // unchanged. cutoff_index == 0 means "keep everything".
     const gtsam::Symbol s(kv.key);
-    if (cutoff_index > 0 && s.chr() == 'x' && s.index() < cutoff_index)
+    if (cutoff_index > 0 && (s.chr() == 'x' || s.chr() == 'b') && s.index() < cutoff_index)
       continue;
-    fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, kv.value.cast<gtsam::Pose2>(), noise));
+    if (s.chr() == 'b')
+      fg.add(gtsam::PriorFactor<double>(kv.key,
+                                        kv.value.cast<double>(),
+                                        MakeDiagonal({params_.gyro_bias_prior_sigma_rad_per_s})));
+    else
+      fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, kv.value.cast<gtsam::Pose2>(), noise));
     kept_values.insert(kv.key, kv.value);
   }
   // SAFETY (SAFETY_REVIEW_2026-07-23 G-H4): this update runs on the detached
@@ -110,9 +129,12 @@ void GraphManager::RebaseISAM2()
                  "rebase, live graph untouched.\n",
                  e.what());
     std::lock_guard<std::mutex> lock(mu_);
-    rebase_pending_factors_.resize(0);
-    rebase_pending_values_.clear();
-    rebase_in_progress_ = false;
+    if (generation == rebase_generation_)
+    {
+      rebase_pending_factors_.resize(0);
+      rebase_pending_values_.clear();
+      rebase_in_progress_ = false;
+    }
     return;
   }
 
@@ -122,7 +144,7 @@ void GraphManager::RebaseISAM2()
   // factors/values — ms-scale), so the TF publisher unblocks quickly.
   {
     std::lock_guard<std::mutex> lock(mu_);
-    if (!rebase_in_progress_)
+    if (!rebase_in_progress_ || generation != rebase_generation_)
     {
       // Reset() ran between phase 1 and phase 3 — the graph we
       // built is now stale (its priors reference a state that no
@@ -151,6 +173,18 @@ void GraphManager::RebaseISAM2()
     }
     isam_ = std::move(fresh);
     estimate_dirty_ = true;
+    // Only a successful swap retires work. Updates mirrored during phase 2
+    // remain charged to the next budget, including measurement-only factors.
+    rebased_updates_ = snapshot_updates;
+    rebased_nodes_ = snapshot_nodes;
+    ++successful_rebases_;
+    if (latest_)
+    {
+      // The rebuild replaces the likelihoods with snapshot priors; publish
+      // its actual marginal rather than retaining a pre-rebuild covariance.
+      ticks_since_cov_ = std::max(1, params_.cov_update_every_n);
+      RefreshLatestLocked(latest_->node_index, latest_->timestamp);
+    }
     rebase_pending_factors_.resize(0);
     rebase_pending_values_.clear();
     rebase_in_progress_ = false;
@@ -184,6 +218,7 @@ bool GraphManager::ApplyIsamUpdateLocked(const gtsam::NonlinearFactorGraph& fg,
     ResetLocked();
     return false;
   }
+  ++successful_updates_;
   if (rebase_in_progress_)
   {
     // Mirror everything onto the pending buffer so phase 3 of the
@@ -287,7 +322,10 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   // the stale snapshot — silently undoing the dock re-pin. Clearing the flag
   // and the pending buffers makes that worker discard its tree, exactly as
   // ResetLocked does for the same reason.
+  ++rebase_generation_;
   rebase_in_progress_ = false;
+  rebased_updates_ = successful_updates_;
+  rebased_nodes_ = next_index_;
   rebase_pending_factors_.resize(0);
   rebase_pending_values_.clear();
 
@@ -295,7 +333,8 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   // sees the transformed pose instead of the pre-transform one.
   if (latest_)
   {
-    latest_->pose = correction * latest_->pose;
+    ticks_since_cov_ = std::max(1, params_.cov_update_every_n);
+    RefreshLatestLocked(latest_->node_index, latest_->timestamp);
   }
 }
 

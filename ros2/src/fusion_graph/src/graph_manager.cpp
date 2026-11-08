@@ -229,7 +229,8 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
     new_factors_.add(gtsam::PriorFactor<double>(k_bias0, 0.0, bias_prior_noise));
   }
 
-  isam_.update(new_factors_, new_values_);
+  if (!ApplyIsamUpdateLocked(new_factors_, new_values_))
+    return;
   estimate_dirty_ = true;
   new_factors_.resize(0);
   new_values_.clear();
@@ -246,6 +247,7 @@ void GraphManager::Initialize(const gtsam::Pose2& X0,
   out.covariance(2, 2) = params_.prior_sigma_theta * params_.prior_sigma_theta;
   out.node_index = 0;
   out.timestamp = timestamp;
+  out.estimate_revision = ++estimate_revision_;
   latest_ = out;
 }
 
@@ -287,6 +289,12 @@ GraphStats GraphManager::Stats() const
   std::lock_guard<std::mutex> lock(mu_);
   GraphStats s;
   s.total_nodes = next_index_;
+  s.successful_updates = successful_updates_;
+  s.updates_since_rebase = successful_updates_ - rebased_updates_;
+  s.successful_rebases = successful_rebases_;
+  s.factor_slots = isam_.getFactorsUnsafe().size();
+  s.live_factors = isam_.getFactorsUnsafe().nrFactors();
+  s.rebase_in_progress = rebase_in_progress_;
   s.gps_rejects_wrongfix = stats_gps_rejects_wrongfix_;
   s.gps_rejects_dead_reckoning = stats_gps_rejects_dead_reckoning_;
   s.gps_rejects_stuck_value = stats_gps_rejects_stuck_value_;
@@ -349,11 +357,10 @@ void GraphManager::ForceAnchor(uint64_t node_index,
     return;  // ill-posed reset; latest_ is now null, nothing to anchor
   }
   estimate_dirty_ = true;
-  // Update latest_ snapshot so PublishOutputs sees the new pose.
-  if (latest_ && latest_->node_index == node_index)
-  {
-    latest_->pose = PoseAt(node_index);
-  }
+  // A historical anchor can also revise the head. Publication tracks estimate
+  // revisions, so no DR recapture or special invalidation is needed here.
+  if (latest_)
+    RefreshLatestLocked(latest_->node_index, latest_->timestamp);
 }
 
 std::map<uint64_t, gtsam::Pose2> GraphManager::GetAllPoses() const

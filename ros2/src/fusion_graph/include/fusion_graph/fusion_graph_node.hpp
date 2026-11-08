@@ -74,6 +74,7 @@ public:
   ~FusionGraphNode() override;
 
 private:
+  friend struct FusionGraphNodeTestAccess;
   // ── Construction helpers ───────────────────────────────────────────
   // The constructor is split into two methods (defined in
   // fusion_graph_node_setup_params.cpp / _setup_comms.cpp) so each
@@ -253,15 +254,19 @@ private:
   // map-vs-odom offset at the moment of the last graph node, namely
   //   T_map_odom = node_pose × inv(dr_at_node)
   // Re-broadcast at OnTimer rate (so the TF buffer stays fresh) but
-  // recomputed only when a new node lands. Then
+  // recaptured only when a new node lands. A same-node estimate revision
+  // left-multiplies the anchor by X_new × inv(X_previous), preserving this
+  // node-to-current DR relationship even across odom rebases. Then
   //   map→base = T_map_odom × odom→base[NOW]
   // correctly extrapolates the last-node pose through current odom
   // integration, and /odometry/filtered_map publishes the same
   // extrapolated pose.
   gtsam::Pose2 t_map_odom_anchor_{0.0, 0.0, 0.0};
   uint64_t last_anchored_node_index_ = std::numeric_limits<uint64_t>::max();
+  uint64_t last_anchored_estimate_revision_ = 0;
+  gtsam::Pose2 last_anchored_graph_pose_;
   // Atomic: flipped to false from several executor-thread sites
-  // (ForceAnchor / Initialize / clear paths) and read by the TF
+  // (explicit seed / Initialize / clear paths) and read by the TF
   // broadcast thread. The anchor VALUE is only ever written together
   // with valid=true under tf_state_mu_ (OnTimer capture site), so a
   // reader holding the mutex always sees a coherent {value, valid}
@@ -601,7 +606,6 @@ private:
 
   // Memory + compute bounding parameters.
   uint64_t isam2_rebase_every_nodes_ = 2000;
-  uint64_t last_rebase_index_ = 0;
 
   // Auto-checkpoint state.
   bool auto_save_enabled_ = true;

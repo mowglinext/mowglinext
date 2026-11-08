@@ -400,10 +400,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       create_wall_timer(std::chrono::seconds(30),
                         [this]()
                         {
-                          if (!graph_->IsInitialized())
-                            return;
-                          const auto stats = graph_->Stats();
-                          if (stats.total_nodes - last_rebase_index_ < isam2_rebase_every_nodes_)
+                          if (!graph_->RebaseDue(isam2_rebase_every_nodes_))
                             return;
                           bool expected = false;
                           if (!rebase_in_flight_->compare_exchange_strong(expected, true))
@@ -412,19 +409,11 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                             // at the next maintenance tick.
                             return;
                           }
-                          // Commit the bookkeeping NOW so the next 30 s maintenance
-                          // tick doesn't re-trigger while the worker is still building.
-                          last_rebase_index_ = stats.total_nodes;
                           std::thread(
-                              [graph = graph_,
-                               logger = get_logger(),
-                               total = stats.total_nodes,
-                               flag = rebase_in_flight_]()
+                              [graph = graph_, logger = get_logger(), flag = rebase_in_flight_]()
                               {
                                 graph->RebaseISAM2();
-                                RCLCPP_INFO(logger,
-                                            "fusion_graph: iSAM2 rebased at node %lu",
-                                            static_cast<unsigned long>(total));
+                                RCLCPP_INFO(logger, "fusion_graph: iSAM2 maintenance finished");
                                 flag->store(false);
                               })
                               .detach();
