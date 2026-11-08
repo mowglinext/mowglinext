@@ -50,6 +50,7 @@
 #include "fusion_graph/lidar_occupancy_mapper.hpp"
 #include "fusion_graph/lidar_scan_history.hpp"
 #include "fusion_graph/lidar_submap_store.hpp"
+#include "fusion_graph/motion_input_support.hpp"
 #include "fusion_graph/pose_extrapolator.hpp"
 #include <Eigen/Core>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
@@ -77,6 +78,7 @@ public:
 
 private:
   friend struct FusionGraphNodeTestAccess;
+  friend class FusionGraphNodeInputTest;
   // ── Construction helpers ───────────────────────────────────────────
   // The constructor is split into two methods (defined in
   // fusion_graph_node_setup_params.cpp / _setup_comms.cpp) so each
@@ -87,6 +89,7 @@ private:
   void SetupCommunications(double node_period_s);
 
   // ── Callbacks ──────────────────────────────────────────────────────
+  void ObserveMotionClockEpoch();
   void OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg);
   void OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg);
   void OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg);
@@ -132,6 +135,8 @@ private:
   void SynchronizeSupportEpoch();
   void RememberSupportFix(uint64_t token, const sensor_msgs::msg::NavSatFix& fix);
   void PublishSupportLocked();
+  // Caller holds tf_state_mu_; uses captured source-clock time, never callback age.
+  bool MotionPublicationAllowedLocked(int64_t now_ns, int64_t target_ns);
   void RecordSupportOdom(const TickOutput& out, const builtin_interfaces::msg::Time& stamp);
   // Dedicated-thread TF broadcast loop (see tf_broadcast_rate_hz_).
   void TfBroadcastLoop();
@@ -174,6 +179,9 @@ private:
   // Most recent wheel timestamp (for accumulator dt).
   std::optional<rclcpp::Time> last_wheel_stamp_;
   std::optional<rclcpp::Time> last_imu_stamp_;
+  // Source reordering is not a clock reset. Observe ROS clock epochs separately
+  // so a late sample cannot move either integration baseline backwards.
+  std::optional<rclcpp::Time> last_motion_callback_clock_;
 
   // ── Local-frame dead reckoning ──────────────────────────────────
   // odom→base_footprint TF + /odometry/filtered. Wheel vx + gyro_z
@@ -554,6 +562,11 @@ private:
   // Set tf_broadcast_rate_hz <= 0 to disable the thread and fall
   // back to inline OnTimer publishing.
   std::mutex tf_state_mu_;
+  MotionInputSupport motion_support_;
+  bool motion_loss_reported_ = false;
+  std::atomic<uint64_t> motion_clock_epoch_{0};
+  uint64_t motion_callback_epoch_ = 0;
+  rclcpp::JumpHandler::SharedPtr motion_clock_jump_handler_;
   struct SupportOdom
   {
     TickOutput snapshot;
