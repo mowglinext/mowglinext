@@ -7,7 +7,7 @@
 
 namespace mowgli_nav2_plugins
 {
-// Pivot-approach input from the existing complete map publication.
+// Coverage rotation/departure input from the existing complete map publication.
 // Navigation areas never grant mowing permission; blocked rings remain RAW.
 struct CornerGeometry
 {
@@ -24,5 +24,6 @@ struct CornerGeometry
   std::optional<double> stoppingBudget(transit::Point axle,
                                        double requested,
                                        const transit::Ring& body) const;
+  bool rotationClear(transit::Point axle, double yaw, double turn, const transit::Ring& body) const;
 };
 }  // namespace mowgli_nav2_plugins

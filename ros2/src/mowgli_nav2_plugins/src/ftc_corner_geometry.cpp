@@ -57,7 +57,7 @@ CornerGeometry CornerGeometry::parse(const visualization_msgs::msg::MarkerArray&
       if (m.text == "mowing")
         next.mowing.allowed.push_back(std::move(ring));
     }
-    else if (m.ns == "obstacle" || m.ns == "dock_body")
+    else if (m.ns == "obstacle" || m.ns == "dock_body" || m.ns == "peer_dock")
       next.mowing.blocked.push_back(std::move(ring));
     else if (m.ns != "dock_corridor")
       return {};
@@ -143,4 +143,52 @@ std::optional<double> CornerGeometry::stoppingBudget(transit::Point axle,
   return budget;
 }
 
+bool CornerGeometry::rotationClear(transit::Point axle,
+                                   double yaw,
+                                   double turn,
+                                   const transit::Ring& body) const
+{
+  if (!valid || !mowing.authorized(axle) || !std::isfinite(yaw) || !std::isfinite(turn) ||
+      std::abs(turn) > 2 * M_PI || body.size() < 3 || body.size() > 64)
+    return false;
+  double reach = 0;
+  for (const auto& p : body)
+  {
+    if (!std::isfinite(p.x) || !std::isfinite(p.y))
+      return false;
+    reach = std::max(reach, std::hypot(p.x, p.y));
+  }
+  if (reach > 3)
+    return false;
+  const auto shape = polygon(body);
+  if (!bg::is_valid(shape) || std::abs(bg::area(shape)) < 1e-10)
+    return false;
+  // The signed interval is directed, including the opposite arc longer than
+  // pi. Do not wrap it: the complete selected arc must pass the same proof.
+  // Reuse the rotation-only portion of the proven chord-hull construction:
+  // every body point's arc lies within r*angle^2/8 of its endpoint chord.
+  // The convex hull covers the filled chassis, including holes wholly inside it.
+  const int steps = std::max(1, static_cast<int>(std::ceil(std::abs(turn) / .02)));
+  const double angle = std::abs(turn) / steps;
+  const double padding = reach * angle * angle / 8 + 1e-12;
+  for (int i = 0; i < steps; ++i)
+  {
+    bg::model::multi_point<Point> cloud;
+    for (int k : {i, i + 1})
+    {
+      const double a = yaw + turn * k / steps;
+      for (const auto& p : body)
+        for (double dx : {-padding, padding})
+          for (double dy : {-padding, padding})
+            cloud.emplace_back(axle.x + p.x * std::cos(a) - p.y * std::sin(a) + dx,
+                               axle.y + p.x * std::sin(a) + p.y * std::cos(a) + dy);
+    }
+    Polygon hull;
+    bg::convex_hull(cloud, hull);
+    for (const auto& hole : mowing.blocked)
+      if (bg::intersects(hull, polygon(hole)))
+        return false;
+  }
+  return true;
+}
 }  // namespace mowgli_nav2_plugins
