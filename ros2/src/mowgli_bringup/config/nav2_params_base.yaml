@@ -955,10 +955,9 @@ global_costmap:
       # filter-free (see local_costmap below) so coverage swaths near the edge
       # don't trip MPPI/RPP "collision ahead" and Nav2 local recoveries (spin,
       # backup) still function near edges.
-      # PLUGIN ORDER (set in the lidar / no-lidar overlays): inflation_layer is
-      # listed BEFORE keepout_filter, so the keepout mask is stamped onto an
-      # already-inflated master grid and is NOT inflated itself. Only real
-      # sensor marks (obstacle_layer) get the inflation band.
+      # The overlays inflate sensor marks in the primary grid, then apply
+      # keepout_filter to the separate final grid. This also prevents retained
+      # boundary cells from becoming inflation seeds during bounded updates.
       #
       # Why: SmacPlanner2D is a POINT check — a pose collides when its centre
       # cell cost is >= INSCRIBED. It never tests the footprint polygon, so its
