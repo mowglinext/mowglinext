@@ -41,6 +41,10 @@ diffdrive_controller:
 
     publish_rate: 50.0
 
+    # Publish the velocity of the same measured interval as the odometry pose.
+    # A rolling mean lags acceleration, braking and turn transitions.
+    velocity_rolling_window_size: 1
+
     # Don't publish odom→base TF from the controller — robot_localization's
     # ekf_odom_node owns that transform (REP-105).
     enable_odom_tf: false
