@@ -75,9 +75,7 @@ bool Fail(Failure wanted)
 
 bool DirectoryFd(int fd)
 {
-  struct stat info
-  {
-  };
+  struct stat info{};
   return ::fstat(fd, &info) == 0 && S_ISDIR(info.st_mode);
 }
 
