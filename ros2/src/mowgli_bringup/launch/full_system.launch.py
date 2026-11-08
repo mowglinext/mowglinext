@@ -60,6 +60,7 @@ from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
     chassis_circumscribed_radius,
     chassis_footprint,
+    coverage_entry_tolerance,
     dig_proposal_radius,
     dig_skip_radius,
     dock_body_extents,
@@ -411,6 +412,9 @@ def generate_launch_description() -> LaunchDescription:
             # replaces the pending dig KEEPOUT, which blocked planning from the
             # robot's own pose (START_OCCUPIED, 2026-09-17).
             {"dig_skip_radius_m": dig_skip_radius(robot_params)},
+            # Same derived tolerance FTC and the entry goal checker use, so
+            # FollowStrip's entry/blade checks agree with them exactly.
+            {"coverage_entry_tolerance_m": coverage_entry_tolerance(robot_params)},
             {"dock_no_pivot_distance_m": dock_no_pivot_distance(robot_params)},
             {"dock_body_half_width_m": float(robot_params.get("dock_body_width_m", 0.55)) / 2.0},
             {

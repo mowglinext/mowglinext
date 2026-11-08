@@ -9,9 +9,17 @@ namespace fusion_graph
 {
 // Outer computational limit shared with the existing process integration guard.
 // Holding a rate below this limit is an estimator assumption, not an accuracy,
-// travel or stopping guarantee. Loss after support requires a node restart.
+// travel or stopping guarantee.
 inline constexpr double kMotionIntegrationGapS = 1.0;
 inline constexpr int64_t kMotionSupportGapNs = 1000000000;
+// After a loss, BOTH streams must stay continuous (no gap >= kMotionSupportGapNs,
+// same epoch) for this long before publication resumes. A single returning
+// sample still cannot renew support. Until 2026-11-08 a loss latched until a
+// node restart: one STM32 reflash / serial reconnect (~9 s silence) left the
+// robot with no odom->base_footprint TF for good, collision_monitor zeroed
+// every command and it could not undock. Graph and dead-reckoning state are
+// kept through a loss, so resuming is a publication decision only.
+inline constexpr int64_t kMotionRecoveryNs = 2000000000;
 
 // All access belongs under FusionGraphNode::tf_state_mu_. A new callback alone
 // cannot renew support: only a validated, advancing acquisition stamp may do so.
@@ -25,12 +33,16 @@ public:
       lost_ = lost_ || established_;
       wheel_.reset();
       imu_.reset();
+      recovery_.reset();
       epoch_ = epoch;
     }
     last_now_ = now;
     if (established_ && ((wheel_ && now >= *wheel_ && now - *wheel_ >= kMotionSupportGapNs) ||
                          (imu_ && now >= *imu_ && now - *imu_ >= kMotionSupportGapNs)))
+    {
       lost_ = true;
+      recovery_.reset();  // any gap restarts the recovery window
+    }
   }
 
   void Accept(bool wheel, int64_t stamp, int64_t now, uint64_t epoch)
@@ -40,14 +52,27 @@ public:
     Observe(now, epoch);
     auto& previous = wheel ? wheel_ : imu_;
     if (established_ && previous && stamp > *previous && stamp - *previous >= kMotionSupportGapNs)
+    {
       lost_ = true;
+      recovery_.reset();
+    }
     if (!previous || stamp > *previous)
       previous = stamp;
+    // Both streams present again: the recovery window starts now and survives
+    // only as long as Observe/Accept see no further gap.
+    if (lost_ && wheel_ && imu_ && !recovery_)
+      recovery_ = now;
   }
 
   bool Allows(int64_t now, int64_t target, uint64_t epoch)
   {
     Observe(now, epoch);
+    if (lost_ && recovery_ && now >= *recovery_ && now - *recovery_ >= kMotionRecoveryNs)
+    {
+      lost_ = false;
+      recovery_.reset();
+      ++recoveries_;
+    }
     if (lost_ || !wheel_ || !imu_ || *wheel_ > now || *imu_ > now)
       return false;
     if (target < now || target - *wheel_ >= kMotionSupportGapNs ||
@@ -65,11 +90,17 @@ public:
   {
     return established_;
   }
+  uint64_t recoveries() const
+  {
+    return recoveries_;
+  }
 
 private:
   std::optional<int64_t> wheel_;
   std::optional<int64_t> imu_;
   std::optional<int64_t> last_now_;
+  std::optional<int64_t> recovery_;
+  uint64_t recoveries_ = 0;
   uint64_t epoch_ = 0;
   bool established_ = false;
   bool lost_ = false;

@@ -324,18 +324,17 @@ class TestCoverageProcessRestart(unittest.TestCase):
         time.sleep(0.3)
         self.assertEqual(len(self.follow_goals), 0)  # missing precision still denies dispatch
         self.precision_enabled.set()
-        self.wait_until(
-            lambda: len(self.transit_goals) == 1, 'Checked first entry not dispatched'
-        )
-        self.assertEqual(self.transit_goals[0][0].pose.pose.position.x, 0.0)
-        self.complete_transit(0)
+        # The axle (map origin) is contained at the nearby first unit: FTC takes
+        # it directly, with no blade-off entry transit (as before #1084; the
+        # forced first transit made boundary starts unreachable, 2026-11-08).
         self.wait_until(
             lambda: len(self.follow_goals) == 1, 'First subpath not dispatched'
         )
+        self.assertEqual(len(self.transit_goals), 0)
         self.assertEqual(self.follow_goals[0][0].path.poses, self.units[0].poses)
         self.follow_goals[0][1].set()
         self.wait_until(
-            lambda: len(self.transit_goals) == 2, 'Transition not dispatched'
+            lambda: len(self.transit_goals) == 1, 'Transition not dispatched'
         )
 
         # Crash after completion is written and the cursor erased, while the
@@ -365,10 +364,10 @@ class TestCoverageProcessRestart(unittest.TestCase):
         second, log = self.start_process()  # no second START; test boot restoration
         self.assertNotEqual(first.pid, second.pid)
         self.wait_until(
-            lambda: len(self.transit_goals) == 3, 'Restart did not resume next subpath'
+            lambda: len(self.transit_goals) == 2, 'Restart did not resume next subpath'
         )
         self.assertEqual(len(self.follow_goals), 1)  # completed work was not repeated
-        self.assertEqual(self.transit_goals[2][0].pose.pose.position.x, 10.0)
+        self.assertEqual(self.transit_goals[1][0].pose.pose.position.x, 10.0)
         self.wait_until(
             lambda: True in self.resume_values, 'GUI resume signal was false'
         )
@@ -379,7 +378,7 @@ class TestCoverageProcessRestart(unittest.TestCase):
             ),
             'Restart resume log was not emitted',
         )
-        self.complete_transit(2)
+        self.complete_transit(1)
         self.wait_until(
             lambda: len(self.follow_goals) == 2, 'Next subpath not followed'
         )

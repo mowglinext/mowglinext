@@ -831,9 +831,13 @@ bool FollowStrip::sendFollowGoal(const std::shared_ptr<BTContext>& ctx)
     return true;
   }
 
-  if (!coverageEntryContained(ctx, config().blackboard) ||
-      (!follow_goal_ever_sent_ &&
-       (!transit_outcome_ || transit_outcome_->Get() != GoalOutcome::kSucceeded)))
+  // Mowing permission is the axle's containment, recomputed here, never a
+  // proof that a transit succeeded: a nearby first unit is driven by FTC
+  // directly, as before #1084. Requiring a successful RotationShim/RPP transit
+  // to every first unit made starts on the recorded line (the outermost ring
+  // rides on it) unreachable beside a hedge — RPP's footprint check stopped
+  // 0.57 m short and mowing looped at 0 % (field 2026-11-08).
+  if (!coverageEntryContained(ctx, config().blackboard))
   {
     setBladeEnabled(false);
     blade_dispatch_pending_ = false;
@@ -1064,12 +1068,17 @@ bool FollowStrip::sendCurrentSwath(const std::shared_ptr<BTContext>& ctx)
     ctx->transit_to_strip_failed_at.reset();
   }
   // Preserve the existing precision hold for a nearby first unit. Once
-  // support returns, sendFollowGoal still requires this attempt's arrival.
+  // support returns, sendFollowGoal still recomputes the axle's containment.
   if (!coverageTransitRequired(gap, unit_boundary) &&
       (!ctx->coverage_precision_ready || !ctx->coverage_precision_ready()))
     return sendFollowGoal(ctx);
 
-  if (coverageTransitRequired(gap, unit_boundary) || !follow_goal_ever_sent_ ||
+  // A transit is needed for a real gap, or when the axle is outside the MOW
+  // union (with coverage_entry_tolerance_m). Being the first unit alone is not
+  // a reason: see sendFollowGoal. The entry goal checker that ends this transit
+  // uses the same containment + tolerance, so its success implies the dispatch
+  // check passes — the two cannot ping-pong.
+  if (coverageTransitRequired(gap, unit_boundary) ||
       !coverageEntryContained(ctx, config().blackboard))
   {
     // SAFETY: force the blade OFF first, unconditionally, before any dispatch or

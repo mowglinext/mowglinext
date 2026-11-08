@@ -8,10 +8,16 @@
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
-`FollowStrip` begins blade-off and requires its own checked first-entry transit,
-including direct retries and the outer tree's soft transit fallback. The
-coverage-only goal checker supplies contained, settled arrival; proximity alone
-does not authorize cutting. `coverage_entry.hpp` consumes the existing complete
+`FollowStrip` begins blade-off. Mowing permission is the axle's containment in the
+MOW union, recomputed before ON and before each FTC request, never a proof that a
+transit succeeded: a contained, nearby first unit (gap ≤ `kSegmentTransitGapM`) is
+handed to FTC directly, as before #1084. A transit is forced for a real gap or an
+uncontained axle; the transit tree's coverage-only goal checker then grants arrival
+on the same containment, so the two cannot ping-pong. Containment allows
+`coverage_entry_tolerance_m` outside the recorded line (the planner grows the
+outermost ring's field outward by op_width/2): with #1084's strict line and forced
+first transit, every boundary start beside a hedge was unreachable and mowing
+looped at 0 % (field 2026-11-08). Proximity alone still does not authorize cutting. `coverage_entry.hpp` consumes the existing complete
 MOW geometry publication through the shared `mowing_geometry.hpp` parser. It
 checks outer-union membership and every raw forbidden ring before ON and
 immediately before each FTC request; selected area remains planning identity.

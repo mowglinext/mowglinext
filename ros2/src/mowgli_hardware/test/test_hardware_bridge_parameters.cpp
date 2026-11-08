@@ -246,6 +246,10 @@ struct HardwareBridgeBladeStatusTestPeer
   {
     return node.dig_escape_allowed();
   }
+  static void setOutsideArea(HardwareBridgeNode& node, bool outside)
+  {
+    node.outside_area_.store(outside);
+  }
 };
 
 class HardwareBridgeParametersTest : public ::testing::Test
@@ -1027,6 +1031,19 @@ TEST_F(BridgeFirmwareInterlock, DigEscapeIsNotAllowedWhileIncompatible)
 {
   EXPECT_FALSE(Peer::digEscapeAllowed(*node));
   Peer::handshake(*node, kMowgliProtocolVersion);
+  EXPECT_TRUE(Peer::digEscapeAllowed(*node));
+}
+
+// Outside every recorded area the 0.30 m dig reverse only takes the mower further
+// out (field 2026-10-26). The #1022 merge replaced this term with the interlock
+// check instead of adding to it, and no test noticed.
+TEST_F(BridgeFirmwareInterlock, DigEscapeIsRefusedOutsideEveryRecordedArea)
+{
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  ASSERT_TRUE(Peer::digEscapeAllowed(*node));
+  Peer::setOutsideArea(*node, true);
+  EXPECT_FALSE(Peer::digEscapeAllowed(*node));
+  Peer::setOutsideArea(*node, false);
   EXPECT_TRUE(Peer::digEscapeAllowed(*node));
 }
 

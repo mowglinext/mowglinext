@@ -114,8 +114,8 @@ bool CornerGeometry::rotationClear(transit::Point axle,
                                    double turn,
                                    const transit::Ring& body) const
 {
-  if (!valid || !mowing.authorized(axle) || !std::isfinite(yaw) || !std::isfinite(turn) ||
-      std::abs(turn) > 2 * M_PI || body.size() < 3 || body.size() > 64)
+  if (!valid || !mowing.authorizedWithin(axle, entry_tolerance) || !std::isfinite(yaw) ||
+      !std::isfinite(turn) || std::abs(turn) > 2 * M_PI || body.size() < 3 || body.size() > 64)
     return false;
   double reach = 0;
   for (const auto& p : body)

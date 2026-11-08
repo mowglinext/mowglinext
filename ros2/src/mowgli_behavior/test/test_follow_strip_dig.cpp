@@ -841,7 +841,13 @@ TEST_F(FollowStripDigTest, LiveStalledBladeFailsWithoutBookingUncutGround)
   ASSERT_EQ(tickUntil(
                 [&]
                 {
-                  return completed_setup_arrivals_ == 1;
+                  // A contained, nearby first unit has no entry transit to
+                  // complete any more (FTC takes it directly): wait only for an
+                  // arrival that was actually requested.
+                  // ...and, with no entry transit, until the spin-up ON is out, so
+                  // the snapshot below separates setup traffic from the failure OFF.
+                  return completed_setup_arrivals_ == 1 ||
+                         (navigate->goalCount() == 0 && hasBladeRequest(true, 0));
                 },
                 1.0),
             BT::NodeStatus::RUNNING);
@@ -997,7 +1003,10 @@ TEST_F(FollowStripDigTest, MissingServiceDoesNotRenewTheReadinessTimeout)
   ASSERT_EQ(tickUntil(
                 [&]
                 {
-                  return completed_setup_arrivals_ == 1;
+                  // A contained, nearby first unit has no entry transit to
+                  // complete any more (FTC takes it directly): wait only for an
+                  // arrival that was actually requested.
+                  return completed_setup_arrivals_ == 1 || navigate->goalCount() == 0;
                 },
                 1.5),
             BT::NodeStatus::RUNNING);
@@ -2758,8 +2767,15 @@ geometry_msgs::msg::Polygon entryRectangle(double x0, double y0, double x1, doub
 class CoverageEntryAdmission : public FollowStripDigTest
 {
 protected:
-  void replay(double x, double y, bool admitted, bool missing_tf = false, bool hole = false)
+  void replay(double x,
+              double y,
+              bool admitted,
+              bool missing_tf = false,
+              bool hole = false,
+              double tolerance = 0.0)
   {
+    if (tolerance > 0.0)
+      ctx->node->declare_parameter("coverage_entry_tolerance_m", tolerance);
     const auto path = entryTestPath();
     ASSERT_EQ(path.poses.size(), 658u);
     ASSERT_DOUBLE_EQ(path.poses.front().pose.position.x, -2.9969917838565916);
@@ -2784,7 +2800,15 @@ protected:
     ctx->tf_buffer->setTransform(tf, "captured odometry pose as controlled test TF", true);
     if (missing_tf)
       ctx->tf_buffer->clear();
+    // Consume the permission snapshot before the first tick (a point inside the
+    // area and outside the test hole proves it is valid), so admission below is
+    // decided by geometry + TF, not by when FollowStrip's subscription delivers.
+    std::shared_ptr<mowgli_behavior::CoverageEntryGeometry> cache;
+    if (!blackboard->get("_coverage_entry_geometry", cache) || !cache)
+      blackboard->set("_coverage_entry_geometry",
+                      mowgli_behavior::CoverageEntryGeometry::create(ctx->node));
     publishSelectedGeometry();
+    waitPermission(-1.5, 0.0, true);
     reportBlade(0.0);
     tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
         "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\">"
@@ -2802,19 +2826,9 @@ protected:
     EXPECT_EQ(follow->goalCount(), 0u);
     EXPECT_FALSE(hasBladeRequest(true, 0));
     navigate->succeed(0);  // real action result consumed by production TransitToStrip
-    if (admitted)
-    {
-      ASSERT_EQ(tickUntil(
-                    [&]
-                    {
-                      return navigate->goalCount() == 2;
-                    },
-                    1.0),
-                BT::NodeStatus::RUNNING);
-      ASSERT_EQ(navigate->goalCount(), 2u);
-      EXPECT_FALSE(hasBladeRequest(true, 0));
-      navigate->succeed(1);
-    }
+    // An admitted axle at the unit start is handed to FTC directly; FollowStrip
+    // no longer forces a second, blade-off transit to the first unit (that
+    // requirement made boundary starts unreachable — field 2026-11-08).
     const auto status = tickUntil(
         [&]
         {
@@ -2854,6 +2868,17 @@ TEST_F(CoverageEntryAdmission, WestBeyondOriginalEpsilonDenied)
 {
   replay(-3.0 - 2e-8, .0215044462, false);
 }
+// The planner grows the outermost ring's field outward by op_width/2, so its
+// start can sit outside the recorded line; coverage_entry_tolerance_m (0.13 m
+// shipped) admits it, while an axle beyond the tolerance stays denied.
+TEST_F(CoverageEntryAdmission, ToleranceAdmitsTheOutermostRingJustOutsideTheLine)
+{
+  replay(-3.05, .0215044462, true, false, false, 0.13);
+}
+TEST_F(CoverageEntryAdmission, BeyondToleranceStillDenied)
+{
+  replay(-3.20, .0215044462, false, false, false, 0.13);
+}
 TEST_F(CoverageEntryAdmission, MissingTfDenied)
 {
   replay(-3.0217157814, .0215044462, false, true);
@@ -2876,7 +2901,14 @@ protected:
     ctx->current_strip_subpaths = {path};
     ctx->current_strip_path = path;
     ctx->current_transit_goal = path.poses.front();
+    // Consume the permission snapshot before the first tick: admission is then
+    // decided by the axle under test, not by when the subscription delivers.
+    std::shared_ptr<mowgli_behavior::CoverageEntryGeometry> cache;
+    if (!blackboard->get("_coverage_entry_geometry", cache) || !cache)
+      blackboard->set("_coverage_entry_geometry",
+                      mowgli_behavior::CoverageEntryGeometry::create(ctx->node));
     publishSelectedGeometry();
+    waitPermission(-1.5, 0.0, true);
     reportBlade(0.);
     tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
         "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><FollowStrip/></BehaviorTree></root>",
@@ -2946,14 +2978,7 @@ TEST_F(CompleteEntryReplay, OutsideDuringSpinupCutsBladeAndReacquiresOriginalUni
 {
   seed();
   axle(-2.95, .02, 0.);
-  ASSERT_EQ(tickUntil(
-                [&]
-                {
-                  return navigate->goalCount() == 1;
-                },
-                1.),
-            BT::NodeStatus::RUNNING);
-  navigate->succeed(0);
+  // Contained at a nearby first unit: FTC takes it directly, no entry transit.
   ASSERT_EQ(tickUntil(
                 [&]
                 {
@@ -2961,19 +2986,20 @@ TEST_F(CompleteEntryReplay, OutsideDuringSpinupCutsBladeAndReacquiresOriginalUni
                 },
                 1.),
             BT::NodeStatus::RUNNING);
+  EXPECT_EQ(navigate->goalCount(), 0u);
   const auto requests = bladeRequestCount();
   axle(-3.0217, .0215, 0.);
   ASSERT_EQ(tickUntil(
                 [&]
                 {
                   reportBlade(3000.);
-                  return navigate->goalCount() == 2;
+                  return navigate->goalCount() == 1;
                 },
                 1.),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 0u);
   EXPECT_TRUE(waitForBladeRequest(false, requests));  // The OFF is an asynchronous service request.
-  EXPECT_EQ(navigate->goal(1)->pose.pose, entryTestPath().poses.front().pose);
+  EXPECT_EQ(navigate->goal(0)->pose.pose, entryTestPath().poses.front().pose);
   EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
   EXPECT_TRUE(ctx->area_completed_swaths[1].empty());
   // Complete the same controlled actual-controller trace a second time.
@@ -2988,7 +3014,7 @@ TEST_F(CompleteEntryReplay, OutsideDuringSpinupCutsBladeAndReacquiresOriginalUni
       break;
   }
   ASSERT_EQ(done, 1);
-  navigate->succeed(1);
+  navigate->succeed(0);
   ASSERT_EQ(tickUntil(
                 [&]
                 {
@@ -3011,14 +3037,7 @@ TEST_F(CompleteEntryReplay, LaterUnitOutsideSuccessReacquiresWithoutChangingPath
                                        path.poses.begin(),
                                        path.poses.end());
   axle(-2.95, .02, 0.);
-  ASSERT_EQ(tickUntil(
-                [&]
-                {
-                  return navigate->goalCount() == 1;
-                },
-                1.),
-            BT::NodeStatus::RUNNING);
-  navigate->succeed(0);
+  // First unit contained and nearby: FTC directly, no entry transit.
   ASSERT_EQ(tickUntil(
                 [&]
                 {
@@ -3028,28 +3047,30 @@ TEST_F(CompleteEntryReplay, LaterUnitOutsideSuccessReacquiresWithoutChangingPath
                 1.5),
             BT::NodeStatus::RUNNING);
   ASSERT_EQ(follow->goalCount(), 1u);
+  EXPECT_EQ(navigate->goalCount(), 0u);
   follow->succeed(0);
+  // A later unit always goes through NavigateToPose (coverageTransitRequired).
   ASSERT_EQ(tickUntil(
                 [&]
                 {
-                  return navigate->goalCount() == 2;
+                  return navigate->goalCount() == 1;
                 },
                 1.),
             BT::NodeStatus::RUNNING);
   const auto requests = bladeRequestCount();
   axle(-3.0217, .0215, 0.);
-  navigate->succeed(1);
+  navigate->succeed(0);
   ASSERT_EQ(tickUntil(
                 [&]
                 {
                   reportBlade(3000.);
-                  return navigate->goalCount() == 3;
+                  return navigate->goalCount() == 2;
                 },
                 1.),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 1u);
   EXPECT_FALSE(hasBladeRequest(true, requests));
-  EXPECT_EQ(navigate->goal(2)->pose.pose, path.poses.front().pose);
+  EXPECT_EQ(navigate->goal(1)->pose.pose, path.poses.front().pose);
   EXPECT_EQ(ctx->area_completed_swaths[1].size(), 1u);
   std::istringstream trace(entryApproachSamples());
   int n, done = 0;
@@ -3062,7 +3083,7 @@ TEST_F(CompleteEntryReplay, LaterUnitOutsideSuccessReacquiresWithoutChangingPath
       break;
   }
   ASSERT_EQ(done, 1);
-  navigate->succeed(2);
+  navigate->succeed(1);
   ASSERT_EQ(tickUntil(
                 [&]
                 {
@@ -3106,38 +3127,33 @@ TEST_F(CompleteEntryReplay, InitialPrecisionPauseStillRequiresActualEntryAfterRe
 {
   seed();
   axle(-2.95, .02, 0.);
-  std::atomic<bool> ready{false};
-  std::atomic<std::size_t> precision_queries{0};
-  ctx->coverage_precision_ready = [&]
+  // Shared, not stack-captured: TearDown halts the tree after this body
+  // returns, and the halt still consults the predicate (a captured reference
+  // to a dead local was a use-after-scope SIGBUS once FTC is dispatched here).
+  const auto ready = std::make_shared<std::atomic<bool>>(false);
+  const auto precision_queries = std::make_shared<std::atomic<std::size_t>>(0);
+  ctx->coverage_precision_ready = [ready, precision_queries]
   {
-    ++precision_queries;
-    return ready.load();
+    ++*precision_queries;
+    return ready->load();
   };
   ASSERT_EQ(tickUntil(
                 [&]
                 {
-                  return precision_queries.load() > 0 && bladeRequestCount() > 0;
+                  return precision_queries->load() > 0 && bladeRequestCount() > 0;
                 },
                 .2),
             BT::NodeStatus::RUNNING);
-  ASSERT_GT(precision_queries.load(), 0u) << "the initial OFF alone is not a precision pause";
+  ASSERT_GT(precision_queries->load(), 0u) << "the initial OFF alone is not a precision pause";
   EXPECT_EQ(navigate->goalCount(), 0u);
   EXPECT_EQ(follow->goalCount(), 0u);
   EXPECT_FALSE(hasBladeRequest(true, 0));
   // Resume only after the retained map input reached the production subscriber;
   // a missing snapshot intentionally causes another blade-off entry attempt.
   ASSERT_NO_FATAL_FAILURE(waitPermission(-2.95, .02, true));
-  ready.store(true);
-  ASSERT_EQ(tickUntil(
-                [&]
-                {
-                  return navigate->goalCount() == 1;
-                },
-                1.),
-            BT::NodeStatus::RUNNING);
-  EXPECT_EQ(follow->goalCount(), 0u);
-  EXPECT_FALSE(hasBladeRequest(true, 0));
-  navigate->succeed(0);
+  ready->store(true);
+  // Precision back and the axle contained at a nearby first unit: FTC takes it
+  // directly (no entry transit), still only after the pause has ended.
   ASSERT_EQ(tickUntil(
                 [&]
                 {
@@ -3147,6 +3163,8 @@ TEST_F(CompleteEntryReplay, InitialPrecisionPauseStillRequiresActualEntryAfterRe
                 1.5),
             BT::NodeStatus::RUNNING);
   ASSERT_EQ(follow->goalCount(), 1u);
+  EXPECT_EQ(navigate->goalCount(), 0u);
+  EXPECT_TRUE(hasBladeRequest(true, 0));
   EXPECT_EQ(follow->goal(0)->path, entryTestPath());
   EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
 }
@@ -3173,13 +3191,30 @@ protected:
     setRobot(-.05, 0);
     reportBlade(0.);
   }
+  // Transits sent by start(): a permitted, nearby first unit is driven by FTC
+  // directly (no transit, as before #1084 — field 2026-11-08); an unpermitted
+  // axle still reacquires the unchanged unit start blade-off first.
+  std::size_t transit_base_ = 0;
+
   void start(bool permitted, double x = -.05)
   {
     setRobot(x, 0);
+    // Consume the permission snapshot BEFORE the first tick, so containment is
+    // decided by the geometry under test, not by its delivery race.
+    std::shared_ptr<mowgli_behavior::CoverageEntryGeometry> cache;
+    if (!blackboard->get("_coverage_entry_geometry", cache) || !cache)
+      blackboard->set("_coverage_entry_geometry",
+                      mowgli_behavior::CoverageEntryGeometry::create(ctx->node));
     geometry_pub->publish(authority);
+    waitPermission(x, 0, permitted);
     tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
         "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><FollowStrip/></BehaviorTree></root>",
         blackboard));
+    if (permitted)
+    {
+      transit_base_ = 0;
+      return;
+    }
     ASSERT_EQ(tickUntil(
                   [&]
                   {
@@ -3188,11 +3223,11 @@ protected:
                   1.),
               BT::NodeStatus::RUNNING);
     ASSERT_EQ(navigate->goalCount(), 1u);
-    waitPermission(x, 0, permitted);
     EXPECT_FALSE(hasBladeRequest(true, 0));
     EXPECT_EQ(follow->goalCount(), 0u);
     EXPECT_EQ(navigate->goal(0)->pose.pose, original.poses.front().pose);
     navigate->succeed(0);
+    transit_base_ = 1;
   }
   void expectDispatch()
   {
@@ -3205,7 +3240,7 @@ protected:
                   1.5),
               BT::NodeStatus::RUNNING);
     ASSERT_EQ(follow->goalCount(), 1u);
-    EXPECT_EQ(navigate->goalCount(), 1u);
+    EXPECT_EQ(navigate->goalCount(), transit_base_);
     EXPECT_TRUE(hasBladeRequest(true, 0));
     EXPECT_EQ(follow->goal(0)->path, original);
     EXPECT_EQ(follow->goal(0)->controller_id, "FollowCoveragePath");
@@ -3353,13 +3388,13 @@ TEST_F(CoverageEntryUnion, DriftOutsideWholeUnionTurnsOffAndReacquires)
                 [&]
                 {
                   reportBlade(3000.);
-                  return navigate->goalCount() == 2;
+                  return navigate->goalCount() == transit_base_ + 1;
                 },
                 1.),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 0u);
   EXPECT_TRUE(waitForBladeRequest(false, before));  // The OFF is an asynchronous service request.
-  EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
+  EXPECT_EQ(navigate->goal(transit_base_)->pose.pose, original.poses.front().pose);
   EXPECT_EQ(ctx->area_resume_pose_index[1], 0u);
 }
 TEST_F(CoverageEntryUnion, ValidToEmptyRevokesWhileWaitingForBlade)
@@ -3380,13 +3415,13 @@ TEST_F(CoverageEntryUnion, ValidToEmptyRevokesWhileWaitingForBlade)
                 [&]
                 {
                   reportBlade(3000.);
-                  return navigate->goalCount() == 2;
+                  return navigate->goalCount() == transit_base_ + 1;
                 },
                 1.),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 0u);
   EXPECT_TRUE(waitForBladeRequest(false, before));  // The OFF is an asynchronous service request.
-  EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
+  EXPECT_EQ(navigate->goal(transit_base_)->pose.pose, original.poses.front().pose);
 }
 TEST_F(CoverageEntryUnion, ValidToMalformedRevokesWhileWaitingForBlade)
 {
@@ -3407,11 +3442,11 @@ TEST_F(CoverageEntryUnion, ValidToMalformedRevokesWhileWaitingForBlade)
                 [&]
                 {
                   reportBlade(3000.);
-                  return navigate->goalCount() == 2;
+                  return navigate->goalCount() == transit_base_ + 1;
                 },
                 1.),
             BT::NodeStatus::RUNNING);
   EXPECT_EQ(follow->goalCount(), 0u);
   EXPECT_TRUE(waitForBladeRequest(false, before));  // The OFF is an asynchronous service request.
-  EXPECT_EQ(navigate->goal(1)->pose.pose, original.poses.front().pose);
+  EXPECT_EQ(navigate->goal(transit_base_)->pose.pose, original.poses.front().pose);
 }

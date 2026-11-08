@@ -691,6 +691,9 @@ private:
     /// Declared upper bound on residual forward travel / speed after STOP.
     /// This is a response assumption, not a calibrated physical stopping time.
     double pivot_coast_time_bound_s{0.5};
+    /// How far outside the recorded line the axle keeps mowing authority in
+    /// the rotation gates (robot_config_util.coverage_entry_tolerance).
+    double coverage_entry_tolerance_m{0.0};
     double goal_timeout{5.0};
     double max_follow_distance{1.0};
     /// Max longitudinal carrot lead (m); <= 0 derives it (ftc_carrot_lead.hpp).

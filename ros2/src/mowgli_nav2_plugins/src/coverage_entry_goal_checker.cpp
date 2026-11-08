@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mowgli_nav2_plugins/coverage_entry_goal_checker.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 #include "pluginlib/class_list_macros.hpp"
@@ -52,22 +56,33 @@ bool CoverageEntryGoalChecker::arrived(const geometry_msgs::msg::Pose& query,
   const transit::Point g{target.pose.position.x, target.pose.position.y};
   if (!std::isfinite(radius) || radius < 0 || transit::distance(p, g) > 0.30)
     return false;
+  const double tolerance = entryTolerance();
   std::lock_guard lock(mutex_);
   if (!geometry_.valid || !geometry_.mowing.clear(p) || !geometry_.mowing.clear(g))
     return false;
-  // Only a MOW ring containing the exact unchanged goal grants arrival.
-  // A nearby disconnected MOW island or the navigation union cannot end transit.
+  // Only a MOW ring containing the unchanged goal grants arrival; a nearby
+  // disconnected MOW island or the navigation union cannot end transit.
+  // "Containing" allows coverage_entry_tolerance_m outside the recorded line —
+  // the same allowance FollowStrip's dispatch check uses, so a transit that
+  // ends here is one FollowStrip accepts (no transit/dispatch ping-pong). With
+  // tolerance 0 this is the exact strict rule: the disk must clear every edge.
+  const auto signed_distance = [](transit::Point q, const transit::Ring& ring)
+  {
+    double edge = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
+      edge = std::min(edge, transit::edgeDistance(q, ring[j], ring[i]));
+    return transit::inside(q, ring) ? -edge : edge;
+  };
   bool inside = false;
   for (const auto& ring : geometry_.mowing.allowed)
   {
-    if (!transit::inside(g, ring) || !transit::inside(p, ring))
+    if (ring.size() < 3)
       continue;
-    bool disk_clear = true;
-    if (radius > 0)
-      for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
-        disk_clear =
-            disk_clear && transit::edgeDistance(p, ring[j], ring[i]) > radius + transit::kEpsilon;
-    inside = inside || disk_clear;
+    const bool goal_in = signed_distance(g, ring) + transit::kEpsilon < tolerance ||
+                         (tolerance <= 0 && transit::inside(g, ring));
+    const bool disk_in = signed_distance(p, ring) + radius + transit::kEpsilon < tolerance ||
+                         (tolerance <= 0 && radius <= 0 && transit::inside(p, ring));
+    inside = inside || (goal_in && disk_in);
   }
   if (!inside)
     return false;
@@ -75,6 +90,22 @@ bool CoverageEntryGoalChecker::arrived(const geometry_msgs::msg::Pose& query,
     if (transit::ringDistance(p, hole) <= radius + transit::kEpsilon)
       return false;
   return true;
+}
+
+double CoverageEntryGoalChecker::entryTolerance() const
+{
+  // Injected on controller_server as FollowCoveragePath.coverage_entry_tolerance_m
+  // (robot_config_util.coverage_entry_tolerance), shared with FTC's gates.
+  // Absent or invalid keeps the exact recorded line.
+  const auto node = node_.lock();
+  if (!node)
+    return 0.0;
+  rclcpp::Parameter parameter;
+  if (!node->get_parameter("FollowCoveragePath.coverage_entry_tolerance_m", parameter) ||
+      parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE)
+    return 0.0;
+  const double tolerance = parameter.as_double();
+  return std::isfinite(tolerance) && tolerance > 0.0 ? std::min(tolerance, 0.5) : 0.0;
 }
 
 bool CoverageEntryGoalChecker::isGoalXYReached(const geometry_msgs::msg::Pose& query,

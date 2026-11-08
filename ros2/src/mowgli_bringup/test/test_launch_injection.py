@@ -666,3 +666,40 @@ def test_dock_pose_reaches_mqtt_bridge() -> None:
         scope = {"__builtins__": {}, "float": float}
         assert eval(expression, scope, {"robot_params": {key: 1.25}}) == 1.25, key
         assert eval(expression, scope, {"robot_params": {}}) == 0.0, key
+
+
+# ---------------------------------------------------------------------------
+# coverage_entry_tolerance_m must reach FTC (navigation) AND the BT (full_system)
+# as the SAME derivation, or FollowStrip and FTC's gates disagree about whether
+# a boundary start may be entered (field 2026-11-08: mowing looped at 0 %).
+# ---------------------------------------------------------------------------
+
+
+def _dict_values(tree: ast.Module, key: str) -> List[ast.expr]:
+    """Values of every `{"key": <value>}` dict literal in `tree`."""
+    out: List[ast.expr] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                if isinstance(k, ast.Constant) and k.value == key:
+                    out.append(v)
+    return out
+
+
+def _is_helper_call(value: ast.expr, helper: str) -> bool:
+    return (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+            and value.func.id == helper)
+
+
+def test_navigation_launch_injects_coverage_entry_tolerance_into_ftc() -> None:
+    tree = _parse("navigation.launch.py")
+    values = _subscript_assign_values(tree, "fcp", "coverage_entry_tolerance_m")
+    assert values, 'navigation.launch.py must assign fcp["coverage_entry_tolerance_m"]'
+    assert all(_is_helper_call(v, "coverage_entry_tolerance") for v in values)
+
+
+def test_full_system_injects_coverage_entry_tolerance_into_behavior_tree() -> None:
+    tree = _parse("full_system.launch.py")
+    values = _dict_values(tree, "coverage_entry_tolerance_m")
+    assert values, "full_system.launch.py must pass coverage_entry_tolerance_m to the BT"
+    assert all(_is_helper_call(v, "coverage_entry_tolerance") for v in values)

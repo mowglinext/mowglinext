@@ -297,6 +297,31 @@ def planning_obstacle_margin(
     return min(OBSTACLE_MARGIN_MAX_M, max(floor, requested))
 
 
+DEFAULT_SWATH_OVERLAP_M = 0.02
+
+
+def coverage_entry_tolerance(params):
+    """How far OUTSIDE the recorded mowing polygon the axle may stand and still
+    count as inside it for coverage entry, blade permission and FTC's
+    rotation gates (``coverage_entry_tolerance_m``).
+
+    Not a safety knob: it is the planner's own geometry. coverage_server plans
+    the outermost ring on a field grown outward by ``op_width/2 -
+    chassis_safety_inset`` (Invariant 7; ``field_offset``), so with the default
+    inset 0 that ring's centreline sits up to op_width/2 OUTSIDE the recorded
+    line, and FTC tracks it to within FTC_TRACKING_SLACK_M. An entry/blade
+    check stricter than that refuses the planner's own starts: on 2026-11-08
+    every unit start on the boundary (7 mm inside it, beside the hedge) was
+    unreachable and mowing looped at 0 %.
+    """
+    p = params or {}
+    tool_width = float(p.get("tool_width", DEFAULT_TOOL_WIDTH_M))
+    swath_overlap = float(p.get("swath_overlap", DEFAULT_SWATH_OVERLAP_M))
+    inset = float(p.get("chassis_safety_inset", 0.0))
+    op_width = max(0.05, tool_width - swath_overlap)
+    return max(0.0, op_width / 2.0 - inset) + FTC_TRACKING_SLACK_M
+
+
 def keepout_obstacle_margin(
         params, global_resolution=GLOBAL_COSTMAP_RESOLUTION_M):
     """map_server.keepout_obstacle_margin: lethal band around drawn obstacles.

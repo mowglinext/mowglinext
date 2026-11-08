@@ -386,6 +386,62 @@ TEST_P(MotionPublication, FirstReturningSampleCannotHideAnUnobservedGap)
   ASSERT_FALSE(facts.empty());
   EXPECT_FALSE(facts.back().pose_published);
 }
+// A loss used to latch until a node restart: one STM32 reflash (~9 s without
+// serial data) left the robot with no odom->base_footprint for good and it could
+// not undock (field 2026-11-08). Both streams continuous for kMotionRecoveryNs
+// now restore publication; shorter returns still cannot.
+TEST_P(MotionPublication, ContinuousReturnRestoresAuthorityAfterRecoveryWindow)
+{
+  Clock(16.10);  // last inputs at 14.98: a > 1 s gap -> loss
+  Tick();
+  Pump();
+  const auto m = map_count, l = local_count, f = fast_count, y = yaw_count, t = tf_count,
+             p = positive_count;
+  double tick = 16.12;
+  for (; tick < 16.12 + 1.5; tick += .02)  // 1.5 s < recovery window
+  {
+    Both(tick);
+    Gnss();
+    Tick();
+    Pump(1ms);
+  }
+  NoMoreAuthority(m, l, f, y, t, p);
+  for (; tick < 16.12 + 2.6; tick += .02)  // past the 2 s window
+  {
+    Both(tick);
+    Gnss();
+    Tick();
+    Pump(1ms);
+  }
+  Pump();
+  EXPECT_GT(map_count, m);
+  EXPECT_GT(tf_count, t);
+  EXPECT_GT(tf_stamp, ns(16.12 + 2.1));
+}
+TEST_P(MotionPublication, GapDuringRecoveryRestartsTheWindow)
+{
+  Clock(16.10);
+  Tick();
+  Pump();
+  double tick = 16.12;
+  for (; tick < 16.12 + 1.5; tick += .02)
+  {
+    Both(tick);
+    Tick();
+    Pump(1ms);
+  }
+  tick += 1.1;  // a second gap inside the window
+  const auto m = map_count, l = local_count, f = fast_count, y = yaw_count, t = tf_count,
+             p = positive_count;
+  for (const double end = tick + 1.5; tick < end; tick += .02)  // only 1.5 s since the gap
+  {
+    Both(tick);
+    Gnss();
+    Tick();
+    Pump(1ms);
+  }
+  NoMoreAuthority(m, l, f, y, t, p);
+}
 TEST_P(MotionPublication, DuplicateReorderedAndInvalidWheelCannotRenew)
 {
   Clock(15.97);
