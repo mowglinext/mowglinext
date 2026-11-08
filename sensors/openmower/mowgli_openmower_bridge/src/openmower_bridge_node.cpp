@@ -16,6 +16,7 @@
 #include "mowgli_hardware/cmd_vel_validation.hpp"
 #include "mowgli_hardware/timer_period.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
+#include "mowgli_interfaces/linear_command_policy.hpp"
 #include "mowgli_openmower_bridge/simulation_trace.hpp"
 #include "mowgli_openmower_bridge/xesc_2040_link.hpp"
 #include "mowgli_openmower_bridge/xesc_mini_link.hpp"
@@ -417,11 +418,16 @@ void OpenMowerBridgeNode::on_cmd_vel(geometry_msgs::msg::TwistStamped::ConstShar
                 "cmd_vel before any high-level state; assuming AUTONOMOUS for the LowLevel board.");
     send_high_level_state();
   }
-  constexpr double kDust = 1.0e-3;
-  if (std::abs(vx) > kDust && std::abs(vx) < min_linear_vel_)
-  {
-    vx = 0.0;
-  }
+  const auto steady_ns =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch())
+          .count();
+  const bool autonomous_precision =
+      mowgli_interfaces::autonomous_precision_allowed(bt_reported_mode_ == HL_MODE_AUTONOMOUS,
+                                                      bt_status_receipt_ns_ != 0,
+                                                      steady_ns,
+                                                      bt_status_receipt_ns_,
+                                                      high_level_status_timeout_s_);
+  vx = mowgli_interfaces::apply_linear_soft_deadband(vx, min_linear_vel_, autonomous_precision);
   cmd_vx_ = std::clamp(vx, -max_mps_, max_mps_);
   cmd_wz_ = std::clamp(wz, -max_radps_, max_radps_);
   cmd_vel_stamp_ = now();
@@ -430,6 +436,10 @@ void OpenMowerBridgeNode::on_cmd_vel(geometry_msgs::msg::TwistStamped::ConstShar
 void OpenMowerBridgeNode::on_high_level_status(
     mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
 {
+  bt_reported_mode_ = msg->state;
+  bt_status_receipt_ns_ =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch())
+          .count();
   current_mode_ = msg->state;
   hl_status_stamp_ = now();
   OM_SIM_TRACE("hl_rx",

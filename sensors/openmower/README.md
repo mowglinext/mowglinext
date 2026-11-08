@@ -185,6 +185,15 @@ feed-forward. `openmower_wheel_loop_enabled: false` reverts to the OpenMower
 mapping. Tune `openmower_wheel_kp` / `openmower_wheel_ki` on the lawn; the
 defaults (0.5 / 2.0, integral clamp 0.3 duty) are deliberately soft.
 
+The linear soft deadband (`min_linear_vel`, default 0.05 m/s) applies outside
+fresh BT-reported AUTONOMOUS. In AUTONOMOUS, deliberate slower targets can start
+from rest and continue through the existing wheel-control pipeline. This applies
+to every merged command lane, including teleop/tuning overrides; intended stops
+must be exact zero. The pre-BT NULL→AUTONOMOUS fallback cannot grant the exception.
+BT evidence uses monotonic receipt age and the existing `high_level_status_timeout_s`
+(default 5 s); a LowLevel reconnect requires fresh BT status. This does not establish
+physical xESC slow-speed response or change the safety gates below.
+
 ## Safety model — read before mowing
 
 On the Mowgli STM32 backend the firmware is the sole blade / e-stop authority
