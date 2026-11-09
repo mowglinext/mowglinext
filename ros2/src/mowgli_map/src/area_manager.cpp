@@ -533,7 +533,8 @@ void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPt
   res->success = true;
   res->message = "All map layers and areas cleared.";
   RCLCPP_INFO(get_logger(), "%s", res->message.c_str());
-  publish_recorded_area_polygons();
+  area_replace_in_progress_ = true;
+  begin_area_list_edit();
 }
 
 void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
@@ -698,7 +699,7 @@ void MapServerNode::on_add_area(const mowgli_interfaces::srv::AddMowingArea::Req
   }
 
   res->success = true;
-  publish_recorded_area_polygons();
+  begin_area_list_edit();
   // mowglinext#637 phase 2: the area list changed (one entry added — this is
   // also how the GUI's clear+re-add edit/delete flow adds every SURVIVING
   // area back, so an untouched area's own re-add counts as a change too, not
@@ -714,6 +715,26 @@ void MapServerNode::publish_recorded_area_polygons()
   // A map edit invalidates transit until the debounced complete mask and
   // geometry snapshot have been rebuilt. The LiDAR filter keeps its own topic.
   transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
+  area_replace_in_progress_ = false;
+  publish_recorded_area_list();
+}
+
+void MapServerNode::begin_area_list_edit()
+{
+  area_list_publish_not_before_ = std::chrono::steady_clock::now() + kMapEditSettle;
+  recorded_areas_publication_pending_ = true;
+  if (area_list_published_empty_)
+    return;
+  mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
+  msg.header.stamp = get_clock()->now();
+  msg.header.frame_id = "map";
+  recorded_area_polygons_pub_->publish(msg);
+  area_list_published_empty_ = true;
+}
+
+void MapServerNode::publish_recorded_area_list()
+{
+  recorded_areas_publication_pending_ = false;
   mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
   msg.header.stamp = get_clock()->now();
   msg.header.frame_id = "map";
@@ -727,6 +748,7 @@ void MapServerNode::publish_recorded_area_polygons()
       msg.areas.push_back(std::move(entry));
     }
   }
+  area_list_published_empty_ = msg.areas.empty();
   recorded_area_polygons_pub_->publish(msg);
 }
 
@@ -1499,6 +1521,11 @@ void MapServerNode::on_save_areas(const std_srvs::srv::Trigger::Request::SharedP
                                   std_srvs::srv::Trigger::Response::SharedPtr res)
 {
   std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+  // The caller's commit: whatever the file write does below, the area list it
+  // just built is complete, so the corridor filter may have it now.
+  area_replace_in_progress_ = false;
+  if (recorded_areas_publication_pending_)
+    publish_recorded_area_list();
   if (areas_file_path_.empty())
   {
     res->success = false;
