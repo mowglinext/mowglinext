@@ -101,8 +101,10 @@
 //      pass-through, same rule as the ground filter's stale-IMU case — never
 //      silently suppress LiDAR near a corridor while the robot doesn't know
 //      where it actually is. A recorded-area list that hasn't arrived yet
-//      (or is genuinely empty) behaves the same way: point_in_any_area can
-//      only ever return false, so the filter is a no-op rather than a guess.
+//      (or is genuinely empty) behaves the same way: without it every beam
+//      would read as "outside every recorded area" and be suppressed at any
+//      distance alongside a corridor, so the filter is a no-op rather than
+//      a guess.
 
 #include <algorithm>
 #include <chrono>
@@ -484,7 +486,10 @@ public:
   /// never received) — the function is then a no-op, same rule as
   /// apply_ground_filter's stale-IMU case: better to keep seeing a corridor's
   /// hedge than to silently blind the robot near one while it doesn't
-  /// actually know where it is.
+  /// actually know where it is. An empty @p recorded_areas is the same
+  /// no-op: the "outside every recorded area" rule is only safe because the
+  /// polygon says where the robot can be, and with no polygon every beam
+  /// would fall under it.
   static CorridorFilterStats apply_corridor_ignore_filter(
       sensor_msgs::msg::LaserScan& io,
       const std::vector<Corridor>& corridors,
@@ -493,7 +498,7 @@ public:
       const LidarExtrinsics& extrinsics)
   {
     CorridorFilterStats stats;
-    if (corridors.empty() || !robot_pose_map.has_value())
+    if (corridors.empty() || recorded_areas.empty() || !robot_pose_map.has_value())
       return stats;
     const Pose2D& pose = *robot_pose_map;
     const float inf = std::numeric_limits<float>::infinity();
