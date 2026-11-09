@@ -94,11 +94,14 @@ inline void layer_to_occupancy_grid(const grid_map::GridMap& grid_map,
   const int start_x = start(0);
   const int start_y = start(1);
   int8_t* const out = occupancy_grid.data.data();
+  // Unwrapped columns [0, tail_y) are buffer columns [start_y, size_y).
+  const int tail_y = size_y - start_y;
   for (int j = 0; j < size_y; ++j)
   {
-    // Unwrapped column j is buffer column (start_y + j) mod size_y; inside it,
-    // unwrapped row i is buffer row (start_x + i) mod size_x.
-    const int buffer_col = (start_y + j) % size_y;
+    // Unwrapped column j is buffer column (start_y + j) mod size_y, formed
+    // without the sum (which can overflow int); inside it, unwrapped row i is
+    // buffer row (start_x + i) mod size_x.
+    const int buffer_col = j < tail_y ? start_y + j : j - tail_y;
     const float* const column = data.data() + static_cast<std::size_t>(buffer_col) * size_x;
     int8_t* const last = out + (n_cells - 1U - static_cast<std::size_t>(j) * size_x);
     const int head =
