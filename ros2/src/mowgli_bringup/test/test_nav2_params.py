@@ -1086,6 +1086,19 @@ def test_lyrical_transit_parameters_reach_primary_controller() -> None:
         assert cfg["local_costmap"]["local_costmap"]["ros__parameters"]["transform_tolerance"] == 0.5
 
 
+def test_path_handler_is_the_lazy_pruning_feasible_path_handler():
+    # controller_server's per-cycle pruning must not scale with the length of a
+    # coverage sub-path; LazyPrunePathHandler is FeasiblePathHandler with the
+    # same results (mowgli_nav2_plugins test_lazy_prune_path_handler).
+    for overlay in ("lidar", "no_lidar"):
+        cfg = _deep_merge(_load_yaml("nav2_params_base.yaml"),
+                          _load_yaml(f"nav2_params_{overlay}.yaml"))
+        controller = _controller_section(cfg)
+        assert controller["path_handler_plugins"] == ["PathHandler"]
+        assert controller["PathHandler"]["plugin"] == "mowgli_nav2_plugins/LazyPrunePathHandler"
+        assert controller["PathHandler"]["max_robot_pose_search_dist"] == 10.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

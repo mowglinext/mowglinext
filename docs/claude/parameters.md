@@ -479,8 +479,11 @@ There is **no `use_fusion_graph` arg** — it was removed with the dual EKF (Inv
 
 ### Where the blocks live (`nav2_params_base.yaml`)
 
-Lyrical adds `controller_server.path_handler_plugins: [PathHandler]` and
-`PathHandler.plugin: nav2_controller::FeasiblePathHandler`. Its TF tolerance,
+Lyrical adds `controller_server.path_handler_plugins: [PathHandler]`.
+`PathHandler.plugin` is `mowgli_nav2_plugins/LazyPrunePathHandler`: upstream's
+`nav2_controller::FeasiblePathHandler` (same parameters, same results) without its
+per-cycle `vector::erase` of the passed poses, which scaled with the length of a
+coverage sub-path (`mowgli_nav2_plugins/test/bench/README.md`). Its TF tolerance,
 like the controller's, is taken from `local_costmap.transform_tolerance` at launch.
 RPP parameters are nested under `FollowPath.primary_controller`; RotationShim
 parameters remain directly under `FollowPath`.

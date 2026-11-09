@@ -28,6 +28,7 @@ find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
 find_package(nav2_ros_common REQUIRED)
 find_package(nav2_smac_planner REQUIRED)
+find_package(nav2_controller REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -97,6 +98,28 @@ target_link_libraries(${PROJECT_NAME}
 )
 
 # ---------------------------------------------------------------------------
+# controller_server path handler. Its own library: it extends upstream's
+# FeasiblePathHandler plugin, so only a controller_server that selects it
+# loads libfeasible_path_handler.so as a dependency.
+# ---------------------------------------------------------------------------
+
+add_library(mowgli_lazy_prune_path_handler SHARED src/lazy_prune_path_handler.cpp)
+target_include_directories(mowgli_lazy_prune_path_handler
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(mowgli_lazy_prune_path_handler
+  nav2_controller::feasible_path_handler
+  ${nav2_core_TARGETS}
+  ${nav2_costmap_2d_TARGETS}
+  ${nav2_util_TARGETS}
+  ${nav2_ros_common_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${pluginlib_TARGETS}
+)
+
+# ---------------------------------------------------------------------------
 # retrace_server: a boundary-safe replacement for Nav2's BackUp recovery
 # ---------------------------------------------------------------------------
 
@@ -118,6 +141,7 @@ pluginlib_export_plugin_description_file(nav2_core ftc_controller_plugin.xml)
 pluginlib_export_plugin_description_file(nav2_core goal_checker_plugin.xml)
 pluginlib_export_plugin_description_file(nav2_costmap_2d costmap_plugins.xml)
 pluginlib_export_plugin_description_file(nav2_core planner_plugin.xml)
+pluginlib_export_plugin_description_file(nav2_core path_handler_plugin.xml)
 
 # ---------------------------------------------------------------------------
 # Install
@@ -129,7 +153,7 @@ install(
 )
 
 install(
-  TARGETS ${PROJECT_NAME}
+  TARGETS ${PROJECT_NAME} mowgli_lazy_prune_path_handler
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}
@@ -142,6 +166,7 @@ install(
 
 install(
   FILES ftc_controller_plugin.xml goal_checker_plugin.xml costmap_plugins.xml planner_plugin.xml
+        path_handler_plugin.xml
   DESTINATION share/${PROJECT_NAME}
 )
 
@@ -170,7 +195,9 @@ if(BUILD_TESTING)
   ament_add_ros_isolated_gtest(test_authorized_transit test/test_authorized_transit.cpp)
   target_link_libraries(test_authorized_transit ${PROJECT_NAME})
 
-  find_package(nav2_controller REQUIRED)
+  ament_add_ros_isolated_gtest(test_lazy_prune_path_handler test/test_lazy_prune_path_handler.cpp)
+  target_link_libraries(test_lazy_prune_path_handler mowgli_lazy_prune_path_handler)
+
   find_package(nav2_rotation_shim_controller REQUIRED)
   find_package(nav2_regulated_pure_pursuit_controller REQUIRED)
   find_library(ENTRY_SIMPLE_GOAL_CHECKER simple_goal_checker
@@ -408,7 +435,7 @@ endif()
 # ---------------------------------------------------------------------------
 
 ament_export_include_directories(include)
-ament_export_libraries(${PROJECT_NAME})
+ament_export_libraries(${PROJECT_NAME} mowgli_lazy_prune_path_handler)
 ament_export_dependencies(
   Boost
   rclcpp
@@ -418,6 +445,7 @@ ament_export_dependencies(
   nav2_util
   nav2_ros_common
   nav2_smac_planner
+  nav2_controller
   nav_msgs
   std_srvs
   geometry_msgs

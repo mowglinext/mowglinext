@@ -105,7 +105,11 @@ controller_server:
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
     path_handler_plugins: ["PathHandler"]
     PathHandler:
-      plugin: "nav2_controller::FeasiblePathHandler"
+      # Upstream FeasiblePathHandler, minus its per-cycle vector::erase of the
+      # passed poses (identical results, differential-tested): a coverage
+      # sub-path is one goal of up to ~400k poses, and that erase moved every
+      # remaining pose each cycle (3.9 ms/cycle on x86 at 400k). Same params.
+      plugin: "mowgli_nav2_plugins/LazyPrunePathHandler"
       max_robot_pose_search_dist: 10.0
 
     progress_checker:

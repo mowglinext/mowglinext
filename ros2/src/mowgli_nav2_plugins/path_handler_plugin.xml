@@ -1,0 +1,8 @@
+<library path="mowgli_lazy_prune_path_handler">
+  <class name="mowgli_nav2_plugins/LazyPrunePathHandler" type="mowgli_nav2_plugins::LazyPrunePathHandler" base_class_type="nav2_core::PathHandler">
+    <description>
+      nav2_controller::FeasiblePathHandler with O(1) amortized pruning of the
+      passed poses (upstream erases them every control cycle). Same results.
+    </description>
+  </class>
+</library>

@@ -100,6 +100,7 @@ The Nav2 recovery's BackUp is NOT Nav2's: `navigate_to_pose.xml` / `navigate_to_
 | `package.xml` | 40 | ament_cmake; deps nav2_core/nav2_costmap_2d/nav2_util/pluginlib/tf2*/Eigen; `<nav2_core plugin=...>` exports |
 | `ftc_controller_plugin.xml` | 12 | pluginlib: `mowgli_nav2_plugins/FTCController` → `nav2_core::Controller`, `<library path="mowgli_nav2_plugins">` |
 | `goal_checker_plugin.xml` | 16 | pluginlib: `mowgli_nav2_plugins/PathProgressGoalChecker` → `nav2_core::GoalChecker` |
+| `path_handler_plugin.xml` | 9 | pluginlib: `mowgli_nav2_plugins/LazyPrunePathHandler` → `nav2_core::PathHandler`, own `<library path="mowgli_lazy_prune_path_handler">` (it links upstream's `libfeasible_path_handler.so`, which only a controller_server that selects it should load) |
 | **`include/mowgli_nav2_plugins/`** | | |
 | `ftc_controller.hpp` | 594 | `FTCController` class: FSM enum, carrot/PID/deviation/reverse/oscillation state, `struct Config` (all params + C++ defaults) |
 | `ftc_stall.hpp` | 95 | Pure `StallDecision()` plus acceleration-ramp clamp used after obstacle holds |
@@ -118,6 +119,7 @@ The Nav2 recovery's BackUp is NOT Nav2's: `navigate_to_pose.xml` / `navigate_to_
 | `obstacle_deviation.hpp` | 236 | `BoundaryGuard` (zone guard + zone mask) and `ObstacleDeviation` static helpers; thresholds `kLethalThreshold=253`, `kLethalOnlyThreshold=254` |
 | `oscillation_detector.hpp` | 113 | `FailureDetector` — rolling (v, ω) window, mean + zero-crossing test |
 | `path_progress_goal_checker.hpp` | 155 | `PathProgressGoalChecker` — progress-gated goal checker state + params (`path_arc_m_` cumulative arc table) |
+| `lazy_prune_path_handler.hpp` | ~55 | `LazyPrunePathHandler` — controller_server's `PathHandler` (both lanes): `nav2_controller::FeasiblePathHandler` with the passed poses kept behind an offset and erased in bulk once they are the larger half, instead of `vector::erase` every cycle. Same results by construction; differential test `test/test_lazy_prune_path_handler.cpp` runs it against the real upstream plugin cycle by cycle. Impl `src/lazy_prune_path_handler.cpp` (findPlanSegment / transformLocalPlan follow Nav2 1.5.2 verbatim apart from the offset) |
 | **`src/`** | | |
 | `ftc_controller.cpp` | ~2.4k | Lifecycle, params + dynamic callback, newPathReceived, computeVelocityCommands, FSM, carrot, PID, collision, deviation, reverse-escape, oscillation |
 | `ftc_controller_plugin.cpp` | 20 | `PLUGINLIB_EXPORT_CLASS(FTCController, nav2_core::Controller)` |
@@ -140,6 +142,8 @@ The Nav2 recovery's BackUp is NOT Nav2's: `navigate_to_pose.xml` / `navigate_to_
 | `test_obstacle_deviation.cpp` | 823 | ~50 cases on a 400×400 @0.05 m synthetic costmap: detection, side choice (left bias), grow, boundary guard, zone mask (#517), footprint model, clip/expand, `hasClearExit`, lookahead clamp |
 | `test_oscillation_detector.cpp` | 195 | 11 cases: capacity, half-full gate, alternating ω detected, steady motion not |
 | `test_path_progress_end_approach.cpp` | 388 | 13 cases on the checker (needs a node): field sub-path parked 0.30/0.45/0.499 m short and off the line → reached; start / > tolerance short → not; U-turn and closed ring whose end is near their start → not reached at the start or while passing near the end, reached at the end; long path unchanged; 95 % rule kept; path shorter than the tolerance completes on proximity |
+
+Per-cycle cost of following one long sub-path (controller_server bookkeeping, FTC, goal checker) vs its pose count: `test/bench/cycle_bench.cpp` (standalone, `test/bench/README.md`). Measured 2026-11-09: FTC and the goal checker are flat in path length; upstream controller_server's own bookkeeping is linear (~22 ns per remaining pose on x86), of which the path handler's erase was 58 % and `calculate_path_length` in the tracking feedback (upstream, not pluggable) is the rest.
 
 ## Runtime surface
 
