@@ -986,11 +986,15 @@ BT::NodeStatus SetNavMode::tick()
   // "degraded" (Float-quality GPS) runs at half the configured speed, floored
   // at the host min-drive clamp: hardware_bridge zeroes |vx| < kMinLinVel
   // (0.15 m/s), so a half-speed below that would stall the robot entirely.
+  // With the LiDAR map anchor (ctx->lidar_map_mode) Float keeps full speed:
+  // the map holds the pose (operator decision 2026-11-09; field bag 164410Z
+  // mowed 54 of 80 s at 0.15 instead of 0.20 m/s on Float).
   constexpr double kMinDriveSpeed = 0.15;
+  const bool full_speed = mode == "precise" || ctx->lidar_map_mode;
   const double transit =
-      (mode == "precise") ? ctx->transit_speed : std::max(0.5 * ctx->transit_speed, kMinDriveSpeed);
+      full_speed ? ctx->transit_speed : std::max(0.5 * ctx->transit_speed, kMinDriveSpeed);
   const double mowing =
-      (mode == "precise") ? ctx->mowing_speed : std::max(0.5 * ctx->mowing_speed, kMinDriveSpeed);
+      full_speed ? ctx->mowing_speed : std::max(0.5 * ctx->mowing_speed, kMinDriveSpeed);
 
   const std::vector<rclcpp::Parameter> params = {
       rclcpp::Parameter("FollowPath.primary_controller.max_linear_vel", transit),
@@ -1001,8 +1005,9 @@ BT::NodeStatus SetNavMode::tick()
   ctx->current_nav_mode = mode;
 
   RCLCPP_INFO(ctx->node->get_logger(),
-              "SetNavMode: mode '%s' — transit %.2f m/s, mowing %.2f m/s",
+              "SetNavMode: mode '%s'%s — transit %.2f m/s, mowing %.2f m/s",
               mode.c_str(),
+              (mode != "precise" && ctx->lidar_map_mode) ? " (LiDAR map: full speed)" : "",
               transit,
               mowing);
   return BT::NodeStatus::SUCCESS;

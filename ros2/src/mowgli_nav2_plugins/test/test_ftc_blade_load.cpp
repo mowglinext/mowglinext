@@ -177,3 +177,40 @@ TEST(BladeLoadDecision, RecoveryIsImmediate)
   EXPECT_TRUE(mnp::BladeLoadDecision(kTarget, true, 1600.0, kFresh, kFloor, cfg).is_limited);
   EXPECT_FALSE(mnp::BladeLoadDecision(kTarget, true, 2600.0, kFresh, kFloor, cfg).is_limited);
 }
+
+TEST(BladeSpinUp, ARestartingBladeIsNotTreatedAsLoaded)
+{
+  // Field 2026-11-09: after every scan pause the blade restarted from 0 rpm and
+  // the slowdown ENGAGED at 0-211 rpm, crawling at 0.08 m/s for 1-3 s.
+  const auto cfg = EnabledCfg();
+  mnp::FtcBladeSpinUp gate;
+  EXPECT_FALSE(mnp::BladeLoadArmed(gate, true, true, 0.0, 100.0, cfg));
+  EXPECT_FALSE(mnp::BladeLoadArmed(gate, true, true, 900.0, 101.0, cfg));
+  EXPECT_FALSE(mnp::BladeLoadArmed(gate, true, true, 2100.0, 102.0, cfg));
+  // Reaching full rpm arms it; a later real load then slows the robot.
+  EXPECT_TRUE(mnp::BladeLoadArmed(gate, true, true, 2600.0, 102.5, cfg));
+  EXPECT_TRUE(mnp::BladeLoadArmed(gate, true, true, 1600.0, 110.0, cfg));
+}
+
+TEST(BladeSpinUp, ABladeThatNeverSpinsUpIsArmedAfterTheGrace)
+{
+  // A blade held down by thick grass from the start still slows the robot.
+  const auto cfg = EnabledCfg();
+  mnp::FtcBladeSpinUp gate;
+  EXPECT_FALSE(mnp::BladeLoadArmed(gate, true, true, 1200.0, 50.0, cfg));
+  EXPECT_FALSE(
+      mnp::BladeLoadArmed(gate, true, true, 1300.0, 50.0 + mnp::kBladeSpinUpGraceS - 0.1, cfg));
+  EXPECT_TRUE(mnp::BladeLoadArmed(gate, true, true, 1300.0, 50.0 + mnp::kBladeSpinUpGraceS, cfg));
+}
+
+TEST(BladeSpinUp, BladeOffOrStaleTelemetryRestartsTheSpinUp)
+{
+  const auto cfg = EnabledCfg();
+  mnp::FtcBladeSpinUp gate;
+  ASSERT_TRUE(mnp::BladeLoadArmed(gate, true, true, 2600.0, 10.0, cfg));
+  EXPECT_FALSE(mnp::BladeLoadArmed(gate, false, true, 0.0, 11.0, cfg));  // blade OFF
+  EXPECT_FALSE(mnp::BladeLoadArmed(gate, true, true, 300.0, 12.0, cfg));  // spinning up again
+  ASSERT_TRUE(mnp::BladeLoadArmed(gate, true, true, 2600.0, 13.0, cfg));
+  EXPECT_FALSE(mnp::BladeLoadArmed(gate, true, false, 2600.0, 14.0, cfg));  // stale
+  EXPECT_FALSE(mnp::BladeLoadArmed(gate, true, true, 1000.0, 14.5, cfg));
+}

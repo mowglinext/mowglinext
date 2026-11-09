@@ -1098,8 +1098,12 @@ double FTCController::applyBladeLoad(double target_speed)
                             config_.blade_load_rpm_min,
                             config_.blade_load_min_speed_ratio,
                             config_.blade_load_telemetry_max_age_s};
+  const bool fresh = age_s >= 0.0 && age_s <= cfg.telemetry_max_age_s;
+  const bool armed =
+      BladeLoadArmed(blade_spin_up_, active, fresh, rpm, clock_->now().seconds(), cfg);
   const FtcBladeLoadResult out =
-      BladeLoadDecision(target_speed, active, rpm, age_s, config_.stall_crawl_speed, cfg);
+      armed ? BladeLoadDecision(target_speed, active, rpm, age_s, config_.stall_crawl_speed, cfg)
+            : FtcBladeLoadResult{target_speed, 1.0, false};
 
   if (out.is_limited != is_blade_limited_)
   {

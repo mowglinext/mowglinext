@@ -767,6 +767,11 @@ struct BTContext
 
   /// Current navigation mode: "precise" or "degraded"
   std::string current_nav_mode{"precise"};
+  /// lidar_enabled AND use_lidar_map_anchor (behavior_tree_node param
+  /// precision_lidar_map_mode): the LiDAR map holds the pose, so RTK Float keeps
+  /// the full transit/mowing speed in SetNavMode "degraded" (operator decision
+  /// 2026-11-09, same as the precision gate's LiDAR-map mode).
+  bool lidar_map_mode{false};
 
   /// Whether SetNav2Lifecycle has suspended (PAUSEd) the Nav2 lifecycle
   /// stack to save CPU/thermal budget while idle on the dock. Tracked here
