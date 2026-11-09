@@ -44,6 +44,7 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "mowgli_behavior/bt_context.hpp"
+#include "mowgli_behavior/coverage_entry.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "nav2_msgs/action/compute_path_to_pose.hpp"
 #include "nav2_msgs/action/follow_path.hpp"
@@ -358,6 +359,53 @@ TEST_F(TransitNonBlockingTest, AFailedTransitIsNotRepeatedTheMowMovesOnToTheNext
   EXPECT_NEAR(next.y, 3.0, 1e-6) << "FollowStrip repeated the transit TransitToStrip just failed";
   EXPECT_EQ(follow->goalCount(), 0u);
   EXPECT_FALSE(ctx->transit_to_strip_failed_at.has_value()) << "the failure applies once";
+}
+
+TEST_F(TransitNonBlockingTest, ANearbyStartInsideTheAreaIsDrivenByTheCoverageControllerDirectly)
+{
+  // Field 2026-11-09: the first unit started 0.36 m away on the outer ring beside
+  // a hedge; RPP refused the transit ("collision ahead"), FollowStrip then skipped
+  // 2 m and transited along the same hedge. No Nav2 transit for such a start.
+  auto geometry = mowgli_behavior::CoverageEntryGeometry::create(ctx->node);
+  blackboard->set("_coverage_entry_geometry", geometry);
+  const auto ready = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!geometry->contains(4.8, 0.0) && std::chrono::steady_clock::now() < ready)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  ASSERT_TRUE(geometry->contains(4.8, 0.0));
+  ctx->mowing_enabled = false;  // no blade telemetry on this bench: skip the spin-up wait
+  setRobot(4.8, 0.0);
+  planArea({straightUnit(5.0, 8.0, 0.0), straightUnit(5.0, 8.0, 3.0)});
+  buildTransitThenFollow();
+
+  tickUntil(
+      [&]()
+      {
+        return follow->goalCount() >= 1;
+      },
+      10.0);
+
+  EXPECT_EQ(navigate->goalCount(), 0u) << "a 0.2 m start inside the area was sent to Nav2";
+  ASSERT_GE(follow->goalCount(), 1u);
+  EXPECT_NEAR(follow->goal(0)->path.poses.front().pose.position.x, 5.0, 1e-6);
+}
+
+TEST_F(TransitNonBlockingTest, AFarStartStillTransits)
+{
+  auto geometry = mowgli_behavior::CoverageEntryGeometry::create(ctx->node);
+  blackboard->set("_coverage_entry_geometry", geometry);
+  const auto ready = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!geometry->contains(0.0, 0.0) && std::chrono::steady_clock::now() < ready)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  planArea({straightUnit(5.0, 8.0, 0.0)});
+  buildTransitThenFollow();
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() == 1;
+                },
+                10.0),
+            BT::NodeStatus::RUNNING);
+  EXPECT_NEAR(navigate->goal(0)->pose.pose.position.x, 5.0, 1e-6);
 }
 
 TEST_F(TransitNonBlockingTest, AStartOccupiedRefusalIsStillLeftToFollowStrip)

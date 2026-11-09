@@ -36,6 +36,7 @@
 #include "mowgli_behavior/blade_control_service.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
+#include "mowgli_behavior/coverage_entry.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/coverage_orientation_service.hpp"
 #include "mowgli_behavior/coverage_persistence.hpp"
@@ -1523,6 +1524,9 @@ private:
     // Build blackboard and store shared context
     blackboard_ = BT::Blackboard::create();
     blackboard_->set("context", context_);
+    // Created here, not on FollowStrip's first start, so the transient-local
+    // transit geometry has arrived before the first TransitToStrip asks for it.
+    blackboard_->set("_coverage_entry_geometry", CoverageEntryGeometry::create(context_->node));
 
     // Default poses (x;y;yaw format) — overridable via parameters.
     const std::string dock_pose = declare_parameter<std::string>("dock_pose", "0.0;0.0;0.0");

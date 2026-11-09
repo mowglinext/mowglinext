@@ -2866,6 +2866,42 @@ BT::NodeStatus TransitToStrip::onStart()
     return BT::NodeStatus::SUCCESS;
   }
 
+  std::shared_ptr<CoverageEntryGeometry> entry_geometry;
+  if (!config().blackboard->get("_coverage_entry_geometry", entry_geometry) || !entry_geometry)
+  {
+    config().blackboard->set("_coverage_entry_geometry", CoverageEntryGeometry::create(ctx->node));
+  }
+  // A start within kSegmentTransitGapM of a robot that is already inside the
+  // mowing area needs no Nav2 transit: FollowStrip hands it to the coverage
+  // controller directly (sendCurrentSwath: no gap, entry contained). RPP's
+  // footprint check cannot reach a start on the outermost ring beside a hedge
+  // it sees (field 2026-11-09: a 0.36 m transit refused with "collision ahead",
+  // FollowStrip then declared the start blocked, skipped 2 m and transited along
+  // the same hedge: 57 s before the first cut). FTC follows that ring by design.
+  try
+  {
+    if (ctx->tf_buffer && ctx->current_transit_goal.header.frame_id == "map")
+    {
+      const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+      const double near_gap =
+          std::hypot(ctx->current_transit_goal.pose.position.x - tf.transform.translation.x,
+                     ctx->current_transit_goal.pose.position.y - tf.transform.translation.y);
+      if (near_gap <= mowgli_interfaces::coverage_geometry::kSegmentTransitGapM &&
+          coverageEntryContained(ctx, config().blackboard))
+      {
+        RCLCPP_INFO(ctx->node->get_logger(),
+                    "TransitToStrip: strip start is %.2f m away and the robot is inside the "
+                    "mowing area — no transit, the coverage controller drives it",
+                    near_gap);
+        return BT::NodeStatus::SUCCESS;
+      }
+    }
+  }
+  catch (const tf2::TransformException&)
+  {
+    // No pose: keep the ordinary transit below.
+  }
+
   RCLCPP_INFO(ctx->node->get_logger(),
               "TransitToStrip: goal frame='%s' pos=(%.2f, %.2f)",
               ctx->current_transit_goal.header.frame_id.c_str(),
