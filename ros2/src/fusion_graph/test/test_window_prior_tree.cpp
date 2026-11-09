@@ -114,11 +114,15 @@ gtsam::SharedNoiseModel Iso(double s)
   return gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector3(s, s, s));
 }
 
+// Bit for bit, on the stored Rot2 components too, so a -0.0 / +0.0 or a
+// c, s difference that theta() rounds away still counts.
 void ExpectSamePose(const gtsam::Pose2& a, const gtsam::Pose2& b)
 {
-  EXPECT_EQ(a.x(), b.x());
-  EXPECT_EQ(a.y(), b.y());
-  EXPECT_EQ(a.theta(), b.theta());
+  const double pa[] = {a.x(), a.y(), a.rotation().c(), a.rotation().s()};
+  const double pb[] = {b.x(), b.y(), b.rotation().c(), b.rotation().s()};
+  EXPECT_EQ(std::memcmp(pa, pb, sizeof(pa)), 0)
+      << "(" << pa[0] << ", " << pa[1] << ", " << pa[2] << ", " << pa[3] << ") vs (" << pb[0]
+      << ", " << pb[1] << ", " << pb[2] << ", " << pb[3] << ")";
 }
 
 }  // namespace
@@ -431,10 +435,11 @@ TEST(WindowPriorTree, EveryRebuildPathLinksTheWindowAndKeepsExactEstimates)
 namespace
 {
 
-// Distance in units in the last place between two finite doubles.
+// Distance in units in the last place between two finite doubles; 0 only
+// when they are bit-identical (so -0.0 vs +0.0 is not a match).
 int64_t Ulps(double a, double b)
 {
-  if (a == b)
+  if (std::memcmp(&a, &b, sizeof(a)) == 0)
     return 0;
   if ((a < 0) != (b < 0))
     return std::numeric_limits<int64_t>::max();
@@ -597,8 +602,10 @@ TEST(WindowPriorTree, TreeMatchesPlainPriorsUnderFaultInjection)
         {
           const auto a = kv.value.cast<gtsam::Pose2>();
           const auto b = new_all.at<gtsam::Pose2>(kv.key);
-          const int64_t ulps =
-              std::max({Ulps(a.x(), b.x()), Ulps(a.y(), b.y()), Ulps(a.theta(), b.theta())});
+          const int64_t ulps = std::max({Ulps(a.x(), b.x()),
+                                         Ulps(a.y(), b.y()),
+                                         Ulps(a.rotation().c(), b.rotation().c()),
+                                         Ulps(a.rotation().s(), b.rotation().s())});
           if (ulps == 0)
             continue;
           ++differing;
