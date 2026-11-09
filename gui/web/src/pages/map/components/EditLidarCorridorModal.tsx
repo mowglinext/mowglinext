@@ -1,4 +1,6 @@
-import {Modal, InputNumber, Input, Form} from "antd";
+import {NumberWithAddon} from '../../../components/inputs/NumberWithAddon';
+import {useAsyncHandler} from "../../../hooks/useAsyncHandler";
+import {Modal, Input, Form} from "antd";
 import {useTranslation} from "react-i18next";
 import type {LidarIgnoreCorridor} from "../../../types/ros.ts";
 import {DEFAULT_CORRIDOR_WIDTH_M, MAX_CORRIDOR_WIDTH_CM, MIN_CORRIDOR_WIDTH_CM} from "../hooks/useLidarCorridors.ts";
@@ -28,6 +30,7 @@ export const EditLidarCorridorModal = ({corridor, ...rest}: EditLidarCorridorMod
 };
 
 const EditLidarCorridorForm = ({corridor, busy, onSave, onCancel}: EditLidarCorridorModalProps & {corridor: LidarIgnoreCorridor}) => {
+    const asyncHandler = useAsyncHandler();
     const {t} = useTranslation();
     const [form] = Form.useForm<{name: string; widthCm: number}>();
 
@@ -39,16 +42,20 @@ const EditLidarCorridorForm = ({corridor, busy, onSave, onCancel}: EditLidarCorr
             cancelText={t('mapLidarCorridors.cancel')}
             confirmLoading={busy}
             onCancel={onCancel}
-            onOk={async () => {
+            onOk={asyncHandler(async () => {
                 // validateFields rejects (and shows the inline error) for a width
                 // outside 5-120 cm — the server would otherwise silently clamp it.
+                let values: {name: string; widthCm: number};
                 try {
-                    const {name, widthCm} = await form.validateFields();
-                    onSave((name ?? '').trim(), widthCm / 100);
-                } catch {
-                    // validation errors are already rendered on the field
+                    values = await form.validateFields();
+                } catch (error) {
+                    // Only field validation failures are already visible inline.
+                    if (typeof error === 'object' && error !== null && 'errorFields' in error &&
+                        Array.isArray(error.errorFields) && error.errorFields.length > 0) return;
+                    throw error;
                 }
-            }}
+                onSave((values.name ?? '').trim(), values.widthCm / 100);
+            })}
         >
             <Form form={form} layout="vertical" initialValues={{name: corridor.name ?? '', widthCm: Math.round((corridor.width_m ?? DEFAULT_CORRIDOR_WIDTH_M) * 100)}}>
                 <Form.Item name="name" label={t('mapLidarCorridors.nameLabel')}>
@@ -65,7 +72,7 @@ const EditLidarCorridorForm = ({corridor, busy, onSave, onCancel}: EditLidarCorr
                         max: MAX_CORRIDOR_WIDTH_CM,
                         message: t('mapLidarCorridors.widthRange', {min: MIN_CORRIDOR_WIDTH_CM, max: MAX_CORRIDOR_WIDTH_CM}),
                     }]}>
-                    <InputNumber step={5} precision={0} addonAfter="cm" style={{width: '100%'}}/>
+                    <NumberWithAddon step={5} precision={0} after="cm" style={{width: '100%'}}/>
                 </Form.Item>
             </Form>
         </Modal>

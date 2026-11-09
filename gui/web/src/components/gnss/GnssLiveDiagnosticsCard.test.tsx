@@ -101,3 +101,10 @@ describe("GnssLiveDiagnosticsCard", () => {
         expect(screen.getByText(en.settingsGnssLiveStatus.msmStateNotSeen)).toBeInTheDocument();
     });
 });
+
+it('keeps coordinates available without inferring any detailed fix or receiver identity', () => {
+    renderCard('satellite_cn0_unknown', {gnssStatus: undefined, latitude: 0, longitude: 0, altitudeM: 0, horizontalAccuracyM: undefined});
+    expect(screen.getByTestId('gnss-fix-status-value')).toHaveTextContent(en.gpsStatus.compactUnknown);
+    expect(screen.queryByText(en.gpsStatus.rtkFixed)).not.toBeInTheDocument();
+    expect(screen.queryByText('GNSS', {exact: true})).not.toBeInTheDocument();
+});

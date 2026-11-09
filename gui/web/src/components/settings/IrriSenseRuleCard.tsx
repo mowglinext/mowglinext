@@ -1,4 +1,5 @@
-import {Card, Col, Form, InputNumber, Row, Switch, Typography} from "antd";
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
+import {Card, Col, Form, Row, Switch, Typography} from "antd";
 import {useTranslation} from "react-i18next";
 import type {IrriSenseSettings, IrriSenseSettingsUpdate} from "../../types/irrisense.ts";
 
@@ -27,30 +28,30 @@ export function IrriSenseRuleCard({settings, draft, onChange}: IrriSenseRuleCard
                 <Row gutter={[16, 0]}>
                     <Col xs={24} sm={8}>
                         <Form.Item label={t("settingsIrriSense.wetDeficit")} tooltip={t("settingsIrriSense.wetDeficitTooltip")}>
-                            <InputNumber
+                            <NumberWithAddon
                                 value={wetDeficitMm}
                                 onChange={(v) => onChange({wetDeficitMm: v ?? 0})}
-                                min={0} step={0.5} addonAfter="mm" style={{width: "100%"}}
+                                min={0} step={0.5} after="mm" style={{width: "100%"}}
                                 aria-label={t("settingsIrriSense.wetDeficit")}
                             />
                         </Form.Item>
                     </Col>
                     <Col xs={24} sm={8}>
                         <Form.Item label={t("settingsIrriSense.dryAfterWatering")} tooltip={t("settingsIrriSense.dryAfterWateringTooltip")}>
-                            <InputNumber
+                            <NumberWithAddon
                                 value={dryAfterWateringHours}
                                 onChange={(v) => onChange({dryAfterWateringHours: v ?? 0})}
-                                min={0} step={0.5} addonAfter="h" style={{width: "100%"}}
+                                min={0} step={0.5} after="h" style={{width: "100%"}}
                                 aria-label={t("settingsIrriSense.dryAfterWatering")}
                             />
                         </Form.Item>
                     </Col>
                     <Col xs={24} sm={8}>
                         <Form.Item label={t("settingsIrriSense.maxStale")} tooltip={t("settingsIrriSense.maxStaleTooltip")}>
-                            <InputNumber
+                            <NumberWithAddon
                                 value={maxStaleMinutes}
                                 onChange={(v) => onChange({maxStaleMinutes: v ?? 1})}
-                                min={1} step={10} addonAfter="min" style={{width: "100%"}}
+                                min={1} step={10} after="min" style={{width: "100%"}}
                                 aria-label={t("settingsIrriSense.maxStale")}
                             />
                         </Form.Item>

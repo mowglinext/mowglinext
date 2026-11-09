@@ -10,6 +10,7 @@ container_name_for_service() {
     gui)          printf 'mowgli-gui\n' ;;
     mosquitto)    printf 'mowgli-mqtt\n' ;;
     mavros)       printf 'mowgli-mavros\n' ;;
+    openmower)    printf 'mowgli-openmower\n' ;;
     ntrip)        printf 'mowgli-ntrip\n' ;;
     *)            return 1 ;;
   esac
@@ -49,6 +50,12 @@ expected_runtime_services() {
     services+=(mavros)
   fi
 
+  # OpenMower electronics: the bridge sidecar replaces mowgli-ros2's
+  # hardware_bridge_node. GNSS is unaffected — it stays with the sidecar above.
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    services+=(openmower)
+  fi
+
   if [[ "${LIDAR_ENABLED}" == "true" && "${LIDAR_TYPE}" != "none" ]]; then
     services+=(lidar)
   fi
@@ -68,20 +75,28 @@ check_devices() {
 
   local devices=()
   local gnss_backend
+  local gnss_source
   local gnss_device
   local gnss_connection
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
+  gnss_source="$(effective_gnss_source 2>/dev/null || default_gnss_source)"
   gnss_device="$(gnss_serial_device_from_state)"
   gnss_connection="$(gnss_connection_from_serial_device "$gnss_device")"
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     devices+=("${MAVROS_PORT:-/dev/mavros}:Pixhawk MAVROS serial")
+  elif [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    devices+=("${OPENMOWER_LL_PORT:-/dev/ttyAMA0}:OpenMower LowLevel board")
+    devices+=("${OPENMOWER_XESC_LEFT_PORT:-/dev/ttyAMA5}:OpenMower left xESC")
+    devices+=("${OPENMOWER_XESC_RIGHT_PORT:-/dev/ttyAMA3}:OpenMower right xESC")
+    devices+=("${OPENMOWER_XESC_MOW_PORT:-/dev/ttyAMA4}:OpenMower mow xESC")
+    devices+=("${gnss_device}:GPS receiver")
   else
     devices+=("/dev/mowgli:Mowgli STM32 board")
   fi
 
-  if [[ "$(effective_gnss_stack 2>/dev/null || true)" != "disabled" ]]; then
+  if [[ "$(effective_gnss_stack 2>/dev/null || true)" != "disabled" && "$gnss_source" == "direct" ]]; then
     devices+=("${gnss_device}:GPS receiver")
   fi
 
@@ -170,6 +185,7 @@ check_generated_gps_yaml_alignment() {
   local yaml_file="$DOCKER_DIR/config/mowgli/mowgli_robot.yaml"
   local yaml_receiver_family yaml_serial_device yaml_serial_baud
   local yaml_frame_id yaml_ntrip_enabled
+  local gnss_source
 
   _describe_gnss_resolution() {
     local label="$1"
@@ -205,10 +221,16 @@ check_generated_gps_yaml_alignment() {
   yaml_serial_baud="$(yaml_gps_value "$yaml_file" gnss_serial_baud)"
   yaml_frame_id="$(yaml_gps_value "$yaml_file" gnss_frame_id)"
   yaml_ntrip_enabled="$(yaml_gps_value "$yaml_file" ntrip_enabled)"
+  gnss_source="$(effective_gnss_source 2>/dev/null || default_gnss_source)"
 
-  _describe_gnss_resolution "GNSS receiver family" "$yaml_receiver_family" "${GNSS_RECEIVER_FAMILY:-}" "auto"
-  _describe_gnss_resolution "GNSS serial device" "$yaml_serial_device" "${GNSS_SERIAL_DEVICE:-}" "/dev/ttyAMA4"
-  _describe_gnss_resolution "GNSS serial baud" "$yaml_serial_baud" "${GNSS_SERIAL_BAUD:-}" "921600"
+  info "GNSS source: $gnss_source"
+
+  if [[ "$gnss_source" == "direct" ]]; then
+    _describe_gnss_resolution "GNSS receiver family" "$yaml_receiver_family" "${GNSS_RECEIVER_FAMILY:-}" "auto"
+    _describe_gnss_resolution "GNSS serial device" "$yaml_serial_device" "${GNSS_SERIAL_DEVICE:-}" "$(default_gnss_uart_device)"
+    _describe_gnss_resolution "GNSS serial baud" "$yaml_serial_baud" "${GNSS_SERIAL_BAUD:-}" "921600"
+  fi
+
   _describe_gnss_resolution "GNSS frame_id" "$yaml_frame_id" "${GNSS_FRAME_ID:-}" "gps_link"
   _describe_gnss_resolution "GNSS NTRIP enabled" "$yaml_ntrip_enabled" "${GNSS_NTRIP_ENABLED:-}" "true"
 }
@@ -266,6 +288,11 @@ check_containers() {
 
 check_firmware() {
   step "Check: Mowgli firmware"
+
+  if [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]]; then
+    info "OpenMower backend: the LowLevel board keeps its own firmware; check the bridge with: $(print_logs_command_for_container mowgli-openmower 50)"
+    return 0
+  fi
 
   if [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]]; then
     info "MAVROS backend: skipping direct Mowgli firmware check"
@@ -325,7 +352,9 @@ check_mavros() {
 
   local mavros_state
   mavros_state="$(
-    docker_cmd exec mowgli-ros2 bash -lc       "source /opt/ros/lyrical/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/state --once 2>/dev/null"       2>/dev/null || echo ""
+    docker_cmd exec mowgli-mavros bash -lc \
+      "source /opt/ros/lyrical/setup.bash && source /opt/mowgli/mavros/setup.bash && source /opt/mowgli/universal_gnss/setup.bash && source /ros2_ws/install/setup.bash && timeout 5 ros2 topic echo /mavros/state --once 2>/dev/null" \
+      2>/dev/null || echo ""
   )"
   if [[ -z "$mavros_state" ]]; then
     fail "No MAVROS state on /mavros/state"
@@ -341,10 +370,12 @@ check_gps() {
   : "${GNSS_BACKEND:=universal}"
   local gnss_backend
   local gnss_stack
+  local gnss_source
   local gps_container
 
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
   gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
+  gnss_source="$(effective_gnss_source 2>/dev/null || default_gnss_source)"
 
   if ! is_supported_gnss_backend "$gnss_backend"; then
     fail "Unknown GNSS_BACKEND=${GNSS_BACKEND}"
@@ -364,7 +395,11 @@ check_gps() {
   fi
 
   if [[ "$gnss_stack" == "universal" ]]; then
-    info "Universal GNSS mode: expected direct sidecar ${gps_container}"
+    if [[ "$gnss_source" == "mavros" ]]; then
+      info "Universal GNSS mode: MAVROS receiver + NTRIP-only sidecar ${gps_container}"
+    else
+      info "Universal GNSS mode: direct receiver sidecar ${gps_container}"
+    fi
   fi
 
   local fix_data
@@ -376,7 +411,9 @@ check_gps() {
 
   if [[ -z "$fix_data" ]]; then
     fail "No GPS fix data on /gps/fix"
-    if [[ "$gnss_stack" == "universal" ]]; then
+    if [[ "$gnss_stack" == "universal" && "$gnss_source" == "mavros" ]]; then
+      add_issue "MAVROS GNSS is not publishing /gps/fix. Check logs: $(print_logs_command_for_container mowgli-mavros 80)"
+    elif [[ "$gnss_stack" == "universal" ]]; then
       add_issue "Universal GNSS sidecar is not publishing /gps/fix. Check logs: $(print_logs_command_for_container "$gps_container" 80)"
     else
       add_issue "GPS not publishing. Check logs: $(print_logs_command_for_container "$gps_container" 30)"
@@ -408,7 +445,11 @@ check_gps() {
     fail "GPS: No fix (status=$status_val)"
   fi
 
-  info "Universal GNSS sidecar: /gps/fix is reaching mowgli-ros2"
+  if [[ "$gnss_source" == "mavros" ]]; then
+    info "MAVROS GNSS: /gps/fix is reaching mowgli-ros2"
+  else
+    info "Universal GNSS sidecar: /gps/fix is reaching mowgli-ros2"
+  fi
 
   if [[ "${GNSS_NTRIP_ENABLED:-false}" == "true" ]]; then
     local rtcm_info

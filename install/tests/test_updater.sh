@@ -18,6 +18,14 @@ updater_compose_arguments
 error() { printf '%s\n' "$*" >&2; }
 warn() { printf '%s\n' "$*" >&2; }
 info() { :; }
+
+assert_fails() {
+  if "$@"; then
+    printf 'ASSERTION FAILED: expected command to fail: %s\n' "$*" >&2
+    return 1
+  fi
+  return 0
+}
 # install_host_updater() now calls require_root_for itself (issue #632's
 # --only=updater exposed that it used to rely on an earlier full-flow step
 # having already set $SUDO as a side effect) — this test sources only
@@ -30,25 +38,41 @@ REPO_DIR="$ROOT"; INSTALL_DIR="$ROOT/install"
 source "$ROOT/install/lib/compose.sh"
 effective_gnss_backend() { echo disabled; }
 effective_gnss_stack() { echo disabled; }
+effective_gnss_source() { echo direct; }
 is_supported_gnss_backend() { return 0; }
+# Same reason as the GNSS stub above: this file exercises compose.sh in
+# isolation, so every collaborator it calls has to be provided here. The real
+# definition lives in config.sh — the stack.sh source-set guard at the bottom
+# is what checks that compose.sh's dependencies are actually reachable in
+# production.
+is_supported_gnss_source() { return 0; }
+list_supported_gnss_sources() { echo "direct mavros"; }
+
+is_supported_hardware_backend() {
+  case "${1:-}" in
+    mowgli|mavros|openmower) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 LIDAR_ENABLED=false
 MSG_UPDATER_HARDWARE_MANAGED='unsupported managed hardware'
 MSG_UPDATER_HARDWARE_LEGACY='preserving legacy hardware selection'
-for choice in mowgli mavros; do
-  HARDWARE_BACKEND=mowgli
-  [[ "$choice" == mavros ]] && HARDWARE_BACKEND=mavros
+# Managed releases cover the Mowgli board and the OpenMower v1 bridge; MAVROS
+# keeps the legacy path.
+for choice in mowgli openmower mavros; do
+  HARDWARE_BACKEND="$choice"
   rm -f -- "$sandbox/.updater-managed"
   check_updater_hardware
-  if [[ "$choice" != mowgli ]]; then
-    ! updater_hardware_supported
+  if [[ "$choice" == mavros ]]; then
+    assert_fails updater_hardware_supported
     install_host_updater
     [[ ! -e "$sandbox/.updater-managed" ]]
     build_compose_stack
     fragment=docker-compose.mavros.yml
     [[ " ${COMPOSE_FILES[*]} " == *"/$fragment "* ]]
     touch "$sandbox/.updater-managed"
-    ! check_updater_hardware
-    ! install_host_updater
+    assert_fails check_updater_hardware
+    assert_fails install_host_updater
   else
     updater_hardware_supported
     touch "$sandbox/.updater-managed"
@@ -67,7 +91,7 @@ uname() { echo Linux; }
 systemctl() { echo 'unexpected systemctl mutation' >&2; return 99; }
 curl() { return 22; }
 git() { printf '%040d\n' 1; }
-! install_host_updater
+assert_fails install_host_updater
 [[ ! -e "$sandbox/.updater-managed" ]]
 grep -q 'ExecStart=/usr/local/bin/mowgli-updater supervise' "$ROOT/install/systemd/mowgli-updater.service"
 grep -q 'MOWGLI_UPDATE_MAINTENANCE' "$ROOT/install/compose/docker-compose.updater.yml"
@@ -117,3 +141,51 @@ unset MOWGLI_UPDATER_BINARY
 [[ ! -e "$sandbox/.updater-managed" ]]
 
 printf 'Updater installer contract passed\n'
+
+# ---------------------------------------------------------------------------
+# docker/stack.sh sources a NARROWER lib set than the installer: common.sh,
+# config.sh, docker.sh, deploy.sh, compose.sh — and notably NOT
+# backend_choice.sh. Anything build_compose_stack calls must therefore be
+# defined in one of those. A guard that lived in backend_choice.sh once made
+# `stack.sh regen` fail for EVERY backend, because `! <missing command>`
+# evaluates TRUE and the "Unknown HARDWARE_BACKEND" branch fired on the
+# default install too.
+#
+# Runs in a FRESH bash, not a subshell: a subshell inherits the stubs defined
+# above (that is precisely how the first version of this guard passed while
+# the regression was still present), which would mask the very definitions it
+# is here to prove exist.
+# ---------------------------------------------------------------------------
+MOWGLI_TEST_ROOT="$ROOT" bash -euo pipefail -s <<'STACK_SOURCE_GUARD'
+ROOT="$MOWGLI_TEST_ROOT"
+stack_sandbox="$(mktemp -d)"
+trap 'rm -rf -- "$stack_sandbox"' EXIT
+export MOWGLI_HOME="$ROOT"
+# Exactly what docker/stack.sh sources, in its order.
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/common.sh"
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/config.sh"
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/docker.sh"
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/deploy.sh"
+# shellcheck source=/dev/null
+source "$ROOT/install/lib/compose.sh"
+DOCKER_DIR="$stack_sandbox"
+LIDAR_ENABLED=false
+for backend in mowgli mavros openmower; do
+  HARDWARE_BACKEND="$backend"
+  if ! build_compose_stack >/dev/null 2>&1; then
+    echo "build_compose_stack failed for HARDWARE_BACKEND=$backend with stack.sh's source set" >&2
+    exit 1
+  fi
+  [[ ${#COMPOSE_FILES[@]} -gt 0 ]]
+done
+# An unknown backend must still be rejected, not silently composed.
+HARDWARE_BACKEND=definitely-not-a-backend
+if build_compose_stack >/dev/null 2>&1; then
+  echo "build_compose_stack accepted an unknown HARDWARE_BACKEND" >&2
+  exit 1
+fi
+STACK_SOURCE_GUARD

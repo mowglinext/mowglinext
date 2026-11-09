@@ -215,3 +215,52 @@ func TestMapBackupRoutes(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, do(http.MethodPost, "/api/map-backups/areas-20261004T120000.000Z.dat/restore").Code,
 		"a well-formed id that does not exist is a server-side failure, not a path escape")
 }
+
+// An area's own mowing lines (angle, winding, start point) are optional keys in areas.dat. The
+// backup is the raw file, so they ride along; the summary must not mistake them for areas,
+// names or obstacles.
+func areasFileWithLines() []byte {
+	return []byte("# Mowgli\narea_count: 2\nnext_area_id: 3\n" +
+		"area_0_name: Voor\narea_0_polygon: 0,0;10,0;10,10\narea_0_is_navigation: 0\narea_0_id: 1\n" +
+		"area_0_mow_angle_deg: 35\narea_0_ring_direction: 2\narea_0_start_x: 9.500\narea_0_start_y: 4.000\n" +
+		"area_0_obstacle_count: 1\narea_0_obstacle_0: 2,2;3,2;3,3\n" +
+		"area_1_name: Achter\narea_1_polygon: 20,0;30,0;30,10\narea_1_is_navigation: 0\narea_1_id: 2\n" +
+		"area_1_obstacle_count: 0\n" +
+		"lidar_corridor_count: 0\n")
+}
+
+func TestMapBackupKeepsAnAreasOwnMowingLines(t *testing.T) {
+	store, _ := newBackupStore(t)
+	require.NoError(t, os.WriteFile(store.areasFile, areasFileWithLines(), 0o644))
+
+	info, skipped, err := store.Create()
+	require.NoError(t, err)
+	require.False(t, skipped)
+
+	// The new keys are not areas, names or obstacles.
+	assert.Equal(t, 2, info.Areas)
+	assert.Equal(t, 1, info.Obstacles)
+	assert.Equal(t, []string{"Voor", "Achter"}, info.AreaNames)
+
+	stored, err := os.ReadFile(filepath.Join(store.dir, info.ID))
+	require.NoError(t, err)
+	assert.Equal(t, areasFileWithLines(), stored, "the lines are in the backup, byte for byte")
+}
+
+func TestMapBackupRestoreBringsTheMowingLinesBack(t *testing.T) {
+	store, _ := newBackupStore(t)
+	require.NoError(t, os.WriteFile(store.areasFile, areasFileWithLines(), 0o644))
+	good, _, err := store.Create()
+	require.NoError(t, err)
+
+	// The lines are removed from the live map afterwards (a map save that dropped them).
+	require.NoError(t, os.WriteFile(store.areasFile, areasFile("Voor", "Achter"), 0o644))
+	require.NoError(t, store.Restore(context.Background(), good.ID, func(context.Context) error { return nil }))
+
+	now, err := os.ReadFile(store.areasFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(now), "area_0_mow_angle_deg: 35")
+	assert.Contains(t, string(now), "area_0_ring_direction: 2")
+	assert.Contains(t, string(now), "area_0_start_x: 9.500")
+	assert.Contains(t, string(now), "area_0_start_y: 4.000")
+}

@@ -31,9 +31,29 @@
 #pragma once
 
 #include <cstddef>
+#include <set>
 
 namespace mowgli_behavior
 {
+
+/// First unit at or after `from` that is not recorded as mowed (`unit_count` when none is left).
+///
+/// FollowStrip drives an area's units in plan order and skips only those whose completion was
+/// recorded: a unit left incomplete after a failed blade-off transit is driven again, and a
+/// headland ring is driven before the interior. PlanCoverageArea uses the same rule to choose the
+/// first transit goal, so the robot's first hop lands where the first goal is actually driven
+/// (field 2026-10-12: it hopped to a resume point in unit 7 and FollowStrip then sent it back to
+/// unit 1, 3.9 m away).
+inline std::size_t nextUndoneUnit(std::size_t from,
+                                  std::size_t unit_count,
+                                  const std::set<std::size_t>& done)
+{
+  while (from < unit_count && done.count(from) > 0)
+  {
+    ++from;
+  }
+  return from;
+}
 
 struct UnitResumeCfg
 {

@@ -1,0 +1,40 @@
+# Dry run of the coverage planner, for the GUI map editor's "line preview".
+#
+# Runs the SAME planBoustrophedon call a real PlanCoverage goal runs — same live
+# geometry parameters (chassis_safety_inset, obstacle_margin, headland passes,
+# turning radius, ...), same growth of drawn obstacles — but takes the swath
+# angle and the perimeter winding from the request instead of from the saved
+# settings, so an operator can try a value before saving it. Returns the
+# headland rings and the swaths in DRIVE ORDER, so the GUI can draw direction
+# arrows and show how the serpentine runs.
+#
+# Read-only and stateless: nothing is queued, the robot does not move and the
+# behavior tree is not involved. The turn-around connectors that join these
+# pieces are deliberately NOT part of the answer — they are decided at drive
+# time by the continuous-path builder, and previewing only the rings and swaths
+# is what tells the operator how the lines run.
+#
+# Request
+geometry_msgs/Polygon outer_boundary
+geometry_msgs/Polygon[] obstacles       # interior holes (>= 3 points each)
+float64 mow_angle_deg                   # swath heading in the map frame; < 0 = auto (minimise swath count)
+bool perpendicular                      # rotate the resolved swath angle 90 degrees (cross-hatch)
+int32 ring_direction                    # perimeter winding: 0 planner default, 1 clockwise, 2 counter-clockwise; < 0 = use the live ring_direction parameter
+bool has_start_point                    # false = the planner's own start (midpoint of the longest side of the outermost ring)
+float64 start_x                         # map-frame metres; snapped onto the OUTERMOST headland ring (nearest point on a straight side); read only when has_start_point
+float64 start_y
+---
+# Response
+bool success
+string message                          # failure reason when success == false
+geometry_msgs/Polygon[] rings           # closed headland loops, outermost first, points in DRIVE order
+geometry_msgs/Polygon[] swaths          # two points each (start, end), in serpentine DRIVE order
+float64 mow_angle_deg                   # swath heading the planner actually used, in [0, 180) — resolves "auto"
+int32 headland_passes                   # ring count actually planned (auto resolved)
+int32 ring_direction                    # winding actually applied: 0 / 1 / 2
+float64 planned_fraction                # planned coverage as a fraction of the field area, [0, 1]
+float64 field_area_m2
+uint32 dropped_pieces                   # slivers / tiny rings the planner discarded
+bool start_adjustable                   # true when the plan has a headland ring, i.e. a start point can be placed; false with the rings off
+float64 start_x                         # where the route actually starts (map frame): the first point of the outermost ring (the first swath start with no rings)
+float64 start_y

@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import en from "../../i18n/locales/en.json";
 import { GnssSerialDeviceConfigField } from "./GnssSerialDeviceConfigField.tsx";
 
-const useGnssRuntimeConfigMock = vi.fn();
+import type {useGnssRuntimeConfig} from "../../hooks/useGnssRuntimeConfig";
+
+const useGnssRuntimeConfigMock = vi.fn<() => ReturnType<typeof useGnssRuntimeConfig>>();
 
 vi.mock("../../hooks/useGnssRuntimeConfig.ts", () => ({
     useGnssRuntimeConfig: () => useGnssRuntimeConfigMock(),
@@ -119,4 +121,14 @@ describe("GnssSerialDeviceConfigField", () => {
         expect(screen.getByText(/selected family unicore/i)).toBeInTheDocument();
         expect(screen.getByText(/selected model UM982/i)).toBeInTheDocument();
     });
+});
+
+it('does not present a draft device or default baud as reported active configuration after a failed refresh', () => {
+    useGnssRuntimeConfigMock.mockReturnValue({runtimeConfig: null, error: 'Invalid GNSS runtime config'});
+    renderField({value: '/dev/draft'});
+    expect(screen.getByText(en.gnssRuntimeConfig.source.unknown)).toBeInTheDocument();
+    expect(screen.getByText(en.gnssRuntimeConfig.invalidResponse)).toBeInTheDocument();
+    expect(screen.queryByText('921600')).not.toBeInTheDocument();
+    expect(screen.queryByText(en.gnssRuntimeConfig.source.default)).not.toBeInTheDocument();
+    expect(screen.queryByText('/dev/draft', {selector: 'code'})).not.toBeInTheDocument();
 });

@@ -1,7 +1,10 @@
+import {observeAsync} from "../utils/async";
 import { useApi } from "./useApi.ts";
 import { App } from "antd";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
+import {apiErrorMessage, errorMessage} from "../utils/errors";
+import type {SettingsValues} from "../types/settings.generated";
 
 export type JSONSchema = {
     type?: string;
@@ -16,13 +19,13 @@ export type JSONSchemaProperty = {
     type?: string;
     title?: string;
     description?: string;
-    default?: any;
-    enum?: any[];
+    default?: unknown;
+    enum?: unknown[];
     minimum?: number;
     maximum?: number;
     "x-environment-variable"?: string;
     "x-yaml-node"?: string;
-    "x-remap-values"?: Record<string, any>;
+    "x-remap-values"?: Record<string, unknown>;
     "x-section"?: string;
     properties?: Record<string, JSONSchemaProperty>;
     allOf?: JSONSchemaCondition[];
@@ -31,7 +34,7 @@ export type JSONSchemaProperty = {
 
 export type JSONSchemaCondition = {
     if?: {
-        properties?: Record<string, { const?: any; enum?: any[] }>;
+        properties?: Record<string, { const?: unknown; enum?: unknown[] }>;
     };
     then?: {
         properties?: Record<string, JSONSchemaProperty>;
@@ -47,12 +50,16 @@ export const useSettingsSchema = () => {
     const { notification } = App.useApp();
     const { t } = useTranslation();
     const [schema, setSchema] = useState<JSONSchema | null>(null);
-    const [values, setValues] = useState<Record<string, any>>({});
+    const [values, setValues] = useState<SettingsValues>({});
     const [loading, setLoading] = useState(false);
     const [restartRequired, setRestartRequired] = useState(false);
 
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('settingsSchema.loadFailed'), description: errorMessage(error)});
+    });
+
     useEffect(() => {
-        (async () => {
+        observeAsync((async () => {
             try {
                 setLoading(true);
                 const [schemaRes, valuesRes] = await Promise.all([
@@ -60,30 +67,27 @@ export const useSettingsSchema = () => {
                     guiApi.settings.yamlList(),
                 ]);
                 if (schemaRes.error) {
-                    throw new Error((schemaRes.error as any).error);
+                    throw new Error(apiErrorMessage(schemaRes.error));
                 }
                 setSchema(schemaRes.data as JSONSchema);
                 if (!valuesRes.error) {
                     setValues((valuesRes.data) || {});
                 }
-            } catch (e: any) {
-                notification.error({
-                    message: t("settingsSchema.loadFailed"),
-                    description: e.message,
-                });
+            } catch (e) {
+                reportLoadError(e);
             } finally {
                 setLoading(false);
             }
-        })();
-    }, []);
+        })());
+    }, [guiApi.settings]);
 
     const saveValues = useCallback(
-        async (newValues: Record<string, any>) => {
+        async (newValues: SettingsValues) => {
             try {
                 setLoading(true);
                 const res = await guiApi.settings.yamlCreate(newValues);
                 if (res.error) {
-                    throw new Error((res.error as any).error);
+                    throw new Error(apiErrorMessage(res.error));
                 }
                 setValues(newValues);
                 setRestartRequired(true);
@@ -91,11 +95,13 @@ export const useSettingsSchema = () => {
                     message: t("settingsSections.toasts.saved"),
                     description: t("settingsSections.toasts.savedDescription"),
                 });
-            } catch (e: any) {
+                return true;
+            } catch (e) {
                 notification.error({
                     message: t("settingsSections.toasts.saveFailed"),
-                    description: e.message,
+                    description: errorMessage(e),
                 });
+                return false;
             } finally {
                 setLoading(false);
             }
@@ -105,7 +111,7 @@ export const useSettingsSchema = () => {
 
     const savePartialValues = useCallback(
         async (
-            partialValues: Record<string, any>,
+            partialValues: SettingsValues,
             options?: {
                 successMessage?: string;
                 successDescription?: string;
@@ -114,7 +120,7 @@ export const useSettingsSchema = () => {
             },
         ) => {
             try {
-                const changedPayload: Record<string, any> = {};
+                const changedPayload: SettingsValues = {};
                 for (const [key, value] of Object.entries(partialValues)) {
                     if (JSON.stringify(value) !== JSON.stringify(values[key])) {
                         changedPayload[key] = value;
@@ -128,7 +134,7 @@ export const useSettingsSchema = () => {
                 setLoading(true);
                 const res = await guiApi.settings.yamlCreate(changedPayload);
                 if (res.error) {
-                    throw new Error((res.error as any).error);
+                    throw new Error(apiErrorMessage(res.error));
                 }
                 setValues((prev) => ({ ...prev, ...changedPayload }));
                 if (!options?.silentSuccess) {
@@ -138,10 +144,10 @@ export const useSettingsSchema = () => {
                     });
                 }
                 return true;
-            } catch (e: any) {
+            } catch (e) {
                 notification.error({
                     message: options?.errorMessage ?? t("settingsSections.toasts.saveFailed"),
-                    description: e.message,
+                    description: errorMessage(e),
                 });
                 return false;
             } finally {

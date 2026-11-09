@@ -45,9 +45,29 @@ const (
 )
 
 // mapReplacementLock serializes the GUI's full read/replace/persist/rollback
-// transaction. A channel-backed lock lets a request stop waiting when its
+// sequence, followed by the dock step for imports. The GUI add/clear/dock
+// routes also participate. A channel-backed lock lets a request stop waiting when its
 // caller context expires.
 var mapReplacementLock = make(chan struct{}, 1)
+
+// MapWriteStatus describes acknowledgements, not a distributed transaction.
+type MapWriteStatus string
+
+const (
+	mapUnchanged         MapWriteStatus = "unchanged"
+	mapRestored          MapWriteStatus = "restored"
+	mapUnconfirmed       MapWriteStatus = "unconfirmed"
+	mapActiveUnconfirmed MapWriteStatus = "active_persistence_unconfirmed"
+	mapPersisted         MapWriteStatus = "persisted"
+)
+
+type mapReplacementError struct {
+	status MapWriteStatus
+	err    error
+}
+
+func (e *mapReplacementError) Error() string { return e.err.Error() }
+func (e *mapReplacementError) Unwrap() error { return e.err }
 
 // triggerRes decodes a std_srvs/srv/Trigger response. The generated
 // mowgli.ClearMapRes has no message field, which is where map_server explains
@@ -74,6 +94,9 @@ func mapWriteBudget(nAreas int) time.Duration {
 
 // callMapService runs one map_server call under its own deadline.
 func callMapService(ctx context.Context, provider types.IRosProvider, service string, req, res any, srvType string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	callCtx, cancel := context.WithTimeout(ctx, mapServiceCallTimeout)
 	defer cancel()
 	err := provider.CallService(callCtx, service, req, res, srvType)
@@ -125,6 +148,9 @@ func writeAreas(ctx context.Context, provider types.IRosProvider, areas []mowgli
 	if err := callMapService(ctx, provider, mapServiceClearMap, &mowgli.ClearMapReq{}, &cleared, "std_srvs/srv/Trigger"); err != nil {
 		return fmt.Errorf("clearing the old map: %w", err)
 	}
+	if !cleared.Success {
+		return fmt.Errorf("clearing the old map: map_server rejected it: %s", cleared.Message)
+	}
 	for i, element := range areas {
 		req := mowgli.AddMowingAreaReq{
 			Area:             normalizedArea(element.Area),
@@ -161,7 +187,8 @@ func persistAreas(ctx context.Context, provider types.IRosProvider) error {
 //   - reading the current map failed  → nothing was changed;
 //   - clear/add failed                → the previous map was put back, or, if
 //     that failed too, map_server holds a partial map and the error says so;
-//   - only save_areas failed          → the NEW map is live but not on disk.
+//   - only save_areas failed          → the NEW map was accepted in memory;
+//     persistence is unconfirmed (add_area may already have auto-saved).
 func replaceMapInternal(ctx context.Context, provider types.IRosProvider, req *mowgli.ReplaceMapReq) error {
 	return replaceMapInternalWithLockWait(ctx, provider, req, nil)
 }
@@ -171,23 +198,31 @@ func replaceMapInternal(ctx context.Context, provider types.IRosProvider, req *m
 // without timing assumptions. Production callers pass no callback.
 func replaceMapInternalWithLockWait(ctx context.Context, provider types.IRosProvider, req *mowgli.ReplaceMapReq, onWait func()) error {
 	if req == nil {
-		return errors.New("replaceMapInternal: nil request")
+		return &mapReplacementError{mapUnchanged, errors.New("replaceMapInternal: nil request")}
 	}
 	if err := lockMapReplacement(ctx, onWait); err != nil {
-		return fmt.Errorf("replace map: waiting for another map replacement: %w", err)
+		return &mapReplacementError{mapUnchanged, fmt.Errorf("replace map: waiting for another map replacement: %w", err)}
 	}
 	defer unlockMapReplacement()
+	return replaceMapLocked(ctx, provider, req)
+}
 
+// Caller must hold mapReplacementLock, including any subsequent import dock call.
+func replaceMapLocked(ctx context.Context, provider types.IRosProvider, req *mowgli.ReplaceMapReq) error {
 	previous, err := snapshotMap(ctx, provider)
 	if err != nil {
-		return fmt.Errorf("replace map: could not read the current map, so nothing was changed: %w", err)
+		return &mapReplacementError{mapUnchanged, fmt.Errorf("replace map: could not read the current map, so nothing was changed: %w", err)}
+	}
+	if err := ctx.Err(); err != nil {
+		return &mapReplacementError{mapUnchanged, fmt.Errorf("replace map: canceled before clearing the current map: %w", err)}
 	}
 
 	if err := writeAreas(ctx, provider, req.Areas); err != nil {
-		return fmt.Errorf("replace map failed while %w — %s", err, restorePreviousMap(ctx, provider, previous))
+		status, message := restorePreviousMap(ctx, provider, previous)
+		return &mapReplacementError{status, fmt.Errorf("replace map failed while %w — %s", err, message)}
 	}
 	if err := persistAreas(ctx, provider); err != nil {
-		return fmt.Errorf("replace map: the new map is live but was NOT written to disk and will be lost at the next restart — check free space on the robot, then save again: %w", err)
+		return &mapReplacementError{mapActiveUnconfirmed, fmt.Errorf("replace map: the new map is live but persistence was NOT confirmed — check the map and storage before another operation: %w", err)}
 	}
 	return nil
 }
@@ -224,7 +259,7 @@ func unlockMapReplacement() {
 // restorePreviousMap puts the snapshot back after a failed replace and
 // describes the outcome for the operator. It runs on a fresh deadline: the
 // usual reason for getting here is that the original one expired.
-func restorePreviousMap(ctx context.Context, provider types.IRosProvider, previous []mowgli.ReplaceMapArea) string {
+func restorePreviousMap(ctx context.Context, provider types.IRosProvider, previous []mowgli.ReplaceMapArea) (MapWriteStatus, string) {
 	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), mapWriteBudget(len(previous)))
 	defer cancel()
 
@@ -233,7 +268,7 @@ func restorePreviousMap(ctx context.Context, provider types.IRosProvider, previo
 		err = persistAreas(restoreCtx, provider)
 	}
 	if err != nil {
-		return fmt.Sprintf("restoring the previous map ALSO failed (%v): the robot now holds a PARTIAL map. Do not start mowing; keep this editor open and save again once ROS2 responds", err)
+		return mapUnconfirmed, fmt.Sprintf("restoring the previous map ALSO failed (%v): the robot may hold a PARTIAL map. Do not start mowing; verify the map before another operation", err)
 	}
-	return fmt.Sprintf("the previous map (%d areas) was restored; your edits are still in the editor, save again", len(previous))
+	return mapRestored, fmt.Sprintf("the previous map (%d areas) was restored; your edits are still in the editor, save again", len(previous))
 }

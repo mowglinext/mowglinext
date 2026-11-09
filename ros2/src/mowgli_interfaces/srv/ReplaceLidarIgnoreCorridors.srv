@@ -1,0 +1,24 @@
+# Complete, ordered, 2D replacement. [] explicitly clears the corridors.
+# Per-transaction staging budget: 64 KiB (entry storage + names + Point32s).
+# Bounds four staging/message copies to 256 KiB, independently of map size.
+# This admits >20 GUI-smoothed lines of 200 vertices; no per-line point cap.
+uint32 MAX_PAYLOAD_BYTES=65536
+LidarIgnoreCorridor[] corridors
+# Correlation only: NOT an idempotency key. No automatic retry after response loss.
+string client_operation_id
+---
+bool success
+# VALIDATION_REJECTED, PERSISTENCE_NOT_CONFIGURED, PERSISTENCE_FAILED_BEFORE_COMMIT,
+# COMMITTED, COMMITTED_DURABILITY_UNCONFIRMED, COMMITTED_PUBLICATION_PENDING.
+string outcome
+string message
+bool committed
+# File and directory fsync confirmed; not a hardware power-loss certification.
+bool persisted
+# Submitted to DDS; NOT acknowledgement from every consumer.
+bool published
+string client_operation_id
+string server_instance_id
+uint64 revision
+# Canonical committed snapshot on success; previous snapshot on pre-commit refusal.
+LidarIgnoreCorridor[] corridors

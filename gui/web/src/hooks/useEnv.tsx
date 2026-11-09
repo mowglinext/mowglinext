@@ -1,28 +1,33 @@
+import {decodeConfigEnvironment} from "../utils/configEnvironment";
+import type {ApiGetConfigResponse} from "../api/Api";
+import {apiErrorMessage, errorMessage} from "../utils/errors";
+import {observeAsync} from "../utils/async";
 import {useApi} from "./useApi.ts";
 import {App} from "antd";
-import {useEffect, useState} from "react";
+import {useEffect, useEffectEvent, useState} from "react";
 import {useTranslation} from "react-i18next";
 
 export const useEnv = () => {
     const guiApi = useApi()
     const {notification} = App.useApp();
     const {t} = useTranslation();
-    const [env, setEnv] = useState<Record<string, any>>({})
+    const [env, setEnv] = useState<ApiGetConfigResponse>({})
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('hookNotifications.failedToLoadConfig'), description: errorMessage(error)});
+    });
+
     useEffect(() => {
-        (async () => {
+        observeAsync((async () => {
             try {
                 const envs = await guiApi.config.envsList()
                 if (envs.error) {
-                    throw new Error(envs.error.error ?? "")
+                    throw new Error(apiErrorMessage(envs.error) ?? "")
                 }
-                setEnv(envs.data)
-            } catch (e: any) {
-                notification.error({
-                    message: t('hookNotifications.failedToLoadConfig'),
-                    description: e.message,
-                })
+                setEnv(decodeConfigEnvironment(envs.data))
+            } catch (e: unknown) {
+                reportLoadError(e)
             }
-        })()
-    }, [])
+        })())
+    }, [guiApi.config])
     return env
 }

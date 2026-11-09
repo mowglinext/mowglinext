@@ -47,6 +47,7 @@ add_library(fusion_graph_core
   src/graph_manager_node.cpp
   src/graph_manager_rebase.cpp
   src/graph_manager_persistence.cpp
+  src/checkpoint_file.cpp
   src/lidar_submap_store.cpp
 )
 
@@ -148,6 +149,18 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+  find_package(ament_cmake_ros REQUIRED)
+
+  add_library(checkpoint_test_delay SHARED test/checkpoint_test_delay.cpp)
+  target_link_libraries(checkpoint_test_delay ${CMAKE_DL_LIBS})
+  ament_add_ros_isolated_pytest_test(test_save_service test/test_save_service.py
+    TIMEOUT 60
+    ENV
+      FUSION_GRAPH_TEST_NODE=$<TARGET_FILE:fusion_graph_node>
+      CHECKPOINT_TEST_DELAY=$<TARGET_FILE:checkpoint_test_delay>
+      PYTHONDONTWRITEBYTECODE=1
+  )
 
   ament_add_gtest(test_factors
     test/test_factors.cpp
@@ -163,6 +176,21 @@ if(BUILD_TESTING)
     test/test_persistence.cpp
   )
   target_link_libraries(test_persistence fusion_graph_core)
+
+  ament_add_gtest(test_persistence_faults test/test_persistence_faults.cpp)
+  target_link_libraries(test_persistence_faults fusion_graph_core)
+
+  # Compile the real helper directly so GNU linker fault wrappers also work
+  # when BUILD_SHARED_LIBS is enabled for the rest of the package.
+  ament_add_gtest(test_checkpoint_file
+    test/test_checkpoint_file.cpp
+    src/checkpoint_file.cpp
+  )
+  target_include_directories(test_checkpoint_file PRIVATE include)
+  target_link_options(test_checkpoint_file PRIVATE
+    -Wl,--wrap=fwrite,--wrap=fflush,--wrap=fsync,--wrap=fclose
+    -Wl,--wrap=open,--wrap=close,--wrap=link,--wrap=rename
+  )
 
   ament_add_gtest(test_stationary_yaw
     test/test_stationary_yaw.cpp

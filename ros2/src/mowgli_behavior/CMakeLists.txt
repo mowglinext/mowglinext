@@ -126,6 +126,15 @@ if(BUILD_TESTING)
   # colcon tests packages in parallel, and on one shared DDS domain the test
   # processes discover each other's nodes (docs/claude/testing-ci.md).
   find_package(ament_cmake_ros REQUIRED)
+  find_package(launch_testing_ament_cmake REQUIRED)
+
+  # Restart the real behavior process at a completed-subpath checkpoint.
+  add_launch_test(test/test_coverage_restart.launch.py
+    TARGET test_coverage_restart
+    TIMEOUT 90
+    RUNNER "${ament_cmake_ros_DIR}/run_test_isolated.py"
+    ENV "MOWGLI_BEHAVIOR_EXECUTABLE=$<TARGET_FILE:behavior_tree_node>"
+  )
   find_package(tinyxml2 REQUIRED)
   # Exclude uncrustify — we use clang-format (see .clang-format)
   set(ament_cmake_uncrustify_FOUND TRUE)
@@ -140,6 +149,30 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_blade_services PUBLIC include)
   target_link_libraries(test_blade_services
+    ${ament_index_cpp_TARGETS}
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
+  )
+
+  ament_add_ros_isolated_gtest(test_fleet_yield_services
+    test/test_fleet_yield_services.cpp
+    ${blade_service_sources}
+  )
+  target_include_directories(test_fleet_yield_services PUBLIC include)
+  target_link_libraries(test_fleet_yield_services
     ${ament_index_cpp_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
@@ -585,6 +618,33 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
+  # ---- test_area_coverage_lines ----
+  # Pure: which swath angle / perimeter winding an area is planned with (its own
+  # override, else the robot-wide setting).
+  ament_add_gtest(test_area_coverage_lines
+    test/test_area_coverage_lines.cpp
+  )
+
+  target_include_directories(test_area_coverage_lines PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_area_coverage_lines
+    ${mowgli_interfaces_TARGETS}
+  )
+
+  # ---- test_undock_resume ----
+  # Pure: reverse left of an undock stopped mid-way (Pause / emergency).
+  ament_add_gtest(test_undock_resume
+    test/test_undock_resume.cpp
+  )
+
+  target_include_directories(test_undock_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_dig_skip ----
   # Pure: session dig skip zones (which coverage poses are skipped around a
   # recorded dig point) + the wait for the bridge's bounded reverse.
@@ -625,6 +685,11 @@ if(BUILD_TESTING)
     $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
     $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
     TIMEOUT 180
+  )
+
+  # Capture ROS 2 logs reliably in the checkpoint regression test.
+  set_tests_properties(test_follow_strip_dig PROPERTIES
+    ENVIRONMENT "RCUTILS_LOGGING_USE_STDOUT=1;RCUTILS_LOGGING_BUFFERED_STREAM=0"
   )
 
   target_include_directories(test_follow_strip_dig PUBLIC
@@ -700,12 +765,38 @@ if(BUILD_TESTING)
     ${geometry_msgs_TARGETS}
   )
 
+  # ---- test_blocked_stretch ----
+  # Pure: where a unit resumes once an obstacle stretch beat every detour
+  # (issue #607) instead of dropping the rest of the unit.
+  ament_add_gtest(test_blocked_stretch
+    test/test_blocked_stretch.cpp
+  )
+
+  target_include_directories(test_blocked_stretch PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_blocked_stretch
+    ${geometry_msgs_TARGETS}
+  )
+
   # ---- test_unit_resume ----
   ament_add_gtest(test_unit_resume
     test/test_unit_resume.cpp
   )
 
   target_include_directories(test_unit_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  # ---- test_area_progress ---- (area_progress.hpp, pure header, no ROS)
+  ament_add_gtest(test_area_progress
+    test/test_area_progress.cpp
+  )
+
+  target_include_directories(test_area_progress PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
@@ -792,6 +883,7 @@ if(BUILD_TESTING)
   # current_command + resume cursor) and only EndSession on a dead charger.
   ament_add_ros_isolated_gtest(test_battery_critical_resume
     test/test_battery_critical_resume.cpp
+    src/docking_nodes.cpp
     $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
     $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
     $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
@@ -808,6 +900,41 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_battery_critical_resume
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
+  # ---- test_incomplete_resume ----
+  # Play resumes the area that was in progress when a session ended unfinished:
+  # EndSession(keep_incomplete) keeps the coverage progress (and the single-area target) for
+  # failed coverage / HOME, a plain Start continues it, a finished session still wipes it, and
+  # kept progress older than a day is not resumed. Structural half: only those two endings of
+  # main_tree.xml keep.
+  ament_add_ros_isolated_gtest(test_incomplete_resume
+    test/test_incomplete_resume.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+  )
+  target_include_directories(test_incomplete_resume PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+  target_compile_definitions(test_incomplete_resume PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+  target_link_libraries(test_incomplete_resume
     ${rclcpp_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
@@ -1013,6 +1140,9 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  ament_add_gtest(test_blade_ready test/test_blade_ready.cpp)
+  target_include_directories(test_blade_ready PRIVATE include)
+
   # Pure dock-alignment math (header-only): the along/cross-track decomposition
   # logged at claimed contact, and the per-undock dock_pose_yaw drift check.
   ament_add_gtest(test_dock_alignment
@@ -1056,6 +1186,25 @@ if(BUILD_TESTING)
   target_compile_definitions(test_dig_obstruction_recovery PRIVATE
     MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
   )
+
+  # Execute the real mowing startup control flow with deterministic external
+  # actions, and exercise BackUp cancellation before goal-handle collection.
+  ament_add_ros_isolated_gtest(test_startup_pause
+    test/test_startup_pause.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+  )
+  target_include_directories(test_startup_pause PUBLIC include)
+  target_compile_definitions(test_startup_pause PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+  target_link_libraries(test_startup_pause ${behavior_node_dependencies} tinyxml2::tinyxml2)
+
+  ament_add_ros_isolated_gtest(test_backup_pause
+    test/test_backup_pause.cpp
+    src/navigation_nodes.cpp
+  )
+  target_include_directories(test_backup_pause PUBLIC include)
+  target_link_libraries(test_backup_pause ${behavior_node_dependencies})
 
 endif()
 

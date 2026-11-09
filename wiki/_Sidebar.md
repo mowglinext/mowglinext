@@ -20,6 +20,7 @@
 - [Firmware](Firmware)
 - [GUI](GUI)
 - [Simulation](Simulation)
+- [Diagnostics and Session Monitoring](Diagnostics-and-Session-Monitoring)
 - [E2E Testing](Simulation#end-to-end-e2e-test)
 
 **Community**

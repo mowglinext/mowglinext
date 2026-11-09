@@ -37,10 +37,13 @@ ensure_default_configs() {
   # stack self-heals, not just the full installer's migrate_runtime_paths.
   fix_path_type_conflict "$DOCKER_DIR/config/mqtt/mosquitto.conf" "file"
   fix_path_type_conflict "$DOCKER_DIR/config/cyclonedds.xml" "file"
+  fix_path_type_conflict "$DOCKER_DIR/config/cyclonedds-mavros.xml" "file"
   # The GNSS sidecar reads mowgli_robot.yaml directly. A derived parameters
   # file left by an earlier install is dead weight holding the NTRIP password.
   rm -rf "$DOCKER_DIR/config/universal_gnss"
   fix_path_type_conflict "$DOCKER_DIR/config/mavros/mowgli_robot.yaml" "file"
+  fix_path_type_conflict "$DOCKER_DIR/config/mavros/esc_wheel_odometry.yaml" "file"
+  fix_path_type_conflict "$DOCKER_DIR/config/mavros/hardware_bridge.yaml" "file"
 
   if [ ! -f "$DOCKER_DIR/config/mqtt/mosquitto.conf" ]; then
     cp "$defaults/mqtt/mosquitto.conf" "$DOCKER_DIR/config/mqtt/mosquitto.conf"
@@ -51,6 +54,12 @@ ensure_default_configs() {
     cp "$defaults/cyclonedds.xml" "$DOCKER_DIR/config/cyclonedds.xml"
     info "Created default cyclonedds.xml"
   fi
+
+  # The MAVROS sidecar needs an older-Cyclone-compatible peer configuration.
+  if [ ! -f "$DOCKER_DIR/config/cyclonedds-mavros.xml" ]; then
+    cp "$defaults/cyclonedds-mavros.xml" "$DOCKER_DIR/config/cyclonedds-mavros.xml"
+    info "Created default cyclonedds-mavros.xml"
+  fi
 }
 
 
@@ -59,6 +68,12 @@ build_compose_stack() {
   local gnss_backend
   local gnss_stack
   local gnss_service
+  local gnss_source
+
+  if ! is_supported_hardware_backend "${HARDWARE_BACKEND:-mowgli}"; then
+    error "Unknown HARDWARE_BACKEND: ${HARDWARE_BACKEND:-unset} (expected mowgli, mavros or openmower)"
+    return 1
+  fi
 
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.base.yml")
   COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.gui.yml")
@@ -68,13 +83,18 @@ build_compose_stack() {
     COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.mqtt.yml")
   fi
 
-  # In Mowgli mode, select one direct GNSS stack.
-  # In MAVROS mode, GPS is handled via Pixhawk/MAVROS + NTRIP sidecar,
-  # so direct GNSS compose fragments must not be included.
+  # GNSS ownership is independent from the robot hardware backend. A MAVROS
+  # robot may use either a receiver connected directly to the SoC or a receiver
+  # connected to the Pixhawk. The two paths use different UG runtime fragments.
   gnss_backend="$(effective_gnss_backend 2>/dev/null || true)"
   gnss_stack="$(effective_gnss_stack 2>/dev/null || true)"
+  gnss_source="$(effective_gnss_source 2>/dev/null || true)"
   if ! is_supported_gnss_backend "$gnss_backend"; then
     error "Unknown GNSS_BACKEND: ${GNSS_BACKEND:-unset} (expected: $(list_supported_gnss_backends))"
+    return 1
+  fi
+  if ! is_supported_gnss_source "$gnss_source"; then
+    error "Unknown GNSS_SOURCE: ${GNSS_SOURCE:-unset} (expected: $(list_supported_gnss_sources))"
     return 1
   fi
 
@@ -101,18 +121,20 @@ build_compose_stack() {
       warn "UNIVERSAL_GNSS_IMAGE was unset in .env; defaulting to $UNIVERSAL_GNSS_IMAGE_DEFAULT"
     fi
     gnss_service="$(compose_gnss_service_name "$gnss_backend" 2>/dev/null || true)"
-    case "$gnss_service" in
-      gps)
+    case "$gnss_service:$gnss_source" in
+      gps:direct)
         COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.gps.yml")
+        info "Universal GNSS selected: receiver is connected directly to the companion computer."
+        ;;
+      gps:mavros)
+        COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.gps-mavros.yml")
+        info "Universal GNSS selected: receiver is provided by MAVROS; UG runs NTRIP-only."
         ;;
       *)
-        error "No compose fragment mapped for GNSS backend: ${gnss_backend}"
+        error "No compose fragment mapped for GNSS backend/source: ${gnss_backend}/${gnss_source}"
         return 1
         ;;
     esac
-    if [[ "$gnss_stack" == "universal" ]]; then
-      info "Universal GNSS selected: GNSS runs in the external Universal GNSS sidecar."
-    fi
   fi
 
   # Watchtower is gone: the host updater does managed releases and
@@ -145,6 +167,11 @@ build_compose_stack() {
 
   [[ "${HARDWARE_BACKEND:-mowgli}" == "mavros" ]] && \
     COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.mavros.yml")
+
+  # OpenMower v1 electronics: the bridge sidecar replaces mowgli-ros2's
+  # hardware_bridge_node (gated in mowgli.launch.py); GNSS stays universal.
+  [[ "${HARDWARE_BACKEND:-mowgli}" == "openmower" ]] && \
+    COMPOSE_FILES+=("$COMPOSE_SRC_DIR/docker-compose.openmower.yml")
 
   info "Selected compose fragments:"
   for f in "${COMPOSE_FILES[@]}"; do
@@ -314,10 +341,17 @@ write_compose_merged() {
   mkdir -p "$DOCKER_DIR"
 
   if [[ -f "$DOCKER_DIR/.updater-managed" ]]; then
-    if [[ "${HARDWARE_BACKEND:-mowgli}" != "mowgli" ]]; then
-      error "$MSG_UPDATER_STACK_BACKEND"
-      return 1
-    fi
+    # The worker reads HARDWARE_BACKEND from docker/.env itself (the bundle's
+    # "backend" group), so only the backends a release covers get this far.
+    # Spelled out rather than updater_hardware_supported: docker/stack.sh
+    # sources this file without lib/updater.sh.
+    case "${HARDWARE_BACKEND:-mowgli}" in
+      mowgli|openmower) ;;
+      *)
+        error "$MSG_UPDATER_STACK_BACKEND"
+        return 1
+        ;;
+    esac
     local selected_gnss="none" selected_lidar="none"
     if [[ "$(effective_gnss_stack)" != "disabled" && "$(effective_gnss_backend)" != "disabled" ]]; then
       selected_gnss="universal"

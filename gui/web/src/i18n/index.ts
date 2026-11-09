@@ -1,3 +1,4 @@
+import {observeAsync} from "../utils/async";
 import i18n from "i18next";
 import {initReactI18next} from "react-i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
@@ -14,7 +15,7 @@ export const SUPPORTED_LANGUAGES = [
 
 export type LanguageCode = (typeof SUPPORTED_LANGUAGES)[number]["code"];
 
-i18n
+observeAsync(i18n
   // Detect from localStorage first (an explicit user choice via the in-app
   // switcher), then fall back to the browser language (navigator.language).
   .use(LanguageDetector)
@@ -41,6 +42,6 @@ i18n
       lookupLocalStorage: "mowglinext.lang",
       caches: ["localStorage"],
     },
-  });
+  }));
 
 export default i18n;

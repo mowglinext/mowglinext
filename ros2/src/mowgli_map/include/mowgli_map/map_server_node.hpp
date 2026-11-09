@@ -40,11 +40,13 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/u_int64.hpp>
 #include <tf2/exceptions.hpp>
 #include <tf2_ros/buffer.hpp>
 #include <tf2_ros/transform_listener.hpp>
 
+#include "mowgli_map/area_coverage_lines.hpp"
 #include "mowgli_map/dock_antenna_capture.hpp"
 #include "mowgli_map/map_types.hpp"
 #include "mowgli_map/mow_progress.hpp"
@@ -67,8 +69,11 @@
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
 #include <mowgli_interfaces/srv/get_recovery_point.hpp>
 #include <mowgli_interfaces/srv/promote_obstacle.hpp>
+#include <mowgli_interfaces/srv/replace_lidar_ignore_corridors.hpp>
+#include <mowgli_interfaces/srv/set_area_coverage_lines.hpp>
 #include <mowgli_interfaces/srv/set_docking_point.hpp>
 #include <std_srvs/srv/trigger.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace mowgli_map
 {
@@ -91,6 +96,8 @@ inline constexpr const char* kRuntimeRobotYaml = "/ros2_ws/config/mowgli_robot.y
 /// are offered as services.
 class MapServerNode : public rclcpp::Node
 {
+  friend class CorridorTransactionTest;
+
 public:
   /// @brief Construct the node, declare parameters, create map, wire up all
   ///        publishers, subscribers, services, and timers.
@@ -126,6 +133,10 @@ public:
   double tool_width() const
   {
     return tool_width_;
+  }
+  const std::string& planning_grid_error_for_test() const
+  {
+    return planning_grid_error_;
   }
 
   /// Test-only: add a verified tool pose to the accumulated footprint.
@@ -230,6 +241,14 @@ public:
   void add_area_for_test(const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
                          mowgli_interfaces::srv::AddMowingArea::Response::SharedPtr res);
 
+  /// Test-only: directly invoke the set_area_coverage_lines service handler.
+  void set_area_coverage_lines_for_test(
+      const mowgli_interfaces::srv::SetAreaCoverageLines::Request::SharedPtr req,
+      mowgli_interfaces::srv::SetAreaCoverageLines::Response::SharedPtr res)
+  {
+    on_set_area_coverage_lines(req, res);
+  }
+
   /// Test-only: directly invoke get_mowing_area service handler.
   void get_mowing_area_for_test(const mowgli_interfaces::srv::GetMowingArea::Request::SharedPtr req,
                                 mowgli_interfaces::srv::GetMowingArea::Response::SharedPtr res);
@@ -240,6 +259,25 @@ public:
   /// a file with areas by an empty map.
   void save_areas_guarded_for_test(const std::string& path);
   void load_areas_for_test(const std::string& path);
+  /// Calls the real ~/load_areas service handler (the runtime reload the GUI's
+  /// map-backup restore uses) and returns its response.
+  std_srvs::srv::Trigger::Response load_areas_service_for_test();
+
+  /// Test-only: exercise map persistence through the real service callbacks.
+  void save_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_save_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+  void load_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_load_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+
+  /// Test-only: exercise the same clear operation used by GUI map replacement.
+  void clear_map_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_clear_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
 
   /// Test-only: current area-list generation (mowglinext#637 phase 2).
   uint64_t area_list_generation_for_test() const
@@ -400,6 +438,12 @@ private:
     /// PERSISTED and must stay stable across a restart — see
     /// next_area_id_'s doc comment for how it survives one.
     uint32_t id{0};
+    /// Optional per-area overrides of the robot-wide mow_angle_deg /
+    /// mow_direction (see area_coverage_lines.hpp). Persisted in areas.dat,
+    /// served by ~/get_mowing_area, changed by ~/set_area_coverage_lines. The
+    /// default (nothing overridden) is what every area written before these
+    /// fields existed means.
+    AreaCoverageLines coverage_lines;
   };
 
   /// An operator-drawn line along which costmap_scan_filter_node suppresses
@@ -504,6 +548,12 @@ private:
   void on_add_area(const mowgli_interfaces::srv::AddMowingArea::Request::SharedPtr req,
                    mowgli_interfaces::srv::AddMowingArea::Response::SharedPtr res);
 
+  /// Set or clear one area's own mow angle / perimeter winding, addressed by the
+  /// stable MapArea.id. Persists immediately; changes only that area's NEXT plan.
+  void on_set_area_coverage_lines(
+      const mowgli_interfaces::srv::SetAreaCoverageLines::Request::SharedPtr req,
+      mowgli_interfaces::srv::SetAreaCoverageLines::Response::SharedPtr res);
+
   /// Increment area_list_generation_ and publish it on
   /// area_list_generation_pub_ (mowglinext#637 phase 2). Called once per
   /// successful ~/add_area. Not called at startup: area_list_generation_
@@ -530,6 +580,15 @@ private:
   void on_clear_lidar_ignore_corridors(
       const mowgli_interfaces::srv::ClearLidarIgnoreCorridors::Request::SharedPtr req,
       mowgli_interfaces::srv::ClearLidarIgnoreCorridors::Response::SharedPtr res);
+  void on_replace_lidar_ignore_corridors(
+      const mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors::Request::SharedPtr req,
+      mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors::Response::SharedPtr res);
+  void commit_corridors(std::vector<LidarIgnoreCorridorEntry> candidate,
+                        uint64_t next_id,
+                        mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors::Response& result,
+                        bool require_persistence);
+  std::vector<mowgli_interfaces::msg::LidarIgnoreCorridor> corridor_snapshot() const;
+
   /// Republish the full current list on lidar_ignore_corridors_pub_
   /// (transient_local) — called after every add/clear/load, so a late
   /// subscriber always has the current list.
@@ -612,6 +671,10 @@ private:
   /// Does nothing if mowing_area_polygon_ has fewer than 3 points.
   /// Caller must hold map_mutex_.
   void publish_keepout_mask();
+  void invalidate_keepout_mask();
+  /// Called with map_mutex_ held: complete transit authorization snapshot.
+  void publish_transit_geometry();
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr transit_geometry_pub_;
 
   /// Check if the robot is outside all allowed polygons and publish violation.
   void check_boundary_violation(double x, double y);
@@ -720,7 +783,7 @@ private:
   static geometry_msgs::msg::Polygon parse_polygon_string(const std::string& s);
 
   /// Serialize a polygon to "x1,y1;x2,y2;..." string format.
-  static std::string polygon_to_string(const geometry_msgs::msg::Polygon& poly);
+  static std::string polygon_to_string(const geometry_msgs::msg::Polygon& poly, int precision = 6);
 
   /// Save areas and docking point to a YAML file.
   /// Atomically write the areas file. Unless `allow_empty_overwrite`, REFUSES (throws) to
@@ -730,16 +793,37 @@ private:
   /// the first add_area, or after a failed load — writing that out destroyed the operator's
   /// map and left only the ignore lines. The file being replaced is kept as <path>.bak.
   void save_areas_to_file(const std::string& path, bool allow_empty_overwrite = false);
+  // Caller holds areas_state_mutex_. Candidate corridors never enter live memory before commit.
+  // Returns directory-sync confirmation; pre-Rename failures throw, post-Rename never throw.
+  bool write_areas_candidate(const std::string& path,
+                             bool allow_empty_overwrite,
+                             const std::vector<LidarIgnoreCorridorEntry>& corridors,
+                             uint64_t next_corridor_id);
   /// area_count recorded in an areas file, or 0 when it is missing/unreadable.
   static int count_areas_in_file(const std::string& path);
 
   /// fsync `tmp_path`, rename it over `path`, fsync the directory. Throws (and
-  /// removes the temp file) if the data cannot be made durable; `path` is then
-  /// untouched.
-  static void commit_file_atomically(const std::string& tmp_path, const std::string& path);
+  /// removes the temp file) on failure before Rename; `path` is then untouched.
+  /// Returns false if directory open/fsync fails AFTER Rename; file is already committed.
+  static bool commit_file_atomically(const std::string& tmp_path, const std::string& path);
+
+  /// Which datum frame the in-memory dock pose is expressed in when a load
+  /// finds an areas.dat stamped with a different datum.
+  enum class DockPoseFrame
+  {
+    /// Boot: the dock pose comes from mowgli_robot.yaml, written under the
+    /// same (old) datum as areas.dat, so it migrates together with the map.
+    kSameAsFile,
+    /// Runtime reload (~/load_areas, e.g. a map-backup restore): the datum is
+    /// a launch parameter, so the in-memory dock pose is already in the
+    /// current frame — migrated at boot, or set by calibration. Moving it
+    /// again would shift the dock by the datum delta and persist the error.
+    kAlreadyCurrent,
+  };
 
   /// Load areas and docking point from a YAML file.
-  void load_areas_from_file(const std::string& path);
+  void load_areas_from_file(const std::string& path,
+                            DockPoseFrame dock_frame = DockPoseFrame::kSameAsFile);
 
   /// Datum-change migration (issue #216). areas.dat is stamped with the
   /// datum its metre coordinates were recorded against. When the stamp
@@ -753,8 +837,13 @@ private:
   ///
   /// @param file_datum_lat/lon  Stamp parsed from areas.dat (NaN if absent).
   /// @param path                areas.dat path, for the re-stamping save.
+  /// @param dock_frame          kSameAsFile also migrates (and persists) the
+  ///                            dock pose; kAlreadyCurrent leaves it alone.
   /// Caller must NOT hold map_mutex_.
-  void migrate_areas_datum(double file_datum_lat, double file_datum_lon, const std::string& path);
+  void migrate_areas_datum(double file_datum_lat,
+                           double file_datum_lon,
+                           const std::string& path,
+                           DockPoseFrame dock_frame);
 
   /// Reapply area classifications to the map grid (called after loading areas).
   /// Takes map_mutex_; clears classification_dirty_.
@@ -789,6 +878,9 @@ private:
 
   // ── Parameters ────────────────────────────────────────────────────────────
   double resolution_;
+  int64_t max_grid_cells_{4000000};
+  std::string planning_grid_error_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr planning_grid_error_pub_;
   double map_size_x_;
   double map_size_y_;
   std::string map_frame_;
@@ -916,6 +1008,15 @@ private:
   /// "Start occupied".
   double boundary_inner_margin_m_{0.3};
 
+  /// Soft TRANSIT margin (m) around every drawn obstacle, outside its lethal keepout band
+  /// (keepout_obstacle_margin_m_): cells up to keepout_obstacle_margin_m_ + this far from the
+  /// polygon get kSoftPenaltyMaskCost in the keepout mask — the same mid-cost as the boundary
+  /// bands, NEVER lethal. It nudges the global planner (Smac, point-to-point TRANSIT) towards a
+  /// wider berth around drawn obstacles where there is room, because the lethal band is only the
+  /// body half-width while the controller tests the whole footprint against the real object. 0
+  /// disables it. Read declare_parameters(), not this initialiser (mowglinext#975).
+  double obstacle_transit_margin_m_{0.0};
+
   /// Cells within this distance of docking_pose_ are exempt from the
   /// boundary_inner_margin_m_ penalty above, regardless of direction — kept
   /// even though the mid-cost design no longer strictly needs it for
@@ -994,6 +1095,10 @@ private:
 
   // ── State ─────────────────────────────────────────────────────────────────
   grid_map::GridMap map_;
+  // Lock order: areas_state_mutex_ BEFORE map_mutex_. Covers every mutation of
+  // the state serialized in areas.dat, the shared .tmp writer and corridor publication.
+  // Recursive because load/migration/save and obstacle helpers share this boundary.
+  mutable std::recursive_mutex areas_state_mutex_;
   mutable std::mutex map_mutex_;
 
   /// Dedicated grid accumulating the mowed area, published as an OccupancyGrid
@@ -1054,7 +1159,11 @@ private:
   /// Next id to mint for a new corridor — same contract as next_area_id_
   /// (persisted in areas.dat, recovered on load as max(loaded ids) + 1,
   /// never reset by ~/clear_map or ~/clear_lidar_ignore_corridors).
-  uint32_t next_lidar_corridor_id_{1};
+  // uint32 IDs plus one representable exhaustion sentinel; never wrap to zero.
+  uint64_t next_lidar_corridor_id_{1};
+  std::string corridor_server_instance_id_;
+  uint64_t corridor_revision_{0};
+  bool corridor_publication_pending_{false};
 
   /// Bumped on every successful ~/add_area (mowglinext#637 phase 2) and
   /// published on area_list_generation_pub_ (transient_local — a late
@@ -1314,6 +1423,8 @@ private:
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr clear_map_srv_;
   rclcpp::Service<mowgli_interfaces::srv::AddMowingArea>::SharedPtr add_area_srv_;
   rclcpp::Service<mowgli_interfaces::srv::GetMowingArea>::SharedPtr get_mowing_area_srv_;
+  rclcpp::Service<mowgli_interfaces::srv::SetAreaCoverageLines>::SharedPtr
+      set_area_coverage_lines_srv_;
   rclcpp::Service<mowgli_interfaces::srv::SetDockingPoint>::SharedPtr set_docking_point_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr capture_dock_antenna_srv_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_areas_srv_;
@@ -1327,6 +1438,9 @@ private:
       get_lidar_ignore_corridors_srv_;
   rclcpp::Service<mowgli_interfaces::srv::ClearLidarIgnoreCorridors>::SharedPtr
       clear_lidar_ignore_corridors_srv_;
+
+  rclcpp::Service<mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors>::SharedPtr
+      replace_lidar_ignore_corridors_srv_;
 
   // ── TF ────────────────────────────────────────────────────────────────────
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

@@ -12,10 +12,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gin-gonic/gin"
 	"github.com/mowglinext/mowglinext/pkg/msgs/geometry"
 	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/types"
-	"github.com/gin-gonic/gin"
 	"gopkg.in/yaml.v3"
 )
 
@@ -100,6 +100,7 @@ type ImportOpenMowerRequest struct {
 // ImportOpenMowerSummary is the user-facing preview that the GUI shows
 // in its confirmation modal.
 type ImportOpenMowerSummary struct {
+	ImportOutcome
 	MowingAreas      int                 `json:"mowing_areas"`
 	NavigationAreas  int                 `json:"navigation_areas"`
 	Obstacles        int                 `json:"obstacles"`
@@ -118,6 +119,37 @@ type ImportOpenMowerSummary struct {
 	// so overwriting it would misalign the just-imported map — the GUI
 	// then hides the datum-import option.
 	MnDatumConfigured bool `json:"mn_datum_configured"`
+}
+
+type DockWriteStatus string
+
+const (
+	dockNotRequested      DockWriteStatus = "not_requested"
+	dockNotAttempted      DockWriteStatus = "not_attempted"
+	dockRejected          DockWriteStatus = "rejected"
+	dockUnconfirmed       DockWriteStatus = "unconfirmed"
+	dockActiveUnconfirmed DockWriteStatus = "active_persistence_unconfirmed"
+	dockConfirmed         DockWriteStatus = "confirmed"
+)
+
+// ImportOutcome is additive to both the legacy summary and {error: string}.
+// Statuses describe only the service acknowledgements within this operation.
+type ImportOutcome struct {
+	MapStatus  MapWriteStatus  `json:"map_status"`
+	DockStatus DockWriteStatus `json:"dock_status"`
+}
+
+type importApplyError struct {
+	outcome ImportOutcome
+	err     error
+}
+
+func (e *importApplyError) Error() string { return e.err.Error() }
+func (e *importApplyError) Unwrap() error { return e.err }
+
+type importErrorResponse struct {
+	ImportOutcome
+	Error string `json:"error"`
 }
 
 // ImportedAreaBrief is one row in the per-area preview table.
@@ -186,21 +218,34 @@ func ImportRoutes(r *gin.RouterGroup, rosProvider types.IRosProvider, dbProvider
 // @Router /import/openmower [post]
 func postImportOpenMower(rosProvider types.IRosProvider, dbProvider types.IDBProvider) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		outcome := ImportOutcome{mapUnchanged, dockNotAttempted}
+		fail := func(status int, err error) {
+			var applied *importApplyError
+			if errors.As(err, &applied) {
+				outcome = applied.outcome
+			}
+			c.JSON(status, importErrorResponse{outcome, err.Error()})
+		}
 		raw, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "cannot read body: " + err.Error()})
+			fail(http.StatusBadRequest, fmt.Errorf("cannot read body: %w", err))
 			return
 		}
 
 		req, err := parseImportRequest(raw)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+			fail(http.StatusBadRequest, err)
 			return
 		}
 
 		var omMap openMowerMap
 		if err := json.Unmarshal(req.Map, &omMap); err != nil {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid OpenMower map.json: " + err.Error()})
+			fail(http.StatusBadRequest, fmt.Errorf("invalid OpenMower map.json: %w", err))
+			return
+		}
+		if req.OmDatumLat != nil && !validImportLatitude(*req.OmDatumLat) ||
+			req.OmDatumLon != nil && !validImportLongitude(*req.OmDatumLon) {
+			fail(http.StatusBadRequest, errors.New("invalid OpenMower projection datum; import was not started"))
 			return
 		}
 
@@ -208,9 +253,18 @@ func postImportOpenMower(rosProvider types.IRosProvider, dbProvider types.IDBPro
 		// passed an OpenMower datum we reproject geodetically; otherwise
 		// we fall back to an identity copy and warn.
 		mnLat, mnLon, datumErr := readMowgliNextDatum(dbProvider)
+		if datumErr == nil && (!validImportLatitude(mnLat) || !validImportLongitude(mnLon)) {
+			fail(http.StatusBadRequest, errors.New("invalid target projection datum; import was not started"))
+			return
+		}
 		reproj, datumWarn := resolveReprojection(req.OmDatumLat, req.OmDatumLon, mnLat, mnLon, datumErr)
+		east, north := reproj.project(0, 0)
+		if math.IsNaN(east) || math.IsInf(east, 0) || math.IsNaN(north) || math.IsInf(north, 0) {
+			fail(http.StatusBadRequest, errors.New("invalid coordinate transformation; import was not started"))
+			return
+		}
 
-		summary := buildImportSummary(omMap, reproj)
+		summary, replaceReq, dockReq := buildOpenMowerImport(omMap, reproj)
 		summary.MnDatumConfigured = datumErr == nil
 		if datumWarn != "" {
 			summary.Warnings = append([]string{datumWarn}, summary.Warnings...)
@@ -218,15 +272,30 @@ func postImportOpenMower(rosProvider types.IRosProvider, dbProvider types.IDBPro
 
 		// Build (in memory) the MowgliNext-shaped payload that *would*
 		// be POSTed to /map_server_node/add_area, plus the dock pose.
-		// Currently logged + counted but not actually written.
-		replaceReq, dockReq := buildMowgliNextPayload(omMap, reproj)
+		// Sent only after the operator explicitly requests apply.
+		if dockReq == nil {
+			outcome.DockStatus = dockNotRequested
+		}
+		summary.ImportOutcome = outcome
 
+		if err := validateImportDock(dockReq); err != nil {
+			fail(http.StatusBadRequest, err)
+			return
+		}
 		if req.Apply {
+			if summary.MowingAreas == 0 {
+				fail(http.StatusBadRequest, errors.New("no admissible mowing area; import was not started"))
+				return
+			}
 			if err := applyImport(c, rosProvider, replaceReq, dockReq); err != nil {
-				c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+				fail(http.StatusInternalServerError, err)
 				return
 			}
 			summary.Applied = true
+			summary.MapStatus = mapPersisted
+			if dockReq != nil {
+				summary.DockStatus = dockConfirmed
+			}
 		} else {
 			logImportPreview(summary, replaceReq, dockReq)
 		}
@@ -596,6 +665,13 @@ func resolveReprojection(omLat, omLon *float64, mnLat, mnLon float64, mnDatumErr
 // between the two datums — so the GUI's "datum shift" alert still reads
 // meaningfully under full reprojection.
 func buildImportSummary(omMap openMowerMap, reproj datumReprojector) ImportOpenMowerSummary {
+	summary, _, _ := buildOpenMowerImport(omMap, reproj)
+	return summary
+}
+
+// One selection, obstacle assignment and projection drive both the operator's
+// preview and the exact write payload. Never reconstruct a weaker apply list.
+func buildOpenMowerImport(omMap openMowerMap, reproj datumReprojector) (ImportOpenMowerSummary, *mowgli.ReplaceMapReq, *mowgli.SetDockingPointReq) {
 	originE, originN := reproj.project(0, 0)
 	summary := ImportOpenMowerSummary{
 		Warnings:         []string{},
@@ -615,12 +691,12 @@ func buildImportSummary(omMap openMowerMap, reproj datumReprojector) ImportOpenM
 		a.Outline = dedupOutline(a.Outline)
 		switch strings.ToLower(a.Properties.Type) {
 		case "mow", "nav":
-			if !validateOutline(a, &summary) {
+			if !validateImportOutline(a, reproj, &summary) {
 				continue
 			}
 			mowAndNav = append(mowAndNav, a)
 		case "obstacle":
-			if !validateOutline(a, &summary) {
+			if !validateImportOutline(a, reproj, &summary) {
 				continue
 			}
 			obstacles = append(obstacles, a)
@@ -631,6 +707,7 @@ func buildImportSummary(omMap openMowerMap, reproj datumReprojector) ImportOpenM
 		}
 	}
 
+	replaceReq := &mowgli.ReplaceMapReq{Areas: []mowgli.ReplaceMapArea{}}
 	// Per-area summary + obstacle re-parenting.
 	obstacleAssign := matchObstaclesToParents(obstacles, mowAndNav, &summary)
 	for i, a := range mowAndNav {
@@ -650,6 +727,14 @@ func buildImportSummary(omMap openMowerMap, reproj datumReprojector) ImportOpenM
 			summary.MowingAreas++
 		}
 		summary.Obstacles += len(obstacleAssign[i])
+		obstaclePolygons := []geometry.Polygon{}
+		for _, oi := range obstacleAssign[i] {
+			obstaclePolygons = append(obstaclePolygons, geometry.Polygon{Points: outlineToPoint32s(obstacles[oi].Outline, reproj)})
+		}
+		replaceReq.Areas = append(replaceReq.Areas, mowgli.ReplaceMapArea{
+			Area:             mowgli.MapArea{Name: a.Properties.Name, Area: geometry.Polygon{Points: outlineToPoint32s(a.Outline, reproj)}, Obstacles: obstaclePolygons},
+			IsNavigationArea: isNav,
+		})
 	}
 
 	if summary.MowingAreas == 0 {
@@ -677,7 +762,13 @@ func buildImportSummary(omMap openMowerMap, reproj datumReprojector) ImportOpenM
 		}
 	}
 
-	return summary
+	var dockReq *mowgli.SetDockingPointReq
+	if pose := summary.DockPose; pose != nil {
+		dockReq = &mowgli.SetDockingPointReq{DockingPose: geometry.Pose{
+			Position: geometry.Point{X: pose.X, Y: pose.Y}, Orientation: yawToQuaternion(pose.YawRad),
+		}}
+	}
+	return summary, replaceReq, dockReq
 }
 
 // validateOutline performs the per-polygon sanity checks. Returns
@@ -697,7 +788,42 @@ func validateOutline(a openMowerArea, summary *ImportOpenMowerSummary) bool {
 			return false
 		}
 	}
+	if !simpleImportOutline(a.Outline) {
+		summary.Warnings = append(summary.Warnings, fmt.Sprintf("area %q (id=%s) has a degenerate or self-intersecting outline — skipped.", a.Properties.Name, shortID(a.ID)))
+		return false
+	}
 	return true
+}
+
+// Test topology without repairing, reordering or rounding source vertices.
+func simpleImportOutline(points []openMowerPoint) bool {
+	if len(points) < 3 {
+		return false
+	}
+	cross := func(a, b, c openMowerPoint) float64 { return (b.X-a.X)*(c.Y-a.Y) - (b.Y-a.Y)*(c.X-a.X) }
+	between := func(a, b, p openMowerPoint) bool {
+		return cross(a, b, p) == 0 && p.X >= math.Min(a.X, b.X) && p.X <= math.Max(a.X, b.X) && p.Y >= math.Min(a.Y, b.Y) && p.Y <= math.Max(a.Y, b.Y)
+	}
+	var twiceArea float64
+	for i, a := range points {
+		b := points[(i+1)%len(points)]
+		if a == b {
+			return false
+		}
+		twiceArea += cross(points[0], a, b)
+		for j := i + 1; j < len(points); j++ {
+			if j == i+1 || i == 0 && j == len(points)-1 {
+				continue
+			}
+			c, d := points[j], points[(j+1)%len(points)]
+			ac, ad, ca, cb := cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b)
+			if ((ac > 0 && ad < 0 || ac < 0 && ad > 0) && (ca > 0 && cb < 0 || ca < 0 && cb > 0)) ||
+				between(a, b, c) || between(a, b, d) || between(c, d, a) || between(c, d, b) {
+				return false
+			}
+		}
+	}
+	return twiceArea != 0 && !math.IsNaN(twiceArea) && !math.IsInf(twiceArea, 0)
 }
 
 // matchObstaclesToParents assigns each obstacle to the first
@@ -736,74 +862,49 @@ func matchObstaclesToParents(obstacles, parents []openMowerArea, summary *Import
 // pose request that the apply path will eventually use. Produced even
 // in preview mode so logging shows exactly what would be written.
 func buildMowgliNextPayload(omMap openMowerMap, reproj datumReprojector) (*mowgli.ReplaceMapReq, *mowgli.SetDockingPointReq) {
-	// Re-walk the validated areas (cheap; smaller than the duplication
-	// cost of returning more from buildImportSummary).
-	mowAndNav := []openMowerArea{}
-	obstacles := []openMowerArea{}
-	for _, a := range omMap.Areas {
-		if a.Properties.Active != nil && !*a.Properties.Active {
-			continue
-		}
-		a.Outline = dedupOutline(a.Outline)
-		switch strings.ToLower(a.Properties.Type) {
-		case "mow", "nav":
-			if len(a.Outline) >= 3 {
-				mowAndNav = append(mowAndNav, a)
-			}
-		case "obstacle":
-			if len(a.Outline) >= 3 {
-				obstacles = append(obstacles, a)
-			}
-		}
-	}
+	_, areas, dock := buildOpenMowerImport(omMap, reproj)
+	return areas, dock
+}
 
-	// Quick re-match of obstacles to parents (no warnings here — those
-	// already went into the summary).
-	obstacleAssign := map[int][]int{}
-	for oi, ob := range obstacles {
-		cx, cy := centroid(ob.Outline)
-		for pi, p := range mowAndNav {
-			if pointInPolygon(cx, cy, p.Outline) {
-				obstacleAssign[pi] = append(obstacleAssign[pi], oi)
-				break
-			}
-		}
+// Validate the actual projected representation as well as the source outline.
+// Keep the established source bound and reject unrepresentable transformations.
+func validateImportOutline(a openMowerArea, reproj datumReprojector, summary *ImportOpenMowerSummary) bool {
+	if !validateOutline(a, summary) {
+		return false
 	}
-
-	replaceReq := &mowgli.ReplaceMapReq{Areas: []mowgli.ReplaceMapArea{}}
-	for pi, a := range mowAndNav {
-		isNav := strings.EqualFold(a.Properties.Type, "nav")
-		obs := []geometry.Polygon{}
-		for _, oi := range obstacleAssign[pi] {
-			obs = append(obs, geometry.Polygon{Points: outlineToPoint32s(obstacles[oi].Outline, reproj)})
+	projected := []openMowerPoint{}
+	for _, p := range outlineToPoint32s(a.Outline, reproj) {
+		if !finiteMapCoordinate(float64(p.X)) || !finiteMapCoordinate(float64(p.Y)) {
+			summary.Warnings = append(summary.Warnings, fmt.Sprintf("area %q (id=%s) has an invalid projected vertex — skipped.", a.Properties.Name, shortID(a.ID)))
+			return false
 		}
-		mapArea := mowgli.MapArea{
-			Name:      a.Properties.Name,
-			Area:      geometry.Polygon{Points: outlineToPoint32s(a.Outline, reproj)},
-			Obstacles: obs,
-		}
-		replaceReq.Areas = append(replaceReq.Areas, mowgli.ReplaceMapArea{
-			Area:             mapArea,
-			IsNavigationArea: isNav,
-		})
+		projected = append(projected, openMowerPoint{float64(p.X), float64(p.Y)})
 	}
-
-	var dockReq *mowgli.SetDockingPointReq
-	for _, d := range omMap.DockingStations {
-		if d.Properties.Active != nil && !*d.Properties.Active {
-			continue
-		}
-		dx, dy := reproj.project(d.Position.X, d.Position.Y)
-		dockReq = &mowgli.SetDockingPointReq{
-			DockingPose: geometry.Pose{
-				Position:    geometry.Point{X: dx, Y: dy, Z: 0},
-				Orientation: yawToQuaternion(reproj.projectYaw(d.Heading, d.Position.X, d.Position.Y)),
-			},
-		}
-		break
+	if !simpleImportOutline(projected) {
+		summary.Warnings = append(summary.Warnings, fmt.Sprintf("area %q (id=%s) has an unrepresentable projected outline — skipped.", a.Properties.Name, shortID(a.ID)))
+		return false
 	}
+	return true
+}
 
-	return replaceReq, dockReq
+func finiteMapCoordinate(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0) && math.Abs(v) <= outlinePolygonAbsBound
+}
+
+func validImportLatitude(v float64) bool  { return !math.IsNaN(v) && math.Abs(v) < 90 }
+func validImportLongitude(v float64) bool { return !math.IsNaN(v) && math.Abs(v) <= 180 }
+
+func validateImportDock(dock *mowgli.SetDockingPointReq) error {
+	if dock == nil {
+		return nil
+	}
+	pose := dock.DockingPose
+	if !finiteMapCoordinate(pose.Position.X) || !finiteMapCoordinate(pose.Position.Y) ||
+		math.IsNaN(pose.Orientation.Z) || math.IsInf(pose.Orientation.Z, 0) ||
+		math.IsNaN(pose.Orientation.W) || math.IsInf(pose.Orientation.W, 0) {
+		return errors.New("invalid projected dock pose; import was not started")
+	}
+	return nil
 }
 
 // applyImport runs the live write path: clear_map → add_area×N →
@@ -812,15 +913,25 @@ func buildMowgliNextPayload(omMap openMowerMap, reproj datumReprojector) (*mowgl
 // Replace-mode only. Mirrors the same service sequence used by the
 // HTTP-driven ReplaceMapRoute + SetDockingPointRoute via the shared
 // helpers in mowglinext.go, so the importer and the regular save path
-// can't drift apart on what "save" means. A failure mid-sequence
-// surfaces as a 500 to the caller; replaceMapInternal puts the previous
-// map back and its error says whether that worked (map_replace.go).
+// can't drift apart on what "save" means. A failure surfaces as a 500 with
+// structured map/dock outcomes. Only failed clear/add operations attempt the
+// existing bounded area restoration. A dock failure never rolls back the
+// already-saved map. The lock covers both steps.
 func applyImport(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mowgli.ReplaceMapReq, dockReq *mowgli.SetDockingPointReq) error {
+	return applyImportWithLockWait(c, rosProvider, replaceReq, dockReq, nil)
+}
+
+func applyImportWithLockWait(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mowgli.ReplaceMapReq, dockReq *mowgli.SetDockingPointReq, onWait func()) error {
+	outcome := ImportOutcome{mapUnchanged, dockNotAttempted}
+	if dockReq == nil {
+		outcome.DockStatus = dockNotRequested
+	}
+	fail := func(err error) error { return &importApplyError{outcome, err} }
 	if rosProvider == nil {
-		return errors.New("apply: no ROS provider")
+		return fail(errors.New("apply: no ROS provider"))
 	}
 	if replaceReq == nil {
-		return errors.New("apply: nil replace request")
+		return fail(errors.New("apply: nil replace request"))
 	}
 	// Reuse the gin request context for cancellation propagation, but give the
 	// whole clear_map → add_area×N → save_areas sequence a size-scaled budget
@@ -828,14 +939,38 @@ func applyImport(c *gin.Context, rosProvider types.IRosProvider, replaceReq *mow
 	// Shared with ReplaceMapRoute so the import and the map editor stay in sync.
 	ctx, cancel := context.WithTimeout(c.Request.Context(), mapWriteBudget(len(replaceReq.Areas)))
 	defer cancel()
+	if err := lockMapReplacement(ctx, onWait); err != nil {
+		return fail(fmt.Errorf("apply: waiting for another map replacement: %w", err))
+	}
+	defer unlockMapReplacement()
 
 	logImportf("import/openmower applying: %d areas, dock=%v", len(replaceReq.Areas), dockReq != nil)
-	if err := replaceMapInternal(ctx, rosProvider, replaceReq); err != nil {
-		return err // already says "replace map …" and what state the robot is in
+	if err := replaceMapLocked(ctx, rosProvider, replaceReq); err != nil {
+		var replacement *mapReplacementError
+		if errors.As(err, &replacement) {
+			outcome.MapStatus = replacement.status
+		} else {
+			outcome.MapStatus = mapUnconfirmed
+		}
+		return fail(err)
 	}
+	outcome.MapStatus = mapPersisted
 	if dockReq != nil {
-		if err := setDockingPointInternal(ctx, rosProvider, dockReq); err != nil {
-			return fmt.Errorf("set docking point: %w", err)
+		if err := ctx.Err(); err != nil {
+			return fail(fmt.Errorf("set docking point not attempted: %w", err))
+		}
+		res, err := requestDockingPoint(ctx, rosProvider, dockReq)
+		if err != nil {
+			outcome.DockStatus = dockUnconfirmed
+			return fail(fmt.Errorf("set docking point: %w", err))
+		}
+		if !res.Success {
+			outcome.DockStatus = dockRejected
+			return fail(fmt.Errorf("set docking point: dock pose rejected by map_server: %s", res.Message))
+		}
+		if res.Message != "" {
+			outcome.DockStatus = dockActiveUnconfirmed
+			return fail(fmt.Errorf("set docking point: persistence not confirmed: %s", res.Message))
 		}
 	}
 	return nil

@@ -4,8 +4,10 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -57,6 +59,8 @@ const (
 // are minted by the backend (a timestamp), but download/delete take one from
 // the URL, so we validate defensively against path traversal / injection.
 var rosbagNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+var errInvalidRosbagPath = errors.New("invalid recording path")
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -417,16 +421,12 @@ func buildRosbagStopCommand(recordingsDir string) []string {
 func (m *rosbagManager) getDownload() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		name := c.Param("name")
-		if !rosbagNameRe.MatchString(name) {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid recording name"})
+		root, recording := m.openRecording(c)
+		if recording == nil {
 			return
 		}
-		dir := filepath.Join(m.recordingsDir, name)
-		info, err := os.Stat(dir)
-		if err != nil || !info.IsDir() {
-			c.JSON(http.StatusNotFound, ErrorResponse{Error: "recording not found"})
-			return
-		}
+		defer root.Close()
+		defer recording.Close()
 
 		c.Header("Content-Type", "application/gzip")
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name+".tar.gz"))
@@ -436,7 +436,7 @@ func (m *rosbagManager) getDownload() gin.HandlerFunc {
 		// can no longer change the status code, so a mid-stream error is logged
 		// and the connection is simply cut (a truncated download the operator
 		// can retry).
-		if err := writeRecordingTarGz(c.Writer, dir, name); err != nil {
+		if err := writeRecordingTarGz(c.Writer, recording, name); err != nil {
 			c.Error(err) //nolint:errcheck // best-effort; headers already sent
 		}
 	}
@@ -445,39 +445,47 @@ func (m *rosbagManager) getDownload() gin.HandlerFunc {
 // writeRecordingTarGz tars+gzips every file under dir, prefixing entries with
 // the recording name so the archive extracts into a self-named folder. The
 // live pidfile is skipped — it is transient bookkeeping, not part of the bag.
-func writeRecordingTarGz(w interface{ Write([]byte) (int, error) }, dir, name string) error {
+func writeRecordingTarGz(w io.Writer, dir *os.Root, name string) error {
 	gz := gzip.NewWriter(w)
 	defer gz.Close()
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
 
-	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	return fs.WalkDir(dir.FS(), ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if entry.Type()&os.ModeSymlink != 0 {
+			return errInvalidRosbagPath
+		}
+		if entry.IsDir() {
 			return nil
 		}
-		if info.Name() == rosbagPidFile {
+		if entry.Name() == rosbagPidFile {
 			return nil
 		}
-		rel, err := filepath.Rel(dir, path)
+		// Root.Open also enforces confinement if an entry is replaced after
+		// preflight. Never reopen an archive input using an absolute path.
+		f, err := dir.Open(path)
 		if err != nil {
 			return err
+		}
+		defer f.Close()
+		info, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return errInvalidRosbagPath
 		}
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
 		}
-		header.Name = filepath.ToSlash(filepath.Join(name, rel))
+		header.Name = filepath.ToSlash(filepath.Join(name, path))
 		if err := tw.WriteHeader(header); err != nil {
 			return err
 		}
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
 		_, err = io.Copy(tw, f)
 		return err
 	})
@@ -490,30 +498,31 @@ func writeRecordingTarGz(w interface{ Write([]byte) (int, error) }, dir, name st
 func (m *rosbagManager) deleteRecording() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		name := c.Param("name")
-		if !rosbagNameRe.MatchString(name) {
-			c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid recording name"})
+		root, recording := m.openRecording(c)
+		if recording == nil {
 			return
 		}
+		defer root.Close()
+		defer recording.Close()
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 		defer cancel()
 
-		// Refuse to delete a recording that is still capturing.
-		if names, err := m.activeRecordingNames(ctx); err == nil {
-			for _, n := range names {
-				if n == name {
-					c.JSON(http.StatusConflict, ErrorResponse{Error: "recording is still in progress; stop it first"})
-					return
-				}
-			}
-		}
-
-		dir := filepath.Join(m.recordingsDir, name)
-		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-			c.JSON(http.StatusNotFound, ErrorResponse{Error: "recording not found"})
+		// Unknown liveness is not evidence that a destructive operation is safe.
+		names, err := m.activeRecordingNames(ctx)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, ErrorResponse{Error: "cannot verify recording state: " + err.Error()})
 			return
 		}
-		if err := os.RemoveAll(dir); err != nil {
+		for _, n := range names {
+			if n == name {
+				c.JSON(http.StatusConflict, ErrorResponse{Error: "recording is still in progress; stop it first"})
+				return
+			}
+		}
+		// Root.RemoveAll cannot traverse outside the root, even if a directory
+		// is replaced with a symlink while the recorder probe is in flight.
+		if err := root.RemoveAll(name); err != nil {
 			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "failed to delete recording: " + err.Error()})
 			return
 		}
@@ -524,6 +533,64 @@ func (m *rosbagManager) deleteRecording() gin.HandlerFunc {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// openRecording is the common preflight for download and deletion. Refuse all
+// symlinks (including nested ones) before streaming headers or deleting files.
+// Keep directory handles open so later IO stays confined despite path swaps.
+func (m *rosbagManager) openRecording(c *gin.Context) (root, recording *os.Root) {
+	name := c.Param("name")
+	if name == "." || name == ".." || !rosbagNameRe.MatchString(name) {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: "invalid recording name"})
+		return nil, nil
+	}
+	defer func() {
+		if recording == nil && root != nil {
+			root.Close()
+		}
+	}()
+	root, err := os.OpenRoot(m.recordingsDir)
+	if err != nil {
+		c.JSON(http.StatusNotFound, ErrorResponse{Error: "recording not found"})
+		return root, nil
+	}
+	info, err := root.Lstat(name)
+	if err != nil {
+		c.JSON(http.StatusNotFound, ErrorResponse{Error: "recording not found"})
+		return root, nil
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: errInvalidRosbagPath.Error()})
+		return root, nil
+	}
+	if !info.IsDir() {
+		c.JSON(http.StatusNotFound, ErrorResponse{Error: "recording not found"})
+		return root, nil
+	}
+	dir, err := root.OpenRoot(name)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, ErrorResponse{Error: errInvalidRosbagPath.Error()})
+		return root, nil
+	}
+	err = fs.WalkDir(dir.FS(), ".", func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && !entry.Type().IsRegular() {
+			return errInvalidRosbagPath
+		}
+		return nil
+	})
+	if err != nil {
+		dir.Close()
+		if errors.Is(err, errInvalidRosbagPath) {
+			c.JSON(http.StatusBadRequest, ErrorResponse{Error: errInvalidRosbagPath.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "cannot inspect recording: " + err.Error()})
+		}
+		return root, nil
+	}
+	return root, dir
+}
 
 // dirSize sums the size of every regular file under dir (0 on error).
 func dirSize(dir string) int64 {

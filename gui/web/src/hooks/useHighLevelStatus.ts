@@ -1,20 +1,15 @@
-import {useEffect, useState} from "react";
-import {HighLevelStatus} from "../types/ros.ts";
-import {useWS} from "./useWS.ts";
+import type {HighLevelStatus} from '../types/ros';
+import {useValidatedTelemetry} from './useValidatedTelemetry';
+import {decodeHighLevelStatus, retainHighLevelEmergency, accumulateHighLevelAssertions, type HighLevelDisplay} from '../utils/statusTelemetry';
 
 export const useHighLevelStatus = () => {
-    const [highLevelStatus, setHighLevelStatus] = useState<HighLevelStatus>({})
-    const highLevelStatusStream = useWS<string>(
-        () => {},
-        () => {},
-        (e) => {
-            setHighLevelStatus((e as any))
-        })
-    useEffect(() => {
-        highLevelStatusStream.start("/api/mowglinext/subscribe/highLevelStatus",)
-        return () => {
-            highLevelStatusStream.stop()
-        }
-    }, []);
-    return {highLevelStatus, stop: highLevelStatusStream.stop, start: highLevelStatusStream.start};
-}
+    const {telemetry, start, stop} = useValidatedTelemetry<HighLevelStatus>(
+        'highLevelStatus', {}, decodeHighLevelStatus, retainHighLevelEmergency, accumulateHighLevelAssertions,
+        undefined, 'receipt', // HighLevelStatus.msg has no producer timestamp or sequence.
+    );
+    const highLevelStatus: HighLevelDisplay = {
+        ...telemetry.data,
+        clearanceUnverified: telemetry.assertions.emergency === true && telemetry.data.emergency !== true,
+    };
+    return {highLevelStatus, telemetry, start, stop};
+};

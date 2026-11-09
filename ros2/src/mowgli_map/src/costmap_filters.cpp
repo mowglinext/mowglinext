@@ -84,10 +84,25 @@ raster::CellAxes MapServerNode::make_cell_axes(const grid_map::GridMap& map, boo
   return axes;
 }
 
+void MapServerNode::invalidate_keepout_mask()
+{
+  nav_msgs::msg::OccupancyGrid mask;
+  mask.header.stamp = now();
+  mask.header.frame_id = map_frame_;
+  // Empty means authorization is unavailable, NOT an empty/free garden.
+  cached_keepout_mask_ = mask;
+  keepout_mask_pub_->publish(mask);
+  transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
+}
+
 void MapServerNode::publish_keepout_mask()
 {
-  if (areas_.empty())
+  std_msgs::msg::String error;
+  error.data = planning_grid_error_;
+  planning_grid_error_pub_->publish(error);
+  if (areas_.empty() || !planning_grid_error_.empty())
   {
+    invalidate_keepout_mask();
     return;
   }
 
@@ -379,6 +394,62 @@ void MapServerNode::publish_keepout_mask()
            point_to_polygon_distance(static_cast<double>(pt.x), static_cast<double>(pt.y), obs) <=
                keepout_obstacle_margin_m_;
   };
+  // Soft TRANSIT margin around every drawn obstacle (mowglinext#975), painted BEFORE the lethal
+  // passes below so the lethal band always wins. The lethal band is only the body half-width: the
+  // transit planner (a point check) may run a path right along its edge, while the controller tests
+  // the whole footprint against the LiDAR cells of the real object, which a drawn polygon only
+  // approximates. The soft band is built exactly like the inner boundary margin: the same
+  // kSoftPenaltyMaskCost, never lethal (so it cannot create START_OCCUPIED or GOAL_OCCUPIED, and a
+  // coverage ring planned inside it stays reachable) — Smac prefers a wider berth where there is
+  // room and still routes through the band when the alternative is much longer. Only free cells
+  // inside an area are touched (cells outside every area stay lethal, soft cells stay soft) and the
+  // dock approach stays bias-free like the boundary band. Pending proposals are not drawn
+  // obstacles.
+  const double transit_margin = std::max(obstacle_transit_margin_m_, 0.0);
+  if (transit_margin > 0.0)
+  {
+    const double soft_reach = obstacle_band + transit_margin;
+    const auto stamp_soft_band = [&](const geometry_msgs::msg::Polygon& polygon)
+    {
+      const raster::CellWindow w = raster::polygon_window(polygon, axes, window, soft_reach);
+      for (int r = w.rows.first; r <= w.rows.last; ++r)
+      {
+        for (int c = w.cols.first; c <= w.cols.last; ++c)
+        {
+          const std::size_t k = og_cell(r, c);
+          if (mask.data[k] != 0 || (dock_exempts && near_dock(r, c)))
+          {
+            continue;
+          }
+          geometry_msgs::msg::Point32 pt;
+          pt.x = static_cast<float>(axes.x_of_row[static_cast<std::size_t>(r)]);
+          pt.y = static_cast<float>(axes.y_of_col[static_cast<std::size_t>(c)]);
+          pt.z = 0.0F;
+          if (point_in_polygon(pt, polygon) || point_to_polygon_distance(static_cast<double>(pt.x),
+                                                                         static_cast<double>(pt.y),
+                                                                         polygon) <= soft_reach)
+          {
+            mask.data[k] = kSoftPenaltyMaskCost;
+          }
+        }
+      }
+    };
+    for (const auto& obs : obstacle_polygons_)
+    {
+      stamp_soft_band(obs);
+    }
+    for (const auto& area : areas_)
+    {
+      for (const auto& obs : area.obstacles)
+      {
+        if (!obs.pending)
+        {
+          stamp_soft_band(obs.polygon);
+        }
+      }
+    }
+  }
+
   for (const auto& obs : obstacle_polygons_)
   {
     stamp_window_cells(obs, obstacle_band, 100, cell_hits_obstacle);
@@ -434,6 +505,7 @@ void MapServerNode::publish_keepout_mask()
 
   cached_keepout_mask_ = mask;
   keepout_mask_pub_->publish(mask);
+  publish_transit_geometry();
 
   // Publish filter info only once (transient_local latches it for late
   // subscribers).  Republishing every cycle causes Nav2 KeepoutFilter to
@@ -451,6 +523,55 @@ void MapServerNode::publish_keepout_mask()
     keepout_filter_info_pub_->publish(info);
     keepout_filter_info_sent_ = true;
   }
+}
+
+void MapServerNode::publish_transit_geometry()
+{
+  visualization_msgs::msg::MarkerArray snapshot;
+  const auto append =
+      [&](const geometry_msgs::msg::Polygon& polygon, const std::string& kind, double margin)
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.frame_id = map_frame_;
+    marker.header.stamp = get_clock()->now();
+    marker.ns = kind;
+    marker.id = static_cast<int>(snapshot.markers.size());
+    marker.type = visualization_msgs::msg::Marker::LINE_STRIP;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+    marker.pose.orientation.w = 1;
+    // For obstacle rings the line width carries the same explicit body margin
+    // as the keepout mask; for allowed rings it is visualization only.
+    marker.scale.x = margin;
+    marker.color.a = 1;
+    const bool forbidden = kind == "obstacle" || kind == "dock_body";
+    marker.color.g = forbidden ? 0 : 1;
+    marker.color.r = forbidden ? 1 : 0;
+    for (const auto& p : polygon.points)
+    {
+      geometry_msgs::msg::Point point;
+      point.x = p.x;
+      point.y = p.y;
+      marker.points.push_back(point);
+    }
+    snapshot.markers.push_back(std::move(marker));
+  };
+  for (const auto& area : areas_)
+  {
+    append(area.polygon, "area", 0.01);
+    for (const auto& obstacle : area.obstacles)
+      if (!obstacle.pending)
+        append(obstacle.polygon, "obstacle", std::max(0.0, keepout_obstacle_margin_m_));
+  }
+  for (const auto& obstacle : obstacle_polygons_)
+    append(obstacle, "obstacle", std::max(0.0, keepout_obstacle_margin_m_));
+  if (has_dock_exclusion_)
+  {
+    append(dock_corridor_polygon_, "dock_corridor", 0.01);
+    // Its own namespace: still a forbidden ring for the transit planner, but a START inside it
+    // may plan its way out (the robot ends coverage units in front of the dock).
+    append(dock_body_polygon_, "dock_body", 0);
+  }
+  transit_geometry_pub_->publish(snapshot);
 }
 
 }  // namespace mowgli_map

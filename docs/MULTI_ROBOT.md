@@ -84,14 +84,22 @@ them, and renaming the project orphans the maps volume.
   GUI" link) and a fleet map with one marker per robot, projected with each
   robot's own datum. Data comes from `GET /api/fleet/robots` polled every 2 s.
 - Peer management (add by address, remove) lives on the same page.
+- The Map page (`MapPage.tsx`, full and compact) also draws every online
+  peer: this robot's URDF silhouette in purple (`FLEET_PEER_COLOR`) with the
+  peer's name, at its fused pose (`pose` = `/odometry/filtered_map`),
+  re-projected from the peer's datum into ours (`utils/fleetPeers.ts`).
+  `useFleetPeers` polls `GET /api/fleet/robots` every 2 s while there is a
+  peer and every 15 s while the robot is alone.
 
 ## Phase 3 — Coordinated mowing
 
 Enabled per fleet with the DB flag `fleet.coordination.enabled` (default off).
-While it is off, the coordinator only clears its local BT's fleet assignment.
-It does this on disable and after GUI startup, retrying at the two-second tick
+While it is off, the coordinator clears its local BT's fleet assignment.
+It does this on disable and after GUI startup, retrying at the one-second tick
 cadence until acknowledged, then remaining silent. This reconciles stale
-exclusions if the BT outlives a GUI restart; it sends no START/STOP commands.
+exclusions if the BT outlives a GUI restart. Disabling also cancels any pause
+lifecycle owned by this GUI process, keeping the mower stopped; an uncertain
+cancellation remains pending even if coordination is re-enabled.
 
 ### 3a. Shared map
 
@@ -136,30 +144,132 @@ difference, so fleet members must share one datum. Docks stay per robot
 
 ### 3c. Mutual avoidance
 
-- The coordinator publishes peer poses into the local ROS graph through
-  foxglove `clientPublish` as `geometry_msgs/PoseArray` on `/fleet/peers`
-  (map frame, 2 Hz, empty when alone).
-- `fleet_peer_obstacles_node` (Python, `mowgli_bringup/scripts`) turns each
-  peer pose into a ring of points of radius `fleet_peer_radius_m` (0.6 m) at
-  z = 0.3 m and publishes `sensor_msgs/PointCloud2` `/fleet/peer_obstacles` at
-  5 Hz continuously (an empty cloud when there are no peers, so a persisting
-  costmap source never goes stale).
-- Nav2: the LiDAR overlay adds a `fleet_peers` observation source to the LOCAL
-  `obstacle_layer` (marking only, no raytrace clearing). The no-LiDAR overlay
-  adds a dedicated `fleet_layer` (an `ObstacleLayer` under a different name;
-  CI forbids `obstacle_layer` + `static_layer` together) to both costmaps.
-  The global costmap in the LiDAR variant is left alone because FTC treats
-  anything lethal there as "not an obstacle".
-- **Yield rule** (the primary safety mechanism; no BT change): when two
-  members are within `fleet_yield_distance_m` (3.0 m) and both AUTONOMOUS, the
-  greater-`robot_id` member is sent `COMMAND_STOP`; once the distance exceeds
-  5.0 m for 3 s it is sent `COMMAND_START`, which resumes at its saved cursor.
-  A yielded robot reports IDLE, so the other never sees it as a competitor.
+Two layers, and the first one is the primary protection since 2026-10-10:
 
-## Status (2026-09-15)
+**Each robot carries the others in its costmaps, always.** The `FleetProvider`
+runs a *peer feed* (`gui/pkg/providers/fleet_peer_feed.go`) whenever at least
+one peer is registered — independently of the coordination toggle — at 5 Hz:
+it takes every online peer's FUSED pose (`/odometry/filtered_map` mirrored
+over the peer's GUI, so the body centre with its heading, not the antenna
+fix), re-projects it through the peer's datum into our map frame (the peer's
+identity, refreshed every 60 s, carries its datum), drops any sample older
+than 3 s, and publishes `geometry_msgs/PoseArray` on `/fleet/peers` through
+foxglove `clientPublish`. A peer whose fused pose is stale but whose fix is
+fresh is placed from the fix with an all-zero quaternion ("no heading").
+`fleet_peer_obstacles.py` (`mowgli_bringup/scripts`, respawned by the launch)
+turns each pose into a DENSE block of points covering the chassis footprint
+(the same derived triple Nav2 uses for our own footprint, injected by
+`full_system.launch.py`, plus a 0.15 m margin; a disc when the heading is
+unknown) and publishes `sensor_msgs/PointCloud2` `/fleet/peer_obstacles` at
+5 Hz continuously — an empty cloud when alone, so no costmap source ever
+goes stale. Nav2 then treats a peer like any obstacle:
 
-All three phases are implemented on this branch and unit-tested; **none has
-been field-tested with two real mowers yet**.
+- LiDAR overlay: `fleet_peers` source on the LOCAL `obstacle_layer` (FTC's
+  detection source — a peer on the swath is skirted or stopped for) AND on the
+  GLOBAL `obstacle_layer` (Smac routes a transit around a peer stopped on the
+  path instead of planning through it and waiting on the local collision
+  check). The global placement was unsafe while FTC's zone mask treated
+  global-lethal cells as non-obstacles; that mask is gone (root CLAUDE.md
+  Invariant 5). The LiDAR itself also sees the other body, so collision_monitor
+  keeps its scan source only.
+- No-LiDAR overlay: a `fleet_layer` (`mowgli_nav2_plugins::RecentObstacleLayer`
+  under a distinct name, rebuilt from the last second of clouds every update —
+  a plain `ObstacleLayer` with no scan to raytrace never forgot a mark) in
+  BOTH costmaps, and — new — the consumers are ON like in the LiDAR variant:
+  FTC `check_obstacles` + `enable_obstacle_deviation`, RPP
+  `use_collision_detection`, and a collision_monitor whose only source is the
+  fleet cloud (`pointcloud` type, an active velocity-projected approach gate,
+  `source_timeout: 0.0` so a dead fleet node never halts a lone robot). On a
+  lawn without peers the layer is empty and nothing changes.
+
+The Fleet page shows the feed state ("Peers in costmap", count, rate, last
+error) so an operator can tell whether the other mower actually reaches this
+robot's obstacle map.
+
+**Docks side by side.** The peer block is the chassis grown by the footprint
+margin (0.05 m) and `peer_margin_m` (0.15 m), and it is checked against OUR
+footprint, which carries its own 0.05 m + Nav2's 0.01 m padding. Two mowers
+parked on neighbouring docks therefore overlap in that model long before
+their bodies touch: on 2026-10-28 the docks were 0.53 m apart (7.6 cm between
+the chassis), the block reached 0.18 m into our footprint, and BackUp aborted
+every undock in its first cycle (`Collision Ahead - Exiting DriveOnHeading`)
+— collision_monitor's approach gate would have frozen it too (points already
+inside the footprint = collision at t = 0). No margin fixes it: even the bare
+chassis collides once rasterised at 0.05 m; today's model needs ≥ 0.77 m
+between dock centres. So the feed also publishes `/fleet/docked_peers`, the
+subset of `/fleet/peers` whose fresh `highLevelStatus` says `is_charging`
+(same poses, same tick), and `fleet_peer_obstacles.py` leaves such a peer out
+of the cloud — dock infrastructure, like the dock itself — only while ALL of
+these hold (`classify_docked_peer`):
+
+1. we are on our own dock rail: from the dock pose back to `undock_distance`
+   (+0.5 m either end), within 0.30 m of its axis and 30° of its heading;
+2. the peer's bare chassis is ≥ 2 cm clear of the strip our chassis sweeps
+   along that rail (a charger BEHIND our dock keeps blocking the undock);
+3. the two bare chassis are ≥ 2 cm apart right now;
+4. our grown footprint is within 0.5 m of the peer's block — so the block is
+   back for the first transit after the undock (0.54 m at 1.5 m) and before
+   an approach to the staging pose reaches it.
+
+Anything missing — an older GUI (no `/fleet/docked_peers`), our fused pose
+older than 1 s, no latched `/map_server_node/docking_pose`, a heading-less
+peer — keeps the peer a full obstacle. Each verdict change is logged once;
+cases 2/3 log a warning that the docks must be moved apart. With a LiDAR the
+scanner still sees the neighbour's real body and the LOCAL `obstacle_layer`
+keeps old fleet marks until a scan raytraces them away; both are unverified
+on hardware.
+
+**Yield rule** (the coordinator, only while coordination is ON): when a peer
+WITH PRIORITY (smaller `robot_id`) is autonomous within `yield_distance_m`
+(3.0 m) of us while we are mowing, planning or in transit, the coordinator
+requests a fleet-owned pause through `/behavior_tree_node/fleet_yield`
+(`mowgli_interfaces/srv/FleetYield`). Once no such peer has been within
+`resume_distance_m` (5.0 m) for 3 s, it requests resume of that same pause.
+Distances use the same map-frame positions as the feed (fused pose first,
+fix fallback, 3 s freshness; no datum means the rule stands down). Two bounds
+keep it from deadlocking against the costmap avoidance above: resume becomes
+eligible after `yield_max_hold_s` (45 s) even if the peer remains close, and
+a confirmed resume starts `yield_cooldown_s` (20 s) before another yield.
+The coordinator ticks at 1 s. Resume still requires a current local position.
+
+The BT owns the pause identity and its eligibility. QUERY supplies a server
+epoch; each new pause lifecycle gets one fresh UUID. PAUSE, RESUME and CANCEL
+retain that original `(epoch, request_id)` through every transport retry.
+Response epochs describe the current server fence and never replace the
+request epoch. QUERY never adopts another process's hold, including after a
+GUI restart. This service is required: an older ROS stack produces an explicit
+fleet service error, with no fallback to ordinary STOP or START.
+
+An accepted PAUSE owns the BT's STOP checkpoint. Cached GUI MOWING status may
+lag that pause and does not discard ownership. RESUME waits for the BT's actual
+IDLE stop hold (`NOT_READY` is transient), then preserves the active area target,
+coverage session and blade inhibit. A duplicate resume returns
+`ALREADY_RESUMED` without replaying ordinary START, even while the GUI still
+shows IDLE. Cooldown begins on a confirmed `RESUMED` or `ALREADY_RESUMED`
+reply; abandoning an uncertain resume also conservatively starts a cooldown
+when the lifecycle terminates. Clearance/max-hold is checked again before
+retrying an uncertain resume, since a failed transport may also mean the first
+request never arrived.
+
+Operator commands (including another STOP or START), Home, manual mowing,
+recording, emergency, maintenance and other unsafe BT phases fence the old
+identity. Observed takeover or disabling coordination requests CANCEL, which
+also fences a delayed PAUSE even if cancellation arrived first. A lost CANCEL
+reply retains that cancellation intent until reconciled. Terminal outcomes stop
+retries and latch the finished proximity event; a new yield requires a peer to
+leave the resume radius or an observed inactive-to-eligible transition. Stale
+MOWING snapshots alone cannot mint replacement epochs after revocation.
+
+## Status (2026-10-10)
+
+All three phases are merged into `dev` (PR #615, 2026-09-21) and shown as
+beta in the GUI. The first two-mower field test (2026-10) found the stop rule
+alone unreliable: the peer feed only ran with coordination ON, at 2 s, from
+the antenna fix without heading, and the no-LiDAR variant had no consumer for
+the costmap at all — so the robot that was not told to stop had nothing to
+make it avoid the other. The 3c redesign above (always-on 5 Hz footprint
+feed, consumers enabled in both variants, bounded yield) is the response;
+its own field check is still owed.
 
 | Piece | Where | Verified by |
 |-------|-------|-------------|
@@ -167,28 +277,40 @@ been field-tested with two real mowers yet**.
 | Fleet view (registry, mirror, proxy, `/fleet` page) | `gui/pkg/providers/fleet*.go`, `gui/pkg/api/fleet.go`, `gui/web/src/pages/FleetPage.tsx` | two in-process robots in `gui/pkg/api/fleet_test.go` (handshake, live WebSocket mirror, proxy, removal); vitest `utils/fleet.test.ts` |
 | BT area assignment + yield | `mowgli_behavior` (`~/set_fleet_assignment`, `~/coverage_session`, `GetNextUnmowedArea`, `FollowStrip`) | 8 new gtests in `test_get_next_unmowed_area.cpp` (497/497 behavior tests green on Lyrical) |
 | Peer obstacles | `fleet_peer_obstacles.py`, Nav2 overlays | `test_fleet_peer_obstacles.py`, `test_nav2_params.py` (fleet source placement) |
-| Coordinator (exclusions, completed memory, peer poses, yield rule, map push) | `fleet_coordinator*.go`, `fleet_map.go` | `fleet_coordinator_test.go` (pure rules + `tick()` against the ROS mock) |
+| Coordinator (exclusions, completed memory, peer poses, yield rule, map push) | `fleet_coordinator*.go`, `fleet_yield.go`, `fleet_map.go` | `fleet_coordinator_test.go`, `fleet_yield_test.go` (rules and coordinator ticks against an ownership-enforcing service mock) |
 
-Field checks still owed before calling it done:
+Field checks remain `HARDWARE_REQUIRED`; deterministic GUI/service-mock tests do
+not establish physical avoidance. Before a run, record the exact repository and
+GUI/ROS image commits, firmware image, submodule gitlinks, robot units and receiver
+revisions. Use a supervised test area with blades disabled, working physical
+emergency stops and room to stop both robots before contact. The observable
+pass criteria are:
 
 1. Two mowers, one map, coordination ON: each picks a different area (rotation),
    neither re-enters an area the other finished (completed memory), and the
    run ends with both docked and MOWING_COMPLETE.
 2. Force a same-area pick (`~/start_in_area` on both): the greater-id robot
    yields mid-pass, saves its cursor and moves on; the other keeps mowing.
-3. Drive the two within 3 m on transit: the lower-priority one holds
-   (`COMMAND_STOP`), the local costmap shows the peer ring, and it resumes
-   after the 5 m / 3 s hysteresis.
-4. `/fleet/peers` actually reaches `fleet_peer_obstacles.py` through
-   foxglove `clientPublish` (JSON encoding of `geometry_msgs/PoseArray`).
+3. Coordination OFF, both mowing near each other: each robot's local costmap
+   shows the other's footprint block (Foxglove: `/fleet/peer_obstacles` and
+   the costmap), FTC skirts or stops for it, a transit routes around it, and
+   the no-LiDAR collision monitor halts before contact.
+4. Coordination ON, drive the two within 3 m on transit: the lower-priority
+   one holds through the fleet-owned PAUSE and resumes after the 5 m / 3 s
+   hysteresis; park the priority robot in front of it and check the 45 s max-hold resume + the
+   20 s cooldown.
+5. The Fleet page's "Peers in costmap" tag is green with the right count on
+   both robots; `fleet_peer_obstacles.py` logs its first `/fleet/peers`
+   message (foxglove `clientPublish`, JSON `geometry_msgs/PoseArray`).
 
 Known limits: partitioning is per AREA (a single-area lawn is not split);
 priority is the lexical order of the generated `robot_id`, not configurable;
 the yield rule needs a GPS fix on both robots; a peer that goes offline keeps
 its last completed areas in the memory until the 12 h TTL or "Start fresh".
 
-Fleet node parameters (`fleet_peer_obstacles.py`: `peer_radius_m` 0.6,
-`ring_points` 24, `publish_rate_hz` 5, `peer_timeout_s` 5, `point_height_m`
+Fleet node parameters (`fleet_peer_obstacles.py`: `peer_margin_m` 0.15,
+`fill_step_m` 0.05, `publish_rate_hz` 5, `peer_timeout_s` 3, `point_height_m`
 0.30) are node defaults only, not template keys — change them in the launch
-file if a site needs to. Coordinator knobs live in the GUI DB
-(`fleet.coordination`) and on the Fleet page.
+file if a site needs to; the chassis extents (grown `chassis_*_m` and bare
+`body_*_m`) and `undock_distance_m` are injected from the robot config. Coordinator knobs live in the GUI DB (`fleet.coordination`) and on
+the Fleet page.

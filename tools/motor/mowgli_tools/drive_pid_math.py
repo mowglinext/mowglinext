@@ -14,6 +14,24 @@ def clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+def mavros_ticks_per_meter_from_motor_revolutions(
+    left_scaled_revolutions: int,
+    right_scaled_revolutions: int,
+    rtk_distance_m: float,
+    *,
+    transport_scale: float = 1000.0,
+) -> float:
+    """Fit ESC motor revolutions per metre from WheelTick and RTK distance."""
+    distance = _require_finite_float("rtk_distance_m", rtk_distance_m)
+    scale = _require_finite_float("transport_scale", transport_scale)
+    if distance <= 0.0 or scale <= 0.0:
+        raise ValueError("RTK distance and transport scale must be positive")
+    mean_revolutions = 0.5 * (
+        abs(int(left_scaled_revolutions)) + abs(int(right_scaled_revolutions))
+    ) / scale
+    return mean_revolutions / distance
+
+
 def wrap_angle_rad(angle_rad: float) -> float:
     return math.atan2(math.sin(angle_rad), math.cos(angle_rad))
 
@@ -101,6 +119,20 @@ WHEEL_PID_KP_RANGE = (2.0, 80.0)
 WHEEL_PID_KI_RANGE = (200.0, 8000.0)
 WHEEL_PID_INTEGRAL_LIMIT_RANGE = (32.0, 120.0)
 WHEEL_PID_KD_MAX = 50.0
+
+
+@dataclass(frozen=True)
+class OdometryParams:
+    """The only active calibration parameter for the MAVROS backend."""
+
+    ticks_per_meter: float
+
+    def to_dict(self) -> dict[str, float]:
+        return {"ticks_per_meter": _require_finite_float("ticks_per_meter", self.ticks_per_meter)}
+
+    @classmethod
+    def from_mapping(cls, mapping: dict[str, Any]) -> "OdometryParams":
+        return cls(_require_finite_float("ticks_per_meter", mapping["ticks_per_meter"]))
 
 
 @dataclass(frozen=True)
@@ -249,6 +281,65 @@ class TickSample:
     time_s: float
     left_ticks: int
     right_ticks: int
+
+
+@dataclass(frozen=True)
+class MotorCounterSample:
+    """Source-owned signed motor revolutions, with ROS acquisition provenance."""
+
+    stamp_ns: int
+    revolutions: float
+    source: str
+    epoch: int
+    segment: int
+    valid: bool = True
+    delivery_ns: int = 0
+
+
+def motor_revolutions_between(
+    samples: Sequence[MotorCounterSample], start_ns: int, end_ns: int, maximum_gap_s: float,
+) -> float:
+    """Interpolate cumulative counters at exact RTK bounds; never extrapolate."""
+    if start_ns <= 0 or end_ns <= start_ns or maximum_gap_s <= 0:
+        raise ValueError("Invalid motor/RTK observation window")
+    unique: list[MotorCounterSample] = []
+    for sample in samples:
+        if not sample.valid and start_ns <= sample.delivery_ns <= end_ns:
+            raise ValueError("Unavailable motor observation inside RTK window")
+        if unique and sample.stamp_ns == unique[-1].stamp_ns:
+            if sample != replace(unique[-1], delivery_ns=sample.delivery_ns):
+                raise ValueError("Changed motor counter under cached acquisition stamp")
+            continue
+        if unique and sample.stamp_ns < unique[-1].stamp_ns:
+            raise ValueError("Motor acquisition timestamp rollback")
+        unique.append(sample)
+    before = [i for i, sample in enumerate(unique) if sample.stamp_ns <= start_ns]
+    after = [i for i, sample in enumerate(unique) if sample.stamp_ns >= end_ns]
+    if not before or not after:
+        raise ValueError("Motor observations do not bracket accepted RTK window")
+    window = unique[before[-1]:after[0] + 1]
+    identity = (window[0].source, window[0].epoch, window[0].segment)
+    for sample in window:
+        if (not sample.valid or not math.isfinite(sample.revolutions)
+                or (sample.source, sample.epoch, sample.segment) != identity):
+            raise ValueError("Motor source, epoch or segment discontinuity")
+    for previous, current in zip(window, window[1:]):
+        if current.stamp_ns - previous.stamp_ns > maximum_gap_s * 1e9:
+            raise ValueError("Motor acquisition gap exceeds odometry timeout")
+        if current.revolutions < previous.revolutions:
+            raise ValueError("Motor counter rollback or reverse motion during straight pass")
+
+    def at(stamp: int) -> float:
+        for sample in window:
+            if sample.stamp_ns == stamp:
+                return sample.revolutions
+        for previous, current in zip(window, window[1:]):
+            if previous.stamp_ns < stamp < current.stamp_ns:
+                fraction = (stamp - previous.stamp_ns) / (current.stamp_ns - previous.stamp_ns)
+                return previous.revolutions + fraction * (current.revolutions - previous.revolutions)
+        raise ValueError("Unbracketed motor acquisition")
+
+    return at(end_ns) - at(start_ns)
 
 
 @dataclass(frozen=True)
@@ -443,6 +534,7 @@ class TrialMetrics:
     rtk_accepted: bool = False
     left_right_tick_imbalance: float | None = None
     notes: tuple[str, ...] = ()
+    calibration_window: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out = {
@@ -475,6 +567,8 @@ class TrialMetrics:
             "left_right_tick_imbalance": self.left_right_tick_imbalance,
             "notes": list(self.notes),
         }
+        if self.calibration_window is not None:
+            out["calibration_window"] = dict(self.calibration_window)
         return out
 
 
@@ -759,7 +853,7 @@ def compute_trial_metrics(
     ticks_seen: int,
     left_ticks_seen: int,
     right_ticks_seen: int,
-    params_used: DrivePidParams,
+    params_used: DrivePidParams | OdometryParams,
     ground_speed_mean: float | None,
     odom_distance_m: float | None,
     rtk_distance_m: float | None,
@@ -802,6 +896,10 @@ def compute_trial_metrics(
     stall_detected = False
     if not is_stop_trial:
         stall_detected = ticks_seen <= 2 or measured_speed_mean < speed_floor
+        if phase == "odometry" and isinstance(params_used, OdometryParams):
+            # The coefficient under calibration cannot establish physical underspeed.
+            # RTK applicability/provenance and counter continuity are checked by the tuner.
+            stall_detected = left_ticks_seen <= 2 or right_ticks_seen <= 2
         if ground_speed_mean is not None and ground_speed_mean < speed_floor:
             stall_detected = True
     ground_error_mean = None
@@ -812,7 +910,9 @@ def compute_trial_metrics(
     if tick_average > 1e-6:
         left_right_tick_imbalance = abs(left_ticks_seen - right_ticks_seen) / tick_average
     integral_enabled = (
-        params_used.wheel_pid_ki > 0.0 and params_used.wheel_pid_integral_limit > 0.0
+        isinstance(params_used, DrivePidParams)
+        and params_used.wheel_pid_ki > 0.0
+        and params_used.wheel_pid_integral_limit > 0.0
     )
     # Treat integral saturation as a sustained underspeed problem only. Mild
     # overshoot or a still-settling but otherwise responsive trial should not
@@ -840,6 +940,9 @@ def compute_trial_metrics(
     )
     warning_list = list(dict.fromkeys(warnings))
     note_list = list(dict.fromkeys(notes))
+    if (phase == "odometry" and isinstance(params_used, OdometryParams)
+            and measured_speed_mean < speed_floor and not stall_detected):
+        warning_list.append("Low coefficient-derived odometry speed is not proof of physical stall; RTK calibration required.")
     stop_behavior_note = (
         is_stop_trial
         and (

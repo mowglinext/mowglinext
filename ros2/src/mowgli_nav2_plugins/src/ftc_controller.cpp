@@ -126,6 +126,17 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
       },
       rclcpp::QoS(1));
 
+  // collision_monitor's verdict (its state_topic), published on change only:
+  // the last value is the current one. Lets FTC tell "collision_monitor holds
+  // the wheels" from "the robot is slow" (ftc_collision_monitor_hold.hpp).
+  cm_state_sub_ = node->create_subscription<nav2_msgs::msg::CollisionMonitorState>(
+      "/collision_monitor_state",
+      [this](const nav2_msgs::msg::CollisionMonitorState::SharedPtr msg)
+      {
+        cm_action_.store(msg->action_type);
+      },
+      rclcpp::QoS(10));
+
   current_state_ = PlannerState::PRE_ROTATE;
   last_time_ = clock_->now();
   time_last_oscillation_ = clock_->now();
@@ -145,6 +156,7 @@ void FTCController::cleanup()
   obstacle_marker_pub_.reset();
   boundary_costmap_sub_.reset();
   blade_status_sub_.reset();
+  cm_state_sub_.reset();
   {
     std::lock_guard<std::mutex> lock(boundary_mutex_);
     boundary_costmap_.reset();
@@ -296,6 +308,8 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.min_lateral_deviation = declare_double("min_lateral_deviation", 0.30);
   config_.obstacle_wait_timeout_s = declare_double("obstacle_wait_timeout_s", 2.5);
   config_.obstacle_clear_hold_s = declare_double("obstacle_clear_hold_s", 1.5);
+  config_.cm_hold_s = declare_double("cm_hold_s", 3.0);
+  config_.cm_stall_only_s = declare_double("cm_stall_only_s", 10.0);
   config_.confine_deviation_to_zone = declare_bool("confine_deviation_to_zone", true);
 
   // Footprint-polygon clearance + bounded reverse-escape.
@@ -684,6 +698,18 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     {
       config_.obstacle_wait_timeout_s = p.as_double();
     }
+    else if (key == "cm_hold_s")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 25.0))
+        break;
+      config_.cm_hold_s = p.as_double();
+    }
+    else if (key == "cm_stall_only_s")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, 25.0))
+        break;
+      config_.cm_stall_only_s = p.as_double();
+    }
     else if (key == "obstacle_clear_hold_s")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 30.0))
@@ -931,6 +957,9 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   current_movement_speed_ = config_.speed_slow;
   stall_time_ = 0.0;
   is_stalled_ = false;
+  last_cmd_fwd_speed_ = 0.0;
+  cm_held_s_ = 0.0;
+  cm_stalled_s_ = 0.0;
   is_blade_limited_ = false;
   blade_load_scale_ = 1.0;
 
@@ -1084,6 +1113,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   {
     const double max_speed = maxLinearSpeed();
     cmd_vel.twist.linear.x = std::clamp(cmd_vel.twist.linear.x, -max_speed, max_speed);
+    last_cmd_fwd_speed_ = cmd_vel.twist.linear.x;
     return cmd_vel;
   };
 
@@ -1264,6 +1294,25 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     // costmap clears or the helper throws on timeout.
     if (obstacle_waiting_)
     {
+      return bounded_command();
+    }
+    // Every check above reads the local costmap and says "clear", yet
+    // collision_monitor (raw /scan_collision points, downstream of us) can
+    // hold the wheels at zero. Following a stopped robot only ends on the
+    // progress checker, an abort FollowStrip cannot tell from a non-obstacle
+    // one (field 2026-10-10, the dock spike of the boundary). Hand it to the
+    // WEDGED handling instead: bounded reverse-escape, then hold, then an
+    // obstacle-marked abort.
+    if (turn_fallback_.phase == TurnFallbackPhase::kIdle && collisionMonitorHoldConfirmed(safe_dt))
+    {
+      reverseEscapeOrWait("collision_monitor holds the robot while the path reads clear",
+                          costmap_ros_->getRobotFootprint(),
+                          safe_dt);
+      if (reverse_escape_active_)
+      {
+        cmd_vel.twist.linear.x = -config_.obstacle_reverse_speed_mps;
+        cmd_vel.twist.angular.z = 0.0;
+      }
       return bounded_command();
     }
     applyLateralDeviationToCarrot();
@@ -2353,6 +2402,31 @@ void FTCController::holdObstacleMotion()
   d_lat_filt_ = 0.0;
   d_lon_filt_ = 0.0;
   d_angle_filt_ = 0.0;
+}
+
+bool FTCController::collisionMonitorHoldConfirmed(double dt)
+{
+  const FtcCmHoldCfg cfg{config_.cm_hold_s, config_.cm_stall_only_s};
+  const bool cm_holds = CollisionMonitorActionHolds(cm_action_.load());
+  if (!CmHoldStep(cm_holds,
+                  last_cmd_fwd_speed_,
+                  last_measured_fwd_speed_,
+                  dt,
+                  cfg,
+                  cm_held_s_,
+                  cm_stalled_s_))
+  {
+    return false;
+  }
+  RCLCPP_WARN(logger_,
+              "FTCController: robot stopped %.1fs while commanding %.2f m/s (collision_monitor "
+              "action %u) — treating it as blocked.",
+              cm_holds ? cm_held_s_ : cm_stalled_s_,
+              last_cmd_fwd_speed_,
+              static_cast<unsigned>(cm_action_.load()));
+  cm_held_s_ = 0.0;
+  cm_stalled_s_ = 0.0;
+  return true;
 }
 
 // Bounded straight reverse-escape for the WEDGED case. SAFETY-CRITICAL: this is

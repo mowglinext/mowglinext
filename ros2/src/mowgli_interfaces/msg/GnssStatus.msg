@@ -20,6 +20,9 @@ uint8 FIX_TYPE_GPS_FIX=1
 uint8 FIX_TYPE_RTK_FLOAT=2
 uint8 FIX_TYPE_RTK_FIXED=3
 uint8 FIX_TYPE_DEAD_RECKONING=4
+uint8 FIX_TYPE_2D_FIX=5
+uint8 FIX_TYPE_3D_FIX=6
+uint8 FIX_TYPE_DGPS=7
 
 uint8 RTK_MODE_UNKNOWN=0
 uint8 RTK_MODE_NONE=1
@@ -170,3 +173,9 @@ uint8 correction_semantic_status
 string correction_source
 string correction_forwarding_source
 string msm_summary_source
+
+# Producer-owned identity, copied verbatim from the GNSS source. Empty strings
+# indicate legacy/unavailable provenance, not a newly authorized session.
+# Neither field proves acquisition freshness or authorizes a session by itself.
+string source_id
+string source_incarnation

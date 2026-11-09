@@ -109,6 +109,8 @@ def test_simulation_reset_preserves_persisted_area_geometry():
     for generated_file in (
         'fusion_graph.graph',
         'fusion_graph.meta',
+        'fusion_graph.checkpoint',
+        'fusion_graph.checkpoint.previous',
         'fusion_graph.scans',
         'fusion_graph.lidarmap',
         'coverage_resume.txt',

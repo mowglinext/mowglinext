@@ -48,6 +48,40 @@ USBD_HandleTypeDef hUsbDeviceFS;
  */
 /* USER CODE BEGIN 0 */
 
+void USB_DEVICE_Detach(void)
+{
+#if BOARD_YARDFORCE500_VARIANT_B
+  /* SDIS alone does not produce a host-visible detach on every F401 board.
+   * Reuse the D+ low technique used at boot, with the wait owned by the main
+   * loop state machine so safety/watchdog servicing never stops. */
+  GPIO_InitTypeDef gpio = {0};
+  /* An active OTG transceiver overrides GPIO control of shared DP/DM pins.
+   * HAL_PCD_Stop only powers it down in battery-charging mode, which is off
+   * on this target. Release the PHY before the GPIO can hold D+ low. */
+  USB_OTG_FS->GCCFG &= ~USB_OTG_GCCFG_PWRDWN;
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_12, GPIO_PIN_RESET);
+  gpio.Pin = GPIO_PIN_12;
+  gpio.Mode = GPIO_MODE_OUTPUT_PP;
+  gpio.Pull = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &gpio);
+#endif
+}
+
+void USB_DEVICE_Attach(void)
+{
+#if BOARD_YARDFORCE500_VARIANT_B
+  GPIO_InitTypeDef gpio = {0};
+  gpio.Pin = GPIO_PIN_12;
+  gpio.Mode = GPIO_MODE_AF_PP;
+  gpio.Pull = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  gpio.Alternate = GPIO_AF10_OTG_FS;
+  HAL_GPIO_Init(GPIOA, &gpio);
+  USB_OTG_FS->GCCFG |= USB_OTG_GCCFG_PWRDWN;
+#endif
+}
+
 /* USER CODE END 0 */
 
 /*

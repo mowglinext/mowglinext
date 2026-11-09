@@ -9,11 +9,13 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <ios>
 #include <sstream>
 
+#include "fusion_graph/checkpoint_file.hpp"
 #include "fusion_graph/factors.hpp"
 #include "fusion_graph/graph_manager.hpp"
 #include <boost/serialization/export.hpp>
@@ -33,6 +35,75 @@ BOOST_CLASS_EXPORT_GUID(gtsam::GenericValue<gtsam::Pose2>, "gtsam_GenericValue_P
 
 namespace fusion_graph
 {
+namespace
+{
+bool DecodeSnapshot(const checkpoint::Payload& payload,
+                    gtsam::Values& values,
+                    uint64_t& next_index,
+                    double& time,
+                    double& latitude,
+                    double& longitude)
+{
+  try
+  {
+    values.clear();
+    gtsam::deserializeXML(payload.graph, values);
+    next_index = 0;
+    time = latitude = longitude = 0.0;
+    std::istringstream metadata(payload.metadata);
+    std::string line;
+    const auto number = [](const std::string& val)
+    {
+      size_t consumed = 0;
+      const double result = std::stod(val, &consumed);
+      if (consumed != val.size() || !std::isfinite(result))
+        throw std::invalid_argument("invalid checkpoint number");
+      return result;
+    };
+    while (std::getline(metadata, line))
+    {
+      const auto eq = line.find('=');
+      if (eq == std::string::npos)
+        continue;
+      const auto key = line.substr(0, eq);
+      const auto val = line.substr(eq + 1);
+      if (key == "next_index")
+      {
+        size_t consumed = 0;
+        next_index = std::stoull(val, &consumed);
+        if (val.empty() || val[0] == '-' || consumed != val.size())
+          return false;
+      }
+      else if (key == "last_node_time_s")
+        time = number(val);
+      else if (key == "datum_lat")
+        latitude = number(val);
+      else if (key == "datum_lon")
+        longitude = number(val);
+    }
+    if (next_index == 0 || !values.exists(PoseKey(next_index - 1)))
+      return false;
+    // Metadata must name the actual last pose, including legacy archives.
+    // Otherwise the first live between-factor can reference a missing key.
+    for (const auto& value : values)
+    {
+      const gtsam::Symbol sym(value.key);
+      if (sym.chr() != 'x')
+        continue;
+      const auto pose = value.value.cast<gtsam::Pose2>();
+      if (sym.index() >= next_index || !std::isfinite(pose.x()) || !std::isfinite(pose.y()) ||
+          !std::isfinite(pose.theta()))
+        return false;
+    }
+    return true;
+  }
+  catch (const std::exception&)
+  {
+    return false;
+  }
+}
+}  // namespace
+
 void GraphManager::Reset()
 {
   std::lock_guard<std::mutex> lock(mu_);
@@ -79,6 +150,7 @@ void GraphManager::ResetLocked()
 }
 
 bool GraphManager::Save(const std::string& prefix) const
+try
 {
   // Phase 1: snapshot under the lock. Holding the lock for the full
   // I/O duration (~500 ms on this robot's eMMC) is what stalled Nav2's
@@ -109,88 +181,95 @@ bool GraphManager::Save(const std::string& prefix) const
   }
 
   // Phase 2: I/O without the lock.
-  try
-  {
-    std::ofstream graph_os(prefix + ".graph");
-    if (!graph_os)
-      return false;
-    graph_os << gtsam::serializeXML(estimate_snapshot);
-    graph_os.close();
-
-    std::ofstream meta_os(prefix + ".meta");
-    if (!meta_os)
-      return false;
-    meta_os << "next_index=" << next_index_snapshot << "\n";
-    // Datum (WGS84) tags the graph to its garden so a graph saved at one site
-    // is rejected at another on Load. 9 decimals ≈ 0.1 mm at lat/lon scale.
-    meta_os << "datum_lat=" << std::fixed << std::setprecision(9) << params_.datum_lat << "\n";
-    meta_os << "datum_lon=" << std::fixed << std::setprecision(9) << params_.datum_lon << "\n";
-    // Wall-clock seconds need ≥10 integer digits + a few fractional, so
-    // default 6-digit iostream precision (1.7774e+09) silently corrupts
-    // the timestamp. setprecision(15) is safe for double round-trip.
-    meta_os << "last_node_time_s=" << std::setprecision(6) << last_node_time_s_snapshot << "\n";
-    meta_os.close();
-  }
-  catch (const std::exception& e)
-  {
-    fprintf(stderr, "fusion_graph::Save: %s\n", e.what());
-    return false;
-  }
-  return true;
+  std::ostringstream meta_os;
+  meta_os << "next_index=" << next_index_snapshot << "\n";
+  // Datum (WGS84) tags the graph to its garden so a graph saved at one site
+  // is rejected at another on Load. 9 decimals ≈ 0.1 mm at lat/lon scale.
+  meta_os << "datum_lat=" << std::fixed << std::setprecision(9) << params_.datum_lat << "\n";
+  meta_os << "datum_lon=" << std::fixed << std::setprecision(9) << params_.datum_lon << "\n";
+  // Wall-clock seconds need ≥10 integer digits + a few fractional, so
+  // default 6-digit iostream precision (1.7774e+09) silently corrupts
+  // the timestamp. setprecision(15) is safe for double round-trip.
+  meta_os << "last_node_time_s=" << std::setprecision(6) << last_node_time_s_snapshot << "\n";
+  // If recovery selected .previous, never rotate an unreadable primary over
+  // it. Framing/CRC alone cannot validate XML or metadata pose identities.
+  checkpoint::Payload old;
+  gtsam::Values old_values;
+  uint64_t old_index = 0;
+  double old_time = 0.0, old_latitude = 0.0, old_longitude = 0.0;
+  const bool backup_current =
+      checkpoint::Read(prefix + ".checkpoint", old) &&
+      DecodeSnapshot(old, old_values, old_index, old_time, old_latitude, old_longitude);
+  return checkpoint::Save(prefix,
+                          {gtsam::serializeXML(estimate_snapshot), meta_os.str()},
+                          backup_current);
+}
+catch (const std::exception& e)
+{
+  fprintf(stderr, "fusion_graph::Save: %s\n", e.what());
+  return false;
 }
 
 bool GraphManager::Load(const std::string& prefix)
+try
 {
   std::lock_guard<std::mutex> lock(mu_);
   if (initialized_)
     return false;
 
   gtsam::Values loaded_values;
-  try
-  {
-    std::ifstream graph_is(prefix + ".graph");
-    if (!graph_is)
-      return false;
-    std::stringstream buf;
-    buf << graph_is.rdbuf();
-    gtsam::deserializeXML(buf.str(), loaded_values);
-  }
-  catch (const std::exception&)
-  {
-    return false;
-  }
-
   uint64_t next_idx = 0;
   double last_t = 0.0;
   double loaded_datum_lat = 0.0;
   double loaded_datum_lon = 0.0;
-  try
+  const std::string current = prefix + ".checkpoint";
+  const std::string previous = current + ".previous";
+  // An invalid modern file must never silently select a stale legacy pair.
+  // symlink_status also treats a dangling symlink as a present, bad file.
+  const auto present = [](const std::string& path)
   {
-    std::ifstream meta_is(prefix + ".meta");
-    if (!meta_is)
-      return false;
-    std::string line;
-    while (std::getline(meta_is, line))
+    return std::filesystem::symlink_status(path).type() != std::filesystem::file_type::not_found;
+  };
+  const bool modern = present(current) || present(previous);
+  bool decoded = false;
+  for (const auto& path :
+       modern ? std::vector<std::string>{current, previous} : std::vector<std::string>{prefix})
+  {
+    try
     {
-      auto eq = line.find('=');
-      if (eq == std::string::npos)
+      checkpoint::Payload payload;
+      if (modern)
+      {
+        if (!checkpoint::Read(path, payload))
+          continue;
+      }
+      else
+      {
+        const auto read_legacy = [](const std::string& name, std::string& bytes)
+        {
+          std::ifstream in(name, std::ios::binary);
+          if (!in)
+            return false;
+          bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+          return !in.bad();
+        };
+        if (!read_legacy(path + ".graph", payload.graph) ||
+            !read_legacy(path + ".meta", payload.metadata))
+          continue;
+      }
+      if (!DecodeSnapshot(
+              payload, loaded_values, next_idx, last_t, loaded_datum_lat, loaded_datum_lon))
         continue;
-      const std::string key = line.substr(0, eq);
-      const std::string val = line.substr(eq + 1);
-      if (key == "next_index")
-        next_idx = std::stoull(val);
-      else if (key == "last_node_time_s")
-        last_t = std::stod(val);
-      else if (key == "datum_lat")
-        loaded_datum_lat = std::stod(val);
-      else if (key == "datum_lon")
-        loaded_datum_lon = std::stod(val);
+      decoded = true;
+      break;
+    }
+    catch (const std::exception&)
+    {
+      // Try only the retained complete generation; no mixed sidecar fallback.
     }
   }
-  catch (const std::exception&)
-  {
+  if (!decoded)
     return false;
-  }
 
   // Cross-garden guard: if BOTH the configured and the persisted datum are set,
   // reject a graph whose datum differs — its node poses belong to a different
@@ -261,7 +340,9 @@ bool GraphManager::Load(const std::string& prefix)
                                             pin_noise));
     kept_values.insert(key_value.key, key_value.value);
   }
-  isam_.update(fg, kept_values);
+  auto restored = isam_;
+  restored.update(fg, kept_values);
+  isam_ = std::move(restored);
   estimate_dirty_ = true;
 
   next_index_ = next_idx;
@@ -312,6 +393,11 @@ bool GraphManager::Load(const std::string& prefix)
   }
 
   return true;
+}
+catch (const std::exception& e)
+{
+  fprintf(stderr, "fusion_graph::Load: %s\n", e.what());
+  return false;
 }
 
 }  // namespace fusion_graph

@@ -40,8 +40,8 @@
  *   ~/emergency_stop mowgli_interfaces/srv/EmergencyStop
  *   ~/reboot_board    std_srvs/srv/Trigger
  *   ~/set_firmware_debug std_srvs/srv/SetBool
- *   ~/clear_dig_escalation std_srvs/srv/Trigger  (operator override, distance-gated — see
- * dig_escalation.hpp)
+ *   ~/clear_dig_escalation std_srvs/srv/Trigger  (operator clear, or acknowledgement with
+ * probation close to the spot — see dig_escalation.hpp)
  *
  * Parameters:
  *   serial_port      (string,  default "/dev/mowgli")
@@ -61,7 +61,9 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -78,6 +80,7 @@
 #include "mowgli_hardware/dig_detector.hpp"
 #include "mowgli_hardware/dig_escalation.hpp"
 #include "mowgli_hardware/drive_gain_sanity.hpp"
+#include "mowgli_hardware/firmware_param_store_reset_gate.hpp"
 #include "mowgli_hardware/firmware_params.hpp"
 #include "mowgli_hardware/gnss_hardware_status.hpp"
 #include "mowgli_hardware/imu_liveness.hpp"
@@ -872,9 +875,9 @@ private:
     dig_escalate_cfg_.window_s = declare_parameter<double>("dig_escalate_window_s", 60.0);
     dig_escalate_cfg_.min_count = declare_parameter<int>("dig_escalate_count", 3);
     // How far the chassis must move past the escalation anchor before
-    // ~/clear_dig_escalation accepts an operator override (see
-    // on_clear_dig_escalation). Independently tunable from dig_escalate_radius_m
-    // above — that radius clusters LATCHES into "the same spot" for deciding
+    // ~/clear_dig_escalation is a plain clear rather than an acknowledgement
+    // that puts the spot on probation (see on_clear_dig_escalation). Independently tunable from
+    // dig_escalate_radius_m above — that radius clusters LATCHES into "the same spot" for deciding
     // whether to escalate at all; this distance is how far clear of that spot
     // counts as proof the operator actually freed the chassis, which a site
     // with a lot of open room around the obstruction may want set wider than
@@ -882,8 +885,8 @@ private:
     // configured: below that, "moved" is barely outside the position noise a
     // stationary RTK-Fixed fix already carries, so accepting it would let the
     // override rubber-stamp a chassis that never actually left the
-    // obstruction — exactly what issue #500's seventeen-latch wedge showed
-    // the per-event response cannot self-correct.
+    // obstruction — such a clear would skip the probation that bounds issue
+    // #500's seventeen-latch wedge to one more dig.
     dig_escalate_clear_distance_m_ =
         std::max(0.30, declare_parameter<double>("dig_escalate_clear_distance_m", 0.50));
 
@@ -1075,6 +1078,8 @@ private:
           const std::string previous_state_name = current_mode_state_name_;
           current_mode_ = msg->state;
           current_mode_state_name_ = msg->state_name;
+          have_high_level_status_ = true;
+          last_high_level_status_steady_ns_ = steadyNowNs();
           if (previous_mode != current_mode_ || previous_state_name != current_mode_state_name_)
           {
             RCLCPP_INFO(get_logger(),
@@ -1130,6 +1135,16 @@ private:
           on_reboot_board(req, res);
         });
 
+    // Explicit operator recovery for a full/corrupt parameter log. This only
+    // arms a one-shot firmware marker; it never erases flash in this session.
+    srv_reset_firmware_param_store_ = create_service<std_srvs::srv::Trigger>(
+        "~/reset_firmware_param_store",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
+               std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+        {
+          on_reset_firmware_param_store(req, res);
+        });
+
     srv_set_firmware_debug_ = create_service<std_srvs::srv::SetBool>(
         "~/set_firmware_debug",
         [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
@@ -1140,10 +1155,8 @@ private:
 
     // Operator override for a latched repeat-dig escalation (see
     // dig_escalated_'s doc comment) when driving to the dock is not the
-    // practical recovery — e.g. the dock is unreachable from here, or the
-    // operator has already freed the chassis by hand. Succeeds only once the
-    // chassis has moved past dig_escalate_clear_distance_m_ from the anchor;
-    // see on_clear_dig_escalation.
+    // practical recovery. Close to the anchor it is an acknowledgement that
+    // puts the spot on probation; see on_clear_dig_escalation.
     srv_clear_dig_escalation_ = create_service<std_srvs::srv::Trigger>(
         "~/clear_dig_escalation",
         [this](const std::shared_ptr<std_srvs::srv::Trigger::Request> req,
@@ -1312,6 +1325,12 @@ private:
     cancelBladeResume();
     packet_handler_.reset_receive_state();
     odometry_publisher_.reset();
+    have_board_status_ = false;
+    have_high_level_status_ = false;
+    have_odometry_ = false;
+    have_blade_status_ = false;
+    have_host_velocity_target_ = false;
+    have_param_store_status_ = false;
   }
 
   void close_serial_for_reconnect()
@@ -1345,6 +1364,7 @@ private:
       // A reboot or reflash forgets nothing the board stored, but every report
       // must be re-read: publish "unreported" until the new ones arrive.
       firmware_params_.reset_reports();
+      store_status_sequence_ = 0u;
       publish_firmware_params();
       RCLCPP_INFO(get_logger(), "Serial port re-opened successfully.");
     }
@@ -1374,6 +1394,7 @@ private:
       }
       packet_handler_.feed(buf, static_cast<std::size_t>(n));
       last_serial_rx_time_ = now();
+      last_serial_rx_steady_ns_ = steadyNowNs();
     }
 
     // Dead-link watchdog: the STM32 streams continuously whenever it is up, so
@@ -1561,6 +1582,10 @@ private:
     LlStatus pkt{};
     std::memcpy(&pkt, data, sizeof(LlStatus));
 
+    have_board_status_ = true;
+    board_initialized_ = (pkt.status_bitmask & STATUS_BIT_INITIALIZED) != 0u;
+    last_board_status_steady_ns_ = steadyNowNs();
+
     const auto stamp = now();
 
     // ---- Status message ----
@@ -1603,6 +1628,7 @@ private:
           RCLCPP_INFO(get_logger(), "Dig escalation cleared: robot reached the charger.");
         }
         dig_latch_history_.clear();
+        dig_probation_ = DigProbation{};
       }
 
       // Start IMU calibration when charging and not already calibrating.
@@ -1713,6 +1739,8 @@ private:
       else
       {
         // Normal mode or stop button: full emergency
+        if (stop_active || lift_active || latch_active)
+          blade_intent_authorized_ = false;
         msg.active_emergency = stop_active || lift_active;
         msg.latched_emergency = latch_active;
         fw_latched_emergency_ = latch_active;
@@ -2506,17 +2534,79 @@ private:
   // (16-bit wrap recovery, spike rejection, 50 ms aggregation, dock-charging
   // force-zero) — see odometry_publisher.hpp for the full rationale (task
   // #11 god-node breakup; verbatim port, this method only decodes now).
+  //
+  // The PREVIOUS protocols' (v7, v8) 17-byte packet is decoded too, but only
+  // from a board whose handshake declared one of them: during an update-first
+  // transition (docs/UPDATES.md) the new host runs against the old firmware
+  // until the operator flashes it from the new GUI, and the updater's readiness
+  // check needs live /wheel_odom (stationary proof) to accept that state. This
+  // is telemetry only — fw_compatible_ stays false on a v7/v8 board, so
+  // PreFlightCheck keeps mowing blocked (see legacy_odometry.hpp).
   void handle_odometry(const uint8_t* data, std::size_t len)
   {
-    if (len < sizeof(LlOdometry))
+    switch (classify_odometry_packet(len))
     {
-      RCLCPP_WARN(get_logger(), "Odometry packet too short: %zu < %zu", len, sizeof(LlOdometry));
-      return;
+      case OdometryWireFormat::kCurrent:
+      {
+        LlOdometry pkt{};
+        std::memcpy(&pkt, data, sizeof(LlOdometry));
+        note_odometry(pkt.left_velocity_mm_s, pkt.right_velocity_mm_s);
+        odometry_publisher_.handle_packet(pkt, ticks_per_meter_, wheel_track_, is_charging_);
+        return;
+      }
+      case OdometryWireFormat::kLegacyV8:
+        if (!board_sends_legacy_odometry(fw_protocol_version_))
+        {
+          RCLCPP_WARN_THROTTLE(get_logger(),
+                               *get_clock(),
+                               5000,
+                               "Dropping %zu-byte protocol v%u-v%u odometry: the board has not "
+                               "declared one of those protocols (handshake reports v%u).",
+                               len,
+                               static_cast<unsigned>(kOldestLegacyOdometryProtocolVersion),
+                               static_cast<unsigned>(kLegacyOdometryProtocolVersion),
+                               static_cast<unsigned>(fw_protocol_version_));
+          return;
+        }
+        {
+          LlOdometryV8 pkt{};
+          std::memcpy(&pkt, data, sizeof(LlOdometryV8));
+          RCLCPP_WARN_THROTTLE(get_logger(),
+                               *get_clock(),
+                               60000,
+                               "Decoding protocol v%u odometry from firmware v%s for telemetry "
+                               "only. Flash the protocol v%u firmware from the GUI; mowing stays "
+                               "blocked until then.",
+                               static_cast<unsigned>(fw_protocol_version_),
+                               fw_version_str_.c_str(),
+                               static_cast<unsigned>(kMowgliProtocolVersion));
+          note_odometry(pkt.left_velocity_mm_s, pkt.right_velocity_mm_s);
+          odometry_publisher_.handle_legacy_v8_packet(pkt,
+                                                      ticks_per_meter_,
+                                                      wheel_track_,
+                                                      is_charging_);
+        }
+        return;
+      case OdometryWireFormat::kInvalid:
+        break;
     }
+    RCLCPP_WARN_THROTTLE(get_logger(),
+                         *get_clock(),
+                         5000,
+                         "Dropping odometry packet of unexpected length %zu (expected %zu, or %zu "
+                         "from protocol v%u firmware).",
+                         len,
+                         sizeof(LlOdometry),
+                         sizeof(LlOdometryV8),
+                         static_cast<unsigned>(kLegacyOdometryProtocolVersion));
+  }
 
-    LlOdometry pkt{};
-    std::memcpy(&pkt, data, sizeof(LlOdometry));
-    odometry_publisher_.handle_packet(pkt, ticks_per_meter_, wheel_track_, is_charging_);
+  void note_odometry(int16_t left_velocity_mm_s, int16_t right_velocity_mm_s)
+  {
+    have_odometry_ = true;
+    last_odometry_steady_ns_ = steadyNowNs();
+    actual_left_velocity_mm_s_ = left_velocity_mm_s;
+    actual_right_velocity_mm_s_ = right_velocity_mm_s;
   }
 
   // ---------------------------------------------------------------------------
@@ -2833,6 +2923,20 @@ private:
                     sizeof(LlParamCommit) - sizeof(uint16_t));
   }
 
+  bool send_param_store_reset(uint32_t request_id)
+  {
+    if (!serial_ || !serial_->is_open() || request_id == 0u)
+    {
+      return false;
+    }
+    LlParamStoreReset pkt{};
+    pkt.type = PACKET_ID_LL_PARAM_STORE_RESET;
+    pkt.magic = kLlParamStoreResetMagic;
+    pkt.request_id = request_id;
+    return send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
+                           sizeof(LlParamStoreReset) - sizeof(uint16_t));
+  }
+
   // The firmware answers GET_PARAM(ALL) at a bounded rate and its USB TX queue
   // drops rather than blocks: re-ask a few times for anything still missing.
   void recheck_firmware_param_reports()
@@ -2909,21 +3013,30 @@ private:
     }
     LlParamStoreStatus pkt{};
     std::memcpy(&pkt, data, sizeof(LlParamStoreStatus));
-    if (!firmware_params_.on_store_status(pkt))
+    have_param_store_status_ = true;
+    if (++store_status_sequence_ == 0u)
     {
-      return;
+      ++store_status_sequence_;
     }
-    if (pkt.last_commit == PARAM_COMMIT_ERROR)
+    const bool changed = firmware_params_.on_store_status(pkt, store_status_sequence_);
+    if (changed && pkt.last_commit == PARAM_COMMIT_ERROR)
     {
       RCLCPP_ERROR(get_logger(),
-                   "Firmware could not write its parameter flash: the values apply until the "
-                   "board reboots, then it falls back to the last stored set.");
+                   "Firmware reported a parameter-store failure or rejected a reset request. "
+                   "Check per-parameter persisted flags; unstored values may revert after reboot.");
     }
-    else if (pkt.last_commit == PARAM_COMMIT_LOG_FULL)
+    else if (changed && pkt.last_commit == PARAM_COMMIT_LOG_FULL)
     {
       RCLCPP_WARN(get_logger(),
-                  "Firmware parameter log is full: the board erases it at its next boot and "
-                  "this node re-sends and re-commits the values after reconnecting.");
+                  "Firmware parameter log is full. An explicit operator reset request is required "
+                  "before the next boot.");
+    }
+    else if (changed && pkt.last_commit == PARAM_COMMIT_RESET_PENDING)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "Firmware reports parameter-store reset request %u armed or unresolved; "
+                  "a completed boot reset is not yet confirmed.",
+                  pkt.reset_request_id);
     }
     publish_firmware_params();
   }
@@ -2940,6 +3053,8 @@ private:
     msg.boot_source = firmware_params_.boot_source();
     msg.last_commit = firmware_params_.last_commit();
     msg.records_left = firmware_params_.records_left();
+    msg.reset_request_id = firmware_params_.reset_request_id();
+    msg.store_status_sequence = firmware_params_.store_status_sequence();
     for (const auto& [id, state] : firmware_params_.states())
     {
       mowgli_interfaces::msg::FirmwareParam param;
@@ -2976,6 +3091,108 @@ private:
     send_reboot_command();
     res->success = true;
     res->message = "reboot request sent; board will reset within ~1 s";
+  }
+
+  static bool steady_receipt_is_fresh(int64_t now_ns, int64_t receipt_ns, int64_t max_age_ns)
+  {
+    return receipt_ns > 0 && now_ns >= receipt_ns && now_ns - receipt_ns <= max_age_ns;
+  }
+
+  static uint32_t random_reset_request_id()
+  {
+    static std::mutex mutex;
+    static std::mt19937 generator(
+        []()
+        {
+          std::random_device source;
+          std::seed_seq seed{source(), source(), source(), source()};
+          return std::mt19937(seed);
+        }());
+    std::lock_guard<std::mutex> lock(mutex);
+    std::uniform_int_distribution<uint32_t> distribution(1u, std::numeric_limits<uint32_t>::max());
+    return distribution(generator);
+  }
+
+  FirmwareParamStoreResetState firmware_param_store_reset_state() const
+  {
+    constexpr int64_t kSerialFreshNs = 1'000'000'000;
+    constexpr int64_t kBoardStatusFreshNs = 1'500'000'000;
+    constexpr int64_t kHighLevelFreshNs = 2'000'000'000;
+    constexpr int64_t kOdometryFreshNs = 500'000'000;
+    constexpr int64_t kBladeFreshNs = 1'500'000'000;
+    constexpr int64_t kCommandWatchdogFreshNs = 500'000'000;
+    constexpr double kStoppedCommandEpsilon = 1.0e-3;
+    constexpr int16_t kStoppedWheelSpeedMmPerS = 5;
+    const int64_t now_ns = steadyNowNs();
+
+    FirmwareParamStoreResetState state;
+    state.serial_open = serial_ && serial_->is_open();
+    state.serial_fresh = steady_receipt_is_fresh(now_ns, last_serial_rx_steady_ns_, kSerialFreshNs);
+    state.protocol_compatible = fw_handshake_done_ && fw_compatible_;
+    state.board_status_fresh =
+        have_board_status_ &&
+        steady_receipt_is_fresh(now_ns, last_board_status_steady_ns_, kBoardStatusFreshNs);
+    state.board_initialized = board_initialized_;
+    state.high_level_status_fresh =
+        have_high_level_status_ &&
+        steady_receipt_is_fresh(now_ns, last_high_level_status_steady_ns_, kHighLevelFreshNs);
+    state.idle = current_mode_ == HL_MODE_IDLE;
+    state.odometry_fresh =
+        have_odometry_ &&
+        steady_receipt_is_fresh(now_ns, last_odometry_steady_ns_, kOdometryFreshNs);
+
+    const int64_t command_age_ns = now_ns - last_host_velocity_target_steady_ns_;
+    const bool command_known = have_host_velocity_target_ && command_age_ns >= 0;
+    const bool command_reports_zero =
+        std::abs(last_host_velocity_target_vx_) <= kStoppedCommandEpsilon &&
+        std::abs(last_host_velocity_target_wz_) <= kStoppedCommandEpsilon;
+    const bool command_watchdog_expired = command_age_ns > kCommandWatchdogFreshNs;
+    state.wheel_targets_zero = command_known && (command_reports_zero || command_watchdog_expired);
+    state.wheels_stationary = odometry_publisher_.wheels_stationary();
+    state.actual_wheel_speeds_zero =
+        std::abs(actual_left_velocity_mm_s_) <= kStoppedWheelSpeedMmPerS &&
+        std::abs(actual_right_velocity_mm_s_) <= kStoppedWheelSpeedMmPerS;
+    state.blade_status_fresh =
+        have_blade_status_ &&
+        steady_receipt_is_fresh(now_ns, last_blade_status_steady_ns_, kBladeFreshNs);
+    state.blade_target_off = !mow_enabled_ && !waiting_blade_resume_ && !dig_escaping_;
+    state.blade_inactive = !blade_active_;
+    state.blade_rpm_zero = blade_rpm_ == 0.0F;
+    state.reset_already_pending =
+        have_param_store_status_ && firmware_params_.last_commit() == PARAM_COMMIT_RESET_PENDING;
+    return state;
+  }
+
+  void on_reset_firmware_param_store(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                                     std::shared_ptr<std_srvs::srv::Trigger::Response> res)
+  {
+    const auto state = firmware_param_store_reset_state();
+    const auto block_reason = firmware_param_store_reset_block_reason(state);
+    if (block_reason != FirmwareParamStoreResetBlockReason::kNone)
+    {
+      res->success = false;
+      res->message = std::string(firmware_param_store_reset_block_message(block_reason));
+      return;
+    }
+
+    uint32_t request_id = 0u;
+    do
+    {
+      request_id = random_reset_request_id();
+    } while (request_id == last_reset_request_id_sent_ ||
+             request_id == firmware_params_.reset_request_id());
+    last_reset_request_id_sent_ = request_id;
+
+    if (!send_param_store_reset(request_id))
+    {
+      res->success = false;
+      res->message = "failed to send the explicit parameter-store reset request";
+      return;
+    }
+
+    res->success = true;
+    res->message = "request_id=" + std::to_string(request_id) +
+                   "; reset request sent; waiting for matching firmware confirmation before reboot";
   }
 
   void on_set_firmware_debug(const std::shared_ptr<std_srvs::srv::SetBool::Request> req,
@@ -3037,6 +3254,8 @@ private:
     blade_active_ = pkt.is_active != 0u;
     blade_rpm_ = static_cast<float>(pkt.rpm);
     blade_status_time_ = now();
+    have_blade_status_ = true;
+    last_blade_status_steady_ns_ = steadyNowNs();
     blade_temperature_ = pkt.temperature;
     blade_esc_current_ = blade_current_amps(pkt);
   }
@@ -3441,6 +3660,12 @@ private:
                   dig_escalation_x_,
                   dig_escalation_y_);
     }
+    if (DigProbationLeft(
+            dig_probation_, last_map_pose_x_, last_map_pose_y_, dig_escalate_cfg_.radius_m))
+    {
+      dig_probation_ = DigProbation{};
+      RCLCPP_INFO(get_logger(), "Dig probation ended: robot left the acknowledged obstruction.");
+    }
     // Worst axis of the position block; the detector compares a scalar
     // distance so the larger sigma is the honest one to gate on.
     // MAJOR AXIS of the xy covariance ellipse, not max(var_xx, var_yy).
@@ -3658,8 +3883,16 @@ private:
     }
 
     const double t = now().seconds();
-    const bool escalate = ShouldEscalate(
-        dig_escalate_cfg_, dig_latch_history_, last_map_pose_x_, last_map_pose_y_, t);
+    // One strike on an acknowledged spot (see DigProbation).
+    const bool on_probation = DigProbationReEscalates(dig_probation_,
+                                                      last_map_pose_x_,
+                                                      last_map_pose_y_,
+                                                      dig_escalate_cfg_.radius_m);
+    const bool escalate = on_probation || ShouldEscalate(dig_escalate_cfg_,
+                                                         dig_latch_history_,
+                                                         last_map_pose_x_,
+                                                         last_map_pose_y_,
+                                                         t);
     const int nearby = DigNearbyLatchCount(dig_latch_history_,
                                            last_map_pose_x_,
                                            last_map_pose_y_,
@@ -3678,6 +3911,17 @@ private:
     dig_escalated_ = true;
     dig_escalation_x_ = last_map_pose_x_;
     dig_escalation_y_ = last_map_pose_y_;
+    dig_probation_ = DigProbation{};
+    if (on_probation)
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "Dig escalation: dug in again at map (%.2f, %.2f), inside the obstruction the "
+                   "operator acknowledged — stopping.",
+                   last_map_pose_x_,
+                   last_map_pose_y_);
+      publish_dig_escalated();
+      return;
+    }
     RCLCPP_ERROR(get_logger(),
                  "Dig escalation: %d latches within %.2f m in %.0f s at map (%.2f, %.2f) — "
                  "the robot cannot free itself here; stopping.",
@@ -3690,13 +3934,12 @@ private:
   }
 
   /// Operator override for dig_escalated_ — see the service registration and
-  /// dig_escalated_'s doc comment for the rationale. Distance-gated (NOT a
-  /// bare acknowledge/dismiss): a request that arrives while the chassis is
-  /// still within dig_escalate_clear_distance_m_ of the anchor is refused, so
-  /// an operator who only glances at the GUI and presses the button without
-  /// actually moving the robot cannot silently defeat the guard
-  /// ShouldEscalate raised (issue #500's seventeen-latch wedge is exactly the
-  /// case this must not let back in).
+  /// dig_escalated_'s doc comment. Never refused while latched: past
+  /// dig_escalate_clear_distance_m_ from the anchor the robot was demonstrably
+  /// moved away and this is a plain clear; closer, it is an acknowledgement
+  /// from the spot (the GUI asks the operator to confirm it before Play) and
+  /// the spot goes on probation so one more dig there holds the robot again
+  /// (dig_escalation.hpp, DigProbation).
   void on_clear_dig_escalation(const std::shared_ptr<std_srvs::srv::Trigger::Request>,
                                std::shared_ptr<std_srvs::srv::Trigger::Response> res)
   {
@@ -3708,40 +3951,40 @@ private:
     }
     const double dist =
         std::hypot(last_map_pose_x_ - dig_escalation_x_, last_map_pose_y_ - dig_escalation_y_);
-    if (!CanClearDigEscalation(dig_escalation_x_,
-                               dig_escalation_y_,
-                               last_map_pose_x_,
-                               last_map_pose_y_,
-                               dig_escalate_clear_distance_m_))
-    {
-      res->success = false;
-      char buf[192];
-      std::snprintf(buf,
-                    sizeof(buf),
-                    "still only %.2f m from the obstruction at (%.2f, %.2f) — move the mower "
-                    "more than %.2f m away before clearing",
-                    dist,
-                    dig_escalation_x_,
-                    dig_escalation_y_,
-                    dig_escalate_clear_distance_m_);
-      res->message = buf;
-      return;
-    }
+    const bool moved_clear = CanClearDigEscalation(dig_escalation_x_,
+                                                   dig_escalation_y_,
+                                                   last_map_pose_x_,
+                                                   last_map_pose_y_,
+                                                   dig_escalate_clear_distance_m_);
     dig_escalated_ = false;
     dig_latch_history_.clear();
+    dig_probation_ =
+        moved_clear ? DigProbation{} : DigProbation{true, dig_escalation_x_, dig_escalation_y_};
     publish_dig_escalated();
+
+    char buf[192];
+    if (moved_clear)
+    {
+      std::snprintf(buf,
+                    sizeof(buf),
+                    "dig escalation cleared (moved %.2f m from the obstruction)",
+                    dist);
+    }
+    else
+    {
+      std::snprintf(buf,
+                    sizeof(buf),
+                    "dig escalation acknowledged %.2f m from the obstruction — one more dig within "
+                    "%.2f m of it stops the robot again",
+                    dist,
+                    dig_escalate_cfg_.radius_m);
+    }
     RCLCPP_INFO(get_logger(),
-                "Dig escalation cleared by operator override: moved %.2f m from the obstruction "
-                "at (%.2f, %.2f).",
-                dist,
+                "Dig escalation released by the operator at (%.2f, %.2f): %s",
                 dig_escalation_x_,
-                dig_escalation_y_);
+                dig_escalation_y_,
+                buf);
     res->success = true;
-    char buf[128];
-    std::snprintf(buf,
-                  sizeof(buf),
-                  "dig escalation cleared (moved %.2f m from the obstruction)",
-                  dist);
     res->message = buf;
   }
 
@@ -3801,11 +4044,18 @@ private:
     pkt.linear_x = wire_vx;
     pkt.angular_z = wire_wz;
 
-    // Stamped for blade_reassert_tick: the firmware only accepts a blade ON
-    // within its CMD_VEL watchdog window, measured from this packet.
     if (send_raw_packet(reinterpret_cast<const uint8_t*>(&pkt),
                         sizeof(LlCmdVel) - sizeof(uint16_t)))
-      last_cmd_vel_packet_ns_ = steadyNowNs();
+    {
+      // Both consumers track the successfully written packet, not an attempted
+      // send: blade re-assert freshness and parameter-reset target safety.
+      const int64_t sent_ns = steadyNowNs();
+      last_cmd_vel_packet_ns_ = sent_ns;
+      have_host_velocity_target_ = true;
+      last_host_velocity_target_vx_ = wire_vx;
+      last_host_velocity_target_wz_ = wire_wz;
+      last_host_velocity_target_steady_ns_ = sent_ns;
+    }
 
     // Exact host command represented by the packet above. The firmware keeps
     // final authority and may still reject motion because of an emergency or
@@ -3858,7 +4108,10 @@ private:
     // Repeated BT ONs must not bypass the lift-clear delay. Protective OFFs
     // leave the desired direction intact; explicit OFF cancels recovery above.
     const bool enable_now = mow_enabled_ && !lift_detected_ && !waiting_blade_resume_;
-    send_blade_command(enable_now ? 1u : 0u, desired_blade_direction_);
+    if (enable_now && !emergency_active_ && !fw_latched_emergency_)
+      send_blade_on_with_fresh_velocity();
+    else
+      send_blade_command(enable_now ? 1u : 0u, desired_blade_direction_);
 
     // The request was accepted and acted on — a suppressed enable is a
     // configured behaviour, not a failure.
@@ -3886,9 +4139,11 @@ private:
     in.enable_allowed = !lift_detected_ && !waiting_blade_resume_;
     in.intent_authorized = blade_intent_authorized_;
     in.emergency_active = emergency;
+    const auto max_blade_status_age_ns =
+        static_cast<std::int64_t>(blade_reassert_cfg_.max_blade_status_age_s * 1.0e9);
     in.blade_status_fresh =
-        blade_status_time_.nanoseconds() != 0 &&
-        (now() - blade_status_time_).seconds() <= blade_reassert_cfg_.max_blade_status_age_s;
+        have_blade_status_ &&
+        steady_receipt_is_fresh(now_ns, last_blade_status_steady_ns_, max_blade_status_age_ns);
     in.blade_active = blade_active_;
     in.cmd_vel_age_s = age_s(last_cmd_vel_packet_ns_);
     in.since_last_blade_cmd_s = age_s(last_blade_cmd_ns_);
@@ -3909,6 +4164,9 @@ private:
                            "Blade ON re-asserted: mow_enabled=true but the firmware reports the "
                            "blade stopped (last cmd_vel %.0f ms ago).",
                            in.cmd_vel_age_s * 1e3);
+      // Automatic retries require the existing velocity producer to be live.
+      // Never manufacture a zero packet here: that could renew blade authority
+      // after the firmware stopped it because the command producer disappeared.
       send_blade_command(1, desired_blade_direction_);
       return;
     }
@@ -3930,6 +4188,29 @@ private:
                          reason);
   }
 
+  // Firmware accepts a blade ON only when a CMD_VEL packet arrived recently.
+  // During readiness, collision_monitor may suppress repeated zeros after its
+  // idle timeout, so create a fresh zero at the hardware boundary when needed.
+  // This is always a stop command; once the controller starts, its normal
+  // velocity stream takes over. Never send the blade ON unless the stop packet
+  // (if required) was successfully written inside the firmware freshness window.
+  void send_blade_on_with_fresh_velocity()
+  {
+    const auto max_age_ns =
+        static_cast<std::int64_t>(blade_reassert_cfg_.max_cmd_vel_age_s * 1.0e9);
+    const auto fresh_cmd_vel = [this, max_age_ns]()
+    {
+      const auto now_ns = steadyNowNs();
+      return last_cmd_vel_packet_ns_ != 0 && now_ns >= last_cmd_vel_packet_ns_ &&
+             now_ns - last_cmd_vel_packet_ns_ <= max_age_ns;
+    };
+
+    if (!fresh_cmd_vel())
+      send_cmd_vel_packet(0.0, 0.0);
+    if (fresh_cmd_vel())
+      send_blade_command(1, desired_blade_direction_);
+  }
+
   void cancelBladeResume()
   {
     blade_was_enabled_before_lift_ = false;
@@ -3942,6 +4223,7 @@ private:
     if (req->emergency != 0u)
     {
       cancelBladeResume();
+      blade_intent_authorized_ = false;
       RCLCPP_WARN(get_logger(), "Emergency stop requested via service.");
       emergency_active_ = true;
     }
@@ -4013,14 +4295,18 @@ private:
   /// fused pose has moved kDigEscalationClearFactor x dig_escalate_radius_m
   /// away from dig_escalation_{x,y}_ (carried clear by the operator, or driven
   /// out on a HOME — checked in on_filtered_map_odom); (3) on operator request
-  /// via ~/clear_dig_escalation once the chassis has moved past
-  /// dig_escalate_clear_distance_m_ from the same anchor (see
-  /// on_clear_dig_escalation — an operator-confirmed "I freed it and it isn't
-  /// at the dock" path for the band between the clear distance and the
-  /// automatic 2x-radius release). A robot still sitting against the object
-  /// matches none of the three, so it cannot quietly resume: Play stays
-  /// refused by the tree's DigObstructionGuard until one of them happens.
+  /// via ~/clear_dig_escalation (see on_clear_dig_escalation): past
+  /// dig_escalate_clear_distance_m_ from the anchor it is a plain clear;
+  /// closer it is an operator ACKNOWLEDGEMENT that puts the spot on
+  /// dig_probation_. Nothing clears it on its own while the robot sits
+  /// against the object, so the tree's DigObstructionGuard holds the mission
+  /// until the operator acts.
   bool dig_escalated_{false};
+  /// Spot the operator acknowledged without moving the robot away from it:
+  /// the next dig latch within dig_escalate_cfg_.radius_m re-escalates at
+  /// once (DigProbationReEscalates). Ends at the charger or once the fused
+  /// pose is kDigEscalationClearFactor x radius away (DigProbationLeft).
+  DigProbation dig_probation_;
   /// Map-frame position last_map_pose_{x,y}_ held when dig_escalated_ was set
   /// — the "same spot" both the displacement clear and ~/clear_dig_escalation
   /// measure distance from.
@@ -4103,6 +4389,7 @@ private:
   rclcpp::Service<mowgli_interfaces::srv::MowerControl>::SharedPtr srv_mower_control_;
   rclcpp::Service<mowgli_interfaces::srv::EmergencyStop>::SharedPtr srv_emergency_stop_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reboot_board_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr srv_reset_firmware_param_store_;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr srv_set_firmware_debug_;
 
   // Client (not server, unlike the srv_* members above): calls
@@ -4126,6 +4413,7 @@ private:
   // Serial-link RX watchdog (auto-reconnect on flash / board reboot / unplug).
   double serial_rx_timeout_s_{2.0};
   rclcpp::Time last_serial_rx_time_{0, 0, RCL_ROS_TIME};
+  std::int64_t last_serial_rx_steady_ns_{0};
   double high_level_rate_{2.0};
 
   std::unique_ptr<SerialPort> serial_;
@@ -4180,9 +4468,12 @@ private:
   int stop_button_ms_{100};
   int play_clear_ms_{2000};
   int imu_inclination_threshold_{56};
-  // Runtime parameter bookkeeping (protocol v7): requested vs applied.
+  // Runtime parameter bookkeeping (protocol v8): requested vs applied.
   FirmwareParamTracker firmware_params_;
   rclcpp::Publisher<mowgli_interfaces::msg::FirmwareParams>::SharedPtr pub_firmware_params_;
+  bool have_param_store_status_{false};
+  uint32_t last_reset_request_id_sent_{0u};
+  uint32_t store_status_sequence_{0u};
   static constexpr double kParamReportTimeoutS = 3.0;
   static constexpr int kMaxParamReportRetries = 3;
   int param_report_retries_{kMaxParamReportRetries};
@@ -4253,6 +4544,19 @@ private:
   bool is_charging_{false};
   uint8_t current_mode_{0};
   std::string current_mode_state_name_{"UNSET"};
+  bool have_board_status_{false};
+  bool board_initialized_{false};
+  std::int64_t last_board_status_steady_ns_{0};
+  bool have_high_level_status_{false};
+  std::int64_t last_high_level_status_steady_ns_{0};
+  bool have_odometry_{false};
+  std::int64_t last_odometry_steady_ns_{0};
+  int16_t actual_left_velocity_mm_s_{0};
+  int16_t actual_right_velocity_mm_s_{0};
+  bool have_host_velocity_target_{false};
+  float last_host_velocity_target_vx_{0.0F};
+  float last_host_velocity_target_wz_{0.0F};
+  std::int64_t last_host_velocity_target_steady_ns_{0};
   uint8_t last_sent_mode_{255};
   std::string last_sent_mode_state_name_{"UNSET"};
   uint8_t gps_quality_{0};
@@ -4269,6 +4573,8 @@ private:
   std::string blade_requested_direction_{"unknown"};
   float blade_rpm_{0.0f};
   rclcpp::Time blade_status_time_{0, 0, RCL_ROS_TIME};
+  bool have_blade_status_{false};
+  std::int64_t last_blade_status_steady_ns_{0};
   float blade_temperature_{0.0f};
   float blade_esc_current_{0.0f};
   uint8_t last_reset_cause_{RESET_CAUSE_UNKNOWN};

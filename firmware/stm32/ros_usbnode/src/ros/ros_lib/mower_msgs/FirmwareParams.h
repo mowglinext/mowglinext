@@ -35,6 +35,7 @@ namespace mower_msgs
       enum { COMMIT_PENDING = 3 };
       enum { COMMIT_LOG_FULL = 4 };
       enum { COMMIT_ERROR = 5 };
+      enum { COMMIT_RESET_PENDING = 6 };
 
     FirmwareParams():
       stamp(),
@@ -92,7 +93,7 @@ namespace mower_msgs
     }
 
     virtual const char * getType() override { return "mower_msgs/FirmwareParams"; };
-    virtual const char * getMD5() override { return "de9873be55dffd84ddd5a39622ce1c72"; };
+    virtual const char * getMD5() override { return "980dbf28bf47ecf74668c02a75fde00f"; };
 
   };
 

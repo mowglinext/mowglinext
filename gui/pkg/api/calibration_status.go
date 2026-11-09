@@ -37,12 +37,13 @@ const (
 // mowgli_robot.yaml. Present is false when the file is missing or all
 // three pose values are zero (an uninitialised configuration).
 type DockCalibrationStatus struct {
-	Present        bool    `json:"present"`
-	DockPoseX      float64 `json:"dock_pose_x,omitempty"`
-	DockPoseY      float64 `json:"dock_pose_y,omitempty"`
-	DockPoseYawRad float64 `json:"dock_pose_yaw_rad,omitempty"`
-	DockPoseYawDeg float64 `json:"dock_pose_yaw_deg,omitempty"`
-	Error          string  `json:"error,omitempty"`
+	Present         bool     `json:"present"`
+	PoseValuesValid bool     `json:"pose_values_valid"`
+	DockPoseX       *float64 `json:"dock_pose_x"`
+	DockPoseY       *float64 `json:"dock_pose_y"`
+	DockPoseYawRad  *float64 `json:"dock_pose_yaw_rad"`
+	DockPoseYawDeg  float64  `json:"dock_pose_yaw_deg,omitempty"`
+	Error           string   `json:"error,omitempty"`
 }
 
 // ImuCalibrationStatus mirrors the plaintext imu_calibration.txt format
@@ -132,16 +133,60 @@ func readDockCalibrationStatus(dbProvider types.IDBProvider) DockCalibrationStat
 	x := extractYAMLFloat(yamlData, "dock_pose_x")
 	y := extractYAMLFloat(yamlData, "dock_pose_y")
 	yawRad := extractYAMLFloat(yamlData, "dock_pose_yaw")
-	if x == 0 && y == 0 && yawRad == 0 {
-		return DockCalibrationStatus{Present: false}
-	}
+	storedX := dockPoseValue(yamlData, "dock_pose_x")
+	storedY := dockPoseValue(yamlData, "dock_pose_y")
+	storedYaw := dockPoseValue(yamlData, "dock_pose_yaw")
+	valid := storedX != nil && storedY != nil && storedYaw != nil
+	yawDeg := yawRad * 180.0 / math.Pi
+	if math.IsNaN(yawDeg) || math.IsInf(yawDeg, 0) {
+		yawDeg = 0
+	} // omit unavailable derived degrees
 	return DockCalibrationStatus{
-		Present:        true,
-		DockPoseX:      x,
-		DockPoseY:      y,
-		DockPoseYawRad: yawRad,
-		DockPoseYawDeg: yawRad * 180.0 / math.Pi,
+		Present:         x != 0 || y != 0 || yawRad != 0,
+		PoseValuesValid: valid,
+		DockPoseX:       storedX, DockPoseY: storedY, DockPoseYawRad: storedYaw,
+		DockPoseYawDeg: yawDeg,
 	}
+}
+
+// Numeric presence is independent of the historical all-zero calibration flag.
+// Duplicate occurrences are ambiguous, even if traversal happens to find a value.
+func dockPoseValue(data map[string]interface{}, key string) *float64 {
+	found := 0
+	var result *float64
+	var visit func(map[string]interface{})
+	visit = func(node map[string]interface{}) {
+		for name, raw := range node {
+			if name == key {
+				found++
+				var number float64
+				valid := true
+				switch value := raw.(type) {
+				case int:
+					number = float64(value)
+				case int64:
+					number = float64(value)
+				case uint64:
+					number = float64(value)
+				case float64:
+					number = value
+				default:
+					valid = false
+				}
+				if valid && !math.IsNaN(number) && !math.IsInf(number, 0) {
+					result = &number
+				}
+			}
+			if child, ok := raw.(map[string]interface{}); ok {
+				visit(child)
+			}
+		}
+	}
+	visit(data)
+	if found != 1 {
+		return nil
+	}
+	return result
 }
 
 // readImuCalibrationStatus parses the v1 plaintext format written by

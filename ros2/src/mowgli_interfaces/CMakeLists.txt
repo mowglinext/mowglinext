@@ -49,6 +49,7 @@ set(srv_files
   "srv/EmergencyStop.srv"
   "srv/GetMowingArea.srv"
   "srv/HighLevelControl.srv"
+  "srv/FleetYield.srv"
   "srv/MowerControl.srv"
   "srv/SetDockingPoint.srv"
   "srv/TriggerReplan.srv"
@@ -60,10 +61,13 @@ set(srv_files
   "srv/SetFleetAssignment.srv"
   "srv/PromoteObstacle.srv"
   "srv/PreviewObstacleClearance.srv"
+  "srv/PreviewCoverage.srv"
+  "srv/SetAreaCoverageLines.srv"
   "srv/CorrectRecordedObstacle.srv"
   "srv/AddLidarIgnoreCorridor.srv"
   "srv/GetLidarIgnoreCorridors.srv"
   "srv/ClearLidarIgnoreCorridors.srv"
+  "srv/ReplaceLidarIgnoreCorridors.srv"
 )
 
 # Declare action files

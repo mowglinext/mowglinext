@@ -5,8 +5,8 @@
 // (firmware/stm32/ros_usbnode/include/fw_param_log.h), compiled directly from
 // the firmware tree like the other pure firmware headers. The flash-facing
 // half (fw_param_store.c / fw_params.c) relies on exactly these guarantees:
-// the newest committed record wins, a torn write is invisible, and anything
-// that is not a record forces an erase at boot instead of an append on top.
+// the newest committed record wins, recognized half-programmed prefixes can
+// be skipped safely, and unrecognized data forces an explicit reset before append.
 
 #include <array>
 #include <cmath>
@@ -129,17 +129,33 @@ TEST(FwParamLog, CorruptedPayloadFailsTheCrc)
   EXPECT_EQ(scan.valid_records, 1u);
 }
 
-TEST(FwParamLog, TornHeaderForcesAnEraseButKeepsTheLastGoodRecord)
+TEST(FwParamLog, RecognizedHalfProgrammedPrefixesKeepLaterRecordsParseable)
 {
-  // Only the magic of the second record made it to flash: its length is
-  // unknown, so nothing can be appended after it safely.
-  auto area = erased_area();
-  const std::size_t at = append(area, 0, {40}, {2000.0f});
-  area[at] = FW_PARAM_LOG_MAGIC;
-  const fw_param_log_scan_t scan = fw_param_log_scan(area.data(), area.size());
-  EXPECT_TRUE(scan.needs_erase);
-  EXPECT_EQ(scan.last_valid, 0);
-  EXPECT_EQ(value_of(&area[0], 40), 2000.0f);
+  // F103 writes 32-bit words as two halfwords. These exact two-word prefixes
+  // are the only torn magic/header shapes the scanner may skip; appends after
+  // them remain discoverable without losing the previous committed record.
+  const std::array<std::array<uint32_t, 2>, 3> prefixes = {{
+      {{0xFFFF524Du, FW_PARAM_LOG_ERASED}},
+      {{FW_PARAM_LOG_MAGIC, FW_PARAM_LOG_ERASED}},
+      {{FW_PARAM_LOG_MAGIC, 0xFFFF0001u}},
+  }};
+
+  for (const auto& prefix : prefixes)
+  {
+    auto area = erased_area();
+    std::size_t at = append(area, 0, {40}, {2000.0f});
+    area[at] = prefix[0];
+    area[at + 1] = prefix[1];
+    at += 2;
+    at += append(area, at, {40}, {800.0f});
+
+    const fw_param_log_scan_t scan = fw_param_log_scan(area.data(), area.size());
+    EXPECT_FALSE(scan.needs_erase);
+    EXPECT_EQ(scan.valid_records, 2u);
+    EXPECT_EQ(scan.last_valid, static_cast<long>(at - fw_param_log_record_words(1)));
+    EXPECT_EQ(value_of(&area[static_cast<std::size_t>(scan.last_valid)], 40), 800.0f);
+    EXPECT_EQ(scan.next_free, at);
+  }
 }
 
 TEST(FwParamLog, ForeignDataForcesAnErase)

@@ -1,7 +1,7 @@
 // Copyright 2026 Mowgli Project
 // SPDX-License-Identifier: GPL-3.0
 //
-// Host-side bookkeeping for the STM32 runtime parameters (protocol v7).
+// Host-side bookkeeping for the STM32 runtime parameters (protocol v8).
 //
 // The bridge sends every parameter with SET_PARAM on each (re)connect burst and
 // whenever a ROS parameter changes; the firmware coerces each value into its
@@ -117,6 +117,8 @@ public:
     boot_source_ = kBootUnknown;
     last_commit_ = PARAM_COMMIT_NONE;
     records_left_ = 0;
+    reset_request_id_ = 0;
+    store_status_sequence_ = 0;
   }
 
   void set_requested(uint16_t id, float value)
@@ -155,13 +157,16 @@ public:
   }
 
   /// @return true when the store status changed.
-  bool on_store_status(const LlParamStoreStatus& pkt)
+  bool on_store_status(const LlParamStoreStatus& pkt, uint32_t sequence)
   {
     const bool changed = boot_source_ != pkt.boot_source || last_commit_ != pkt.last_commit ||
-                         records_left_ != pkt.records_left;
+                         records_left_ != pkt.records_left ||
+                         reset_request_id_ != pkt.reset_request_id;
     boot_source_ = pkt.boot_source;
     last_commit_ = pkt.last_commit;
     records_left_ = pkt.records_left;
+    reset_request_id_ = pkt.reset_request_id;
+    store_status_sequence_ = sequence;
     return changed;
   }
 
@@ -208,6 +213,15 @@ public:
   {
     return records_left_;
   }
+  uint32_t reset_request_id() const
+  {
+    return reset_request_id_;
+  }
+
+  uint32_t store_status_sequence() const
+  {
+    return store_status_sequence_;
+  }
 
 private:
   static bool same(float a, float b)
@@ -226,6 +240,8 @@ private:
   uint8_t boot_source_{kBootUnknown};
   uint8_t last_commit_{PARAM_COMMIT_NONE};
   uint16_t records_left_{0};
+  uint32_t reset_request_id_{0};
+  uint32_t store_status_sequence_{0};
 };
 
 }  // namespace mowgli_hardware

@@ -12,17 +12,38 @@
     mqtt_client_id: "mowgli_ros2"
 
     # Prefix prepended to every MQTT topic published or subscribed by this node.
-    # With the default "mowgli" prefix the topics become:
-    #   mowgli/status, mowgli/power, mowgli/emergency, mowgli/position,
-    #   mowgli/diagnostics, mowgli/command, mowgli/areas, mowgli/start_area
+    # With the default "mowgli" prefix the topics include (full list and
+    # payloads in docs/MQTT_CONTROL.md):
+    #   out: mowgli/status, mowgli/power, mowgli/emergency, mowgli/high_level_status,
+    #        mowgli/rtk_status, mowgli/position, mowgli/pose, mowgli/gps,
+    #        mowgli/diagnostics, mowgli/areas, mowgli/area_boundary,
+    #        mowgli/coverage_path, mowgli/host, mowgli/available
+    #   in:  mowgli/command, mowgli/start_area, mowgli/external_rain
     mqtt_topic_prefix: "mowgli"
     # Publish a retained Home Assistant device definition under
     # homeassistant/device/<id>/config and refresh it on Home Assistant birth.
     home_assistant_discovery_enabled: false
 
-    # Rate limit for the /wheel_odom → mowgli/position bridge.
-    # Other topics (status, power, emergency) are published on every ROS2 message.
+    # Maximum rate of position, pose, gps, status, power and rtk_status: each
+    # sends at most its latest message this often (then only if the policies
+    # below say so). emergency and high_level_status are not capped.
     publish_rate: 1.0  # Hz
+
+    # State topics (emergency, high_level_status, status, power, rtk_status) are
+    # published when their payload changes — an emergency change immediately —
+    # and otherwise resent only this often as a retained heartbeat.
+    state_heartbeat_period_s: 10.0  # s, clamped to [1, 3600]
+
+    # Position topics (position, pose, gps) are published when the robot moved
+    # more than this (gps: lat/lon distance) or turned more than 5 degrees
+    # (position, pose), otherwise only every position_heartbeat_period_s.
+    position_deadband_m: 0.2  # m, clamped to [0, 100]; 0 = every publish_rate tick on any motion
+    position_heartbeat_period_s: 30.0  # s, clamped to [1, 3600]
+
+    # mowgli/diagnostics carries the latest status per diagnostic name from every
+    # /diagnostics publisher, merged, this often — and within 1 s when any
+    # status's level changes (or one appears or disappears).
+    diagnostics_publish_period_s: 10.0  # s, clamped to [1, 3600]
 
     # Enable TLS/SSL for the broker connection.
     # Requires the broker to be configured with a valid certificate.

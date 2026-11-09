@@ -141,6 +141,7 @@ BT::NodeStatus RecordArea::onRunning()
                        "RecordArea: not enough points recorded (%zu, min=%u)",
                        trajectory_.size(),
                        min_verts);
+          ctx->fleet_yield.revoke();
           ctx->current_command = 0;
           trajectory_.clear();
           return BT::NodeStatus::FAILURE;
@@ -155,6 +156,7 @@ BT::NodeStatus RecordArea::onRunning()
                      "RecordArea: polygon area %.2f m^2 is below minimum %.2f m^2",
                      area,
                      min_area_val);
+        ctx->fleet_yield.revoke();
         ctx->current_command = 0;
         trajectory_.clear();
         return BT::NodeStatus::FAILURE;
@@ -171,6 +173,7 @@ BT::NodeStatus RecordArea::onRunning()
       // add_area service call. Holding the mutex across that call stalled the
       // status/command callbacks for the whole save. trajectory_ is only
       // touched on this tick thread, so it needs no lock.
+      ctx->fleet_yield.revoke();
       ctx->current_command = 0;
       lock.unlock();
 
@@ -190,6 +193,7 @@ BT::NodeStatus RecordArea::onRunning()
     if (ctx->current_command == 6)
     {
       RCLCPP_INFO(ctx->node->get_logger(), "RecordArea: recording cancelled");
+      ctx->fleet_yield.revoke();
       ctx->current_command = 0;
       trajectory_.clear();
 

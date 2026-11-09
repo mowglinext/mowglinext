@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"math"
@@ -8,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +49,28 @@ func updaterOriginAllowed(r *http.Request) bool {
 	return err == nil && origin.Host == r.Host && (origin.Scheme == "http" || origin.Scheme == "https") && strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") && r.Header.Get("X-Mowgli-Update") == "1"
 }
 
+// runtime.checked_at is re-stamped by the updater every 15 s whether or not anything
+// else moved. Left in the ETag it would make nearly every conditional poll miss; the
+// open updater panel polls unconditionally, so the time it shows stays current.
+var updaterVolatileCheckedAt = regexp.MustCompile(`"checked_at"\s*:\s*"[^"]*"`)
+
+// updaterStateETag identifies the updater state apart from its per-check timestamp.
+func updaterStateETag(body []byte) string {
+	sum := sha256.Sum256(updaterVolatileCheckedAt.ReplaceAll(body, []byte(`"checked_at":""`)))
+	return `"` + hex.EncodeToString(sum[:16]) + `"`
+}
+
+// updaterETagMatches implements the If-None-Match comparison (weak match, list, "*").
+func updaterETagMatches(header, etag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimPrefix(strings.TrimSpace(candidate), "W/")
+		if candidate == "*" || candidate == etag {
+			return true
+		}
+	}
+	return false
+}
+
 // UpdaterRoutes proxies fixed installation operations to the local host service.
 // @Summary Review or control a coordinated software update
 // @Description Same-origin JSON and X-Mowgli-Update: 1 are required. See docs/UPDATES.md for the operation contract.
@@ -61,7 +86,7 @@ func updaterOriginAllowed(r *http.Request) bool {
 // @Failure 409 {object} ErrorResponse
 // @Failure 503 {object} ErrorResponse
 // @Router /system/updater/{operation} [post]
-func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
+func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider, db types.IDBProvider) {
 	socket := os.Getenv("MOWGLI_UPDATER_SOCKET")
 	if socket == "" {
 		socket = "/run/mowgli-updater/updater.sock"
@@ -102,6 +127,26 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 		defer response.Body.Close()
 		c.Header("Cache-Control", "no-store")
 		c.Header("Content-Type", "application/json")
+		if op == "state" && c.Request.Method == "GET" && response.StatusCode == http.StatusOK {
+			// The state is the whole updater ledger (every known release, plan and job
+			// with its image manifests) — over a megabyte on a long-lived install — and
+			// the GUI polls it every few seconds. It rarely changes, so answer a repeat
+			// poll with 304 instead of resending it.
+			body, err := io.ReadAll(io.LimitReader(response.Body, 4*1024*1024))
+			if err != nil {
+				c.JSON(503, ErrorResponse{Error: "Host updater unavailable; run the installer upgrade on a supported Linux host"})
+				return
+			}
+			etag := updaterStateETag(body)
+			c.Header("ETag", etag)
+			if updaterETagMatches(c.GetHeader("If-None-Match"), etag) {
+				c.Status(http.StatusNotModified)
+				return
+			}
+			c.Status(http.StatusOK)
+			_, _ = c.Writer.Write(body)
+			return
+		}
 		c.Status(response.StatusCode)
 		_, _ = io.Copy(c.Writer, io.LimitReader(response.Body, 4*1024*1024))
 	}
@@ -194,7 +239,7 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 			// A protocol-first upgrade can leave the old ROS bridge incompatible.
 			// This verdict proves only safe maintenance entry from live telemetry;
 			// it must never authorize motion or release the maintenance gate.
-			result.MaintenanceReady = status.FirmwareProtocolVersion > 0
+			result.MaintenanceReady = status.FirmwareProtocolVersion > 0 || !firmwareProtocolApplies(db)
 			result.Ready = result.MaintenanceReady && status.FirmwareCompatible
 			if !result.Ready {
 				result.Reason = "Firmware communication is incompatible"
@@ -204,9 +249,23 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider) {
 		if !result.GPSFresh {
 			result.GPSReceiverFresh, result.GPSReason = receiverFresh, receiverReason
 		}
-		c.JSON(200, result)
+		c.JSON(200, struct {
+			updater.Readiness
+			ROS ROSHealth `json:"ros"`
+		}{result, readROSHealth(ros)})
 	})
 }
+
+// firmwareProtocolApplies is false on the OpenMower backend: its bridge talks
+// to the stock LowLevel and xESC firmware, so it reports protocol 0, and
+// firmware_compatible alone says it reaches the boards. Read from docker/.env
+// like every other backend switch: the GUI container is not given
+// HARDWARE_BACKEND (only the ROS containers are), so its process environment
+// always said "mowgli" and OpenMower robots were refused every update.
+func firmwareProtocolApplies(db types.IDBProvider) bool {
+	return activeHardwareBackendForDB(db) != "openmower"
+}
+
 func updateSampleFresh(stamp, now time.Time) bool {
 	return !stamp.IsZero() && now.Sub(stamp) < 3*time.Second && now.Sub(stamp) > -time.Second
 }

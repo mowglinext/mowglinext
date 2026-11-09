@@ -28,6 +28,10 @@ const (
 	fleetSelfSubscriber = "fleet:self"
 )
 
+// ErrFleetCommandRejected distinguishes a functional ROS refusal from a
+// transport failure when aggregating member outcomes.
+var ErrFleetCommandRejected = errors.New("fleet command rejected")
+
 // FleetCommands lists the only GUI service commands that may be sent to a
 // peer (or to self) through the fleet routes. Everything else stays local.
 var FleetCommands = map[string]bool{
@@ -52,6 +56,12 @@ type FleetRobot struct {
 	Online   bool                       `json:"online"`
 	LastSeen *time.Time                 `json:"last_seen,omitempty"`
 	Topics   map[string]json.RawMessage `json:"topics"`
+	// Age of each cached topic in seconds — consumers that place a robot on
+	// the lawn (peer feed, yield rule) must ignore stale samples.
+	TopicAgeS map[string]float64 `json:"topic_age_s"`
+	// Internal receipt identity, copied atomically with the qualified topics.
+	// Deliberately absent from the browser/API wire format.
+	coverageObservation *coverageObservation
 }
 
 // FleetProvider owns the peer registry and the per-peer mirrors.
@@ -65,6 +75,7 @@ type FleetProvider struct {
 	peers   map[string]FleetPeer
 	clients map[string]*peerClient
 	self    *peerCache
+	feed    *peerFeed
 }
 
 // NewFleetProvider loads the registry, starts a mirror per peer and starts
@@ -78,6 +89,7 @@ func NewFleetProvider(db types.IDBProvider, ros types.IRosProvider) *FleetProvid
 		peers:   map[string]FleetPeer{},
 		clients: map[string]*peerClient{},
 		self:    newPeerCache(),
+		feed:    newPeerFeed(),
 	}
 	if _, err := EnsureRobotID(db); err != nil {
 		logrus.Errorf("fleet: cannot persist robot id: %v", err)
@@ -87,6 +99,7 @@ func NewFleetProvider(db types.IDBProvider, ros types.IRosProvider) *FleetProvid
 		f.startClient(p)
 	}
 	f.subscribeSelf()
+	f.startPeerFeed()
 	return f
 }
 
@@ -103,8 +116,9 @@ func (f *FleetProvider) subscribeSelf() {
 	}
 }
 
-// Close stops every peer mirror. The registry stays persisted.
+// Close stops the peer feed and every peer mirror. The registry stays persisted.
 func (f *FleetProvider) Close() {
+	f.stopPeerFeed()
 	f.mu.Lock()
 	clients := f.clients
 	f.clients = map[string]*peerClient{}
@@ -277,16 +291,18 @@ func (f *FleetProvider) startClient(peer FleetPeer) {
 
 func (f *FleetProvider) startClientLocked(peer FleetPeer) {
 	c := newPeerClient(peer.Address, f.now)
+	c.expectedID = peer.ID
+	c.cache.expectedID = peer.ID
 	c.onIdentityUnavailable = func() {
-		f.updatePeerAPIVersion(peer.ID, peer.Address, 0)
+		f.updatePeerAPIVersion(peer.ID, peer.Address, c, 0)
 	}
 	c.onIdentity = func(identity RobotIdentity) {
 		if identity.ID != peer.ID {
-			f.updatePeerAPIVersion(peer.ID, peer.Address, 0)
+			f.updatePeerAPIVersion(peer.ID, peer.Address, c, 0)
 			logrus.WithField("peer", peer.Address).Warn("fleet: identity refresh returned a different robot id")
 			return
 		}
-		f.updatePeerAPIVersion(peer.ID, peer.Address, identity.APIVersion)
+		f.updatePeerAPIVersion(peer.ID, peer.Address, c, identity.APIVersion)
 	}
 	f.clients[peer.ID] = c
 	c.start()
@@ -295,11 +311,11 @@ func (f *FleetProvider) startClientLocked(peer FleetPeer) {
 // updatePeerAPIVersion persists the version reported by the same peer identity
 // and address that owns this client. Reconnecting peers may have been upgraded
 // since their registry entry was first written.
-func (f *FleetProvider) updatePeerAPIVersion(id, address string, apiVersion int) {
+func (f *FleetProvider) updatePeerAPIVersion(id, address string, client *peerClient, apiVersion int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	peer, ok := f.peers[id]
-	if !ok || peer.Address != address || peer.APIVersion == apiVersion {
+	if !ok || peer.Address != address || f.clients[id] != client || peer.APIVersion == apiVersion {
 		return
 	}
 	peer.APIVersion = apiVersion
@@ -342,14 +358,9 @@ func (f *FleetProvider) Robots() ([]FleetRobot, error) {
 		return nil, err
 	}
 	now := f.now()
-	topics, seen, _ := f.self.snapshot(now)
-	rows := []FleetRobot{{
-		Identity: self,
-		Self:     true,
-		Online:   true,
-		LastSeen: timePtr(seen),
-		Topics:   topics,
-	}}
+	selfRow := f.self.robotSnapshot("", now)
+	selfRow.Identity, selfRow.Self, selfRow.Online = self, true, true
+	rows := []FleetRobot{selfRow}
 	f.mu.Lock()
 	peers := f.sortedPeersLocked()
 	clients := make(map[string]*peerClient, len(f.clients))
@@ -359,21 +370,29 @@ func (f *FleetProvider) Robots() ([]FleetRobot, error) {
 	f.mu.Unlock()
 	for _, p := range peers {
 		row := FleetRobot{
-			Identity: RobotIdentity{ID: p.ID, Name: p.Name, APIVersion: p.APIVersion},
-			Address:  p.Address,
-			Topics:   map[string]json.RawMessage{},
+			Identity:  RobotIdentity{ID: p.ID, Name: p.Name, APIVersion: p.APIVersion},
+			Address:   p.Address,
+			Topics:    map[string]json.RawMessage{},
+			TopicAgeS: map[string]float64{},
 		}
 		if c := clients[p.ID]; c != nil {
-			row.Topics, row.LastSeen, row.Online = snapshotRow(c.cache, now)
+			// The live identity carries the peer's datum (and a renamed robot's
+			// new name); the registry only knows what it learnt at add time.
+			qualified := c.cache.robotSnapshot(p.ID, now)
+			if qualified.Identity.ID != "" {
+				row.Identity = qualified.Identity
+			}
+			row.Topics, row.TopicAgeS, row.LastSeen, row.Online = qualified.Topics, qualified.TopicAgeS, qualified.LastSeen, qualified.Online
+			row.coverageObservation = qualified.coverageObservation
 		}
 		rows = append(rows, row)
 	}
 	return rows, nil
 }
 
-func snapshotRow(c *peerCache, now time.Time) (map[string]json.RawMessage, *time.Time, bool) {
-	topics, seen, online := c.snapshot(now)
-	return topics, timePtr(seen), online
+func snapshotRow(c *peerCache, now time.Time) (map[string]json.RawMessage, map[string]float64, *time.Time, bool) {
+	topics, ages, seen, online := c.snapshot(now)
+	return topics, ages, timePtr(seen), online
 }
 
 func timePtr(t time.Time) *time.Time {
@@ -428,13 +447,20 @@ func (f *FleetProvider) callLocal(ctx context.Context, command string, body json
 		if err := json.Unmarshal(body, &req); err != nil {
 			return err
 		}
-		return f.ros.CallService(ctx, "/behavior_tree_node/high_level_control", &req, &mowgli.HighLevelControlRes{}, "mowgli_interfaces/srv/HighLevelControl")
+		var res mowgli.HighLevelControlRes
+		if err := f.ros.CallService(ctx, "/behavior_tree_node/high_level_control", &req, &res, "mowgli_interfaces/srv/HighLevelControl"); err != nil {
+			return err
+		}
+		if !res.Success {
+			return fmt.Errorf("%w: high_level_control rejected the command", ErrFleetCommandRejected)
+		}
+		return nil
 	case "emergency":
 		var req mowgli.EmergencyStopReq
 		if err := json.Unmarshal(body, &req); err != nil {
 			return err
 		}
-		return f.ros.CallService(ctx, "/hardware_bridge/emergency_stop", &req, &mowgli.EmergencyStopRes{}, "mowgli_interfaces/srv/EmergencyStop")
+		return CallEmergencyStop(ctx, f.ros, &req)
 	case "coverage_clear_resume":
 		var res struct {
 			Success bool   `json:"success"`
@@ -444,7 +470,10 @@ func (f *FleetProvider) callLocal(ctx context.Context, command string, body json
 			return err
 		}
 		if !res.Success {
-			return errors.New(res.Message)
+			if strings.TrimSpace(res.Message) == "" {
+				res.Message = "coverage_clear_resume rejected the command"
+			}
+			return fmt.Errorf("%w: %s", ErrFleetCommandRejected, res.Message)
 		}
 		return nil
 	default:

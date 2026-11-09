@@ -677,7 +677,7 @@ TEST(CoveragePlanning, SubPathOrderTriesEverySeedNotJustTheFirst)
   // B: front=(20,20) far from A either way; back=(0,1) 0.05 m from A's front.
   const std::vector<std::pair<double, double>> b{{20.0, 20.0}, {0.0, 1.0}};
 
-  const auto ordered = orderSubPathsForMinimalTransit({a, b});
+  const auto ordered = orderSubPathsForMinimalTransit({a, b}, /*ring_bearing_count=*/0);
   ASSERT_EQ(ordered.size(), 2u);
 
   const double realized_transit = std::hypot(ordered[1].front().first - ordered[0].back().first,
@@ -772,6 +772,29 @@ TEST(CoveragePlanning, SubPathOrderNeverReversesSubPathZero)
 
   const auto it = std::find(ordered.begin(), ordered.end(), r);
   ASSERT_NE(it, ordered.end()) << "sub-path 0 (R) must survive as an exact, unreversed match";
+}
+
+// A shorter global transit must never move interior-only mowing ahead of the
+// perimeter. This is the field-observed regression from #899: some inner rows
+// were driven, then the headland, then the rest of the rows. Ring-bearing paths
+// are the input prefix produced by buildContinuousSubPaths.
+TEST(CoveragePlanning, SubPathOrderKeepsEveryRingBearingPathBeforeInteriorPaths)
+{
+  const std::vector<std::pair<double, double>> outer_ring{{0.0, 0.0}, {0.0, 10.0}};
+  const std::vector<std::pair<double, double>> obstacle_ring{{10.0, 10.0}, {10.0, 0.0}};
+  // Starting from this swath would make a much shorter global chain, which is
+  // exactly the tempting but operationally wrong order this test rejects.
+  const std::vector<std::pair<double, double>> inner_a{{10.0, 0.01}, {0.0, 0.01}};
+  const std::vector<std::pair<double, double>> inner_b{{0.0, 0.02}, {10.0, 0.02}};
+
+  const auto ordered = orderSubPathsForMinimalTransit({outer_ring, obstacle_ring, inner_a, inner_b},
+                                                      /*ring_bearing_count=*/2);
+  ASSERT_EQ(ordered.size(), 4u);
+  EXPECT_EQ(ordered[0], outer_ring) << "the outermost perimeter must remain the route seed";
+  EXPECT_EQ(ordered[1], obstacle_ring)
+      << "every ring-bearing path must finish before interior-only mowing";
+  EXPECT_TRUE(ordered[2] == inner_a || ordered[2] == inner_b);
+  EXPECT_TRUE(ordered[3] == inner_a || ordered[3] == inner_b);
 }
 
 // #335: ring_direction controls the perimeter/headland travel winding (blade

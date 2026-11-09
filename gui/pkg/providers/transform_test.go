@@ -178,6 +178,37 @@ func TestAdaptGnssStatusMapsUniversalPayloadToMowgliShape(t *testing.T) {
 	assert.Equal(t, status.CapabilityFlags, status.ValueFlags)
 }
 
+func TestAdaptGnssStatusPreservesExplicitSolutionTypes(t *testing.T) {
+	tests := []struct {
+		name             string
+		universalFixType uint8
+		mowgliFixType    uint8
+		qualityPercent   float32
+	}{
+		{"2D", universalFixType2DFix, mowgliFixType2DFix, 20.0},
+		{"3D", universalFixType3DFix, mowgliFixType3DFix, 40.0},
+		{"DGPS", universalFixTypeDGPS, mowgliFixTypeDGPS, 60.0},
+		{"RTK float", universalFixTypeRTKFloat, mowgliFixTypeRTKFloat, 80.0},
+		{"RTK fixed", universalFixTypeRTKFixed, mowgliFixTypeRTKFixed, 100.0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			raw := []byte(fmt.Sprintf(
+				`{"stamp":{"sec":1,"nanosec":2},"fix_valid":true,"fix_type":%d}`,
+				test.universalFixType,
+			))
+			adapted, err := adaptGnssStatus(raw)
+			require.NoError(t, err)
+
+			var status mowgli.GnssStatus
+			require.NoError(t, json.Unmarshal(adapted, &status))
+			assert.Equal(t, test.mowgliFixType, status.FixType)
+			assert.Equal(t, test.qualityPercent, status.QualityPercent)
+		})
+	}
+}
+
 func TestAdaptGnssStatusKeepsUnsupportedUniversalFieldsUnset(t *testing.T) {
 	raw := []byte(`{
 		"stamp":{"sec":2,"nanosec":3},
@@ -194,7 +225,7 @@ func TestAdaptGnssStatusKeepsUnsupportedUniversalFieldsUnset(t *testing.T) {
 	var status mowgli.GnssStatus
 	require.NoError(t, json.Unmarshal(adapted, &status))
 	assert.Equal(t, uint8(mowgliFixTypeGPSFix), status.FixType)
-	assert.Equal(t, float32(25.0), status.QualityPercent)
+	assert.Equal(t, float32(0.0), status.QualityPercent)
 	assert.Equal(t, uint32(mowgliCapRtkMode), status.CapabilityFlags)
 	assert.Zero(t, status.ValueFlags)
 	assert.Zero(t, status.HeadingAccuracyDeg)
@@ -261,4 +292,29 @@ func joinCSV(items []string) string {
 		out += s
 	}
 	return out
+}
+
+func TestAdaptGnssStatusPreservesUniversalObservationIdentity(t *testing.T) {
+	raw := []byte(`{"stamp":{"sec":12,"nanosec":34},"fix_valid":true,"fix_type":4,"rtk_mode":3,"position_observation_sequence":42}`)
+	adapted, err := adaptGnssStatus(raw)
+	require.NoError(t, err)
+	var status mowgli.GnssStatus
+	require.NoError(t, json.Unmarshal(adapted, &status))
+	assert.Equal(t, uint64(42), status.PositionObservationSequence)
+	assert.Equal(t, uint8(mowgliFixTypeRTKFixed), status.FixType)
+}
+
+func TestAdaptGnssStatusPreservesSourceSession(t *testing.T) {
+	for _, raw := range []string{
+		`{"stamp":{"sec":12,"nanosec":34},"fix_type":7,"fix_valid":true,"source_id":"serial:receiver","source_incarnation":"session-a","position_observation_sequence":42}`,
+		`{"header":{"stamp":{"sec":12,"nanosec":34},"frame_id":"gps"},"fix_type":6,"fix_valid":true,"source_id":"serial:receiver","source_incarnation":"session-a","position_observation_sequence":42}`,
+	} {
+		adapted, err := adaptGnssStatus([]byte(raw))
+		require.NoError(t, err)
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(adapted, &fields))
+		assert.Equal(t, "serial:receiver", fields["source_id"])
+		assert.Equal(t, "session-a", fields["source_incarnation"])
+		assert.Equal(t, float64(42), fields["position_observation_sequence"])
+	}
 }

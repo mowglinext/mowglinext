@@ -240,6 +240,9 @@ func (m *Manager) recordFirmwareProtocolChange(ctx context.Context, target Deplo
 	if !ok {
 		return nil, nil
 	}
+	if exempt, ok := m.backend.(interface{ FirmwareProtocolExempt() bool }); ok && exempt.FirmwareProtocolExempt() {
+		return nil, nil
+	}
 	running, err := probe.RunningFirmwareProtocol(ctx)
 	if err != nil {
 		return nil, err

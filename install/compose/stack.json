@@ -2,6 +2,10 @@
   "schema": 1,
   "required": ["docker-compose.base.yml", "docker-compose.gui.yml", "docker-compose.updater.yml"],
   "options": {
+    "backend": {
+      "none": [],
+      "openmower": ["docker-compose.openmower.yml"]
+    },
     "gnss": {
       "none": [],
       "universal": ["docker-compose.gps.yml"]

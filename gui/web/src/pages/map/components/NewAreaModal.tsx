@@ -21,7 +21,7 @@ export const NewAreaModal = ({open, areaType, areaName, onAreaTypeChange, onArea
             cancelText={t('mapNewArea.cancel')}
             onOk={onSave}
             onCancel={onCancel}
-            destroyOnClose
+            destroyOnHidden
         >
             <Form layout="vertical" style={{marginTop: 16}}>
                 <Form.Item label={t('mapNewArea.areaType')}>

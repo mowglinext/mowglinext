@@ -76,6 +76,10 @@
 /** USB Device initialization function. */
 void MX_USB_DEVICE_Init(void);
 
+/* F401 recovery only, after stopping USB and before restarting it. */
+void USB_DEVICE_Detach(void);
+void USB_DEVICE_Attach(void);
+
 /*
  * -- Insert functions declaration here --
  */

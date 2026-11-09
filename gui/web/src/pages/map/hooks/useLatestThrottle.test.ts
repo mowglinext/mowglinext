@@ -1,5 +1,7 @@
+import {StrictMode} from "react";
+import {act, renderHook} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLatestThrottle } from "./useLatestThrottle.ts";
+import { createLatestThrottle, useLatestThrottle } from "./useLatestThrottle.ts";
 
 describe("createLatestThrottle", () => {
   beforeEach(() => {
@@ -80,5 +82,40 @@ describe("createLatestThrottle", () => {
 
     expect(emit).toHaveBeenCalledTimes(1);
     expect(emit).toHaveBeenLastCalledWith(1);
+  });
+});
+
+
+describe('useLatestThrottle committed callbacks and cleanup', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(0); });
+  afterEach(() => vi.useRealTimers());
+
+  it('delivers the trailing frame to the latest callback without resetting the throttle', () => {
+    const first = vi.fn();
+    const next = vi.fn();
+    const {result, rerender, unmount} = renderHook(({callback, interval}) => useLatestThrottle(callback, interval),
+      {initialProps: {callback: first, interval: 100}, wrapper: StrictMode});
+    const throttle = result.current;
+    act(() => { throttle.push(1); throttle.push(2); });
+    rerender({callback: next, interval: 100});
+    expect(result.current).toBe(throttle);
+    act(() => { vi.advanceTimersByTime(100); });
+    expect(first).toHaveBeenCalledExactlyOnceWith(1);
+    expect(next).toHaveBeenCalledExactlyOnceWith(2);
+    act(() => { throttle.push(3); });
+    unmount();
+    act(() => { vi.advanceTimersByTime(100); });
+    expect(next).toHaveBeenCalledOnce();
+  });
+
+  it('cancels the old trailing frame on a display budget transition', () => {
+    const callback = vi.fn();
+    const {result, rerender} = renderHook(({interval}) => useLatestThrottle(callback, interval), {initialProps: {interval: 100}});
+    act(() => { result.current.push(1); result.current.push(2); });
+    rerender({interval: 50});
+    act(() => { vi.advanceTimersByTime(100); });
+    expect(callback).toHaveBeenCalledExactlyOnceWith(1);
+    act(() => { result.current.push(3); });
+    expect(callback).toHaveBeenLastCalledWith(3);
   });
 });

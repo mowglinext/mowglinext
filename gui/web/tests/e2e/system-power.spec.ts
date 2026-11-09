@@ -27,7 +27,6 @@ async function openSystem(page: Page, mobile = false) {
     await page.goto("/#/diagnostics");
     if (mobile) await page.getByRole("button", {name: /System$/}).click();
     await expect(page.getByRole("button", {name: "Host power…", exact: true})).toBeVisible();
-    await expect(page.getByText("GPS: RTK Fixed", {exact: true})).toBeVisible();
     await expect(page.getByRole("button", {name: "Battery and power menu"})).toContainText("100%");
     await page.getByRole("button", {name: "Host power…", exact: true}).scrollIntoViewIfNeeded();
 }
@@ -92,14 +91,14 @@ for (const viewport of [{width: 1440, height: 1000}, {width: 390, height: 844}])
         test.setTimeout(20_000);
         await page.setViewportSize(viewport);
         const shortStatus = {
-            fix_type: GnssStatusConstants.FIX_TYPE_GPS_FIX,
+            fix_type: GnssStatusConstants.FIX_TYPE_2D_FIX,
             fix_valid: true,
             rtk_mode: GnssStatusConstants.RTK_MODE_NONE,
         };
         const longStatus = {
-            fix_type: GnssStatusConstants.FIX_TYPE_RTK_FIXED,
+            fix_type: GnssStatusConstants.FIX_TYPE_RTK_FLOAT,
             fix_valid: true,
-            rtk_mode: GnssStatusConstants.RTK_MODE_FIXED,
+            rtk_mode: GnssStatusConstants.RTK_MODE_FLOAT,
         };
         await installMockBackend(page, {
             ...SCENARIOS[0],
@@ -114,10 +113,10 @@ for (const viewport of [{width: 1440, height: 1000}, {width: 390, height: 844}])
 
         const fixValue = page.getByTestId("gnss-fix-status-value");
         const rtkGroup = page.getByTestId("gnss-rtk-status-group");
-        await expect(fixValue).toContainText("GPS fix");
+        await expect(fixValue).toContainText("2D");
         const before = await rtkGroup.boundingBox();
         expect(before).not.toBeNull();
-        await expect(fixValue).toContainText("RTK Fixed", {timeout: 10_000});
+        await expect(fixValue).toContainText("FLOAT", {timeout: 10_000});
         const after = await rtkGroup.boundingBox();
         expect(after).not.toBeNull();
         expect(Math.abs(after!.x - before!.x)).toBeLessThan(1);
@@ -145,7 +144,9 @@ test("mobile shortcut uses the existing shutdown confirmation", async ({page}) =
 });
 
 test("battery Advanced menu retains the same host actions", async ({page}) => {
+    const writes = watchPowerWrites(page);
     await openSystem(page);
+    await expect(page.locator('.ant-notification-notice').filter({hasText: 'Invalid settings payload'})).toHaveCount(0);
     let requests = 0;
     await page.route("**/api/system/shutdown", route => { requests++; return route.fulfill({json: {}}); });
     await page.getByRole("button", {name: "Battery and power menu"}).click();
@@ -156,16 +157,65 @@ test("battery Advanced menu retains the same host actions", async ({page}) => {
     expect(requests).toBe(0);
     await dialog.getByRole("button", {name: "Confirm", exact: true}).click();
     await expect.poll(() => requests).toBe(1);
+    expect(writes).toEqual(['/api/system/shutdown']);
 });
 
-test("shortcut retains existing failure notification and clears reconnect overlay", async ({page}) => {
+/** Track actuation/persistence separately from read-only config POSTs. */
+function watchPowerWrites(page: Page) {
+    const writes: string[] = [];
+    page.on('request', request => {
+        const path = new URL(request.url()).pathname;
+        if (request.method() !== 'GET' && /^\/api\/(?:system\/(?:reboot|shutdown)|containers\/[^/]+\/(?:restart|start|stop)|mowglinext\/call\/|settings\/yaml$)/.test(path)) writes.push(path);
+    });
+    return writes;
+}
+
+test("explicit HTTP rejection reports failure and stops reconnect observation", async ({page}) => {
+    const writes = watchPowerWrites(page);
     await openSystem(page);
-    let requests = 0;
-    await page.route("**/api/system/reboot", route => { requests++; return route.abort("connectionreset"); });
+    let polls = 0;
+    await page.route("**/api/system/reboot", route => route.fulfill({status: 500, json: {error: 'Host rejected reboot'}}));
+    await page.route("**/api/system/info", route => {polls++; return route.fulfill({status: 503});});
     await page.getByRole("button", {name: "Host power…", exact: true}).click();
     await page.getByRole("menuitem", {name: /Restart Host/}).click();
+    expect(writes).toEqual([]);
+    await page.clock.install();
     await page.getByRole("dialog").getByRole("button", {name: "Confirm", exact: true}).click();
-    await expect(page.getByText("Restart failed", {exact: true})).toBeVisible();
+    const error = page.locator('.ant-notification-notice-error');
+    await expect(error).toContainText('Restart failed');
+    await expect(error).toContainText('Host rejected reboot');
     await expect(page.getByText("Rebooting the Host…", {exact: true})).not.toBeVisible();
-    expect(requests).toBe(1);
+    await page.clock.fastForward(30_000);
+    expect(polls).toBe(0);
+    expect(writes).toEqual(['/api/system/reboot']);
+});
+
+test("lost reboot response remains unconfirmed and observes availability without retry", async ({page}) => {
+    const writes = watchPowerWrites(page);
+    await openSystem(page);
+    let polls = 0;
+    await page.route("**/api/system/reboot", route => route.abort("connectionreset"));
+    await page.route("**/api/system/info", route => {polls++; return route.fulfill({status: 503});});
+    await page.getByRole("button", {name: "Host power…", exact: true}).click();
+    await page.getByRole("menuitem", {name: /Restart Host/}).click();
+    expect(writes).toEqual([]);
+    await page.clock.install();
+    await page.getByRole("dialog").getByRole("button", {name: "Confirm", exact: true}).click();
+    await expect(page.locator('.ant-notification-notice-warning')).toContainText('Status unknown');
+    await expect(page.getByText("Restart failed", {exact: true})).toHaveCount(0);
+    await expect(page.getByText("Rebooting the Host…", {exact: true})).toBeVisible();
+    await expect(page.locator('.ant-notification-notice-success')).toHaveCount(0);
+    await page.clock.fastForward(15_000);
+    await expect.poll(() => polls).toBe(1);
+    await page.clock.fastForward(15_000);
+    await expect.poll(() => polls).toBe(2);
+    expect(writes).toEqual(['/api/system/reboot']);
+});
+
+test("malformed settings still reports its error without issuing a power command", async ({page}) => {
+    const writes = watchPowerWrites(page);
+    await installMockBackend(page, {...SCENARIOS[0], rest: {'/api/settings': {}}});
+    await page.goto('/#/diagnostics');
+    await expect(page.locator('.ant-notification-notice-error').filter({hasText: 'Invalid settings payload'}).first()).toBeVisible();
+    expect(writes).toEqual([]);
 });

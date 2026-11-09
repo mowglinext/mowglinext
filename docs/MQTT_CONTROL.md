@@ -78,22 +78,24 @@ unless noted otherwise. QoS 1 throughout.
 
 | Topic | Direction | Retained | Source | Rate |
 |-------|-----------|----------|--------|------|
-| `<prefix>/status` | out | yes | `/hardware_bridge/status` | latest value, at most `publish_rate` Hz |
-| `<prefix>/power` | out | yes | `/hardware_bridge/power` | latest value, at most `publish_rate` Hz |
-| `<prefix>/emergency` | out | yes | `/hardware_bridge/emergency` | every ROS message (not rate-limited) |
-| `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | every ROS message (~1 Hz, not rate-limited) |
-| `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | `publish_rate` Hz |
-| `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | `publish_rate` Hz |
-| `<prefix>/pose` | out | no | `/odometry/filtered_map` (fused localizer pose, **map frame**) | latest value, at most `publish_rate` Hz |
-| `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | latest value, at most `publish_rate` Hz |
+| `<prefix>/status` | out | yes | `/hardware_bridge/status` | on change, at most `publish_rate` Hz, plus a `state_heartbeat_period_s` (10 s) heartbeat |
+| `<prefix>/power` | out | yes | `/hardware_bridge/power` | on change, at most `publish_rate` Hz, plus a 10 s heartbeat (in practice `publish_rate`: the mV/mA readings change every sample) |
+| `<prefix>/emergency` | out | yes | `/hardware_bridge/emergency` | on change, **immediately** (never rate-limited), plus a 10 s heartbeat |
+| `<prefix>/high_level_status` | out | yes | `/behavior_tree_node/high_level_status` | on change, immediately (not rate-limited), plus a 10 s heartbeat |
+| `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | on movement > `position_deadband_m` (0.2 m) or a turn > 5°, at most `publish_rate` Hz, plus a `position_heartbeat_period_s` (30 s) heartbeat |
+| `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | on movement > 0.2 m (lat/lon distance), at most `publish_rate` Hz, plus a 30 s heartbeat |
+| `<prefix>/pose` | out | no | `/odometry/filtered_map` (fused localizer pose, **map frame**) | on movement > 0.2 m or a turn > 5°, at most `publish_rate` Hz, plus a 30 s heartbeat |
+| `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | on change, at most `publish_rate` Hz, plus a 10 s heartbeat |
 | `<prefix>/area_boundary` | out | yes | `/map_server_node/get_mowing_area` (polled) | on change, polled every 10 s |
 | `<prefix>/coverage_path` | out | yes | `/coverage/full_plan` (latched) | on change |
-| `<prefix>/diagnostics` | out | no | `/diagnostics` | on change |
+| `<prefix>/diagnostics` | out | no | `/diagnostics` (every publisher, merged by status name) | every `diagnostics_publish_period_s` (10 s), and within 1 s of a level change |
 | `<prefix>/available` | out | yes | connection state (LWT) | on connect/disconnect |
 | `<prefix>/host` | out | yes | the bridge's own LAN IP | once, on the first successful connect |
 | `<prefix>/areas` | out | yes | `/map_server_node/get_mowing_area` (polled) | ~every 10s |
 | `<prefix>/command` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/high_level_control` | — |
 | `<prefix>/start_area` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/start_in_area` | — |
+| `<prefix>/external_rain_state` | out | yes | `/behavior_tree_node/external_rain_state` (JSON from `behavior_tree_node`) | on change, plus a 30 s heartbeat |
+| `<prefix>/external_rain` | **in** | **yes — retained is accepted** (it is state, not intent) | → `/external_rain` → `behavior_tree_node` | — |
 | `<prefix>/schedules` | out | yes | the GUI's schedule database (not ROS2 — see above) | on any create/update/delete |
 | `<prefix>/schedules/set` | **in** | no (retained deliveries rejected) | → GUI schedule database | — |
 | `<prefix>/schedules/delete` | **in** | no (retained deliveries rejected) | → GUI schedule database | — |
@@ -340,6 +342,15 @@ drawing it, rather than connecting every point in order.
 
 `level`: 0 OK, 1 WARN, 2 ERROR (standard `diagnostic_msgs/DiagnosticStatus` levels).
 
+Several nodes publish `/diagnostics` (`diagnostics_node`'s 1 Hz summary plus Nav2 and driver
+arrays — about 16 arrays a second in total). The bridge keeps the latest status for every `name`
+across all of them and publishes the merged list, sorted by name, every
+`diagnostics_publish_period_s` (10 s). When any status's level changes — or a status appears, or
+disappears because its publisher has been silent for 60 s — the list goes out early, at most once a
+second. A change of message text alone (many messages embed live rates or ages) waits for the next
+period. Until 2026-10 every array was forwarded as it arrived (~958 messages, 1.2 MB a minute on an
+idle robot), each carrying only its own publisher's subset.
+
 ### `<prefix>/available` (Last Will and Testament)
 
 Retained `"online"` (published once connected, and again on every reconnect) or `"offline"`
@@ -420,6 +431,85 @@ unrecognised/out-of-range payload is logged and dropped, and the command is drop
 `/behavior_tree_node/start_in_area` isn't available. Poll `<prefix>/high_level_status` afterwards
 to confirm it took effect. Subject to the same index-staleness caveat as `<prefix>/areas` above —
 targeting a stale index can start the wrong area.
+
+### `<prefix>/external_rain` (inbound — an external "is it raining?" verdict)
+
+Lets an outside source — typically a Home Assistant automation on a roof weather station — tell the
+mower that it is (or is not) raining, in addition to the mower's own rain sensor. Payload is a
+plain string, case-insensitive: `yes` / `on` / `true` / `wet` / `rain` / `1` mean **wet**;
+`no` / `off` / `false` / `dry` / `0` mean **dry**. Anything else (including `unknown`, `unavailable`,
+an empty payload) is logged and ignored, so a malformed message can never flip the state.
+
+Unlike `command` / `start_area`, **retained messages are accepted**: this is state, not operator
+intent, and a retained `yes`/`no` is how the last verdict survives a restart of the bridge.
+
+Behaviour on the robot (`BTContext::RainingNow`, `behavior_tree_node`):
+
+- It is **OR-ed** with the mower's own sensor. An external `no` never hides rain the mower feels, so
+  it can only add a reason to stop, never remove one.
+- While wet, the existing rain handling applies unchanged: after `rain_debounce_sec` the robot stops,
+  docks (`rain_mode` 2) and waits (`RAIN_WAITING`), and resumes once **both** sources read dry.
+- A wet verdict **expires** after `external_rain_max_age_minutes` (default 120, `0` = never) so a
+  dead automation, broker or Home Assistant cannot park the mower in the rain wait forever. Re-publish
+  while it is wet more often than that.
+- If the **mower's own** sensor was already wet when the session started ("I chose to mow in the
+  rain"), rain handling stays quiet for that session as before. A wet external verdict at start does
+  **not** count as that choice: the mower undocks, then pauses and docks again on the first rain
+  check. Do not start a mow while the external source is wet.
+- Master switch `use_external_rain` (GUI: Settings → Rain). Needs `mqtt_enabled`.
+
+Example Home Assistant automation for an Ecowitt GW1200A (`sensor.gw1200a_hourly_rain_rate` is the
+rain of the last hour in mm and stays above 0 for up to an hour after the last drop, so it also acts
+as a drying delay). Swap the trigger for any source, e.g. a `weather.*` forecast template:
+
+```yaml
+alias: Mowgli external rain
+mode: restart
+triggers:
+  - trigger: state
+    entity_id: sensor.gw1200a_hourly_rain_rate
+  - trigger: time_pattern
+    minutes: "/10"        # refresh well inside external_rain_max_age_minutes
+  - trigger: homeassistant
+    event: start
+actions:
+  - action: mqtt.publish
+    data:
+      topic: mowgli/external_rain
+      retain: true
+      payload: >-
+        {% set r = states('sensor.gw1200a_hourly_rain_rate') | float(none) %}
+        {{ 'yes' if r is not none and r > 0 else 'no' }}
+```
+
+For a forecast, replace the payload template with a condition on whatever you trust, for example
+the `precipitation` of the next hour from `weather.get_forecasts` (`type: hourly`), and publish
+`yes` when it exceeds your threshold.
+
+### `<prefix>/external_rain_state` (outbound — feedback on the external rain verdict)
+
+Read-only feedback on what the mower makes of `<prefix>/external_rain`, so a dashboard can show
+that a message arrived and whether it is being counted. It never changes what the mower does.
+Retained JSON, republished on every change and every 30 s:
+
+```json
+{"state":"wet","enabled":true,"received":true,"wet":true,"active":true,
+ "onboard_wet":false,"age_s":312,"expires_in_s":6888,"max_age_s":7200}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `state` | `no_data` (nothing received yet), `dry`, `wet` (fresh, **counted**), `expired` (a wet verdict older than the expiry, **not** counted) or `disabled` (`use_external_rain` off) |
+| `enabled` | the master switch (`use_external_rain`) |
+| `received` / `wet` | a verdict has arrived / the last one said wet, whatever its age |
+| `active` | a fresh wet verdict that the rain guard counts **right now** |
+| `onboard_wet` | the mower's **own** rain sensor, shown beside it so the two sources can be told apart |
+| `age_s`, `expires_in_s` | seconds since the last verdict / until a wet one expires; `null` when not applicable |
+| `max_age_s` | the configured expiry (`external_rain_max_age_minutes` × 60), `0` = never |
+
+`age_s` and `expires_in_s` are refreshed by the 30 s heartbeat, not continuously. This is a
+status only: while the mower is docked and idle a `yes` has no visible effect on the mower itself,
+because the rain guard lives in the mowing tree; this topic is where you see that it arrived.
 
 ### `<prefix>/schedules` (mowing schedules)
 
@@ -508,4 +598,54 @@ Read once at startup (`ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt
 | `use_ssl` | `false` | `mqtt_use_ssl` |
 | `home_assistant_discovery_enabled` | `false` | `mqtt_home_assistant_discovery_enabled` |
 | `mqtt_client_id` | `mowgli_ros2` | package-share `mqtt_bridge.yaml` only (not on the GUI) |
-| `publish_rate` | `1.0` Hz | package-share `mqtt_bridge.yaml` only — also the rate limit for position/gps/status/power/rtk_status. The MQTT network loop runs on its own fixed 50 ms timer, independent of this |
+| `publish_rate` | `1.0` Hz | package-share `mqtt_bridge.yaml` only — the rate cap for position/gps/pose/status/power/rtk_status. The MQTT network loop runs on its own fixed 50 ms timer, independent of this |
+| `state_heartbeat_period_s` | `10.0` s (clamped to 1–3600) | package-share `mqtt_bridge.yaml` only — how often an UNCHANGED emergency/high_level_status/status/power/rtk_status payload is resent; a change is sent at once |
+| `position_deadband_m` | `0.2` m (clamped to 0–100) | package-share `mqtt_bridge.yaml` only — movement that publishes position/pose/gps (gps: lat/lon distance, equirectangular); position/pose also publish on a turn > 5° |
+| `position_heartbeat_period_s` | `30.0` s (clamped to 1–3600) | package-share `mqtt_bridge.yaml` only — resend of an unmoved position/pose/gps |
+| `diagnostics_publish_period_s` | `10.0` s (clamped to 1–3600) | package-share `mqtt_bridge.yaml` only — merged diagnostics cadence; a level change goes out within 1 s |
+
+An out-of-range value is clamped with a WARN in the bridge's log.
+
+## Upgrading: cleaning up Home Assistant history
+
+Before 2026-10 the bridge sent far more than Home Assistant needed. Measured over 60 s on an idle,
+docked robot: `<prefix>/diagnostics` 958 messages (1.17 MB — about 1.7 GB a day),
+`<prefix>/emergency` 237, `<prefix>/high_level_status` 155, every one of them unchanged; and Home
+Assistant's recorder wrote a new row about once a second for the **Location** device tracker
+(every `<prefix>/gps` field, 8-decimal latitude/longitude and altitude jitter included, was an
+attribute), ~51 a minute for **Battery voltage** and ~56 for **Charge current** (millivolt /
+milliamp noise). The bridge now publishes on change with heartbeats (see the Rate column above),
+and the discovery record rounds the noisy sensors (battery voltage to 0.1 V, charge and blade
+current to 0.01 A, blade speed, battery, coverage and GPS quality to whole numbers) and limits
+the attributes: the device tracker keeps only `latitude`/`longitude` rounded to 5 decimals (~1 m),
+the lawn mower only `state_name`, `sub_state_name`, `current_area`, `coverage_percent` (whole
+percent), `completed_swaths`, `skipped_swaths` and `total_swaths`. Entity ids and unique ids are
+unchanged, so existing dashboards and automations keep working; an automation that read another
+attribute of the mower entity (e.g. `current_path_index`) should read `<prefix>/high_level_status`
+directly instead.
+
+The rows already recorded stay in the database. To drop them, run the
+`recorder.purge_entities` action once from **Developer tools → Actions** (adjust the entity ids to
+the ones Home Assistant shows for your mower):
+
+```yaml
+action: recorder.purge_entities
+target:
+  entity_id:
+    - sensor.mowglinext_battery_voltage
+    - sensor.mowglinext_charge_current
+    - device_tracker.mowglinext_location
+    - lawn_mower.mowglinext
+```
+
+This deletes ALL history of those entities, not only the noisy part. If you do not need the
+history of an entity at all, you can also keep it out of the recorder for good:
+
+```yaml
+# configuration.yaml
+recorder:
+  exclude:
+    entities:
+      - device_tracker.mowglinext_location
+```
+

@@ -1,0 +1,14 @@
+.health-card { container-type: inline-size; }
+.health-card-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+}
+.health-card-body:has(.health-card-mower) { grid-template-columns: minmax(0, 1fr) minmax(104px, .85fr); }
+.health-card-mower { min-width: 0; width: 100%; max-width: 210px; justify-self: center; }
+@container (max-width: 280px) {
+    .health-card-body:has(.health-card-mower) { grid-template-columns: minmax(0, 1fr); }
+    .health-card-mower { max-width: 165px; }
+    .health-card-mower svg { height: 190px; }
+}

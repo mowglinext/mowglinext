@@ -47,6 +47,7 @@
 | `launch/foxglove_bridge.launch.py` | 129 | Shared foxglove_bridge (1 MB send buffer, 2 s respawn), included by `full_system`; 2 production threads, automatic selection standalone |
 | **`config/`** | | |
 | `config/mowgli_robot.yaml` | 739 | TEMPLATE of every robot-param default (Invariant 15); installed sparse twin is `install/config/mowgli/mowgli_robot.yaml` |
+| `config/backends/<backend>.yaml` | — | per-`HARDWARE_BACKEND` DEFAULT overrides (only `openmower.yaml` today), layered template ← backend ← installed by `robot_config_util.load_robot_config`; never adds keys (`test_robot_config_util.py`); mirrored into the GUI by `gui/cmd/gen-backend-defaults` |
 | `config/nav2_params_base.yaml` | ~1.2k | Shared Nav2 base: bt_navigator, controller_server (FollowPath RPP / FollowCoveragePath FTC / goal+progress checkers), planner, smoother, behavior_server, costmaps, docking_server, collision_monitor I/O, coverage_server |
 | `config/nav2_params_lidar.yaml` | 284 | Overlay: `/scan_costmap` obstacle layers, `/scan_collision` collision_monitor polygons, `FollowPath.use_collision_detection: true` |
 | `config/nav2_params_no_lidar.yaml` | 80 | Overlay: `/no_lidar_static_map` static layers, FTC obstacle flags off, monitor pass-through, planner `costmap_update_timeout: 5.0` |
@@ -57,7 +58,7 @@
 | `scripts/wait_for_tf.py` | 70 | `--parent map --child odom --timeout 120`; exit 0 when TF resolvable, 1 on timeout |
 | `scripts/empty_static_map_pub.py` | 61 | Latched empty `OccupancyGrid` on `/no_lidar_static_map` (params `size_m` 200, `resolution` 0.5, `frame_id` map) |
 | `scripts/cmd_vel_ws_relay.py` | 121 | WebSocket 127.0.0.1:8766 JSON → `/cmd_vel_teleop` (`TwistStamped`, clamps ±2.0 m/s / ±5.0 rad/s) |
-| `scripts/fleet_peer_obstacles.py` | 158 | Fleet coordination (commit `4bc36b74`, 2026-09-15): subs `/fleet/peers`, publishes `/fleet/peer_obstacles` consumed by both Nav2 costmap variants as an obstacle source; launched unconditionally from `full_system.launch.py` |
+| `scripts/fleet_peer_obstacles.py` | 158 | Fleet coordination (commit `4bc36b74`, 2026-09-15): subs `/fleet/peers` + `/fleet/docked_peers` + `/odometry/filtered_map` + `/map_server_node/docking_pose`, publishes `/fleet/peer_obstacles` consumed by both Nav2 costmap variants as an obstacle source; a charging peer beside our dock is left out while we undock/dock (`classify_docked_peer`, side-by-side docks, 2026-10-28); launched unconditionally from `full_system.launch.py` |
 | **`urdf/`** | | |
 | `urdf/mowgli.urdf.xacro` | 408 | Frames + visuals only (no sim plugins): base_footprint→base_link→wheels/casters/blade/imu/gps/lidar; all dims are xacro args |
 | **`test/`** | | |
@@ -66,7 +67,7 @@
 | `test/test_launch_injection.py` | 262 | AST guards: `num_headland_passes` unclamped, `mowing_enabled` → hardware_bridge only, `dock_max_retries`/`dock_use_charger_detection` → docking_server |
 | `test/test_tf_ownership.py` | 100 | Only fusion_graph + wheel_odometry construct `TransformBroadcaster`; `wheel_odometry.yaml publish_tf: false`; no launch file sets `publish_tf` |
 | `test/test_gnss_launch_config.py` | 61 | `full_system` declares no `use_universal_gnss`, includes no `universal_gnss.launch.py`, passes no legacy `gnss_backend`/`gps_protocol` params |
-| `test/test_fleet_peer_obstacles.py` | 63 | Guards `fleet_peer_obstacles.py`'s `/fleet/peers` sub / `/fleet/peer_obstacles` pub wiring |
+| `test/test_fleet_peer_obstacles.py` | 63 | Guards `fleet_peer_obstacles.py`'s footprint/cloud helpers and the docked-neighbour exception (incl. the 2026-10-28 bag poses) |
 | `test/test_drive_pid_defaults.py` | 167 | Drive PID/yaw-tuning template defaults |
 | `test/test_fusion_graph_launch_types.py` | 146 | `fusion_graph.launch.py` param type/coercion guards |
 | `test/test_gnss_sidecar_launcher.py` | 178 | Guards the Universal GNSS sidecar inline launcher (`docker-compose.gps.yml`'s Python `command:` block) reads `mowgli_robot.yaml` correctly |
@@ -243,3 +244,5 @@ Deployment entry points: `install/compose/docker-compose.base.yml` L42–44 `ros
 - `launch/nav2_navigation_launch.py` — vendored from `nav2_bringup/launch/navigation_launch.py` (Apache-2.0, Intel), edited only to drop `route_server` and add `docking_server`/`coverage_server`.
 - `/tmp/mowgli_nav2_*.yaml` — temp files written by `navigation.launch.py` `_inject_dock_pose_and_speeds` at every launch; never commit or edit.
 - `/ros2_ws/config/mowgli_robot.yaml` (runtime) is written back by `calibrate_imu_yaw_node`, `map_server_node` (`/set_docking_point`), and the GUI (`gui/pkg/api/drive_tuning.go`) via line-splice — the committed seed is `install/config/mowgli/mowgli_robot.yaml`, not this package.
+
+Blade placement uses `chassis_center_x + blade_x_offset`, `blade_y_offset`; both offsets default to zero and are forwarded from the template by `mowgli.launch.py`. `test_urdf_xacro.py` covers the legacy centre, right-offset cutting tool and independence from wheel X.

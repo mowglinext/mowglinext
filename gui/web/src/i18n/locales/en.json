@@ -1,4 +1,44 @@
 {
+  "telemetry": {
+    "emergencyClearanceUnverified": "Emergency was reported · clearing unverified",
+    "statusUnknown": "Status unknown",
+    "freshnessUnverified": "Reported status · freshness unverified"
+  },
+  "blackbox": {
+    "title": "Automatic blackbox",
+    "recordingsTab": "Recordings",
+    "description": "Keeps recent diagnostic history in RAM and saves a snapshot on emergency activation, a diagnostic error or a terminal mission failure. Recording runs while the GUI backend is running, even with this page closed.",
+    "enabled": "Enable automatic blackbox",
+    "pre": "History before event (seconds)",
+    "post": "History after event (seconds)",
+    "memory": "Maximum memory (MiB)",
+    "count": "Maximum saved snapshots",
+    "disk": "Maximum saved storage (MiB)",
+    "apply": "Apply settings",
+    "save": "Save blackbox now",
+    "history": "Available history: {{seconds}} seconds",
+    "resources": "History {{used}} MiB · effective budget {{limit}} MiB · {{dropped}} dropped observations",
+    "pressure": "Recording paused under memory pressure. Normal mower operation continues.",
+    "waiting": "Waiting for telemetry. Check the ROS bridge if publishers are already running.",
+    "privacy": "Snapshots include location and diagnostic telemetry. Review them before sharing. A backend restart or power loss clears unsaved history.",
+    "loading": "Loading blackbox status",
+    "requestFailed": "Blackbox request failed",
+    "required": "Enter a value",
+    "empty": "No saved snapshots yet",
+    "trigger": "Trigger and time",
+    "duration": "Actual recorded coverage",
+    "coverage": "{{pre}} s before · {{post}} s after",
+    "size": "Size",
+    "actions": "Actions",
+    "download": "Download",
+    "delete": "Delete",
+    "deleteNamed": "Delete snapshot {{name}}",
+    "deleteTitle": "Delete this blackbox snapshot?",
+    "cancel": "Cancel",
+    "interrupted": "Capture interrupted",
+    "dropped": "{{count}} capture observations dropped",
+    "phase": {"ready": "Ready", "disabled": "Disabled", "capturing": "Collecting post-event history", "writing": "Saving snapshot", "pruning": "Applying storage limits", "stopped": "Stopped"}
+  },
   "bladeDirection": {
     "title": "Requested blade direction",
     "summary": "Requested direction: {{direction}}",
@@ -63,6 +103,106 @@
       "unavailable": "Unavailable"
     }
   },
+  "settingsHardwareBackend": {
+    "title": "Hardware backend",
+    "active": "Active backend",
+    "names": {
+      "mowgli": "Mowgli board (STM32)",
+      "openmower": "OpenMower v1 (LowLevel board + xESC)",
+      "mavros": "Pixhawk (MAVROS)",
+      "unknown": "Unconfirmed hardware backend"
+    },
+    "descriptions": {
+      "mowgli": "The Mowgli STM32 firmware drives the motors and owns blade and emergency safety. It needs no wiring settings here.",
+      "openmower": "The stock OpenMower electronics keep their own firmware; a bridge container drives them. Settings MowgliNext already has (charge limits, lift delays, ticks per metre…) stay in their usual sections and are applied to the OpenMower hardware.",
+      "mavros": "A flight controller drives the robot through the MAVROS sidecar, which is configured by the installer.",
+      "unknown": "Unconfirmed hardware backend"
+    },
+    "choiceNote": "The backend is chosen when installing the robot.",
+    "openmowerRestartNote": "The OpenMower bridge reads these settings when it starts: use \"Restart ROS2\" after saving, which restarts the bridge too.",
+    "shortNames": {
+      "mowgli": "Mowgli",
+      "openmower": "OpenMower v1",
+      "mavros": "MAVROS",
+      "unknown": "Unconfirmed hardware backend"
+    },
+    "badgeTooltip": "Hardware backend: {{name}} — open the hardware settings",
+    "presetsUnavailable": "Backend defaults unavailable; hardware model presets disabled.",
+    "authority": {
+      "loading": "Hardware identity is loading",
+      "legacy_absent": "Legacy metadata endpoint absent; live hardware writes disabled",
+      "unavailable": "Hardware metadata unavailable; live hardware writes disabled",
+      "malformed": "Malformed hardware metadata; live hardware writes disabled",
+      "unsupported": "Unsupported hardware backend; live hardware writes disabled"
+    }
+  },
+  "settingsMavrosDrive": {
+    "notice": {
+      "title": "MAVROS drive calibration",
+      "description": "Wheel odometry calibration and an explicit traction opt-in are available for this backend. Mowgli STM32 PID, feed-forward and flash controls are not used."
+    },
+    "calibration": {
+      "title": "Wheel odometry",
+      "ticksPerMeter": "Motor ticks per metre",
+      "wheelTrack": "Wheel track (m)"
+    },
+    "odometry": {
+      "title": "Live MAVROS odometry",
+      "source": "Source",
+      "status": "Status",
+      "leftTicks": "Left motor ticks",
+      "rightTicks": "Right motor ticks"
+    },
+    "status": {
+      "live": "Live",
+      "unavailable": "Unavailable or stale"
+    }
+  },
+  "settingsMavrosSafety": {
+    "title": "MAVROS safety",
+    "switch": "Safety Switch",
+    "left": "Wheel lift left",
+    "right": "Wheel lift right",
+    "physicalSafety": "The physical Safety Switch always remains authoritative. It cannot be bypassed here.",
+    "protection": "Wheel lift protection",
+    "liveProtection": "Protection reported by the sidecar",
+    "on": "On",
+    "off": "Off",
+    "disableTitle": "Disable wheel lift protection?",
+    "disableDescription": "Both lifted wheels will no longer assert the wheel lift emergency. Lift telemetry stays visible and the physical Safety Switch remains active. Save to apply.",
+    "states": {
+      "unknown": "Unknown",
+      "engaged": "Engaged",
+      "released": "Released",
+      "ground": "On ground",
+      "lifted": "Lifted"
+    }
+  },
+  "settingsMavrosTraction": {
+    "title": "Enable MAVROS traction commands",
+    "description": "Disabled by default. Enabling forwards traction commands only when the FCU is connected, already armed and its Safety Switch is released. Blade control remains disabled.",
+    "confirmTitle": "Enable traction commands?",
+    "confirmDescription": "Confirm that traction mapping has been validated and the area is safe. This setting never arms the FCU and does not bypass safety. Save to apply."
+  },
+  "settingsMavrosCalibration": {
+    "title": "RTK wheel calibration",
+    "instructions": "Start recording with RTK Fixed and fresh wheel feedback. Drive a straight 2–10 m pass using the existing manual controls in another tab, stop, then finish recording. The measured motor revolutions and independent RTK distance determine ticks_per_meter. Applying saves only this value; PID and feed-forward are untouched.",
+    "state": "State",
+    "samples": "Paired observations",
+    "distance": "RTK distance",
+    "proposal": "Proposed motor ticks per metre",
+    "start": "Start recording",
+    "finish": "Finish recording",
+    "apply": "Apply ticks_per_meter",
+    "unavailable": "Calibration service unavailable",
+    "states": {
+      "idle": "Idle",
+      "recording": "Recording",
+      "ready": "Ready to apply",
+      "applied": "Applied and saved",
+      "failed": "Measurement rejected"
+    }
+  },
   "updates": {
     "title": "Versions & updates",
     "shortTitle": "Versions",
@@ -82,6 +222,20 @@
     "installedSoftware": "Installed software",
     "noContainers": "No Mowgli containers could be identified",
     "mainboard": "Mainboard firmware",
+    "autopilotFirmware": "Autopilot firmware",
+    "mavrosConnected": "FCU connected",
+    "mavrosDisconnected": "FCU disconnected",
+    "mavrosProvider": "Firmware provider",
+    "mavrosVehicleType": "Vehicle type",
+    "mavrosBoardIdentity": "Board identity",
+    "mavrosVersionUnavailable": "Version not reported by the autopilot",
+    "mavrosNotReported": "Not reported by MAVROS",
+    "mavrosUpdateUnsupported": "Firmware updates via MAVROS are not supported yet.",
+    "mavrosVehicleTypes": {
+      "1": "Fixed wing",
+      "2": "Quadrotor",
+      "10": "Ground rover"
+    },
     "firmwareMeaning": "Compatibility is checked against the robot software's protocol. It does not mean the firmware is the latest release. Disconnected or stale values are last known readings.",
     "firmwareAvailable": "Firmware {{version}} (protocol {{protocol}}) is available for this installation.",
     "firmwareUpToDate": "The board runs the firmware of this installation ({{version}}).",
@@ -121,7 +275,8 @@
       "ntrip": "NTRIP",
       "vesc": "VESC",
       "tfluna-front": "Front TF-Luna",
-      "tfluna-edge": "Edge TF-Luna"
+      "tfluna-edge": "Edge TF-Luna",
+      "openmower": "OpenMower bridge"
     },
     "containerStates": {
       "running": "Running",
@@ -515,6 +670,13 @@
     "baseHeadingUncertaintyTooltip": "Standard deviation (rad) of the base heading used to seed the fusion graph at charging contact. Lower = the calibrated heading is trusted more."
   },
   "diagnosticsPage": {
+    "guiHttp": "GUI HTTP",
+    "guiResponding": "Responding",
+    "rosTransport": "ROS connection",
+    "transportHealthy": "Heartbeat verified",
+    "transportChecking": "Waiting for heartbeat",
+    "transportDisconnected": "Disconnected",
+    "transportHint": "The GUI can respond while ROS is unavailable. A healthy connection does not confirm fresh sensors or mower readiness.",
     "verdictEmergency": "Emergency",
     "verdictAttention": "Attention required",
     "verdictAllGood": "All good",
@@ -754,7 +916,7 @@
     "tickFactorLabel": "Tick factor:",
     "tickFactorUnit": "ticks/m at the wheel.",
     "bodyOmegaLabel": "Body omega from L/R diff:",
-    "perWheelTempNote": "Per-wheel motor temperatures + currents are not exposed by the firmware; only the blade motor reports those (see Hardware Status below).",
+    "perWheelTempNote": "Per-wheel electrical readings and ESC temperature depend on the backend and available telemetry. VESC motor RPM is distinct from physical wheel RPM.",
     "hardwareStatus": "Hardware Status",
     "mowerStatus": "Mower Status",
     "statusOk": "OK",
@@ -831,12 +993,38 @@
     "sourceUnchanged": "Publication unchanged for {{seconds}} s",
     "lidarNoEstimate": "No estimate yet"
   },
+  "stopReason": {
+    "genericTitle": "The mower stopped",
+    "AREA_START_BLOCKED": {
+      "title": "Stopped: the mower's own position is blocked",
+      "hint": "Every pass was refused because the mower stands on a blocked spot, often right in front of the dock. Move it a metre or two and press Play: the progress is kept."
+    },
+    "AREA_NO_PROGRESS": {
+      "title": "Stopped: an area could not be mown",
+      "hint": "Several passes in a row mowed nothing new, so the area was given up. Check the map and the obstacles around it, then press Play to try again."
+    },
+    "DOCK_NAV_FAILED": {
+      "title": "Stopped: the mower could not drive back to the dock",
+      "hint": "It is standing where it stopped. Drive or carry it to the dock, or press Play to continue mowing."
+    },
+    "UNDOCK_FAILED": {
+      "title": "Stopped: the mower could not back out of the dock",
+      "hint": "Check that nothing blocks the way out of the dock, then press Play."
+    },
+    "CHARGER_FAILED": {
+      "title": "Stopped: the mower is at the dock but is not charging",
+      "hint": "Check the charging contacts and that the mower sits straight in the dock."
+    }
+  },
   "mowgliNextPage": {
+    "mowerOnDockTop": "Mower on its dock — top view",
+    "mowerTop": "Mower — top view",
     "headlineUntilHomePrefix": "Just ",
     "headlineMinutes": "{{value}} min",
     "headlineUntilHomeSuffix": " until home.",
     "headlineChargingPrefix": "Charging · ",
     "headlineMowingPausedPrefix": "Mowing paused · ",
+    "headlineResumingMowing": "Resuming mowing…",
     "headlinePercent": "{{value}} %",
     "emergencyStop": "Emergency stop",
     "headlineIdlePrefix": "Mowgli is ",
@@ -852,7 +1040,8 @@
     "sublineScanPaused": "LiDAR scan is temporarily stale. Blades are off; mowing resumes automatically when fresh scans return.",
     "activeZone": "active zone",
     "sublineCharging": "On the dock, {{current}} A coming in.",
-    "sublineChargeHold": "Mowing is paused and resumes automatically at {{full}}%. Resume now is available from {{manual}}%.",
+    "sublineChargeHold": "Resumes automatically when charging is complete.",
+    "sublineResumingMowing": "Leaving the dock to continue the mowing session.",
     "sublineManualChargeHold": "Mowing is paused because the mower was docked manually. Take it off the dock before resuming.",
     "sublineEmergency": "Secure the area, then restart with the green button.",
     "sublineIdle": "Tap Play to start a mow, or let the schedule take over.",
@@ -906,11 +1095,15 @@
     "firmwareVersion": "v{{version}}",
     "firmwareReflash": "v{{version}} — reflash firmware to mow",
     "firmwareFlashCta": "Flash firmware",
+    "mavrosFcuConnected": "FCU connected",
+    "mavrosFcuDisconnected": "FCU disconnected",
+    "mavrosWaitingInfo": "Waiting for MAVROS autopilot information",
+    "mavrosAutopilotBoard": "Autopilot board",
     "coverageToday": "Coverage today · {{pct}} %",
     "soilWetTitle": "Careful: the garden is wet (IrriSense)",
     "soilWetBlocking": "scheduled mows are suspended",
     "digEscalationTitle": "Mowing halted — repeat dig detected",
-    "digEscalationBody": "The mower couldn't free itself and stopped {{distance}} m from the spot (needs {{required}} m to clear). Move it further away, then try again.",
+    "digEscalationBody": "The mower couldn't free itself and stopped {{distance}} m from the spot. Resume from here (one more dig at this spot stops it again), move it more than {{required}} m away, or send it home.",
     "digEscalationReady": "Moved {{distance}} m from the spot — ready to clear.",
     "digEscalationClear": "Clear & resume"
   },
@@ -1101,6 +1294,10 @@
     "readinessCtaDrawArea": "Draw area"
   },
   "settingsPage": {
+    "leaveTitle": "Leave without saving?",
+    "leaveBody": "Your unsaved settings will be discarded. Stay on this page to save them.",
+    "discardAndLeave": "Discard and leave",
+    "keepEditing": "Keep editing",
     "ros2Restarting": "Restarting ROS2…",
     "ros2Restarted": "ROS2 restarted",
     "ros2RestartFailed": "ROS2 restart failed",
@@ -1121,6 +1318,8 @@
     "technicalDetails": "Technical details"
   },
   "schedulePage": {
+    "weeklyOverview": "Weekly start times",
+    "startSpacingHint": "Blocks mark scheduled starts with a minimum spacing of 60 minutes. Mowing has no fixed duration.",
     "planning": "Planning",
     "soilWetBlocking": "Soil wet — scheduled mows suspended",
     "soilWet": "Soil wet",
@@ -1210,6 +1409,10 @@
     "noAreaHint": "Record a mowing area to see the live map."
   },
   "statisticsPage": {
+    "readFailed": "Mowing history could not be loaded. Retry to read it.",
+    "refreshFailed": "Mowing history could not be refreshed. Showing the last confirmed data.",
+    "retry": "Retry",
+    "loadingHistory": "Loading mowing history…",
     "statistics": "Statistics",
     "aYearOfMowing": "A year of mowing",
     "noMowingYet": "No mowing yet",
@@ -1436,10 +1639,7 @@
     "rearm": "Re-arm",
     "resumeNow": "Resume now",
     "cancelMowing": "Cancel mowing",
-    "lowChargeHold": "Mowing is paused while the battery charges.",
-    "manualChargeHold": "Mowing is paused because the mower was docked manually.",
-    "criticalChargeHold": "Mowing is paused for critical-battery charging.",
-    "chargeHold": "{{message}} It resumes automatically at {{full}}%. Resume is available at {{resumeAt}}%."
+    "resumeAvailable": "Available from {{percent}}%"
   },
   "modeSegment": {
     "ecoLabel": "Eco",
@@ -1457,6 +1657,12 @@
     "stats": "Stats"
   },
   "gpsStatus": {
+    "compactUnknown": "—",
+    "compact2d": "2D",
+    "compact3d": "3D",
+    "compactDgps": "DGPS",
+    "compactRtkFloat": "FLOAT",
+    "compactRtkFixed": "FIX",
     "rtkFixed": "RTK Fixed",
     "rtkFloat": "RTK Float",
     "gpsFix": "GPS fix",
@@ -1599,7 +1805,7 @@
     },
     "DIG_OBSTRUCTION": {
       "label": "Dig obstruction",
-      "friendly": "Stopped — kept digging at the same spot. Lift it clear, then Play or Home"
+      "friendly": "Stopped — kept digging at the same spot. Check it, then Play to resume or Home"
     },
     "UNDOCK_FAILED": {
       "label": "Start failed",
@@ -1621,7 +1827,7 @@
   "mapToolbar": {
     "actionFailed": "Action failed",
     "mowerAppearance": "Mower map image",
-    "mowerAppearanceUrdf": "URDF silhouette (automatic fallback)",
+    "mowerAppearanceUrdf": "URDF · assembled mower",
     "mowerAppearanceBiltemaRm1000": "Biltema RM1000",
     "mowerAppearanceBiltemaRm1000Alt": "Biltema RM1000 mower",
     "dockAppearance": "Dock appearance",
@@ -1634,6 +1840,8 @@
     "satellite": "Satellite",
     "showObstacleClearance": "Show obstacle clearance preview",
     "hideObstacleClearance": "Hide obstacle clearance preview",
+    "showCoveragePreview": "Show mowing lines",
+    "hideCoveragePreview": "Hide mowing lines",
     "flattenMap": "Flatten map",
     "tilt3dView": "Tilt 3D view",
     "areaRecording": "Area Recording",
@@ -1683,6 +1891,8 @@
     "satellite": "Satellite",
     "showObstacleClearance": "Show obstacle clearance preview",
     "hideObstacleClearance": "Hide obstacle clearance preview",
+    "showCoveragePreview": "Show mowing lines",
+    "hideCoveragePreview": "Hide mowing lines",
     "areaRecording": "Area Recording",
     "mowNextArea": "Resume mowing",
     "continue": "Resume mowing",
@@ -1744,10 +1954,60 @@
     "emoji": "Emoji",
     "add": "Add"
   },
+  "coveragePreview": {
+    "hide": "Hide mowing lines",
+    "title": "Mowing lines",
+    "hint": "Shows how the robot will mow the selected area: the perimeter rounds (kopakker) and the lines across it. Arrows show the driving direction.",
+    "area": "Area",
+    "angle": "Mow angle",
+    "angleModeGlobal": "Robot-wide ({{value}})",
+    "angleModeAuto": "Auto",
+    "angleModeFixed": "Fixed angle",
+    "angleAuto": "auto",
+    "angleDeg": "{{deg}}°",
+    "angleAutoNow": "Auto (now {{deg}}°)",
+    "direction": "Perimeter direction",
+    "directionGlobal": "Robot-wide ({{value}})",
+    "directionDefault": "Default",
+    "directionClockwise": "Clockwise",
+    "directionCounterClockwise": "Counter-clockwise",
+    "swaths": "{{count}} lines",
+    "rings": "{{count}} perimeter rounds",
+    "coverage": "{{percent}}% of the area planned",
+    "calculating": "Calculating…",
+    "failed": "The planner could not draw lines for this area.",
+    "noAreas": "Draw a mowing area first.",
+    "ownSettings": "This area has its own lines.",
+    "followsRobotWide": "This area follows the robot-wide settings.",
+    "resumeWarning": "A paused mow was found. After saving the map, choose Start fresh instead of Resume: resuming plans this area again.",
+    "startPoint": "Start point",
+    "startAutomatic": "Automatic: the middle of the longest side.",
+    "startCustom": "You chose where mowing starts.",
+    "startHint": "Drag the green dot to change where mowing starts. It always starts on the outermost round and snaps onto it.",
+    "startReset": "Back to automatic",
+    "startNeedsRings": "A start point needs the perimeter rounds. Without them mowing starts at the first line.",
+    "startMarkerTitle": "Drag to move where mowing starts",
+    "editHint": "Changes here are part of this map edit: Save map keeps them, Cancel drops them.",
+    "viewHint": "Choose Edit map to change the angle, direction or start point."
+  },
+  "mapSidebar": {
+    "collapse": "collapse",
+    "expand": "expand",
+    "obstacles": "Obstacles",
+    "drawnObstacles": "Drawn obstacles ({{count}})",
+    "noObstacles": "No obstacles detected and no proposals waiting.",
+    "mowingLines": "Mowing lines",
+    "mowingLinesOff": "Shows how the robot will mow an area, so you can try an angle or direction before it mows.",
+    "mowingLinesShow": "Show mowing lines",
+    "noAreas": "Draw a mowing area first."
+  },
   "mapOffsetPanel": {
     "mapOffset": "Map Offset",
     "mapRotation": "Map Rotation",
-    "resetToNorthUp": "Reset to north-up"
+    "resetToNorthUp": "Reset to north-up",
+    "lockRotation": "Lock map rotation",
+    "unlockRotation": "Unlock map rotation",
+    "rotationLockSaveError": "Failed to save the map rotation lock"
   },
   "mapEditArea": {
     "areaTypeMowing": "Mowing Area",
@@ -1812,7 +2072,16 @@
     "colApproxArea": "Approx area (m²)",
     "warningCount_one": "{{count}} warning",
     "warningCount_other": "{{count}} warnings",
-    "applyFailed": "Apply failed"
+    "applyFailed": "Import incomplete or unconfirmed",
+    "legacyApplied": "The legacy server acknowledged the import, but detailed map and dock persistence cannot be confirmed. Your local draft is preserved and may differ from the robot. Verify the map and dock before another operation; no datum write was attempted.",
+    "notStarted": "Import was not started; this request did not change the map or dock.",
+    "mapRestored": "Import failed; restoration of the previous areas was acknowledged. Your local draft is preserved.",
+    "outcomeUnknown": "Import outcome unconfirmed; the server may have changed the map or dock. Your local draft is preserved and may differ from the robot. Verify both before another operation; do not start mowing.",
+    "mapPersistenceUnconfirmed": "The new map is active, but persistence is unconfirmed. The dock was not updated. Your local draft is preserved; verify the map and dock before another operation.",
+    "dockRejected": "The new map was saved, but the dock update was explicitly rejected. Your local draft is preserved and may differ from the robot. Verify the map and dock before another operation.",
+    "dockUnconfirmed": "The new map was saved, but the dock outcome is unconfirmed. Your local draft is preserved and may differ from the robot. Verify the map and dock before another operation.",
+    "dockNotAttempted": "The service confirmed that the areas were saved. The dock update was not attempted. Your local draft is preserved. Verify the robot's state before trying again. No new import or datum write is started automatically.",
+    "dockPersistenceUnconfirmed": "The new map was saved and the dock update was accepted in memory, but dock persistence is unconfirmed. Your local draft is preserved; verify the map and dock before another operation."
   },
   "mapAreasList": {
     "typeWorkArea": "Work Area",
@@ -1946,6 +2215,16 @@
   "mapFiles": {
     "areaSaved": "Area saved",
     "failedToSaveArea": "Failed to save area",
+    "unsupportedGeometry": "Polygons with interior rings (holes) and MultiPolygon geometries are not supported without losing exclusions. No map replacement or dock write was sent. The source file and local draft are unchanged. Review the exclusions before choosing a supported representation.",
+    "invalidGeometry": "Invalid or unrepresentable map geometry or coordinate transformation. No map replacement or dock write was sent. The source file and local draft are unchanged.",
+    "obstacleParentMissing": "Map not saved: obstacles {{ids}} have no matching parent area. The local draft is unchanged; no exclusion was discarded and no map replacement or dock write was sent.",
+    "affectedPolygons": "Affected polygons: {{polygons}}. Fix their outline (no crossing or touching edges) and save again.",
+    "polygonArea": "area \"{{name}}\"",
+    "polygonNavigation": "navigation area \"{{name}}\"",
+    "polygonObstacle": "obstacle {{index}} of area \"{{area}}\"",
+    "unnamedPolygon": "unnamed",
+    "preExistingInvalidGeometryTitle": "Map saved with invalid polygons left unchanged",
+    "preExistingInvalidGeometry": "These polygons were already invalid (crossing or touching edges) and were not edited, so they were saved exactly as before: {{polygons}}. Redraw them so coverage planning can use them reliably.",
     "restoreFailed": "Could not restore this map backup",
     "restoreOriginalsFailed": "The map was restored, but the recorded obstacle outlines in the backup could not be stored",
     "restoreCorridorsFailed": "The map was restored, but the LiDAR ignore lines in the backup could not be written",
@@ -1954,6 +2233,7 @@
     "openMowerImportFailed": "OpenMower import failed",
     "openMowerMapImported": "OpenMower map imported",
     "openMowerMapImportedDescription": "Areas + dock pose written. /map should refresh shortly.",
+    "openMowerMapImportedWithoutDock": "Areas saved. No dock update was requested. /map should refresh shortly.",
     "unknownType": "Unknown type {{type}}",
     "obstaclesDropped": "Some obstacles were dropped",
     "obstaclesDroppedDescription": "These keep-out zones had no matching parent area and were not saved: {{ids}}",
@@ -2367,12 +2647,20 @@
       "label": "Sabo MOWiT 500F",
       "description": "Large professional mower (775x535mm), 32cm cutting width."
     },
+    "Worx500MPlus": {
+      "label": "WORX 500M Plus",
+      "description": "Contributor-configured 580×395 mm mower; blade centre 57.5 mm right of centre. Review caster position and component calibration."
+    },
     "CUSTOM": {
       "label": "Custom Robot",
       "description": "Manually configure all hardware parameters for a custom build."
     }
   },
   "settingsHardware": {
+    "bladeXOffset": "Blade Forward Offset",
+    "bladeYOffset": "Blade Side Offset",
+    "bladeXOffsetTooltip": "Measure from the chassis centre to the blade rotation centre, parallel to the direction of travel. Positive forward, negative backward; zero follows the chassis centre. Metres. Updates the blade position in the robot model and tool transform; does not change cutting width.",
+    "bladeYOffsetTooltip": "Measure sideways from the mower centreline to the blade rotation centre. Positive left, negative right when looking forwards. Metres. Updates the blade position in the robot model and tool transform; does not change cutting width.",
     "robotModel": "Robot Model",
     "robotModelDescription": "Select your mower to auto-fill hardware dimensions.",
     "robotName": "Robot Name",
@@ -2385,7 +2673,7 @@
     "bladeRadius": "Blade Radius",
     "bladeRadiusTooltip": "Mowing blade radius",
     "toolWidth": "Tool Width",
-    "toolWidthTooltip": "Effective cutting width (2 x blade_radius)",
+    "toolWidthTooltip": "Effective width used to plan cutting swaths. Measure the usable cutting envelope from left to right; it is usually twice the blade radius. This setting controls coverage spacing independently of the blade radius shown in the robot model.",
     "encoderTicksPerMeter": "Encoder Ticks/Meter",
     "encoderTicksPerMeterTooltip": "Encoder ticks per metre of wheel travel",
     "chassisAndGeometry": "Chassis & Geometry",
@@ -2394,19 +2682,115 @@
     "chassisWidth": "Chassis Width",
     "chassisHeight": "Chassis Height",
     "chassisCenterX": "Chassis Center X",
-    "chassisCenterXTooltip": "Distance from base_link to chassis centre",
+    "chassisCenterXTooltip": "Measure the front and rear body-edge positions along the centreline from base_link, then average them. Forward is positive and rearward negative. Usually base_link is the rear drive-axle centre. Moves the shell and navigation footprint fore/aft; the current robot model also places the blade centre here.",
     "mass": "Mass",
     "wheelWidth": "Wheel Width",
     "wheelXOffset": "Wheel X Offset",
-    "wheelXOffsetTooltip": "Wheel axle offset from base_link",
+    "wheelXOffsetTooltip": "Measure the forward/backward position of the drive-wheel axle centres from base_link, along the robot centreline. Positive is forward, negative rearward. Normally 0 because base_link is defined at the drive axle. Moves the wheels in the robot model and artwork; it does not move the body or sensor reference frame.",
     "casterRadius": "Caster Radius",
     "casterTrack": "Caster Track",
     "modelConfirmTitle": "Apply model preset?",
     "modelConfirmBody": "This overwrites hardware dimensions, sensor offsets and battery thresholds — including any calibrated values.",
     "modelConfirmOk": "Apply preset",
-    "modelConfirmCancel": "Cancel"
+    "modelConfirmCancel": "Cancel",
+    "casterXOffset": "Caster Front/Back Position",
+    "casterXOffsetTooltip": "Measure horizontally from the rear drive-axle centre to the caster wheel axles with the casters pointing straight ahead. Positive is forward, negative rearward. If Wheel X Offset is non-zero, add it to this measurement. Fixes both caster positions in the robot model and artwork, independently of chassis length. Built-in model values are provisional starting points: measure your robot.",
+    "chassisZOffset": "Chassis vertical offset",
+    "chassisZOffsetTooltip": "Measure the height of the body bottom above the ground, then subtract the drive-axle height. This is the body bottom relative to base_link: negative is below the axle, positive above. For example, 0.050 m clearance minus 0.100 m axle height gives -0.050 m. Moves the body vertically without moving wheels, blade or sensors.",
+    "chassisLengthTooltip": "Measure the straight horizontal distance from the rear body edge to the front body edge, including the bumper; do not follow the curved shell. Sets the shell and robot collision-model length and the navigation footprint.",
+    "chassisWidthTooltip": "Measure the maximum body width from left edge to right edge, including side bumpers. Sets the shell width, navigation footprint and coverage clearance from boundaries and obstacles. Wheels are sized separately; check that projecting tyres are still covered by the navigation footprint.",
+    "chassisHeightTooltip": "Measure vertically from the bottom of the body to the top of the shell, excluding ground clearance, wheels and mounted sensors. Sets the shell and robot collision-model height. Ground clearance is set separately by the chassis vertical offset.",
+    "massTooltip": "Body mass in kilograms, including the battery and attached equipment, excluding wheels, casters and the cutting assembly modelled as separate parts. Weigh the body or subtract those parts from the complete mower weight. Sets the body mass and inertia in the robot model; it does not change the artwork dimensions or motor current limits.",
+    "wheelWidthTooltip": "Measure one drive tyre from its inner sidewall to its outer sidewall along the axle, excluding the axle itself. Each tyre is centred on its wheel-track position: total outside span = wheel track + one tyre width. Sets wheel thickness in the robot model and artwork, and contributes to the size of wheel-slip dig proposals.",
+    "casterRadiusTooltip": "Measure from the caster wheel axle to the tyre tread, or measure its outside diameter and halve it; exclude the fork. Sets the caster size and axle height in the robot model and artwork. Caster front/back position is set separately.",
+    "casterTrackTooltip": "Measure side-to-side between the centres of the left and right caster tyres/axles with both pointing straight ahead, not between their outside edges or swivel stems. Places them at half this distance on either side of the robot centreline in the robot model and artwork.",
+    "geometryMeasurementHelp": "Measure on level ground with the mower powered off. Distances are in metres; X is forward and Z is upward from base_link, normally the rear drive-axle centre. Previews update immediately; save and restart ROS to apply geometry to the running robot and map.",
+    "dockVisualTitle": "Dock Footprint",
+    "dockVisualHelp": "Sizes the dock illustration in Hardware, Sensors and the map. These settings do not change docking calibration or navigation. Defaults are illustrative; measure your dock.",
+    "dock_visual_length": "Dock Length",
+    "dock_visual_width": "Dock Width",
+    "dock_visual_x_offset": "Dock Center X",
+    "dock_visual_lengthTooltip": "Measure the full dock from front to back, including the charging head, in metres. Scales its visible length in previews and on the map; does not move the docking pose.",
+    "dock_visual_widthTooltip": "Measure the full dock from left to right, including a side charging pedestal, in metres. Scales its visible width in top views and on the map.",
+    "dock_visual_x_offsetTooltip": "Additional forward/backward adjustment from the dock artwork’s built-in alignment, in metres. Zero uses that alignment: the standard dock centre is 0.220 m ahead of the rear axle; the Worx slatted platform is centred on the chassis. Positive moves the dock forwards, negative backwards. Illustration only; does not change the calibrated docking pose.",
+    "dock_visual_y_offset": "Dock Center Y",
+    "dock_visual_y_offsetTooltip": "Additional left/right adjustment from the dock artwork’s built-in alignment, in metres. Zero keeps its registered centre aligned with the mower; side charging pedestals do not shift the platform centre. Positive moves left, negative right. Illustration only; does not change docking calibration."
+  },
+  "settingsFcu": {
+    "viewMode": "Hardware view",
+    "chassisTab": "Chassis / main board",
+    "fcuTab": "FCU",
+    "scopeTitle": "FCU feature configuration only",
+    "scopeDescription": "This tool checks only selected_features. Vehicle, board and version details are informational. It does not compile or flash firmware.",
+    "importTitle": "Import Custom Firmware Builder YAML",
+    "importDescription": "Import the complete YAML exported by ArduPilot. An immutable backup of the original document is saved before editing.",
+    "importButton": "Import YAML",
+    "importError": "YAML could not be imported",
+    "invalidYaml": "Invalid YAML document",
+    "informationTitle": "Imported configuration",
+    "vehicle": "Vehicle",
+    "board": "Board",
+    "version": "Version",
+    "informationOnly": "These details do not affect the feature check.",
+    "compatibilityTitle": "FCU feature compatibility",
+    "addAll": "Add all missing MowgliNext features",
+    "minimumSatisfied": "All features required by MowgliNext are present.",
+    "minimumMissing_one": "{{count}} feature required by MowgliNext is missing.",
+    "minimumMissing_other": "{{count}} features required by MowgliNext are missing.",
+    "removalWarningTitle": "Features from the original configuration have been removed.",
+    "removalWarningDescription": "MowgliNext cannot guarantee that they were not used by your hardware or configuration. A backup of the original file has been retained.",
+    "removeFeature": "Remove {{feature}}",
+    "addFeature": "Add {{feature}}",
+    "status": {
+      "requiredPresent": "✓ present",
+      "requiredMissing": "✕ missing",
+      "extra": "○ additional",
+      "removed": "− removed by user"
+    },
+    "sessionDiff": "Session changes",
+    "addedDiff": "added to satisfy the MowgliNext minimum",
+    "removedDiff": "removed by the user",
+    "exportTitle": "Continue with ArduPilot",
+    "downloadFinal": "Download final YAML",
+    "openBuilder": "Open the official ArduPilot builder",
+    "builderDescription": "Download this YAML, then import it on the official ArduPilot website to build the firmware yourself.",
+    "backupsTitle": "FCU backups",
+    "noBackups": "No FCU backup saved in this browser",
+    "originalBackup": "Original imported YAML",
+    "downloadBackup": "Download",
+    "restoreBackup": "Restore as working configuration"
   },
   "settingsDriveMotor": {
+    "odometry": {
+      "sectionDescription": "Wheel odometry calibration",
+      "label": "Odometry calibration",
+      "start": "Start odometry calibration",
+      "modalTitle": "Calibrate odometry",
+      "ticksPerMeter": "Ticks per metre",
+      "passCoefficient": "Pass coefficient: {{value}} ticks/m",
+      "wheelMeasurements": "Wheel transport counts: left {{left}}, right {{right}}",
+      "savedLiveDescription": "Saving stores ticks_per_meter in mowgli_robot.yaml and applies its floating-point value to MAVROS wheel odometry.",
+      "assistantSummary": "This assistant calibrates wheel odometry through straight test passes. Use a clear, level area and keep emergency stop within reach. Review the distance and whether to apply the result before starting.",
+      "motionDescription": "Stamped velocity commands on /cmd_vel_tuning pass through twist_mux to /cmd_vel. The robot stops between motion segments. All passes use the current ticks_per_meter as their reference.",
+      "workflowDescription": "The robot runs straight passes through /cmd_vel, measures wheel rotations/ticks and compares odometry against RTK/GNSS distance when available. The assistant calculates a new ticks_per_meter and writes measurements and recommendations to a YAML report. Applying the value is optional.",
+      "applyTitle": "A successful run will save the recommended odometry coefficient",
+      "applyDescription": "Only ticks_per_meter will be applied to MAVROS wheel odometry and saved in mowgli_robot.yaml, preserving its floating-point precision.",
+      "reportOnlyDescription": "The assistant will generate a YAML report using the current ticks_per_meter as reference. No robot parameters will be changed and no permanent configuration changes will be applied.",
+      "started": "Odometry calibration started",
+      "startFailed": "Failed to start odometry calibration",
+      "validation": {
+        "noPasses": "No odometry passes recorded yet.",
+        "failed": "Odometry calibration did not complete successfully. Review the report failure details.",
+        "noMotion": "An odometry pass stalled or produced no wheel motion. Check wheel observations and mechanics.",
+        "noReference": "No valid RTK/GNSS-backed odometry distance was accepted.",
+        "incompleteReference": "Some odometry passes lack a valid accepted RTK/GNSS distance. Review the measurement coverage.",
+        "validated": "Validated odometry with distance error {{errorPct}}%.",
+        "excessiveError": "Odometry distance error {{errorPct}}% exceeds the accepted 2.0% threshold.",
+        "stability": "Odometry calibration has a motion stability warning (distance error {{errorPct}}%). Review the wheel measurements.",
+        "measurement": "Odometry calibration completed with measurement warnings (distance error {{errorPct}}%). Review the pass notes."
+      },
+      "rollbackDescription": "Restore only the backed-up ticks_per_meter in MAVROS wheel odometry and mowgli_robot.yaml."
+    },
     "savedLiveTitle": "Saved and applied live",
     "savedLiveDescription": "Saving stores these in mowgli_robot.yaml and pushes them to the drive controller immediately — no ROS2 restart needed. They persist across reboots: on every boot the robot re-sends the saved values to the firmware. (The firmware itself has no storage, so it runs its built-in defaults only for the brief moment before the controller reconnects, then re-validates and clamps the values you saved.)",
     "wheelVelocityPid": "Wheel Velocity PID",
@@ -2678,6 +3062,14 @@
       }
     },
     "backend": {
+      "invalidStatus": "Invalid drive tuning status response",
+      "invalidReport": "Invalid drive tuning report response",
+      "invalidParsedReport": "Invalid drive tuning report data",
+      "invalidRollback": "Invalid drive tuning rollback response",
+      "rollbackFailed": "Drive tuning rollback failed",
+      "invalidStart": "Drive tuning start was not confirmed",
+      "invalidRequest": "Invalid drive tuning inputs; no request was sent",
+      "requestFailed": "Drive tuning request failed",
       "statusFetchFailed": "Failed to fetch drive tuning status",
       "rollback": {
         "successMessage": "Drive tuning rollback applied live and persisted to mowgli_robot.yaml"
@@ -2752,7 +3144,9 @@
     "criticalRecovery": "Critical Recovery",
     "criticalRecoveryTooltip": "Leave the critical-battery state once recharged above this %. Hysteresis upper bound, must be greater than Critical.",
     "manualResume": "Manual Resume",
-    "manualResumeTooltip": "Pressing Play while the robot is charging mid-session resumes mowing only above this %. Must be greater than Low (Dock) or the robot re-docks within minutes."
+    "manualResumeTooltip": "Pressing Play while the robot is charging mid-session resumes mowing only above this %. Must be greater than Low (Dock) or the robot re-docks within minutes.",
+    "chargeTail": "Charge Tail Current",
+    "chargeTailTooltip": "After a mid-session recharge the robot resumes only once the charge current has dropped to this value (A), as well as reaching Full %. Higher resumes earlier with a slightly less full pack. Default 0.08 A matches the firmware's end-of-charge current."
   },
   "settingsSafety": {
     "alertMessage": "Safety settings protect the robot and its surroundings",
@@ -2827,7 +3221,7 @@
     "connectorMaxHeadlandPassesTooltip": "How many of the Headland Passes rings a turn-around may cross, counted from the inner field outward. Unlimited = turns may use the whole headland apron, out to the outermost ring. Set it below Headland Passes (e.g. 2 with 3 passes configured) to keep the outermost ring(s) a no-turn zone, so U-turns stay further from the recorded boundary and clear of nearby objects — at the cost of more straight/blade-off connector fallbacks where the remaining apron is too narrow for a turn-around arc to fit. Only applies with a forced (non-Auto, non-None) Headland Passes count. Wired to coverage_server.connector_max_headland_passes.",
     "connectorMaxHeadlandPassesUnlimited": "Unlimited",
     "mowDirection": "Perimeter Direction",
-    "mowDirectionTooltip": "Travel direction around the perimeter/headland rings. Set it so a side-mounted blade stays on the cut side. Auto keeps the planner's natural winding. Wired to coverage_server.ring_direction.",
+    "mowDirectionTooltip": "Travel direction around the perimeter/headland rings. Set it so a side-mounted blade stays on the cut side. Auto keeps the planner's natural winding. Wired to coverage_server.ring_direction. To see the effect, open the Map page and choose Show mowing lines.",
     "mowDirectionAuto": "Auto (planner default)",
     "mowDirectionCw": "Clockwise",
     "mowDirectionCcw": "Counter-clockwise",
@@ -2838,7 +3232,7 @@
     "crossHatch": "Cross-hatch mowing",
     "crossHatchTooltip": "Alternate each area's stripes by 90° when that area is mowed again, relative to Auto or the fixed angle. Pauses, recharge and restarts keep the current orientation. Boundary passes are unchanged. Restart ROS2 after changing this setting.",
     "mowAngleDeg": "Mow Angle",
-    "mowAngleDegTooltip": "Swath (mowing line) direction. Enable Auto to let the planner pick the swath-count-minimising angle, or set a fixed angle of 0–179°.",
+    "mowAngleDegTooltip": "Swath (mowing line) direction. Enable Auto to let the planner pick the swath-count-minimising angle, or set a fixed angle of 0–179°. The Map page can show the resulting lines (Show mowing lines) and set a different angle or direction for one area.",
     "mowAngleAuto": "Auto",
     "mowAngleFixed": "Fixed",
     "mowAngle": "Mow Angle",
@@ -2870,6 +3264,8 @@
     "boundaryClearanceDescription": "How far transit moves between locations prefer to stay from the recorded boundary. This is a soft preference, not a hard rule — transit can still cross the margin when that's the only option (e.g. right after undocking). Mowing itself is unaffected — the robot still cuts up to the true edge as configured elsewhere; only point-to-point travel is nudged back.",
     "boundaryInnerMargin": "Transit Boundary Margin",
     "boundaryInnerMarginTooltip": "Distance (m) transit paths are nudged to stay inside the recorded boundary. 0 disables this and lets transit hug or clip the recorded line, as before this setting existed.",
+    "obstacleTransitMargin": "Transit Obstacle Margin",
+    "obstacleTransitMarginTooltip": "Extra distance (m) outside a drawn obstacle's keepout band that transit paths prefer to keep. A soft preference, never a hard block. It exists because the keepout band is only the body half-width while the controller checks the whole footprint against the real object. 0 disables it. Mowing is unaffected.",
     "dockExemptRadius": "Dock Exemption Radius",
     "dockExemptRadiusTooltip": "Radius (m) around the dock pose, in every direction, exempt from the transit boundary margin above — so the dock approach carries no bias at all, not just \"never blocked\". Widen this if your dock sees a lot of GNSS drift (e.g. under a canopy). Only takes effect once a dock pose is set."
   },
@@ -2900,9 +3296,37 @@
     "resumeDelay": "Resume Delay",
     "resumeDelayTooltip": "Minutes to wait after rain stops before resuming",
     "debounce": "Debounce",
-    "debounceTooltip": "Seconds of continuous rain signal before triggering"
+    "debounceTooltip": "Seconds of continuous rain signal before triggering",
+    "externalSource": "External rain source",
+    "externalSourceDescription": "Also treat a yes/no published to MQTT topic <prefix>/external_rain as rain, for example from a Home Assistant automation on a roof weather station. It can only add a reason to stop; the mower's own rain sensor always counts too. Requires MQTT to be enabled.",
+    "useExternal": "Use external rain source",
+    "useExternalTooltip": "Treat an external 'yes' on <prefix>/external_rain as rain",
+    "externalStatus": "Status",
+    "externalState_wet": "Wet — counted",
+    "externalState_dry": "Dry",
+    "externalState_expired": "Wet, but expired — not counted",
+    "externalState_disabled": "Switched off",
+    "externalState_no_data": "No message received yet",
+    "externalAge": "last message {{age}} ago",
+    "externalExpiresIn": "counts for another {{age}}",
+    "ownSensorWet": "Mower's own sensor: wet",
+    "externalExpiry": "External rain expiry",
+    "externalExpiryTooltip": "Minutes after which an external 'yes' is ignored if it was not refreshed (0 = never expires). Keeps a dead automation from holding the mower in the rain wait."
   },
   "settingsAdvanced": {
+    "valueFor": "Value for {{key}}",
+    "numberCommitHint": "Commit a complete number with Enter or by leaving this field.",
+    "invalidNumber": "Invalid or incomplete number ignored. Enter a complete finite decimal number.",
+    "structuredReadOnly": "Structured value (read-only)",
+    "unsupportedReadOnly": "Unsupported value (read-only)",
+    "deleteKey": "Delete {{key}}",
+    "newKey": "New parameter name",
+    "newValue": "New parameter value",
+    "valueType": "Value type",
+    "types": {"string": "String", "number": "Number", "boolean": "Boolean"},
+    "invalidName": "Use an exact flat parameter name: letters, digits and underscores; start with a letter or underscore. No automatic renaming.",
+    "duplicateKey": "This parameter already exists, including pending deletions.",
+    "protectedKey": "This parameter belongs to another section or is hidden/retired.",
     "advancedParameters": "Advanced parameters",
     "advancedParametersDescription": "These are raw YAML parameters not covered by the sections above. Edit with care — invalid values can break the robot configuration.",
     "noExtraParameters": "No extra parameters defined",
@@ -3003,12 +3427,13 @@
     "rawValueFallback": "{{label}} Raw Value"
   },
   "gnssRuntimeConfig": {
+    "invalidResponse": "Invalid GNSS runtime configuration response.",
     "detectedDevicesLabel": "Detected serial device",
     "detectedDevicesPlaceholder": "Select a detected serial device",
     "manualSerialPathLabel": "Manual serial path override",
-    "activeLinkLabel": "Active runtime link",
+    "activeLinkLabel": "Resolved GNSS configuration",
     "resolvedTarget": "Resolved target: {{path}}",
-    "envFallbackMessage": "Runtime is using .env fallback for GNSS family/device/baud because no GUI YAML override is saved yet: {{family}} / {{device}} / {{baud}}.",
+    "envFallbackMessage": "GNSS configuration resolves family/device/baud from .env because no GUI YAML override is saved yet: {{family}} / {{device}} / {{baud}}.",
     "configuredDeviceMissing": "The selected GNSS serial device no longer exists: {{device}}.",
     "activeDeviceMissing": "The active GNSS serial device does not exist: {{device}}.",
     "familyMismatch": "Detected receiver family {{detected}} differs from the selected family {{selected}}.",
@@ -3017,7 +3442,8 @@
     "source": {
       "config": "GUI/YAML",
       "env": ".env fallback",
-      "default": "built-in default"
+      "default": "built-in default",
+      "unknown": "unavailable / unknown"
     }
   },
   "settingsGnssSignalHelp": {},
@@ -3030,6 +3456,14 @@
     "actionFactoryReset": "Factory reset + apply profile",
     "actionRestart": "Restart GPS",
     "cancel": "Cancel",
+    "invalidResponse": "GNSS response is missing or malformed.",
+    "operationUnconfirmed": "GNSS operation result is unconfirmed",
+    "operationUnconfirmedDesc": "The server or receiver may already have executed the operation. Check its state before retrying; no automatic retry was sent.",
+    "persistenceInProgressDesc": "Saving prerequisite settings before sending the GNSS action.",
+    "persistenceUnconfirmed": "Settings persistence was not confirmed",
+    "persistenceUnconfirmedDesc": "Prerequisite settings save was not confirmed; no GNSS action request was sent.",
+    "restartUnconfirmed": "GPS restart completion is unconfirmed",
+    "planOnlyDesc": "Planning completed without changing the receiver.",
     "unknownApiError": "Unknown GNSS API error",
     "backendRequestFailed": "GNSS backend request failed",
     "summaryPartialFailure": "GNSS action finished with partial failure",
@@ -3044,12 +3478,12 @@
     "notifyFailedDesc": "Review the GNSS action panel for stdout/stderr and warnings.",
     "notifyCompleted": "{{action}} completed",
     "confirmApplyTitle": "Apply GNSS profile to receiver?",
-    "confirmApplyBody": "The GPS sidecar will be stopped, the receiver profile will be applied in a one-shot GNSS container, and the GPS sidecar will be restarted only if the apply succeeds.",
+    "confirmApplyBody": "The running GPS sidecar will be stopped before applying the saved receiver profile. The backend attempts to restore GPS afterward, including on failure.",
     "confirmApplyWarning": "Do not disconnect power or USB/serial wiring while the receiver profile is being applied.",
     "confirmApplyOk": "Apply profile",
     "confirmFactoryResetTitle": "Factory reset receiver and re-apply profile?",
     "confirmFactoryResetDanger": "Factory reset clears receiver settings before rebuilding the selected profile.",
-    "confirmFactoryResetBody": "The backend will stop the GPS sidecar, run the persistent factory-reset flow, then re-apply the selected saved profile and restart GPS only if that flow succeeds.",
+    "confirmFactoryResetBody": "The backend will stop the running GPS sidecar, factory-reset the receiver and re-apply the saved profile, then attempt to restore GPS even if the operation fails.",
     "confirmFactoryResetWarning": "Use this only when you intentionally want to rebuild receiver configuration from a clean state.",
     "confirmFactoryResetOk": "Factory reset and apply",
     "actionInProgress": "{{action}} in progress",
@@ -3162,6 +3596,12 @@
     "yourRobot": "Your robot"
   },
   "robotComponentEditor": {
+    "savedDockLoaded": "Stored dock coordinates loaded",
+    "savedDockLoadedDesc": "The values read from mowgli_robot.yaml are now shown, including the independently stored heading. This readback does not identify a new GPS acquisition.",
+    "dockWriteUnconfirmed": "Dock write not confirmed",
+    "dockReadbackUnconfirmed": "Dock write accepted; stored coordinates not confirmed",
+    "dockUnconfirmedDesc": "Local coordinates are unchanged. The action may have executed; no automatic retry was made. {{reason}}",
+    "invalidGeometry": "Some sensor values are invalid. Inputs remain unavailable; the preview uses robot geometry defaults.",
     "dockPoseSetFromGps": "Dock pose set (from GPS)",
     "dockPoseSetFromGpsDescription": "Captured the dock position from the averaged GPS fix and persisted to mowgli_robot.yaml. The map indicator jumps to the new pose on the next /map publish.",
     "unknownError": "Unknown error",
@@ -3170,14 +3610,14 @@
     "setDockFromPoseTitle": "Set dock position from current robot position?",
     "setDockPose": "Set dock position",
     "cancel": "Cancel",
-    "setDockConfirmIntro1": "This captures the robot's",
+    "setDockConfirmIntro1": "This requests a capture of the robot’s averaged GPS",
     "setDockConfirmXYHeading": "x, y position only",
-    "setDockConfirmIntro2": "right now and writes it to",
+    "setDockConfirmIntro2": "and asks the service to write it to",
     "setDockConfirmIntro3": "as the new dock position. Heading is NOT changed by this action — the fused heading is locked to the existing dock heading while charging, so a live capture could never correct it. Recalibrate heading separately via \"Run Calibration\" (motion-based, not affected by this).",
     "currentRobot": "Current robot",
     "bearing": "bearing",
     "savedDock": "Saved dock (heading unchanged by this action)",
-    "setDockConfirmFooter": "Make sure the robot is sitting on the dock so the position capture reflects the true charging-contact point. The new position persists across container restarts.",
+    "setDockConfirmFooter": "Keep charging contact throughout the action. The GUI adopts only valid coordinates read from the YAML file; an unconfirmed result leaves local coordinates unchanged.",
     "sensorPlacement": "Sensor Placement",
     "metersFromUrdf": "m (robot geometry)",
     "dragSensorsHint": "Drag sensors on the top-down robot view to set their X/Y position. Use the rotation handle (small circle) to set sensor yaw. The grid spacing is 5 cm. Robot dimensions are read from the /robot_description topic.",
@@ -3193,8 +3633,8 @@
     "source": "source",
     "captureFromRobot": "Capture from current robot position",
     "captureIntro1": "Park the robot on the dock facing the approach direction, then click below. Captures",
-    "captureXYYaw": "x, y AND yaw",
-    "captureIntro2": "at once — this is the most reliable way to seed the dock pose for a fresh map.",
+    "captureXYYaw": "GPS position (heading preserved)",
+    "captureIntro2": "while charging. Confirm the action, then check the stored YAML values read back by the GUI.",
     "robotNow": "Robot now: x={{x}} m, y={{y}} m, bearing={{bearing}}°",
     "waitingForPose": "Waiting for robot pose…",
     "tooltipNotCharging": "Place robot on dock with charging contacts engaged before setting the reference pose",
@@ -3728,7 +4168,7 @@
     },
     "hardware": {
       "label": "Hardware",
-      "description": "Robot model, wheels, chassis, and blade dimensions"
+      "description": "Hardware backend and its wiring, robot model, wheels, chassis, and blade dimensions"
     },
     "drive_motor": {
       "label": "Drive Motor",
@@ -3809,12 +4249,28 @@
       "savedDescription": "Restart ROS2 to apply changes.",
       "savedGpsRestartDescription": "Restarting GPS to apply GNSS changes. Restart ROS2 to apply other saved changes.",
       "restartingGps": "Restarting GPS with current settings",
+      "dockCapturePending": "Dock capture is in progress. Wait for its readback before saving settings.",
+      "dockCaptureUnconfirmed": "The dock capture result is unconfirmed. Reload settings or complete a confirmed capture before saving dock edits. Local values remain unchanged.",
+      "dockCaptureWhileSaving": "A settings write or dock capture is already in progress. Wait for it to finish before capturing the dock.",
       "dockRefreshFailed": "Settings saved, but map_server runtime refresh failed",
       "dockRefreshFailedDescription": "Restart ROS2 (or call /map_server_node/set_docking_point manually) to pick up the new dock pose.",
       "drivePidUpdateFailed": "Settings saved, but live drive-PID update failed",
       "drivePidUpdateFailedDescription": "Restart ROS2 to apply the new drive-motor PID gains.",
       "saveFailed": "Failed to save settings",
-      "savedApplyingLive": "Saved. Applying the drive settings to the running robot…"
+      "savedApplyingLive": "YAML saved; runtime application is still pending.",
+      "savedDisplaySettings": "Saved. Dock appearance updated; no robot restart is needed.",
+      "runtimeUnconfirmed": "Runtime update was not confirmed; YAML remains saved.",
+      "liveApplied": "Runtime parameters confirmed",
+      "liveAdjusted": "Runtime parameters applied, adjusted by the robot",
+      "liveAdjustedItem": "{{name}} set to {{applied}} (requested {{requested}}, adjusted by the bridge)",
+      "invalidNumericValue": "Invalid numeric setting; nothing was saved.",
+      "savedRuntimeFailed": "YAML saved, but a subsequent operation failed",
+      "routing": {
+        "unconfirmed": "Backend identity is unconfirmed. YAML saved; no live hardware update was sent.",
+        "pending_image": "YAML saved. Live routing needs a compatible runtime image; restart required.",
+        "restart_required": "YAML saved. These hardware changes require a restart.",
+        "unavailable": "YAML saved. Live hardware routing is unavailable; restart required."
+      }
     }
   },
   "displayMode": {
@@ -3850,6 +4306,8 @@
     "Motor control": "Motor control",
     "IMU": "IMU",
     "Diagnostics": "Diagnostics",
+    "Navigation": "Navigation",
+    "Obstacles": "Obstacles",
     "Other": "Other"
   },
   "hookNotifications": {
@@ -3951,7 +4409,7 @@
     "customComponent": "Custom version",
     "localService": "Locally managed",
     "removedByRelease": "Removed by selected release",
-    "separateUpdate": "Updated separately",
+    "separateUpdate": "Updated automatically with the next release",
     "agentVersion": "Update service version",
     "serviceSelectionUnsupported": "Update the host updater to enable individual container selection.",
     "noCompatibleComponent": "No compatible alternative is published for this component.",
@@ -3965,8 +4423,13 @@
     "selectionPending": "Installer hardware choices have changed. Review installation to apply the container changes.",
     "selectionHelp": "Containers follow your saved installer hardware choices.",
     "hardware": {
+      "backend": "Board",
       "gnss": "GPS",
       "lidar": "LiDAR"
+    },
+    "backendChoice": {
+      "none": "Mowgli",
+      "openmower": "OpenMower v1"
     },
     "disabled": "Off",
     "enabled": "On",
@@ -4032,6 +4495,7 @@
     "pin": "Pin this deployment; continue notifying about newer builds",
     "review": "Review update",
     "updateAgent": "Update the update service",
+    "updatingAgentFirst": "Updating the update service first: the new version is checked by its own updater…",
     "agentHelp": "The updater will restart separately from the containers. Its launcher retains the previous binary if the new version fails to start.",
     "history": "Deployment history",
     "rollback": "Restore previous deployment",
@@ -4333,6 +4797,46 @@
     "start_blocked_escape_signal_max_age_s": {
       "label": "Escape Signal Max Age",
       "tooltip": "How old the last-motion direction may be [s]. Too short is fail-safe (no motion); too long risks acting on a direction that no longer describes how the robot arrived. Hard ceiling 300 in code."
+    },
+    "openmower_xesc_type": {
+      "label": "Motor controller",
+      "tooltip": "xesc_mini (VESC protocol) or xesc_2040. A wrong choice leaves every motor silent: Diagnostics then reports the firmware as incompatible."
+    },
+    "openmower_ll_port": {
+      "label": "LowLevel board port",
+      "tooltip": "Serial device of the OpenMower LowLevel (Pico) board. Stock OpenMower v1: /dev/ttyAMA0."
+    },
+    "openmower_xesc_left_port": {
+      "label": "Left wheel controller port",
+      "tooltip": "Serial device of the left drive xESC. Stock OpenMower v1: /dev/ttyAMA5."
+    },
+    "openmower_xesc_right_port": {
+      "label": "Right wheel controller port",
+      "tooltip": "Serial device of the right drive xESC. Stock OpenMower v1: /dev/ttyAMA3."
+    },
+    "openmower_xesc_mow_port": {
+      "label": "Blade controller port",
+      "tooltip": "Serial device of the blade xESC. Stock OpenMower v1: /dev/ttyAMA4."
+    },
+    "openmower_emergency_input_config": {
+      "label": "Emergency inputs",
+      "tooltip": "What each of the LowLevel board's four hall inputs is (L = lift, S = stop, ! = active low), e.g. !L,!L,S,S. Empty keeps the board's own wiring. A wrong mapping can hide a lift or stop sensor."
+    },
+    "openmower_wheel_loop_enabled": {
+      "label": "Closed-loop wheel speed",
+      "tooltip": "Off = OpenMower's own open-loop mapping (speed × duty per m/s), without tachometer feedback."
+    },
+    "openmower_wheel_duty_per_mps": {
+      "label": "Duty per m/s",
+      "tooltip": "Feed-forward: duty cycle (0–1) per m/s of wheel speed. 1.0 is OpenMower's own mapping."
+    },
+    "openmower_wheel_kp": {
+      "label": "Wheel loop Kp",
+      "tooltip": "Proportional gain [duty per m/s of speed error]. Unlike the STM32 wheel PID this is in duty, not PWM counts."
+    },
+    "openmower_wheel_ki": {
+      "label": "Wheel loop Ki",
+      "tooltip": "Integral gain [duty per (m/s × s) of speed error]."
     }
   },
   "settingsFieldGroups": {
@@ -4380,6 +4884,14 @@
     "startEscape": {
       "title": "Start-Pose Escape",
       "description": "Last-resort nudge when the robot stands on a keepout cell and every plan from its own pose is refused."
+    },
+    "openmowerWiring": {
+      "title": "OpenMower Electronics",
+      "description": "How the OpenMower LowLevel board and the three xESC motor controllers are connected. Until you set a value here, the one chosen in the installer applies. Takes effect when ROS2 is restarted."
+    },
+    "openmowerWheelLoop": {
+      "title": "OpenMower Wheel Speed Loop",
+      "description": "The xESC only takes a duty cycle, so the OpenMower bridge closes a per-wheel speed loop on the wheel tachometers. Takes effect when ROS2 is restarted."
     }
   },
   "firmwareParams": {
@@ -4423,10 +4935,44 @@
     "incompatible": "The firmware on the board does not speak this protocol version: these values are not applied. Reflash the firmware.",
     "bootDefaults": "The board started on its compiled defaults (nothing stored yet).",
     "bootFlash": "The board started on the values stored in its flash.",
-    "bootErased": "The board found its parameter storage full or unreadable at start-up and rewrote it.",
-    "commitError": "The board could not write its flash: these values are lost at the next power cycle.",
-    "commitFull": "The board's parameter storage is full: it is rewritten at the next start-up.",
-    "recordsLeft": "Room for {{count}} more saves before the next rewrite.",
+    "bootErased": "The board erased its parameter store at boot because a reset was requested or no valid record existed. It starts on compiled defaults until the host reconnects and reapplies settings.",
+    "commitError": "The parameter-store operation failed or a reset request was rejected. Check each persisted flag; unstored values may revert at the next power cycle.",
+    "commitFull": "The parameter log is full or has an invalid tail. It will not be erased automatically; an explicit reset request and reboot are required. New changes remain in RAM only until power cycle.",
+    "recordsLeft": "{{count}} saves remain before an explicit reset is needed.",
+    "resetAction": "Reset stored parameters…",
+    "rebootAction": "Reboot board to apply reset…",
+    "resetConfirmTitle": "Request parameter-store reset?",
+    "resetConfirmBody": "This sends a one-time request to the firmware. It does not erase flash now. After the board confirms the request, a separate reboot is required; the erase happens on that next boot.",
+    "resetConfirmWarning": "This erases saved tuning, safety and charging settings. Compiled defaults apply until the host reconnects and reapplies settings. The compiled charge ceiling may be higher, and stored emergency thresholds and tuning are unavailable meanwhile.",
+    "resetConfirmOk": "Send reset request",
+    "resetConfirmCancel": "Cancel",
+    "resetWaiting": "Reset request sent; waiting for matching firmware confirmation. The board will not reboot automatically.",
+    "resetRequestId": "Request ID {{id}}",
+    "resetUncertain": "Firmware confirmation was not received; the outcome is uncertain. No retry was sent. Check the current board status before taking another action.",
+    "resetArmed": "Firmware reports reset request {{id}} is armed or still unresolved. Another board reboot is required to finish recovery.",
+    "resetArmedWarning": "The next boot will try to complete the reset. If firmware erases the store, compiled defaults apply until the host reconnects and reapplies settings. The compiled charge ceiling may be higher; stored charging limits, emergency thresholds and tuning are lost if the reset completes.",
+    "rebootConfirmTitle": "Reboot the board to apply the reset?",
+    "rebootConfirmBody": "This is a separate, explicit reboot. On the next boot, firmware will try to finish the requested reset; the stored values may already have been erased.",
+    "rebootConfirmOk": "Reboot board",
+    "rebootSent": "Reboot request sent. The board reboot and reset completion are not confirmed yet.",
+    "resetCompleted": "The firmware reports that it erased the parameter store at boot. Compiled defaults remain active until the host reconnects and reapplies settings.",
+    "resetRecoverPending": "Use the board's confirmed pending request",
+    "resetClearUncertain": "Clear local warning only (does not change the board)",
+    "resetBlocked": {
+      "status_unknown": "Waiting for board status.",
+      "status_stale": "Board status is stale; wait for fresh telemetry.",
+      "firmware_incompatible": "A compatible protocol v8 firmware is required.",
+      "board_uninitialized": "Waiting for the board to finish initializing.",
+      "high_level_unknown": "Waiting for the mower state.",
+      "high_level_stale": "Mower state is stale; wait for fresh telemetry.",
+      "not_idle": "The mower must be in IDLE.",
+      "odometry_unknown": "Waiting for wheel odometry.",
+      "odometry_stale": "Wheel odometry is stale; wait for fresh telemetry.",
+      "wheels_moving": "The wheels must be stopped.",
+      "blade_state_unknown": "Waiting for blade status.",
+      "blade_state_stale": "Blade status is stale; wait for fresh telemetry.",
+      "blade_active": "The blade must be off and stopped."
+    },
     "colParameter": "Parameter",
     "colApplied": "Applied",
     "colRequested": "Requested",
@@ -4439,6 +4985,9 @@
     "stateUnreported": "No report"
   },
   "fleetPage": {
+    "peerFeedLive": "Peers in costmap",
+    "peerFeedDown": "Peers NOT in costmap",
+    "peerFeedDetail": "{{count}} robot(s) fed to this robot's obstacle map at {{rate}} Hz, whether coordination is on or off",
     "betaTag": "Beta",
     "betaTitle": "Multi-robot support is a beta feature",
     "betaBody": "The fleet view and coordinated mowing are in beta and still evolving. Keep an eye on the robots while you use them, and report what you see on GitHub.",
@@ -4446,8 +4995,10 @@
     "openGui": "Open this robot's GUI",
     "removeConfirm": "Remove {{robot}} from the fleet? It will forget this robot too.",
     "peerAdded": "Robot added to the fleet",
+    "peerAddWarningUnusable": "The add request returned an unusable warning. Check the fleet list and reciprocal registration status.",
     "peerRemoved": "Robot removed from the fleet",
     "pollError": "Fleet snapshot unavailable",
+    "rejectedRobots": "Hidden: unreadable status received from {{names}}. The other robots are shown normally.",
     "apiMismatch": "Different software version",
     "battery": "Battery",
     "gps": "GPS",
@@ -4485,7 +5036,7 @@
     "startFreshConfirm": "Forget which areas the fleet has finished and clear every mower's resume point?",
     "startFreshDone": "Fleet progress cleared",
     "coordRuleAreas": "Areas are split per area: two mowers never work the same area at once.",
-    "coordRuleYield": "Priority is fixed per robot; the lower-priority mower pauses in place and resumes when the other is gone.",
+    "coordRuleYield": "Both mowers always see each other as obstacles in their navigation maps; on top of that, the lower-priority mower pauses when the other comes close and resumes when it is gone (or after 45 s at most).",
     "coordRuleMap": "Every mower needs the same map and the same GPS datum; use “Push my map” after editing areas.",
     "coordRuleOneArea": "A lawn with a single area cannot be shared yet: the second mower will have nothing to do.",
     "phase": {
@@ -4534,5 +5085,315 @@
       "6": "The robot must be charging on its dock with mowing stopped.",
       "7": "The dock pose was not fully saved. Review the reported error before retrying."
     }
+  },
+  "settingsFcuParams": {
+    "genericTab": "FCU parameters",
+    "title": "FCU runtime parameter configurator",
+    "scope": "Local .param comparison and download only. No upload to the robot, parameter writes or flashing. The FCU tab remains the separate Custom Firmware Builder YAML tool.",
+    "importTitle": "Import Mission Planner .param",
+    "importButton": "Import .param",
+    "originalPolicy": "The exact original is saved first in a separate immutable browser backup store. Restore and download never overwrite that original. Export changes only selected existing parameters.",
+    "identityTitle": "Identify the exported configuration",
+    "observedFirmware": "Observed MAVROS firmware",
+    "version": "Firmware version",
+    "board": "Board (when identified)",
+    "identifyFile": "The connected FCU may differ from this export. Confirm the export identity explicitly, or use its documented header. Parameter names alone do not identify the firmware/version.",
+    "family": "Firmware family",
+    "vehicle": "Vehicle family",
+    "unknown": "Unknown",
+    "otherVehicle": "Other / unsupported",
+    "useObserved": "Use observed identity for this file",
+    "identitySource": "Export identification: {{source}}",
+    "families": {
+      "unknown": "Unknown",
+      "ardupilot": "ArduPilot",
+      "px4": "PX4",
+      "other": "Other / unsupported"
+    },
+    "sources": {
+      "unknown": "not identified",
+      "mavros": "MAVROS observation",
+      "file": "file comments",
+      "operator": "operator identification"
+    },
+    "unsupported": "No comparison profile for this firmware/vehicle/version. Initial support: ArduRover 4.7.1 only. PX4 and other versions are not implemented; import, originals and backups remain available.",
+    "hardwareTitle": "Installed hardware and feature bindings",
+    "bindingPolicy": "Initial bindings are editable reference/bridge defaults, not universal values. Match them to the installed MAVROS configuration and wiring. SERIAL port number and MAVLink channel number are different. Never copy reversal, PWM limits, battery, sensor or PID calibration from another robot.",
+    "drive": "Drive hardware profile",
+    "drives": {
+      "unknown": "Not identified",
+      "vesc-dronecan": "Skid drive — VESC / DroneCAN (provisional)",
+      "pwm-skid": "Skid drive — PWM (provisional)"
+    },
+    "blade": "Blade DO_SET_SERVO output",
+    "legacyRpm": "Legacy signed RPM feedback",
+    "serialPort": "MAVROS logical SERIAL port (if identified)",
+    "bindings": {
+      "mavlinkChannel": "MAVLink channel",
+      "gcsSysId": "MAVROS source system ID to verify",
+      "targetSysId": "Target FCU system ID to verify",
+      "rightOutput": "Right traction output",
+      "leftOutput": "Left traction output",
+      "bladeOutput": "Blade output",
+      "rightEscIndex": "Right telemetry ESC index",
+      "leftEscIndex": "Left telemetry ESC index",
+      "canPort": "Physical CAN port",
+      "canDriver": "DroneCAN driver"
+    },
+    "invalidBindings": "Invalid or conflicting channel/identity bindings. No correction can be exported.",
+    "parameters": "parameters",
+    "selectAdmissible": "Select admissible corrections",
+    "clearSelection": "Clear selection",
+    "category": "Requirement class",
+    "categories": {
+      "all": "All classes",
+      "required": "Required for operation",
+      "conditional": "Required for selected hardware/feature",
+      "recommended": "Recommended",
+      "optional": "Optional",
+      "calibration": "Personal calibration — preserve"
+    },
+    "select": "Select",
+    "parameter": "Parameter",
+    "current": "Current value",
+    "proposed": "Proposed value",
+    "state": "Comparison",
+    "reason": "Purpose / justification",
+    "documentation": "Source",
+    "provisional": "Provisional",
+    "provisionalPolicy": "A difference from the reference file does not prove incompatibility. Provisional items require review and offer no guessed correction. Calibration and safety choices are preserved. Missing or duplicate parameters are never created or corrected automatically.",
+    "states": {
+      "compliant": "Matches proposal",
+      "mismatch": "Different",
+      "missing": "Absent / capability unknown",
+      "ambiguous": "Duplicate / ambiguous",
+      "review": "To verify",
+      "preserved": "Preserved"
+    },
+    "confirmationTitle": "Selected sensitive or provisional changes",
+    "confirmation": "I confirm these selected changes and their installed hardware implications.",
+    "justification": "Justification for these selected changes",
+    "downloadOriginal": "Download original .param",
+    "export": "Export selected corrections",
+    "backups": "Immutable .param originals (separate from YAML)",
+    "restore": "Restore working copy",
+    "errors": {
+      "invalidFile": "Invalid UTF-8 Mission Planner .param file, empty input, unsupported syntax or excessive size.",
+      "ambiguousParameter": "Absent, ambiguous or no longer admissible parameter selection.",
+      "backupCollision": "An original backup already exists under this ID; it was not overwritten.",
+      "confirmationRequired": "Explicit confirmation and a justification are required.",
+      "storageError": "Browser backup storage failed. The original must be saved successfully before a new working copy can be used."
+    },
+    "reasons": {
+      "target": "Verify the actual installed FCU ID and effective MAVROS target. Defaults or typed values are not evidence; in multi-robot setups, the correction may belong in MAVROS. No FCU renumbering is proposed.",
+      "gcs": "Verify the effective MAVROS source ID and FCU GCS acceptance policy (identity/range/options). Launch defaults do not establish the installation; no SYSID correction is proposed.",
+      "protocol": "The explicitly identified serial port must carry MAVLink. Both MAVLink 1 and 2 are accepted; version 2 is proposed only when no MAVLink protocol is configured.",
+      "stream": "Verify required telemetry delivery and freshness for the active plugins and link budget. No universal rate or reference value is proposed.",
+      "driveRight": "ArduRover right differential throttle function; physical output/wiring must be identified.",
+      "driveLeft": "ArduRover left differential throttle function; physical output/wiring must be identified.",
+      "blade": "The bridge uses DO_SET_SERVO on the configured channel. Verify its output function is admissible and HOLD actually permits operation; do not copy a reference function.",
+      "canDriver": "The selected physical CAN port must use the identified DroneCAN driver.",
+      "canProtocol": "DroneCAN is conditional on the selected VESC topology; not required for PWM-only hardware.",
+      "canOutputs": "Verify bits for actually wired outputs and preserve other outputs. No reference robot mask is proposed.",
+      "rpmType": "Legacy ESC feedback requires the matching RPM source; COMMON ESC_STATUS or encoders do not require this rule.",
+      "rpmMask": "Verify configured wheel telemetry indices, distinct from DroneCAN node IDs. No reference numbering is imposed.",
+      "rpmScale": "Keep signed raw motor RPM at unit scaling; metric ticks-per-metre calibration is separate.",
+      "arming": "The sequencer uses confirmed FCU MODE/ARM states. Review the installed ARMING_REQUIRE policy; no universal value or guessed correction.",
+      "skipChecks": "4.7 ARMING_SKIPCHK encodes checks to SKIP, unlike old ARMING_CHECK. Preserve the user mask; no reference exclusions are copied.",
+      "safety": "Electrical safety and companion-loss/battery/RC/EKF failsafe actions need installation-specific decisions and physical validation. No automatic disabling or universal value.",
+      "navigation": "GUIDED needs a valid estimator/navigation setup and truthful sensor data. Receiver types, EKF sources, compass/IMU choices are installation-specific; preserve them.",
+      "optional": "Review only if this optional behavior is intended; no automatic change.",
+      "calibration": "Personal motor, battery, sensor, navigation or controller calibration; preserve exactly.",
+      "powerCan": "Battery monitor roles, buses/addresses and CAN bitrate depend on the installed electrical topology; no reference value is copied."
+    },
+    "ruleScope": "Versions: {{versions}}; applicability: {{applicability}}.",
+    "contract": "Backend contract",
+    "groups": {
+      "communication": "MAVLink communication",
+      "actuators": "Propulsion and blade",
+      "can": "DroneCAN and VESC",
+      "safety": "Safety and arming",
+      "navigation": "Navigation and sensors",
+      "telemetry": "Telemetry and publication frequencies"
+    },
+    "diagnostics": {
+      "compatible": "Compatible (checked item)",
+      "review": "To verify",
+      "missing": "Missing / capability unknown",
+      "incompatible": "Incompatible with identified link"
+    },
+    "flows": {
+      "state": "Heartbeat and FCU state",
+      "imu": "IMU and attitude",
+      "gnss": "Position through MAVROS",
+      "gnssExternal": "Universal GNSS positioning",
+      "esc": "ESC / VESC and odometry",
+      "wheel": "Wheel odometry",
+      "battery": "Battery",
+      "rc": "RC reception (if used)",
+      "bladeRpm": "Blade RPM feedback",
+      "bladeOutput": "Blade output"
+    },
+    "gnssBackends": {
+      "unknown": "Identify GNSS backend",
+      "mavros": "GNSS through MAVROS",
+      "universal": "Direct Universal GNSS"
+    },
+    "gnssBackend": "GNSS backend to analyze (does not change installation)",
+    "noApplicable": "No applicable requirement for the selected hardware.",
+    "hiddenPreserved": "Only applicable compatibility checks are displayed. All hidden parameters remain fully preserved in exports.",
+    "ruleVersions": "Profile versions",
+    "messages": "Expected MAVLink messages",
+    "consumer": "Plugin and consumer",
+    "configuredFrequency": "Configured group rate (does not prove message rate)",
+    "observedFrequency": "Measured MAVLink reception",
+    "acquisitionFrequency": "Measured physical acquisition",
+    "rosFrequency": "Measured ROS2 republication",
+    "freshness": "Consumer freshness deadline",
+    "referenceDeadline": "Code reference: {{ms}} ms; verify effective configuration.",
+    "notEstablished": "To verify — not established / outside MAVROS",
+    "notMeasured": "To verify — no reliable runtime measurement available",
+    "telemetryPolicy": "Physical acquisition, MAVLink reception and ROS2 republication are distinct. Republishing a cache is not acquisition. Interval requests can override stream settings; the .param alone proves neither compatibility nor insufficient delivery. No universal minimum rate, SCHED_LOOP_RATE change or automatic rate increase."
+  },
+  "wheelTelemetry": {
+    "states": {
+      "online": "Online",
+      "absent": "Absent",
+      "stale": "Stale",
+      "fault": "Fault"
+    },
+    "temperature": "ESC temperature",
+    "current": "ESC current",
+    "voltage": "ESC voltage",
+    "ampHours": "Cumulative ESC consumption",
+    "motorRpm": "Motor RPM (absolute)",
+    "failureFlags": "Failure flags",
+    "errorCount": "Error count",
+    "age": "ESC acquisition age"
+  },
+  "measurementEditor": {
+    "bodyCentreLine": "Chassis centre reference",
+    "cancel": "Cancel",
+    "apply": "Apply",
+    "close": "Close measurement",
+    "invalid": "Enter a valid measurement within the allowed range.",
+    "draftNote": "Apply changes this draft. Use Save on the settings page to save it to the mower.",
+    "rearEdge": "Rear chassis edge",
+    "frontEdge": "Front chassis edge",
+    "leftEdge": "Left chassis edge",
+    "rightEdge": "Right chassis edge",
+    "bodyBottom": "Chassis bottom",
+    "bodyTop": "Chassis top",
+    "axleHeight": "Robot reference height (normally drive axle)",
+    "robotOrigin": "Robot reference line (normally rear axle)",
+    "bodyCentre": "Chassis centre",
+    "driveAxle": "Drive-wheel axle",
+    "casterAxle": "Caster-wheel axle",
+    "leftWheelCentre": "Left wheel centre",
+    "rightWheelCentre": "Right wheel centre",
+    "leftCasterCentre": "Left caster centre",
+    "rightCasterCentre": "Right caster centre",
+    "innerTyre": "Inner tyre face",
+    "outerTyre": "Outer tyre face",
+    "tyreEdge": "Tyre tread",
+    "bladeCentre": "Blade centre",
+    "cuttingEdge": "Cutting envelope",
+    "swathLeft": "Left swath edge",
+    "swathRight": "Right swath edge",
+    "dockRear": "Rear dock edge",
+    "dockFront": "Front dock edge",
+    "dockLeft": "Left dock edge",
+    "dockRight": "Right dock edge (including pedestal)",
+    "builtInAlignment": "Built-in dock alignment",
+    "adjustedAlignment": "Adjusted dock alignment"
+  },
+  "mowerVisual": {
+    "bodyColour": "Body colour",
+    "chooseColour": "Choose body colour",
+    "originalColour": "Original",
+    "suggestedColour": "Suggested",
+    "title": "Your mower",
+    "bodyStyle": "Body style",
+    "worx": "Worx-inspired",
+    "worxDock": "Side-charging dock",
+    "rounded": "Rounded",
+    "sculpted": "Sculpted",
+    "utility": "Utility",
+    "yardforce": "Yardforce-inspired",
+    "rm1000": "RM1000-inspired",
+    "hardwareLink": "Mower & dock appearance → Hardware",
+    "transparent": "Transparent shell",
+    "browserPreference": "Shell and matching dock use Settings Save · transparency is local",
+    "top": "Top · front ↑",
+    "side": "Side · front ←",
+    "waiting": "Waiting for the robot description to draw accurate geometry.",
+    "previewNote": "Preview of edited settings. The map uses the running robot description; save and restart ROS to apply geometry changes.",
+    "mapAlt": "Assembled mower from the running robot description",
+    "dockStyle": "Styled dock",
+    "dockNote": "Illustrative dock · 67 × 46 cm. Paired with the chassis in Hardware and shown automatically on the map."
+  },
+  "diagnosticHealth": {
+    "operation": "Operational state",
+    "allConfirmed": "All required display checks have current positive evidence. This is not a motion authorization.",
+    "level": {
+      "critical": "Critical",
+      "warning": "Warning",
+      "unknown": "Unknown",
+      "ok": "OK",
+      "not_applicable": "Not applicable"
+    },
+    "containers": "Containers",
+    "ros": "ROS diagnostics",
+    "localizer": "Localizer",
+    "lastReported": "Last reported ROS level: {{level}}",
+    "reason": {
+      "configuration": "Configuration checks report a warning or unavailable information.",
+      "clearance": "An earlier emergency has no verified clearance.",
+      "emergency": "Emergency status determines this verdict.",
+      "operation": "Operational state is missing, initializing or unverified.",
+      "containers": "Container state or required service availability determines this verdict.",
+      "cpu": "CPU temperature determines this verdict; an unavailable reading is unknown.",
+      "battery": "Battery estimate determines this verdict; unavailable telemetry is unknown.",
+      "gnss": "GNSS quality is degraded, missing or unverified. Missing GNSS alone does not prove a robot fault.",
+      "ros": "ROS diagnostics report a degradation or unavailable information.",
+      "lidar": "LiDAR status is missing or degraded; not applicable only when explicitly disabled.",
+      "localizer": "Autonomous operation requires a current localizer diagnostic.",
+      "recovery": "Navigation recovery is taking longer than expected."
+    }
+  },
+  "diagnosticAlertHistory": {
+    "currentCause": "Current verdict cause",
+    "active": "Active",
+    "resolved": "Resolved",
+    "unverified": "State unverified",
+    "recent": "Recent ({{count}})",
+    "showRecent": "Show recent alerts ({{count}})",
+    "hideRecent": "Hide recent alerts",
+    "collapseAll": "Collapse all groups",
+    "empty": "No alerts to display. Recent history remains available here.",
+    "episode": "Episode {{count}}",
+    "source": "Reported source",
+    "unknownSource": "Source not provided",
+    "unknownComponent": "Unnamed component"
+  },
+  "diagnosticReception": {
+    "communication": "Communication with the robot has been interrupted for at least 60 seconds.",
+    "missing": "No data received from {{source}} for at least 60 seconds.",
+    "source": {
+      "operation": "robot status",
+      "emergency": "emergency status",
+      "system": "system monitoring",
+      "hardware": "hardware bridge",
+      "odometry": "odometry",
+      "lidar": "LiDAR",
+      "gnss": "GNSS",
+      "localizer": "localization"
+    }
+  },
+  "digObstructionAck": {
+    "title": "Resume from the blocked spot?",
+    "body": "The wheels dug in repeatedly here and the mower is still {{distance}} m from the spot. Check that nothing is stuck under or in front of it. If it digs in once more at this spot, it will stop again.",
+    "ok": "Resume mowing",
+    "cancel": "Cancel"
   }
 }

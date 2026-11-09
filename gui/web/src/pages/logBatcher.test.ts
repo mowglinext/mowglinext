@@ -26,7 +26,7 @@ describe("createLogBatcher", () => {
   });
 
   it("flushes a burst in one batch", () => {
-    const onBatch = vi.fn();
+    const onBatch = vi.fn<Parameters<typeof createLogBatcher<number>>[0]>();
     const batcher = createLogBatcher<number>(onBatch, 100);
 
     for (let value = 0; value < 100; value += 1) batcher.push(value);
@@ -40,7 +40,7 @@ describe("createLogBatcher", () => {
   });
 
   it("reduces a sustained 100 Hz stream to 10 batches per second", () => {
-    const onBatch = vi.fn();
+    const onBatch = vi.fn<Parameters<typeof createLogBatcher<number>>[0]>();
     const batcher = createLogBatcher<number>(onBatch, 100);
 
     for (let value = 0; value < 100; value += 1) {
@@ -55,7 +55,7 @@ describe("createLogBatcher", () => {
   });
 
   it("drops pending values when reset", () => {
-    const onBatch = vi.fn();
+    const onBatch = vi.fn<Parameters<typeof createLogBatcher<number>>[0]>();
     const batcher = createLogBatcher<number>(onBatch, 100);
 
     batcher.push(1);

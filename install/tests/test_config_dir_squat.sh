@@ -34,13 +34,23 @@ SANDBOX_REPO="$SANDBOX/repo"
 sandbox_repo "$SANDBOX_REPO"
 harness_init "$SANDBOX_REPO"   # sources libs; sets DOCKER_DIR/INSTALL_DIR
 
+# sandbox_repo copies the current docker/ tree, including any tracked runtime
+# files. Remove the bind-mount sources inside THIS sandbox so the test really
+# reproduces the state where Docker creates a directory at a missing file path.
+rm -f "$DOCKER_DIR/config/cyclonedds.xml"
+rm -f "$DOCKER_DIR/config/cyclonedds-mavros.xml"
+rm -f "$DOCKER_DIR/config/mqtt/mosquitto.conf"
+
 # Simulate Docker's empty-dir squat at both bind-mounted file paths.
 mkdir -p "$DOCKER_DIR/config"
 mkdir -p "$DOCKER_DIR/config/cyclonedds.xml"
+mkdir -p "$DOCKER_DIR/config/cyclonedds-mavros.xml"
 mkdir -p "$DOCKER_DIR/config/mqtt/mosquitto.conf"
 
 assert_dir_exists "cyclonedds.xml starts as a squatting directory" \
   "$DOCKER_DIR/config/cyclonedds.xml"
+assert_dir_exists "cyclonedds-mavros.xml starts as a squatting directory" \
+  "$DOCKER_DIR/config/cyclonedds-mavros.xml"
 assert_dir_exists "mosquitto.conf starts as a squatting directory" \
   "$DOCKER_DIR/config/mqtt/mosquitto.conf"
 
@@ -54,6 +64,8 @@ fi
 # `[ -f ]`, which is false for a directory — so this is the real check).
 assert_file_exists "cyclonedds.xml healed to a regular file" \
   "$DOCKER_DIR/config/cyclonedds.xml"
+assert_file_exists "cyclonedds-mavros.xml healed to a regular file" \
+  "$DOCKER_DIR/config/cyclonedds-mavros.xml"
 assert_file_exists "mosquitto.conf healed to a regular file" \
   "$DOCKER_DIR/config/mqtt/mosquitto.conf"
 
@@ -65,6 +77,12 @@ else
   fail "squatted cyclonedds.xml directory backed up, not destroyed" \
     "no cyclonedds.xml.old.* backup found"
 fi
+if compgen -G "$DOCKER_DIR/config/cyclonedds-mavros.xml.old.*" >/dev/null; then
+  pass "squatted cyclonedds-mavros.xml directory backed up, not destroyed"
+else
+  fail "squatted cyclonedds-mavros.xml directory backed up, not destroyed" \
+    "no cyclonedds-mavros.xml.old.* backup found"
+fi
 
 # Healed file must carry the real default contents, not be an empty placeholder.
 if grep -q "MaxAutoParticipantIndex" "$DOCKER_DIR/config/cyclonedds.xml" 2>/dev/null; then
@@ -72,6 +90,19 @@ if grep -q "MaxAutoParticipantIndex" "$DOCKER_DIR/config/cyclonedds.xml" 2>/dev/
 else
   fail "healed cyclonedds.xml has the bundled default contents" \
     "MaxAutoParticipantIndex not found in materialised file"
+fi
+
+# The main ROS2 peer must not be pruned; the older MAVROS DDS cannot parse
+# that option and must use its separately seeded compatibility profile.
+if grep -q 'PruneDelay="inf"' "$DOCKER_DIR/config/cyclonedds.xml"; then
+  pass "healed main Cyclone DDS retains unicast discovery"
+else
+  fail "healed main Cyclone DDS retains unicast discovery" "missing PruneDelay=inf"
+fi
+if grep -q 'PruneDelay=' "$DOCKER_DIR/config/cyclonedds-mavros.xml"; then
+  fail "healed MAVROS Cyclone DDS is compatible" "unsupported Peer PruneDelay"
+else
+  pass "healed MAVROS Cyclone DDS is compatible"
 fi
 
 test_summary

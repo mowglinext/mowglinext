@@ -17,8 +17,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <limits>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -201,6 +203,96 @@ inline std::optional<std::size_t> findControllerRejoin(
     }
   }
   return std::nullopt;
+}
+
+/// Arc length [m] of the planned path from poses[from] to poses[to] (both clamped into the
+/// unit). 0 when `to` does not lie ahead of `from`.
+inline double pathLengthBetween(const std::vector<geometry_msgs::msg::PoseStamped>& poses,
+                                std::size_t from,
+                                std::size_t to)
+{
+  if (poses.empty())
+  {
+    return 0.0;
+  }
+  const std::size_t last = poses.size() - 1;
+  from = std::min(from, last);
+  to = std::min(to, last);
+  double length = 0.0;
+  for (std::size_t i = from + 1; i <= to; ++i)
+  {
+    const auto& p = poses[i].pose.position;
+    const auto& q = poses[i - 1].pose.position;
+    length += std::hypot(p.x - q.x, p.y - q.y);
+  }
+  return length;
+}
+
+/// Planned path a coverage PASS left un-mowed on purpose, so the end-of-pass message can say
+/// so. FollowStrip counts UNITS, and a unit that was mostly detoured around is still booked
+/// "mowed": on 2026-10-06 a 10 m2 area ended with "3/3 swaths mowed, 0 skipped" after 130 of
+/// the first unit's 160 poses went through obstacle detours and a 180 degree turn was skipped.
+struct SkippedPathTally
+{
+  std::size_t detours{0};  ///< obstacle detours taken this pass
+  std::size_t detour_poses{0};  ///< poses between the stuck pose and the resume pose
+  double detour_m{0.0};
+  std::size_t rejoins{0};  ///< controller turn-fallback rejoins (FTC jumped ahead)
+  std::size_t rejoin_poses{0};  ///< poses the controller skipped over
+  double rejoin_m{0.0};
+
+  void addDetour(std::size_t poses, double metres)
+  {
+    ++detours;
+    detour_poses += poses;
+    detour_m += metres;
+  }
+
+  void addRejoin(std::size_t poses, double metres)
+  {
+    ++rejoins;
+    rejoin_poses += poses;
+    rejoin_m += metres;
+  }
+
+  std::size_t poses() const
+  {
+    return detour_poses + rejoin_poses;
+  }
+
+  double metres() const
+  {
+    return detour_m + rejoin_m;
+  }
+
+  /// True when any planned path was left behind (a detour that skipped nothing does not count).
+  bool any() const
+  {
+    return poses() > 0 || metres() > 0.0;
+  }
+};
+
+/// One-line account of the tally, e.g.
+/// "84 poses / 1.9 m of planned path left un-mowed (2 obstacle detours: 80 poses / 1.8 m;
+/// 1 turn-fallback rejoin: 4 poses / 0.1 m)".
+inline std::string describeSkippedPath(const SkippedPathTally& t)
+{
+  char buf[256];
+  std::snprintf(buf,
+                sizeof(buf),
+                "%zu poses / %.1f m of planned path left un-mowed (%zu obstacle detour%s: %zu "
+                "poses / %.1f m; %zu turn-fallback rejoin%s: %zu poses / %.1f m)",
+                t.poses(),
+                t.metres(),
+                t.detours,
+                t.detours == 1 ? "" : "s",
+                t.detour_poses,
+                t.detour_m,
+                t.rejoins,
+                t.rejoins == 1 ? "" : "s",
+                t.rejoin_poses,
+                t.rejoin_m);
+  return std::string(buf);
 }
 
 }  // namespace mowgli_behavior

@@ -194,9 +194,63 @@ class LatestState:
     gps_cov_xx: Optional[float] = None
     gps_cov_yy: Optional[float] = None
     gps_cov_type: Optional[int] = None
+    # header.stamp, in the ROS clock domain (mowglinext#694 evidence: the pinned
+    # receiver can keep this genuinely advancing while lat/lon stay frozen).
+    gps_fix_stamp_sec: Optional[float] = None
     # ENU-projected position (from /gps/absolute_pose if present)
     gps_abs_x: Optional[float] = None
     gps_abs_y: Optional[float] = None
+
+    # --- /gps/status (mowgli_interfaces/GnssStatus, bridged public contract) ---
+    # mowglinext#694 field-evidence set requested by Pepeuch (issue comment
+    # 2026-09-20): compare this bridged status against the raw
+    # universal_gnss_status_* block below to localise a freeze to either the
+    # receiver's own solver or mowgli_gnss_bridge's projection.
+    gnss_status_stamp_sec: Optional[float] = None
+    gnss_status_position_observation_sequence: Optional[int] = None
+    gnss_status_fix_type: Optional[int] = None
+    gnss_status_fix_valid: Optional[bool] = None
+    gnss_status_rtk_mode: Optional[int] = None
+    gnss_status_horizontal_accuracy_m: Optional[float] = None
+    gnss_status_satellites_used: Optional[int] = None
+    gnss_status_satellites_visible: Optional[int] = None
+    gnss_status_satellites_tracked: Optional[int] = None
+    gnss_status_correction_transport_status: Optional[int] = None
+    gnss_status_correction_flow_status: Optional[int] = None
+    gnss_status_correction_semantic_status: Optional[int] = None
+
+    # --- /universal_gnss_receiver/status (universal_gnss_msgs/GnssStatus, RAW
+    # pre-bridge). Carries its OWN latitude_deg/longitude_deg — independent of
+    # /gps/fix's NavSatFix, which goes through a separate navsat_fix_adapter
+    # publish path inside receiver_node. If this freezes too, the stuck solver
+    # is upstream of both outputs; if it keeps moving while /gps/fix does not,
+    # the bug is isolated to the NavSatFix adapter specifically. ---
+    universal_gnss_status_stamp_sec: Optional[float] = None
+    universal_gnss_status_lat: Optional[float] = None
+    universal_gnss_status_lon: Optional[float] = None
+    universal_gnss_status_alt: Optional[float] = None
+    universal_gnss_status_position_observation_sequence: Optional[int] = None
+    universal_gnss_status_source_id: Optional[str] = None
+    universal_gnss_status_source_incarnation: Optional[str] = None
+    universal_gnss_status_fix_valid: Optional[bool] = None
+    universal_gnss_status_fix_type: Optional[int] = None
+    universal_gnss_status_rtk_mode: Optional[int] = None
+    universal_gnss_status_horizontal_accuracy_m: Optional[float] = None
+    universal_gnss_status_satellites_used: Optional[int] = None
+
+    # --- /universal_gnss_receiver/get_snapshot (polled ~1 Hz, not every tick —
+    # it is a service call, not a subscription). runtime_observations is the
+    # receiver's own internal accepted-observation counter; Pepeuch's
+    # 2026-09-20 comment asks for this specifically to see whether it keeps
+    # advancing during a freeze (gui/pkg/api/updater_gnss.go uses the same
+    # counter to detect a stalled receiver during update verification). ---
+    snapshot_runtime_observations: Optional[int] = None
+    snapshot_transport_healthy: Optional[bool] = None
+    snapshot_parser_healthy: Optional[bool] = None
+    snapshot_source_id: Optional[str] = None
+    snapshot_source_incarnation: Optional[str] = None
+    snapshot_call_ok: Optional[bool] = None
+    snapshot_call_error: Optional[str] = None
 
     # --- Dock heading (when charging) ---
     gnss_heading_yaw_rad: Optional[float] = None
@@ -361,6 +415,7 @@ class MowSessionMonitor(Node):
             from mowgli_interfaces.msg import (  # type: ignore
                 AbsolutePose,
                 Emergency,
+                GnssStatus,
                 HighLevelStatus,
                 Status as HwStatus,
             )
@@ -370,8 +425,41 @@ class MowSessionMonitor(Node):
             # AbsolutePose embeds a PoseWithCovariance at .pose, so the
             # existing callback's msg.pose.pose.position access is unchanged.
             sub("/gps/absolute_pose", AbsolutePose, self._gps_abs_cb, QOS_RELIABLE)
+            sub("/gps/status", GnssStatus, self._gnss_status_cb, QOS_RELIABLE)
         except ImportError as exc:
             self.get_logger().warn(f"mowgli_interfaces not available: {exc} — BT/status fields will be missing.")
+
+        # Raw pre-bridge Universal GNSS status + the receiver's own snapshot
+        # service (mowglinext#694 field-evidence set). Only present when
+        # GNSS_STACK=universal built its schema-only interface overlay
+        # (ros2_entrypoint.sh sources /opt/universal_gnss_interfaces); a
+        # bring-up without it just logs and keeps every other signal working.
+        self.snapshot_client = None
+        try:
+            from universal_gnss_msgs.msg import GnssStatus as RawGnssStatus  # type: ignore
+            from universal_gnss_msgs.srv import GetReceiverSnapshot  # type: ignore
+
+            sub(
+                "/universal_gnss_receiver/status",
+                RawGnssStatus,
+                self._universal_gnss_status_cb,
+                QOS_RELIABLE,
+            )
+            self.snapshot_client = self.create_client(
+                GetReceiverSnapshot, "/universal_gnss_receiver/get_snapshot",
+                callback_group=cb,
+            )
+            self._snapshot_request_type = GetReceiverSnapshot.Request
+            # Polled independently of the sample rate — it's a service call,
+            # not a subscription, and 1 Hz is plenty for a counter that only
+            # needs to prove it is still advancing.
+            self.snapshot_timer = self.create_timer(
+                1.0, self._poll_receiver_snapshot, callback_group=cb
+            )
+        except ImportError as exc:
+            self.get_logger().warn(
+                f"universal_gnss_msgs not available: {exc} — raw receiver status/snapshot fields will be missing."
+            )
 
         sub("/battery_state", BatteryState, self._battery_cb, QOS_RELIABLE)
 
@@ -491,6 +579,7 @@ class MowSessionMonitor(Node):
             s.gps_cov_xx = float(msg.position_covariance[0])
             s.gps_cov_yy = float(msg.position_covariance[4])
             s.gps_cov_type = msg.position_covariance_type
+            s.gps_fix_stamp_sec = _ros_stamp_sec(msg.header.stamp)
 
             # --- RTK-Fixed detection: arm the cov-drop check ---
             # u-blox drivers usually set status.status=2 (GBAS/RTK) for RTK
@@ -519,6 +608,58 @@ class MowSessionMonitor(Node):
             s = self.state
             s.gps_abs_x = msg.pose.pose.position.x
             s.gps_abs_y = msg.pose.pose.position.y
+
+    def _gnss_status_cb(self, msg) -> None:
+        # mowgli_interfaces/GnssStatus on /gps/status (the bridged public
+        # contract). See LatestState's gnss_status_* fields for why this is
+        # captured separately from the raw universal_gnss_status_* block.
+        with self.state_lock:
+            s = self.state
+            s.gnss_status_stamp_sec = _ros_stamp_sec(msg.header.stamp)
+            s.gnss_status_position_observation_sequence = int(msg.position_observation_sequence)
+            s.gnss_status_fix_type = int(msg.fix_type)
+            s.gnss_status_fix_valid = bool(msg.fix_valid)
+            s.gnss_status_rtk_mode = int(msg.rtk_mode)
+            s.gnss_status_horizontal_accuracy_m = float(msg.horizontal_accuracy_m)
+            s.gnss_status_satellites_used = int(msg.satellites_used)
+            s.gnss_status_satellites_visible = int(msg.satellites_visible)
+            s.gnss_status_satellites_tracked = int(msg.satellites_tracked)
+            s.gnss_status_correction_transport_status = int(msg.correction_transport_status)
+            s.gnss_status_correction_flow_status = int(msg.correction_flow_status)
+            s.gnss_status_correction_semantic_status = int(msg.correction_semantic_status)
+
+    def _universal_gnss_status_cb(self, msg) -> None:
+        # universal_gnss_msgs/GnssStatus on /universal_gnss_receiver/status —
+        # RAW, pre-bridge. Carries its own latitude_deg/longitude_deg,
+        # independent of /gps/fix's NavSatFix (a separate publish path inside
+        # receiver_node). Field names differ slightly from the bridged
+        # contract (FIX_TYPE_* enum is shifted by one, source_id/incarnation
+        # only exist here) — see universal_gnss_msgs/msg/GnssStatus.msg. NOTE:
+        # this message's timestamp is a bare `stamp` field, NOT wrapped in a
+        # std_msgs/Header like the bridged mowgli_interfaces/GnssStatus is —
+        # msg.header.stamp raises AttributeError here (field-confirmed
+        # 2026-09-21: an uncaught exception in this callback propagated out of
+        # executor.spin_once() and killed the whole monitor process within a
+        # fraction of a second, silently, on every run after this callback was
+        # added). The upstream comment on this field is itself directly
+        # relevant to mowglinext#694: "a non-position update may advance this
+        # stamp while position_observation_sequence remains unchanged".
+        with self.state_lock:
+            s = self.state
+            s.universal_gnss_status_stamp_sec = _ros_stamp_sec(msg.stamp)
+            s.universal_gnss_status_lat = float(msg.latitude_deg)
+            s.universal_gnss_status_lon = float(msg.longitude_deg)
+            s.universal_gnss_status_alt = float(msg.altitude_m)
+            s.universal_gnss_status_position_observation_sequence = int(
+                msg.position_observation_sequence
+            )
+            s.universal_gnss_status_source_id = str(msg.source_id)
+            s.universal_gnss_status_source_incarnation = str(msg.source_incarnation)
+            s.universal_gnss_status_fix_valid = bool(msg.fix_valid)
+            s.universal_gnss_status_fix_type = int(msg.fix_type)
+            s.universal_gnss_status_rtk_mode = int(msg.rtk_mode)
+            s.universal_gnss_status_horizontal_accuracy_m = float(msg.horizontal_accuracy_m)
+            s.universal_gnss_status_satellites_used = int(msg.satellites_used)
 
     def _gnss_heading_cb(self, msg: Imu) -> None:
         with self.state_lock:
@@ -562,6 +703,46 @@ class MowSessionMonitor(Node):
     def _localization_mode_cb(self, msg: Int32) -> None:
         with self.state_lock:
             self.state.localization_mode_id = int(msg.data)
+
+    def _poll_receiver_snapshot(self) -> None:
+        # Fires every 1 s regardless of --rate. Async on purpose: a blocking
+        # call() here would depend on this same executor to spin the response
+        # through, which is fragile even under a ReentrantCallbackGroup.
+        if self.snapshot_client is None:
+            return
+        if not self.snapshot_client.service_is_ready():
+            with self.state_lock:
+                self.state.snapshot_call_ok = False
+                self.state.snapshot_call_error = "service not available"
+            return
+        future = self.snapshot_client.call_async(self._snapshot_request_type())
+        future.add_done_callback(self._on_snapshot_response)
+
+    def _on_snapshot_response(self, future) -> None:
+        with self.state_lock:
+            s = self.state
+            try:
+                response = future.result()
+            except Exception as exc:  # noqa: BLE001 - report any RPC failure into the log
+                s.snapshot_call_ok = False
+                s.snapshot_call_error = str(exc)
+                return
+            s.snapshot_call_ok = True
+            s.snapshot_call_error = None
+            s.snapshot_source_id = str(response.status.source_id)
+            s.snapshot_source_incarnation = str(response.status.source_incarnation)
+            # Same key/value projection gui/pkg/api/updater_gnss.go reads from
+            # the same service, matched by hardware_id == status.source_id so
+            # a stale diagnostics entry from a prior incarnation is ignored.
+            for entry in response.diagnostics.status:
+                if entry.hardware_id != response.status.source_id:
+                    continue
+                values = {kv.key: kv.value for kv in entry.values}
+                if entry.name == "universal_gnss/parser_counters":
+                    s.snapshot_runtime_observations = _safe_int(values.get("runtime_observations"))
+                elif entry.name == "universal_gnss/summary":
+                    s.snapshot_transport_healthy = values.get("transport_healthy") == "true"
+                    s.snapshot_parser_healthy = values.get("parser_healthy") == "true"
 
     def _bt_cb(self, msg) -> None:
         with self.state_lock:
@@ -759,6 +940,7 @@ class MowSessionMonitor(Node):
                     "status": s.gps_status, "service": s.gps_service,
                     "cov_xx": s.gps_cov_xx, "cov_yy": s.gps_cov_yy,
                     "cov_type": s.gps_cov_type,
+                    "stamp_sec": s.gps_fix_stamp_sec,
                     "sigma_xy_mm": (
                         math.sqrt((s.gps_cov_xx + s.gps_cov_yy) * 0.5) * 1000.0
                         if s.gps_cov_xx is not None and s.gps_cov_yy is not None
@@ -767,6 +949,50 @@ class MowSessionMonitor(Node):
                 },
                 "gps_absolute_pose": {
                     "x": s.gps_abs_x, "y": s.gps_abs_y,
+                },
+                # /gps/status — bridged public contract (mowglinext#694 evidence set).
+                "gnss_status": {
+                    "stamp_sec": s.gnss_status_stamp_sec,
+                    "position_observation_sequence": s.gnss_status_position_observation_sequence,
+                    "fix_type": s.gnss_status_fix_type,
+                    "fix_valid": s.gnss_status_fix_valid,
+                    "rtk_mode": s.gnss_status_rtk_mode,
+                    "horizontal_accuracy_m": s.gnss_status_horizontal_accuracy_m,
+                    "satellites_used": s.gnss_status_satellites_used,
+                    "satellites_visible": s.gnss_status_satellites_visible,
+                    "satellites_tracked": s.gnss_status_satellites_tracked,
+                    "correction_transport_status": s.gnss_status_correction_transport_status,
+                    "correction_flow_status": s.gnss_status_correction_flow_status,
+                    "correction_semantic_status": s.gnss_status_correction_semantic_status,
+                },
+                # /universal_gnss_receiver/status — RAW, pre-bridge. Compare
+                # lat/lon here against "gps" above to localise a freeze to the
+                # receiver's solver vs the NavSatFix adapter specifically.
+                "universal_gnss_status": {
+                    "stamp_sec": s.universal_gnss_status_stamp_sec,
+                    "lat": s.universal_gnss_status_lat,
+                    "lon": s.universal_gnss_status_lon,
+                    "alt": s.universal_gnss_status_alt,
+                    "position_observation_sequence": s.universal_gnss_status_position_observation_sequence,
+                    "source_id": s.universal_gnss_status_source_id,
+                    "source_incarnation": s.universal_gnss_status_source_incarnation,
+                    "fix_valid": s.universal_gnss_status_fix_valid,
+                    "fix_type": s.universal_gnss_status_fix_type,
+                    "rtk_mode": s.universal_gnss_status_rtk_mode,
+                    "horizontal_accuracy_m": s.universal_gnss_status_horizontal_accuracy_m,
+                    "satellites_used": s.universal_gnss_status_satellites_used,
+                },
+                # /universal_gnss_receiver/get_snapshot — polled ~1 Hz. Distinct
+                # from the two blocks above: this is the receiver's own internal
+                # accepted-observation counter, independent of any ROS topic.
+                "receiver_snapshot": {
+                    "runtime_observations": s.snapshot_runtime_observations,
+                    "transport_healthy": s.snapshot_transport_healthy,
+                    "parser_healthy": s.snapshot_parser_healthy,
+                    "source_id": s.snapshot_source_id,
+                    "source_incarnation": s.snapshot_source_incarnation,
+                    "call_ok": s.snapshot_call_ok,
+                    "call_error": s.snapshot_call_error,
                 },
                 "yaw_sources": {
                     # COG = GPS travel direction (cog_to_imu); fg = fusion_graph's

@@ -15,13 +15,18 @@
 
 #pragma once
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <future>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -30,9 +35,11 @@
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
+#include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/detour_resume.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
 #include "mowgli_behavior/scan_pause.hpp"
+#include "mowgli_behavior/strip_progress.hpp"
 #include "mowgli_behavior/transit_failure.hpp"
 #include "mowgli_interfaces/action/plan_coverage.hpp"
 #include "mowgli_interfaces/coverage_geometry.hpp"
@@ -85,6 +92,28 @@ inline double transitDeadlineSec(double gap_m)
   return t > kTransitTimeoutMinSec ? t : kTransitTimeoutMinSec;
 }
 
+/// Longest planned route [m] the route-aware bound honours: far beyond any
+/// garden, it only keeps a garbage feedback value from disabling the watchdog.
+constexpr double kTransitRouteMaxM = 2000.0;
+/// A route-driven widening of the transit bound smaller than this is applied
+/// silently on the next one that is not [s] (replans jitter by centimetres).
+constexpr double kTransitBoundLogStepSec = 1.0;
+
+/// The same bound, from the route nav2 actually PLANNED. The transit planner
+/// only crosses the recorded areas (their exact union), so the route can be many
+/// times the straight-line gap — round a concave edge, or round to where two
+/// areas really touch — and the gap-only bound cancelled exactly those
+/// legitimate detours, skipping the unit (large lawns drawn with few points).
+/// `route_m` is the LONGEST distance_remaining NavigateToPose reported for the
+/// goal, applied from the goal's start: the remaining route of a robot that is
+/// not getting anywhere does not grow, so it is still ended on time.
+inline double transitDeadlineForRouteSec(double gap_m, double route_m)
+{
+  const double route =
+      (std::isfinite(route_m) && route_m > 0.0) ? std::min(route_m, kTransitRouteMaxM) : 0.0;
+  return transitDeadlineSec(std::max(gap_m, route));
+}
+
 /// Two transit goals this close are the SAME destination. FollowStrip's first
 /// unit starts where TransitToStrip was sent (both come from the plan start or
 /// the resume cursor), give or take the dig-zone front trim.
@@ -111,6 +140,28 @@ struct TransitResultSlot
   bool ready = false;
   uint16_t error_code = 0;
   std::string error_msg;
+};
+/// Longest planned route NavigateToPose has reported for one transit goal
+/// (feedback distance_remaining): written by the feedback callback, read by the
+/// BT tick to size the transit bound (transitDeadlineForRouteSec).
+struct TransitRouteSlot
+{
+  void Record(double remaining_m)
+  {
+    if (!std::isfinite(remaining_m))
+      return;
+    std::lock_guard<std::mutex> lk(mutex_);
+    longest_m_ = std::max(longest_m_, remaining_m);
+  }
+  double Longest()
+  {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return longest_m_;
+  }
+
+private:
+  std::mutex mutex_;
+  double longest_m_ = 0.0;
 };
 /// The status topic reports a transit's abort before its result (and nav2's
 /// error code) lands. How long a caller waits for it before classifying the
@@ -153,6 +204,58 @@ struct ResumeLocation
 ResumeLocation resolveResumeLocation(const std::vector<nav_msgs::msg::Path>& units,
                                      std::size_t cursor,
                                      std::size_t total_poses);
+
+/// Where inside a unit it resumes after being interrupted `local` poses in: the furthest progress
+/// is replayed from `kCoverageResumeReplayPoses` before the end (an interruption is not completion,
+/// and the tail must stay longer than the goal checker's proximity-only short-path exception).
+/// 0 for a unit that was never entered. The one rule behind both the global cursor
+/// (resolveResumeLocation) and the per-unit progress (BTContext::area_unit_progress).
+std::size_t resumeOffsetForUnit(std::size_t unit_poses, std::size_t local);
+
+/// The pose index each unit's FIRST follow goal starts at, one entry per unit. This is the ONE
+/// rule both FollowStrip::onStart (which trims every unit at its entry) and resolveFirstDrive (the
+/// first transit goal) apply, so the transit always lands where the first follow goal starts and
+/// the robot never drives back along a unit it was just sent past.
+///
+/// A unit's start is the FURTHER of
+///  - the persisted cursor's offset, when `cursor_valid` and the cursor lands in that unit
+///    (resolveResumeLocation), and
+///  - its own recorded progress (`unit_progress`, BTContext::area_unit_progress; null when the
+///    plan is stale), through resumeOffsetForUnit, for a unit not recorded in `done`.
+/// The cursor can sit BEHIND the unit's progress (sendFollowGoal resets the cursor to the trim
+/// offset while the progress never moves backwards), which is why neither may win unconditionally.
+std::vector<std::size_t> resolveUnitStartOffsets(
+    const std::vector<nav_msgs::msg::Path>& units,
+    const std::set<std::size_t>& done,
+    bool cursor_valid,
+    std::size_t cursor,
+    std::size_t total_poses,
+    const std::map<std::size_t, std::size_t>* unit_progress);
+
+/// Where FollowStrip drives FIRST: `unit` is the first unit not recorded in `done` (see
+/// nextUndoneUnit); `local` is the resume offset when the persisted cursor lands in that very unit,
+/// 0 (its front) otherwise. A cursor that lands in a LATER unit is trimmed when that unit is
+/// reached, not before: the earlier incomplete units are driven first. `valid` is false when every
+/// unit is already done.
+struct FirstDrive
+{
+  bool valid = false;
+  std::size_t unit = 0;
+  std::size_t local = 0;
+};
+
+/// The single mapping behind both FollowStrip's first unit and PlanCoverageArea's first transit
+/// goal. `cursor_valid` is false when the persisted cursor must be ignored (stale plan).
+///
+/// `unit_progress` (unit -> poses driven, BTContext::area_unit_progress; null when the plan is
+/// stale) gives the first unit its OWN resume offset; `local` is resolveUnitStartOffsets' entry
+/// for `unit`, i.e. exactly where FollowStrip's first follow goal starts.
+FirstDrive resolveFirstDrive(const std::vector<nav_msgs::msg::Path>& units,
+                             const std::set<std::size_t>& done,
+                             bool cursor_valid,
+                             std::size_t cursor,
+                             std::size_t total_poses,
+                             const std::map<std::size_t, std::size_t>* unit_progress = nullptr);
 
 // ---------------------------------------------------------------------------
 // refreshSwathProgress — publish the GUI-facing live swath progress for the
@@ -270,9 +373,15 @@ public:
 
 private:
   void setBladeEnabled(bool enabled);
+  bool bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx);
+  void beginBladeReadyWait(const std::shared_ptr<BTContext>& ctx);
   // Cancel every in-flight follow / transit goal, reset the transit state
   // machine and switch the blade off. Shared by onHalted() and yieldToFleet().
   void abortActiveGoals(const std::shared_ptr<BTContext>& ctx);
+  /// Cancel the blade-off transit if one is still outstanding — also one the server has not
+  /// answered yet. Called whenever the current unit is left for another (booked, skipped,
+  /// finished): a transit goal that outlives its unit keeps the navigator busy.
+  void cancelTransit(const std::shared_ptr<BTContext>& ctx, const char* why);
   // Fleet coordination: the area this pass is mowing was handed to another
   // fleet member (BTContext::fleet_excluded_areas). Save the resume cursor when
   // a path is in flight, stop everything, record the yield so the next
@@ -289,6 +398,11 @@ private:
   // RUNNING); false when it should fall back to the abort-to-next path (no
   // costmap, abort not obstacle-related, no clear resume, or budget exhausted).
   bool tryStartDetour(const std::shared_ptr<BTContext>& ctx);
+  // A detour's resume transit failed and no further detour is possible: resume
+  // the SAME unit past the blocked stretch (blocked_stretch.hpp) instead of
+  // dropping the rest of it. False when nothing drivable is left or the
+  // no-progress resume budget is spent — the caller then skips the unit.
+  bool resumeUnitPastBlockedStretch(const std::shared_ptr<BTContext>& ctx);
   /// Trim the current unit to [idx, end) and persist the moved resume cursor.
   void trimUnitAt(const std::shared_ptr<BTContext>& ctx, std::size_t idx);
 
@@ -351,8 +465,12 @@ private:
   // restarting the whole path (and so GetNextUnmowedArea sees the progress and
   // does not abandon the area).
   void persistResumeCursor(const std::shared_ptr<BTContext>& ctx);
+  /// Record that the current unit got `local` poses in (BTContext::area_unit_progress); never
+  /// moves backwards.
+  void noteUnitProgress(const std::shared_ptr<BTContext>& ctx, std::size_t local);
   // Smooth live coverage percent (0..100) from the current pose cursor
-  // (swath_base_[swath_idx_] + resume_start_idx_ + path_progress_idx_) over
+  // (swath_base_[swath_idx_] + swath_resume_start_indices_[swath_idx_] +
+  // path_progress_idx_) over
   // total_path_poses_. Monotonic within an area; recomputed every following tick
   // so the GUI %-readout climbs smoothly rather than jumping per sub-path.
   float livePercent() const;
@@ -421,6 +539,10 @@ private:
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
   bool transit_active_ = false;
+  // See cancel_goal.hpp: set when the transit / follow goal is given up, so a goal the server
+  // has not answered yet is cancelled the moment it is accepted.
+  std::shared_ptr<GoalAbandonment> transit_abandonment_ = std::make_shared<GoalAbandonment>();
+  std::shared_ptr<GoalAbandonment> follow_abandonment_ = std::make_shared<GoalAbandonment>();
   // A blade-off transit is REQUIRED for the current swath (its start is
   // >kSegmentTransitGap away) but navigate_to_pose was not ready when we tried to
   // dispatch it. The blade is held OFF and the dispatch is retried each tick;
@@ -454,6 +576,10 @@ private:
   // Sub-paths recorded MOWED during THIS pass. Distinct from
   // ctx->area_completed_swaths[area].size(), which is cumulative across passes.
   std::size_t swaths_mowed_this_pass_ = 0;
+  // Planned path this pass left un-mowed on purpose (obstacle detours, controller turn-fallback
+  // rejoins). The unit counters above cannot show it: a unit that was mostly detoured around
+  // is still booked mowed, so the end-of-pass message reports this tally too.
+  SkippedPathTally skipped_tally_;
   bool swath_goal_sent_ = false;
   // Absolute start index of each swaths_ unit within the CONCATENATION of all
   // units (== full_path). swath_base_[k] = sum of the ORIGINAL (untrimmed) pose
@@ -462,13 +588,12 @@ private:
   // stays comparable to area_path_pose_count. For a single unit this is {0} and
   // the bookkeeping reduces to the original single-path behaviour.
   std::vector<std::size_t> swath_base_;
-  // Resume-cursor bookkeeping. resume_start_idx_ = trim offset WITHIN the
-  // currently-driven unit (swaths_[swath_idx_]) where this run begins (non-zero
-  // only for the one unit a mid-unit resume trimmed); path_progress_idx_ =
-  // furthest pose reached within the currently-driven (trimmed) unit;
-  // total_path_poses_ = concatenation length (percent denominator). Both reset
-  // to 0 on advance() to the next unit.
-  std::size_t resume_start_idx_ = 0;
+  // Resume-cursor bookkeeping. Each entry is the trim offset WITHIN that unit
+  // where this run begins (non-zero for a unit resumed mid-path); keeping these
+  // offsets per unit matters when an earlier incomplete unit is retried first.
+  // path_progress_idx_ is the furthest pose reached within the currently-driven
+  // (trimmed) unit; total_path_poses_ is the original concatenation length.
+  std::vector<std::size_t> swath_resume_start_indices_;
   std::size_t path_progress_idx_ = 0;
   std::size_t total_path_poses_ = 0;
   // Area being mowed (from ctx->current_area) — keys the swath-completion
@@ -597,19 +722,26 @@ private:
   // to a >kSegmentTransitGap segment start blade-on.
   static constexpr double kTransitServerWaitSec = 5.0;
 
-  // Blade spinup delay — wait before sending the FIRST segment goal
-  static constexpr double kBladeSpinupDelaySec = 1.5;
-  std::chrono::steady_clock::time_point blade_start_time_;
-  /// False when the first unit needs a blade-off transit: the blade stays off
-  /// on start and the spin-up wait is skipped (bladeSpinupBeforeFirstUnit).
-  bool blade_spinup_pending_{true};
+  BladeReadyGate blade_ready_gate_;
+  bool blade_requested_on_{false};
+  bool blade_enable_sent_{false};
+  bool blade_ready_{false};
+  bool blade_dispatch_pending_{false};
+  bool blade_gate_failed_{false};
+  std::shared_ptr<std::atomic<int>> blade_command_result_;
+  std::optional<int64_t> blade_request_id_;
   /// Transit watchdog (transitDeadlineSec): started when a blade-off transit
   /// goal is sent; on expiry the goal is cancelled ONCE and the existing
   /// aborted/cancelled path skips the unit.
   std::chrono::steady_clock::time_point transit_start_time_{};
   double transit_deadline_s_{0.0};
+  double transit_gap_m_{0.0};
   bool transit_timeout_requested_{false};
+  /// Longest route nav2 planned for the running transit (feedback); widens
+  /// transit_deadline_s_ through transitDeadlineForRouteSec, never narrows it.
+  std::shared_ptr<TransitRouteSlot> transit_route_ = std::make_shared<TransitRouteSlot>();
   void armTransitWatchdog(double gap_m);
+  void widenTransitDeadline(const std::shared_ptr<BTContext>& ctx);
 
   /// Blade pause across a short LiDAR dropout (scan_pause.hpp): the coverage
   /// goal stays alive, only the blade is cut and later restored.
@@ -649,7 +781,8 @@ public:
     return {BT::InputPort<double>("timeout_sec",
                                   -1.0,
                                   "Hard bound on the transit [s]; <= 0 derives it from the "
-                                  "distance to the strip (transitDeadlineSec)")};
+                                  "distance to the strip, widened to the planned route "
+                                  "(transitDeadlineForRouteSec)")};
   }
 
   BT::NodeStatus onStart() override;
@@ -669,11 +802,16 @@ private:
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
+  std::shared_ptr<GoalAbandonment> nav_abandonment_ = std::make_shared<GoalAbandonment>();
   /// Watchdog: TransitToStrip used to have NO time bound — field 2026-09-21 it
   /// ran 53 s against a path its controller kept refusing.
   std::chrono::steady_clock::time_point start_time_{};
   double deadline_s_{0.0};
+  double gap_m_{0.0};
+  /// False when timeout_sec pinned the bound: an explicit bound is never widened.
+  bool deadline_follows_route_{true};
   bool timeout_requested_{false};
+  std::shared_ptr<TransitRouteSlot> nav_route_ = std::make_shared<TransitRouteSlot>();
   /// nav2's error code for the failure classification (issue #487).
   std::shared_ptr<TransitResultSlot> nav_result_ = std::make_shared<TransitResultSlot>();
   bool failure_seen_{false};
@@ -724,6 +862,7 @@ private:
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
+  std::shared_ptr<GoalAbandonment> nav_abandonment_ = std::make_shared<GoalAbandonment>();
 
   /// Terminal verdict from the result callback: a goal finished in the same
   /// instant it is accepted can lose its status message (action_outcome.hpp).
@@ -767,6 +906,11 @@ private:
   /// (mowglinext#637 phase 2, coverage_nodes.cpp) — otherwise it falls
   /// through to a real probe, which reconciles it in processResponse.
   BT::NodeStatus advanceAndProbe();
+
+  /// No dispatchable area remains: record whether that is a clean completion and end the scan
+  /// (FAILURE) — unless the completion is stale (BTContext::start_awaiting_dispatch), in which
+  /// case the recorded progress is discarded and the scan starts over.
+  BT::NodeStatus finishExhaustedScan(BTContext& ctx);
 
   // Existence probe: GetMowingArea(index).success is false once index passes
   // the last defined area. Area completion is tracked in-memory via the

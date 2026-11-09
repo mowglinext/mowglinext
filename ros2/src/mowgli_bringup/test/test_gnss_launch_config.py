@@ -108,7 +108,8 @@ def test_gnss_stack_is_not_read_from_the_environment(monkeypatch) -> None:
     launch_module = _load_full_system_with(monkeypatch, "full_system_env_ignored")
 
     assert len(_bridge_nodes(launch_module.generate_launch_description())) == 1
-    assert "os.environ" not in _read_launch_source("full_system.launch.py")
+    launch_source = _read_launch_source("full_system.launch.py")
+    assert 'os.environ.get("GNSS_STACK"' not in launch_source
 
 
 def test_universal_bridge_does_not_depend_on_hardware_backend(monkeypatch) -> None:
@@ -139,3 +140,25 @@ def test_sim_uses_hardware_factor_graph_cadence() -> None:
     )[0]
 
     assert '"fusion_graph_node_period_s": "0.04"' in navigation_args
+
+
+def test_universal_bridge_is_direct_gnss_only() -> None:
+    launch_source = _read_launch_source("full_system.launch.py")
+
+    assert 'os.environ.get("GNSS_SOURCE", "direct")' in launch_source
+    assert 'gnss_source not in ("direct", "mavros")' in launch_source
+    assert (
+        'gnss_stack == "universal" and gnss_source == "direct"'
+        in launch_source
+    )
+
+def test_gnss_status_pairing_window_matches_transport_latency() -> None:
+    launch_module = _load_module(
+        "full_system.launch.py", "full_system_gnss_pairing_window"
+    )
+
+    assert launch_module._gnss_status_pairing_window_s("direct") == 0.05
+    assert launch_module._gnss_status_pairing_window_s("mavros") == 0.15
+
+    launch_source = _read_launch_source("full_system.launch.py")
+    assert '"status_pairing_window_s": gnss_status_pairing_window_s' in launch_source

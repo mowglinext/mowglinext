@@ -30,6 +30,10 @@ if(BUILD_TESTING)
     test/test_drive_pid_tuner.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_mavros_odometry_tuner
+    test/test_mavros_odometry_tuner.py
+    TIMEOUT 30
+  )
 endif()
 
 ament_package()

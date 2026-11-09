@@ -1,0 +1,2 @@
+# Keep archived patches byte-identical; their context markers are not source whitespace.
+review.diff -text whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

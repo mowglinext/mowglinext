@@ -31,7 +31,8 @@ size_t fw_param_store_area_words(void);
 
 /**
  * Erase the whole region. BLOCKING for tens of ms (F103) up to seconds (F401):
- * call it at boot only, before the window watchdog is armed.
+ * call it at boot only, before the window watchdog is armed. A running system
+ * may arm the explicit-reset marker but must not call this until reboot.
  * @return 0 on success.
  */
 int fw_param_store_erase(void);

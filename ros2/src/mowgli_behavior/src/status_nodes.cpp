@@ -17,6 +17,7 @@
 
 #include "mowgli_behavior/coverage_persistence.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
+#include "mowgli_behavior/stop_reason.hpp"
 
 namespace mowgli_behavior
 {
@@ -102,6 +103,7 @@ BT::NodeStatus PublishHighLevelStatus::tick()
   {
     std::lock_guard<std::mutex> lock(ctx->context_mutex);
     msg = withLiveStatusFields(identity, *ctx);
+    ctx->fleet_yield.observeStatus(msg.state, msg.state_name);
     ctx->last_high_level_status = msg;
     ctx->has_high_level_status = true;
     ctx->high_level_status_pub->publish(msg);
@@ -141,7 +143,11 @@ BT::NodeStatus ClearCommand::tick()
   RCLCPP_INFO(ctx->node->get_logger(),
               "ClearCommand: resetting current_command from %u to 0",
               ctx->current_command);
-  ctx->current_command = 0;
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->fleet_yield.revoke();
+    ctx->current_command = 0;
+  }
   // Note: session-scoped flags (yaw_seeded_this_session, skipped_swaths) are
   // intentionally NOT touched here. ClearCommand is invoked from mid-session
   // error handlers (UndockFailed, RainTimeout, ChargerFailed,
@@ -149,6 +155,28 @@ BT::NodeStatus ClearCommand::tick()
   // SeedYawFromMotion to re-drive 1 m forward on the next ReactiveSequence
   // re-tick of UndockOrSkip — even when the dock_yaw seed was already healthy.
   // Use EndSession at the real session boundaries instead.
+  return BT::NodeStatus::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// SetStopReason
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus SetStopReason::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  std::string reason;
+  std::string detail;
+  bool overwrite = true;
+  getInput<std::string>("reason", reason);
+  getInput<std::string>("detail", detail);
+  getInput<bool>("overwrite", overwrite);
+  recordStopReason(*ctx, reason, detail, overwrite);
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "SetStopReason: %s%s%s",
+              ctx->stop_reason.c_str(),
+              ctx->stop_detail.empty() ? "" : " — ",
+              ctx->stop_detail.c_str());
   return BT::NodeStatus::SUCCESS;
 }
 
@@ -166,6 +194,10 @@ BT::NodeStatus MarkGuardHalt::tick()
                  "MarkGuardHalt: missing required port 'reason': %s",
                  reason.error().c_str());
     return BT::NodeStatus::FAILURE;
+  }
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->fleet_yield.safetyHold();
   }
   // Log only on the first tick of a halt — the handler re-runs every tick
   // while the fault holds, and the guard already logs its own condition.
@@ -195,6 +227,16 @@ BT::NodeStatus EndSession::tick()
               ctx->skipped_swaths,
               ctx->undock_start_recorded ? "true" : "false",
               ctx->obstacle_backoff_count);
+  {
+    std::lock_guard<std::mutex> lock(ctx->context_mutex);
+    ctx->fleet_yield.revoke();
+    // A battery charge wait belongs to the session it paused. Leaving it set
+    // would let the critical-battery branch drive an ended session back to
+    // the dock (e.g. right after FailedCoverageDock already failed to dock).
+    // Both exits below persist it: keep_incomplete re-saves the snapshot, a
+    // finished session removes the file (an absent row loads as false).
+    ctx->battery_charge_pending = false;
+  }
   ctx->yaw_seeded_this_session = false;
   ctx->blade_direction.endSession();
   ctx->skipped_swaths = 0;
@@ -213,6 +255,7 @@ BT::NodeStatus EndSession::tick()
   // (coverage reset / re-mow) is wrongly judged "no progress" and pushed
   // toward premature give-up at kMaxAreaAttempts.
   ctx->area_last_coverage.clear();
+  ctx->area_last_partial_poses.clear();
   // Start-pose-blocked bookkeeping (issue #487) is per-session too: the next
   // COMMAND_START must get a fresh exemption budget, and a stale
   // start_blocked_area would make the first dispatch of the new session skip
@@ -252,22 +295,51 @@ BT::NodeStatus EndSession::tick()
   // session_dig_points — no context_mutex lock is needed here (see the
   // context_mutex doc comment in bt_context.hpp).
   ctx->session_failed_transit_targets.clear();
+  // The session ended WITHOUT finishing (failed coverage, HOME) and there is progress worth
+  // keeping: leave the coverage state exactly as it is, so the next Play resumes the area that was
+  // in progress. Everything per-run above (attempt budgets, dig zones, flags) is already reset;
+  // what stays is what describes the lawn — completed swaths and cursors, finished areas, the plan
+  // fingerprints (a changed fingerprint would discard the progress), the cross-hatch phase, the
+  // single-area target and the resume file. A finished session never takes this branch.
+  bool keep_incomplete = false;
+  getInput<bool>("keep_incomplete", keep_incomplete);
+  if (keep_incomplete && hasRecordedCoverageProgress(*ctx))
+  {
+    ctx->coverage_plausibility_warning = false;
+    ctx->resume_after_incomplete_end = true;
+    ctx->resume_after_incomplete_end_time = std::chrono::steady_clock::now();
+    // The snapshot carries current_command, and ClearCommand (which follows) does not rewrite it:
+    // a START left in the file would make a restart before the next Play re-enter MowingSequence
+    // and mow on its own. The finished-session path removes the file for the same reason.
+    ctx->current_command = 0;
+    if (!ctx->coverage_resume_path.empty() && !saveCoverageResumeState(*ctx))
+    {
+      RCLCPP_ERROR(ctx->node->get_logger(),
+                   "EndSession: could not save the kept coverage progress to '%s'; a restart "
+                   "before the next Start will lose it.",
+                   ctx->coverage_resume_path.c_str());
+    }
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "EndSession: the session did not finish — keeping its coverage progress "
+                "(%zu finished area(s), %zu area(s) with a resume cursor%s); the next Start "
+                "resumes it",
+                ctx->completed_areas.size(),
+                ctx->area_resume_pose_index.size(),
+                ctx->single_area_target.has_value() ? ", single-area run" : "");
+    return BT::NodeStatus::SUCCESS;
+  }
+  ctx->resume_after_incomplete_end = false;
+
   // Swath-completion model (replaces the cell coverage grid): clear the
   // per-area completed-swath sets, swath counts, and the completed-area set so
   // the next COMMAND_START re-plans and re-mows every area from swath 0.
   // Leaking these across sessions would make the next session skip every
   // already-mowed swath (the grid used to "decay"; the swath model resets at
   // the session boundary instead).
-  ctx->area_completed_swaths.clear();
-  ctx->area_swath_count.clear();
-  ctx->area_resume_pose_index.clear();
-  ctx->area_path_pose_count.clear();
-  ctx->area_plan_fingerprint.clear();
-  ctx->completed_areas.clear();
-  // Issue #680: a plausibility warning belongs to the session that raised
-  // it. Leaking it into the next session would show a stale
-  // COVERAGE_INCOMPLETE for a mow that hasn't run yet.
-  ctx->coverage_plausibility_warning = false;
+  // Issue #680: the plausibility warning goes with it — it belongs to the session that raised
+  // it, and leaking it would show a stale COVERAGE_INCOMPLETE for a mow that hasn't run yet.
+  clearRecordedCoverageProgress(*ctx);
+  ctx->start_awaiting_dispatch = false;
   // Drop any "mow only area N" constraint from a targeted run (~/start_in_area)
   // at the same boundary as every other per-session set, so the next plain
   // COMMAND_START mows the whole lawn again. The clip is session state (it must

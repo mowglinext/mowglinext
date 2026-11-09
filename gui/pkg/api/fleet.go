@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -21,8 +23,8 @@ const fleetCallTimeout = 12 * time.Second
 // FleetRoutes registers /fleet/* on the API group.
 func FleetRoutes(r *gin.RouterGroup, fleet *providers.FleetProvider, coord *providers.FleetCoordinator) {
 	g := r.Group("/fleet")
-	g.GET("/coordination", func(c *gin.Context) { getFleetCoordination(c, coord) })
-	g.PUT("/coordination", func(c *gin.Context) { putFleetCoordination(c, coord) })
+	g.GET("/coordination", func(c *gin.Context) { getFleetCoordination(c, fleet, coord) })
+	g.PUT("/coordination", func(c *gin.Context) { putFleetCoordination(c, fleet, coord) })
 	g.POST("/coordination/reset", func(c *gin.Context) { postFleetCoordinationReset(c, fleet, coord) })
 	g.POST("/map/push", func(c *gin.Context) { postFleetMapPush(c, fleet) })
 	g.GET("/identity", func(c *gin.Context) { getFleetIdentity(c, fleet) })
@@ -210,6 +212,9 @@ func postFleetCall(c *gin.Context, fleet *providers.FleetProvider) {
 type FleetCoordinationResponse struct {
 	Settings providers.CoordinatorSettings `json:"settings"`
 	Status   providers.CoordinatorStatus   `json:"status"`
+	// The /fleet/peers publisher — live whenever a peer is registered,
+	// independent of the coordination toggle (docs/MULTI_ROBOT.md § 3c).
+	PeerFeed providers.PeerFeedStatus `json:"peer_feed"`
 }
 
 // getFleetCoordination returns coordinated-mowing settings + status.
@@ -219,8 +224,8 @@ type FleetCoordinationResponse struct {
 // @Produce json
 // @Success 200 {object} FleetCoordinationResponse
 // @Router /fleet/coordination [get]
-func getFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
-	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status()})
+func getFleetCoordination(c *gin.Context, fleet *providers.FleetProvider, coord *providers.FleetCoordinator) {
+	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status(), PeerFeed: fleet.PeerFeedStatus()})
 }
 
 // putFleetCoordination updates coordinated-mowing settings.
@@ -233,7 +238,7 @@ func getFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
 // @Success 200 {object} FleetCoordinationResponse
 // @Failure 400 {object} ErrorResponse
 // @Router /fleet/coordination [put]
-func putFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
+func putFleetCoordination(c *gin.Context, fleet *providers.FleetProvider, coord *providers.FleetCoordinator) {
 	var s providers.CoordinatorSettings
 	if err := c.BindJSON(&s); err != nil {
 		c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
@@ -243,7 +248,7 @@ func putFleetCoordination(c *gin.Context, coord *providers.FleetCoordinator) {
 		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status()})
+	c.JSON(http.StatusOK, FleetCoordinationResponse{Settings: coord.Settings(), Status: coord.Status(), PeerFeed: fleet.PeerFeedStatus()})
 }
 
 // postFleetCoordinationReset forgets the fleet session's completed areas and
@@ -264,22 +269,50 @@ func postFleetCoordinationReset(c *gin.Context, fleet *providers.FleetProvider, 
 		return
 	}
 	var failures []string
+	type memberResult struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Status     string `json:"status"`
+		HTTPStatus int    `json:"http_status,omitempty"`
+		Error      string `json:"error,omitempty"`
+	}
+	results := make([]memberResult, 0, len(rows))
 	for _, r := range rows {
+		result := memberResult{ID: r.Identity.ID, Name: r.Identity.Name, Status: "offline"}
 		if !r.Online {
+			results = append(results, result)
 			continue
 		}
-		if _, _, err := fleet.Call(ctx, r.Identity.ID, "coverage_clear_resume", json.RawMessage(`{}`)); err != nil {
-			failures = append(failures, r.Identity.Name+": "+err.Error())
+		status, body, err := fleet.Call(ctx, r.Identity.ID, "coverage_clear_resume", json.RawMessage(`{}`))
+		result.HTTPStatus = status
+		switch {
+		case err != nil:
+			result.Status, result.Error = "transport_error", err.Error()
+			if errors.Is(err, providers.ErrFleetCommandRejected) || (status >= 400 && status < 500) {
+				result.Status = "refused"
+			}
+			if strings.TrimSpace(result.Error) == "" {
+				result.Error = fmt.Sprintf("call failed (HTTP %d)", status)
+			}
+		case status < http.StatusOK || status >= http.StatusMultipleChoices:
+			result.Status = "refused"
+			result.Error = fmt.Sprintf("HTTP %d %s", status, strings.TrimSpace(string(body)))
+		default:
+			result.Status = "success"
 		}
+		if result.Error != "" {
+			failures = append(failures, r.Identity.Name+": "+result.Error)
+		}
+		results = append(results, result)
 	}
 	if err := coord.Reset(); err != nil {
 		failures = append(failures, "coordinator: "+err.Error())
 	}
 	if len(failures) > 0 {
-		c.JSON(http.StatusInternalServerError, ErrorResponse{Error: "start fresh incomplete — " + strings.Join(failures, "; ")})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "start fresh incomplete — " + strings.Join(failures, "; "), "results": results})
 		return
 	}
-	c.JSON(http.StatusOK, OkResponse{})
+	c.JSON(http.StatusOK, gin.H{"results": results})
 }
 
 // postFleetMapPush copies this robot's map onto every peer.

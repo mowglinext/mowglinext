@@ -1,3 +1,5 @@
+import {SettingsInputsContext} from "../../hooks/useSettingsInput.ts";
+import {useExternalSettingsDraft} from "../../hooks/useExternalSettingsDraft.ts";
 import {useCallback, useEffect, useState} from "react";
 import {Alert, App, Card, Spin, Switch, Typography} from "antd";
 import {CloudSyncOutlined} from "@ant-design/icons";
@@ -40,7 +42,7 @@ export function IrriSenseSection({registerSaver, unregisterSaver}: IrriSenseSect
     const guiApi = useApi();
     const {notification} = App.useApp();
     const [settings, setSettings] = useState<IrriSenseSettings | null>(null);
-    const [draft, setDraft] = useState<IrriSenseSettingsUpdate>({});
+    const {draft, setDraft, saveDraft, revertDraft, dirtyCount, pending, inputs} = useExternalSettingsDraft<IrriSenseSettingsUpdate>();
     const [gardens, setGardens] = useState<IrriSenseGardenSummary[]>([]);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [testing, setTesting] = useState(false);
@@ -59,18 +61,14 @@ export function IrriSenseSection({registerSaver, unregisterSaver}: IrriSenseSect
 
     const onChange = useCallback((patch: IrriSenseSettingsUpdate) => {
         setDraft((prev) => ({...prev, ...patch}));
-    }, []);
+    }, [setDraft]);
 
-    const isDirty = Object.keys(draft).length > 0;
-
-    const save = useCallback(async (): Promise<boolean> => {
-        if (!isDirty) return true;
+    const save = useCallback((): Promise<boolean> => saveDraft(async (submitted) => {
         try {
             const res = await guiApi.request<IrriSenseSettings>({
-                path: "/irrisense/settings", method: "PUT", body: draft, format: "json",
+                path: "/irrisense/settings", method: "PUT", body: submitted, format: "json",
             });
             setSettings(res.data);
-            setDraft({});
             notification.success({message: t("settingsIrriSense.saved")});
             window.setTimeout(refreshStatus, STATUS_REFRESH_AFTER_SAVE_MS);
             return true;
@@ -78,16 +76,17 @@ export function IrriSenseSection({registerSaver, unregisterSaver}: IrriSenseSect
             notification.error({message: t("settingsIrriSense.saveFailed"), description: apiErrorMessage(e)});
             return false;
         }
-    }, [draft, guiApi, isDirty, notification, refreshStatus, t]);
+    }), [guiApi, notification, refreshStatus, saveDraft, t]);
 
     // Keep the page-level Save button informed of our pending edits.
     useEffect(() => {
         registerSaver?.(SAVER_ID, {
-            dirtyCount: Object.keys(draft).length,
+            dirtyCount,
+            pending,
             save,
-            revert: () => setDraft({}),
+            revert: revertDraft,
         });
-    }, [draft, registerSaver, save]);
+    }, [dirtyCount, pending, registerSaver, save, revertDraft]);
     useEffect(() => () => unregisterSaver?.(SAVER_ID), [unregisterSaver]);
 
     const testConnection = useCallback(async () => {
@@ -121,7 +120,7 @@ export function IrriSenseSection({registerSaver, unregisterSaver}: IrriSenseSect
     const enabled = draft.enabled ?? settings.enabled;
 
     return (
-        <div>
+        <SettingsInputsContext value={inputs}><div>
             <Card size="small" style={{marginBottom: 16}}>
                 <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12}}>
                     <div>
@@ -165,6 +164,6 @@ export function IrriSenseSection({registerSaver, unregisterSaver}: IrriSenseSect
                 </>
             )}
 
-        </div>
+        </div></SettingsInputsContext>
     );
 }

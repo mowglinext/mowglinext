@@ -5,7 +5,8 @@
     "gps": "gnss-contract-1",
     "lidar-ldlidar": "scan-contract-1",
     "lidar-rplidar": "scan-contract-1",
-    "lidar-stl27l": "scan-contract-1"
+    "lidar-stl27l": "scan-contract-1",
+    "openmower": "hardware-bridge-1"
   },
   "gui_compatibility": "ros-gui-1",
   "components": [
@@ -27,8 +28,8 @@
       "name": "gps",
       "type": "external",
       "image": "ghcr.io/pepeuch/universal-gnss-ros2-lyrical",
-      "version": "v0.7.1-rc3",
-      "digest": "sha256:4e7960132882f2f83fb2b1e7d1430b4dfd00081d4be15d7d8ab20dacf7f22bc5"
+      "version": "v0.7.4-rc6",
+      "digest": "sha256:f9dc255b3ff6f7495c4210e990aa136b32a0fe3481f9da830ac4298519e08ea8"
     },
     {
       "name": "lidar-ldlidar",
@@ -49,6 +50,13 @@
       "type": "built",
       "context": "sensors/lidar-stl27l",
       "file": "sensors/lidar-stl27l/Dockerfile",
+      "target": ""
+    },
+    {
+      "name": "openmower",
+      "type": "built",
+      "context": ".",
+      "file": "sensors/openmower/Dockerfile",
       "target": ""
     }
   ]

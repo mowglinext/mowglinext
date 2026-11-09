@@ -44,7 +44,11 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import (
+    EnvironmentVariable,
+    LaunchConfiguration,
+    PythonExpression,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -55,6 +59,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
     chassis_circumscribed_radius,
+    chassis_footprint,
     dig_proposal_radius,
     dig_skip_radius,
     keepout_obstacle_margin,
@@ -62,6 +67,18 @@ from robot_config_util import (  # noqa: E402
     resolve_lidar_enabled,
     warn_lidar_key_absent,
 )
+
+
+def _gnss_status_pairing_window_s(gnss_source: str) -> float:
+    # Direct Universal GNSS delivery was measured at only a few milliseconds,
+    # so retain the historical 50 ms association window there.
+    #
+    # The MAVROS canonical adapter deliberately holds /gps/fix for 100 ms while
+    # it pairs the private UG fix with GPS_RAW_INT/GPS2_RAW ellipsoid altitude.
+    # Real ARM64/Pixhawk measurements on 2026-10-03 showed fix-minus-status
+    # delivery skew of ~101-104 ms normally and 123.3 ms worst observed.
+    # 150 ms keeps useful headroom without adding that latency to direct GNSS.
+    return 0.15 if gnss_source == "mavros" else 0.05
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -116,6 +133,12 @@ def generate_launch_description() -> LaunchDescription:
         default_value="/dev/mowgli",
         description="Serial port for the hardware bridge.",
     )
+    hardware_backend_arg = DeclareLaunchArgument(
+        "hardware_backend",
+        default_value=EnvironmentVariable("HARDWARE_BACKEND", default_value="mowgli"),
+        description="Hardware backend: mowgli, mavros or openmower. Only mowgli "
+        "launches the in-tree hardware_bridge_node (see mowgli.launch.py).",
+    )
 
     enable_mqtt_arg = DeclareLaunchArgument(
         "enable_mqtt",
@@ -166,6 +189,7 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     use_sim_time = LaunchConfiguration("use_sim_time")
     serial_port = LaunchConfiguration("serial_port")
+    hardware_backend = LaunchConfiguration("hardware_backend")
     enable_mqtt = LaunchConfiguration("enable_mqtt")
     enable_foxglove = LaunchConfiguration("enable_foxglove")
     foxglove_port = LaunchConfiguration("foxglove_port")
@@ -245,9 +269,15 @@ def generate_launch_description() -> LaunchDescription:
     # The Universal GNSS receiver runtime stays in the gps sidecar.
     # This process owns only its public-topic contract adapter.
     gnss_stack = str(robot_params.get("gnss_stack", "universal")).strip().lower()
+    gnss_source = os.environ.get("GNSS_SOURCE", "direct").strip().lower()
+    if gnss_source not in ("direct", "mavros"):
+        raise RuntimeError(
+            f"GNSS_SOURCE must be 'direct' or 'mavros', got {gnss_source!r}"
+        )
+    gnss_status_pairing_window_s = _gnss_status_pairing_window_s(gnss_source)
 
     gnss_bridge_node = None
-    if gnss_stack == "universal":
+    if gnss_stack == "universal" and gnss_source == "direct":
         gnss_bridge_node = Node(
             package="mowgli_gnss_bridge",
             executable="universal_gnss_topic_bridge",
@@ -281,6 +311,7 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "use_sim_time": use_sim_time,
             "serial_port": serial_port,
+            "hardware_backend": hardware_backend,
         }.items(),
     )
 
@@ -329,6 +360,15 @@ def generate_launch_description() -> LaunchDescription:
             {"rain_mode": int(robot_params.get("rain_mode", 2))},
             {"rain_delay_minutes": float(robot_params.get("rain_delay_minutes", 30.0))},
             {"rain_debounce_sec": float(robot_params.get("rain_debounce_sec", 0.0))},
+            # use_external_rain / external_rain_max_age_minutes: the
+            # /external_rain verdict (a roof weather station behind Home
+            # Assistant, relayed by mqtt_bridge_node) OR-ed with the mower's own
+            # rain sensor in BTContext::RainingNow. Template defaults live in
+            # mowgli_robot.yaml; these fallbacks only matter if the template key
+            # is missing.
+            {"use_external_rain": bool(robot_params.get("use_external_rain", True))},
+            {"external_rain_max_age_minutes":
+                float(robot_params.get("external_rain_max_age_minutes", 120.0))},
             # idle_nav2_suspend: PAUSE the Nav2 lifecycle stack while parked on
             # the dock to cut idle CPU/thermal load (costmaps stop looping).
             # Default off — a deliberate per-site opt-in. RESUME is guaranteed
@@ -343,6 +383,10 @@ def generate_launch_description() -> LaunchDescription:
             {"transit_speed": float(robot_params.get("transit_speed", 0.25))},
             {"mowing_speed": float(robot_params.get("mowing_speed", 0.2))},
             {"blade_auto_reverse": bool(robot_params.get("blade_auto_reverse", False))},
+            {"mowing_enabled": bool(robot_params.get("mowing_enabled", True))},
+            {"blade_ready_min_rpm": float(robot_params.get("blade_ready_min_rpm", 1000.0))},
+            {"blade_spinup_delay_sec": float(robot_params.get("blade_spinup_delay_sec", 1.5))},
+            {"blade_ready_timeout_sec": float(robot_params.get("blade_ready_timeout_sec", 6.0))},
             # mow_angle_deg: operator swath direction. -1 (negative) = AUTO
             # (coverage server picks the swath-count-minimising angle); 0..179 =
             # fixed swath angle in degrees. Read by PlanCoverageArea::buildGoal
@@ -475,6 +519,17 @@ def generate_launch_description() -> LaunchDescription:
                     robot_params.get("battery_manual_resume_percent", 30.0)
                 )
             },
+            # Charge-hold exit: besides battery_full_percent the charge current
+            # must have tapered to this (blackboard {battery_charge_tail_current_a}
+            # -> IsChargeCurrentBelow in both charge-wait loops). It was declared
+            # in behavior_tree_node.cpp and listed in the template, but never
+            # injected here, so an operator value silently never reached the node
+            # (found 2026-10-05: a 0.3 A setting would have left the robot at 0.08).
+            {
+                "battery_charge_tail_current_a": float(
+                    robot_params.get("battery_charge_tail_current_a", 0.08)
+                )
+            },
         ],
     )
 
@@ -561,6 +616,10 @@ def generate_launch_description() -> LaunchDescription:
             # mowgli_robot.yaml for why this must stay soft, never lethal.
             {"boundary_inner_margin_m": float(
                 robot_params.get("boundary_inner_margin_m", 0.20))},
+            # Soft transit margin around drawn obstacles (mowglinext#975): the
+            # obstacle counterpart of boundary_inner_margin_m — soft, never lethal.
+            {"obstacle_transit_margin_m": float(
+                robot_params.get("obstacle_transit_margin_m", 0.30))},
             {"dock_inner_margin_exempt_radius_m": float(
                 robot_params.get("dock_inner_margin_exempt_radius_m", 2.5))},
             # tool_width is the SINGLE source of truth (mowgli_robot.yaml) for
@@ -607,6 +666,7 @@ def generate_launch_description() -> LaunchDescription:
             {
                 "datum_lat": datum_lat,
                 "datum_lon": datum_lon,
+                "status_pairing_window_s": gnss_status_pairing_window_s,
             },
             {"use_sim_time": use_sim_time},
         ],
@@ -786,12 +846,33 @@ def generate_launch_description() -> LaunchDescription:
     # fleet_peers source / fleet_layer in the Nav2 overlays). Always launched:
     # it publishes an EMPTY cloud when the robot is alone, so the costmap
     # source never goes stale. docs/MULTI_ROBOT.md.
+    # The peer's body is marked as OUR chassis footprint (peers run the same
+    # software and, in practice, the same mower): the same derived triple Nav2
+    # uses for its own footprint, never a literal (root CLAUDE.md "do NOT
+    # hardcode the robot's width"). Respawned: in the no-LiDAR variant the
+    # collision monitor reads this node's cloud, so a crash must heal itself.
+    fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint(robot_params)
+    # The bare chassis + undock reverse feed the docked-neighbour exception
+    # (two mowers on side-by-side docks), which asks whether the BODIES can
+    # touch — a question the margin-grown block above cannot answer.
+    fleet_body_front_m, fleet_body_rear_m, fleet_body_half_width_m = chassis_footprint(robot_params, margin=0.0)
     fleet_peer_obstacles_node = Node(
         package="mowgli_bringup",
         executable="fleet_peer_obstacles.py",
         name="fleet_peer_obstacles",
         output="screen",
-        parameters=[{"use_sim_time": use_sim_time}],
+        respawn=True,
+        respawn_delay=2.0,
+        parameters=[{
+            "use_sim_time": use_sim_time,
+            "chassis_front_m": float(fleet_front_m),
+            "chassis_rear_m": float(fleet_rear_m),
+            "chassis_half_width_m": float(fleet_half_width_m),
+            "body_front_m": float(fleet_body_front_m),
+            "body_rear_m": float(fleet_body_rear_m),
+            "body_half_width_m": float(fleet_body_half_width_m),
+            "undock_distance_m": float(robot_params.get("undock_distance", 1.5)),
+        }],
     )
 
     # ------------------------------------------------------------------
@@ -920,6 +1001,7 @@ def generate_launch_description() -> LaunchDescription:
             # Arguments
             use_sim_time_arg,
             serial_port_arg,
+            hardware_backend_arg,
             enable_mqtt_arg,
             enable_foxglove_arg,
             foxglove_port_arg,

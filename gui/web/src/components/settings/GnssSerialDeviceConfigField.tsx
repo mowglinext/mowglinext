@@ -62,8 +62,9 @@ export const GnssSerialDeviceConfigField: React.FC<Props> = ({
         runtimeConfig?.serial_device?.active_value ??
         DEFAULT_SERIAL_DEVICE,
     );
-    const activeBaud = runtimeConfig?.serial_baud?.active_value ?? "921600";
-    const currentSource = runtimeConfig?.serial_device?.source ?? "default";
+    const activeBaud = runtimeConfig?.serial_baud?.active_value ?? '—';
+    const source = runtimeConfig?.serial_device?.source;
+    const currentSource = source === 'config' || source === 'env' || source === 'default' ? source : 'unknown';
 
     const options = useMemo(() => {
         const discovered = runtimeConfig?.serial_devices ?? [];
@@ -122,8 +123,8 @@ export const GnssSerialDeviceConfigField: React.FC<Props> = ({
             <Space wrap size={[8, 8]}>
                 <Text type="secondary">{t("gnssRuntimeConfig.activeLinkLabel")}</Text>
                 <Tag color={sourceTagColor(currentSource)}>{t(`gnssRuntimeConfig.source.${currentSource}`)}</Tag>
-                <Text code>{runtimeConfig?.receiver_family?.active_value ?? "auto"}</Text>
-                <Text code>{runtimeConfig?.serial_device?.active_value ?? activeValue}</Text>
+                <Text code>{runtimeConfig?.receiver_family?.active_value ?? '—'}</Text>
+                <Text code>{runtimeConfig?.serial_device?.active_value ?? '—'}</Text>
                 <Text code>{activeBaud}</Text>
             </Space>
 
@@ -139,7 +140,7 @@ export const GnssSerialDeviceConfigField: React.FC<Props> = ({
                     type="warning"
                     showIcon
                     message={t("gnssRuntimeConfig.envFallbackMessage", {
-                        family: runtimeConfig?.receiver_family?.active_value ?? "auto",
+                        family: runtimeConfig?.receiver_family?.active_value ?? '—',
                         device: runtimeConfig?.serial_device?.active_value ?? activeValue,
                         baud: activeBaud,
                     })}
@@ -193,7 +194,7 @@ export const GnssSerialDeviceConfigField: React.FC<Props> = ({
                     type="warning"
                     showIcon
                     message={t("gnssRuntimeConfig.loadWarning")}
-                    description={error}
+                    description={error === 'Invalid GNSS runtime config' ? t('gnssRuntimeConfig.invalidResponse') : error === 'Failed to load GNSS runtime config' ? t('gnssRuntimeConfig.loadWarning') : error}
                 />
             )}
         </Space>

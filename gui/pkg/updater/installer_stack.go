@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // AdoptLegacyEnv is how the installer passes the operator's explicit consent
@@ -109,9 +112,19 @@ func (b DockerBackend) InstallStack(ctx context.Context, sourceDir string, choic
 	for key, value := range choices {
 		preserved[key] = value
 	}
+	backend, err := installerBackendChoice(b.Config.Directory)
+	if err != nil {
+		return err
+	}
+	// The Mowgli board leaves the key out ("none" either way to Select), so a
+	// selection recorded before the group existed still equals it and no
+	// Mowgli robot is told an installer change is pending.
+	delete(preserved, "backend")
+	if backend != "none" {
+		preserved["backend"] = backend
+	}
 	choices = preserved
 	selection := StackSelection{Options: choices}
-	var err error
 	selection.InstallerConfig, err = installerConfigIdentity(b.Config.Directory)
 	if err != nil {
 		return err
@@ -358,6 +371,25 @@ func legacyDifferences(old, target []byte) []string {
 	}
 	sort.Strings(differences)
 	return differences
+}
+
+// installerBackendChoice maps docker/.env HARDWARE_BACKEND onto the bundle's
+// "backend" group. It is derived here, never preserved from an earlier
+// selection, so a robot moved back to the Mowgli board drops the OpenMower
+// bridge instead of keeping it. MAVROS has no release stack.
+func installerBackendChoice(dir string) (string, error) {
+	env, err := godotenv.Read(filepath.Join(dir, ".env"))
+	if err != nil {
+		return "", err
+	}
+	switch backend := strings.TrimSpace(env["HARDWARE_BACKEND"]); backend {
+	case "", "mowgli":
+		return "none", nil
+	case "openmower":
+		return "openmower", nil
+	default:
+		return "", fmt.Errorf("release stacks do not cover HARDWARE_BACKEND=%s", backend)
+	}
 }
 
 func (b DockerBackend) SelectionPending() (bool, error) {

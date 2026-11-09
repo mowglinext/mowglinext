@@ -1,10 +1,12 @@
-import {useState, type ReactElement} from "react";
+import {useEffect, useRef, useState, type ReactElement} from "react";
 import {App, Dropdown, Modal, Space, Spin, Typography, type MenuProps} from "antd";
 import {DesktopOutlined, PoweroffOutlined, ReloadOutlined, SettingOutlined} from "@ant-design/icons";
 import {useTranslation} from "react-i18next";
 import {useApi} from "../hooks/useApi.ts";
 import {useMowerAction} from "./MowerActions.tsx";
-import {restartMowgliStack} from "../utils/containers.ts";
+import {assertCommandAccepted, isHttpFailure, restartMowgliStack} from "../utils/containers.ts";
+
+import {requestErrorMessage} from "../utils/errors";
 
 // Shared existing power flow: the battery menu and Diagnostics differ only in
 // their trigger and menu entries, not in handlers, confirmation or reconnect UI.
@@ -24,47 +26,89 @@ export function PowerMenu({children, hostOnly = false}: {children: ReactElement;
     // otherwise the menu lingers behind the modal (antd renders it beneath).
     const [powerMenuOpen, setPowerMenuOpen] = useState(false);
 
+    const commandPending = useRef(false);
+    const reconnecting = useRef(false);
+    const pollRef = useRef<number | undefined>(undefined);
+    const active = useRef(true);
+    useEffect(() => {
+        active.current = true;
+        return () => {
+            active.current = false;
+            window.clearInterval(pollRef.current);
+        };
+    }, []);
+    const stopReconnect = () => {
+        reconnecting.current = false;
+        window.clearInterval(pollRef.current);
+        pollRef.current = undefined;
+        if (active.current) setReconnect(null);
+    };
+    const reportUnconfirmed = (error: unknown) => {
+        if (active.current) notification.warning({message: t('telemetry.statusUnknown'), description: requestErrorMessage(error)});
+    };
+
     // After a whole-stack restart or a Host reboot the GUI goes down too, so poll
     // a lightweight backend endpoint every 15 s and hard-reload once it answers
     // again (usually back within an interval or two; a full Host reboot is longer).
     const watchForGuiAndReload = () => {
-        const poll = window.setInterval(async () => {
+        if (!active.current || pollRef.current !== undefined) return;
+        let checking = false;
+        pollRef.current = window.setInterval(async () => {
+            if (checking) return;
+            checking = true;
             try {
                 const r = await fetch("/api/system/info", {cache: "no-store"});
-                if (r.ok) {
-                    window.clearInterval(poll);
+                if (r.ok && active.current && reconnecting.current) {
+                    window.clearInterval(pollRef.current);
                     window.location.reload();
                 }
             } catch {
                 /* GUI still down — keep polling */
+            } finally {
+                checking = false;
             }
         }, 15_000);
     };
 
     const restartMowgli = async () => {
+        reconnecting.current = true;
         setReconnect({title: t('mowerStatus.restartingStackTitle'), body: t('mowerStatus.restartingStackBody')});
         try {
             // Restarts every mowgli-* container; the GUI last (fire-and-forget).
-            await restartMowgliStack(guiApi);
-        } catch (e: any) {
+            await restartMowgliStack(guiApi, error => {
+                if (!active.current) return;
+                if (isHttpFailure(error)) {
+                    stopReconnect();
+                    notification.error({message: t('mowerStatus.mowgliRestartFailed'), description: requestErrorMessage(error)});
+                } else reportUnconfirmed(error);
+            });
+        } catch (e) {
             // Non-GUI restarts failed before we took ourselves down — recover.
-            setReconnect(null);
-            notification.error({message: t('mowerStatus.mowgliRestartFailed'), description: e.message});
+            stopReconnect();
+            if (isHttpFailure(e)) notification.error({message: t('mowerStatus.mowgliRestartFailed'), description: requestErrorMessage(e)});
+            else reportUnconfirmed(e);
             return;
         }
-        // GUI is now bouncing; wait for it to return, then reload the page.
-        watchForGuiAndReload();
+        // The GUI command is dispatched; observe availability without claiming completion.
+        if (reconnecting.current) watchForGuiAndReload();
     };
 
     const rebootSystem = async () => {
         // A Host reboot takes the whole host (and this GUI) down, so reuse the
         // reconnect overlay + auto-reload, same as the whole-stack restart.
+        reconnecting.current = true;
         setReconnect({title: t('mowerStatus.rebootingPiTitle'), body: t('mowerStatus.rebootingPiBody')});
         try {
-            await guiApi.request({path: "/system/reboot", method: "POST"});
-        } catch (e: any) {
-            setReconnect(null);
-            notification.error({message: t('mowerStatus.restartFailed'), description: e.message});
+            const response = await guiApi.request<unknown>({path: "/system/reboot", method: "POST", format: "json"});
+            assertCommandAccepted(response);
+        } catch (e) {
+            if (!isHttpFailure(e)) {
+                reportUnconfirmed(e);
+                watchForGuiAndReload();
+                return;
+            }
+            stopReconnect();
+            notification.error({message: t('mowerStatus.restartFailed'), description: requestErrorMessage(e) ?? t("telemetry.statusUnknown")});
             return;
         }
         watchForGuiAndReload();
@@ -72,14 +116,21 @@ export function PowerMenu({children, hostOnly = false}: {children: ReactElement;
 
     const shutdownSystem = async () => {
         try {
-            await guiApi.request({path: "/system/shutdown", method: "POST"});
+            const response = await guiApi.request<unknown>({path: "/system/shutdown", method: "POST", format: "json"});
+            assertCommandAccepted(response);
             notification.success({message: t('mowerStatus.shuttingDown')});
-        } catch (e: any) {
-            notification.error({message: t('mowerStatus.shutdownFailed'), description: e.message});
+        } catch (e) {
+            if (!isHttpFailure(e)) {
+                reportUnconfirmed(e);
+                return;
+            }
+            notification.error({message: t('mowerStatus.shutdownFailed'), description: requestErrorMessage(e) ?? t("telemetry.statusUnknown")});
         }
     };
 
     const confirmAction = (title: string, content: string, onOk: () => Promise<void>) => {
+        if (commandPending.current || reconnecting.current) return;
+        let dispatched = false;
         // Close the power menu first so it doesn't linger behind the modal.
         setPowerMenuOpen(false);
         // Use the App-context modal (App.useApp().modal), NOT the static
@@ -94,7 +145,13 @@ export function PowerMenu({children, hostOnly = false}: {children: ReactElement;
             okText: t('mowerStatus.confirm'),
             okType: "danger",
             cancelText: t('mowerStatus.cancel'),
-            onOk,
+            onOk: async () => {
+                if (dispatched || commandPending.current || reconnecting.current) return;
+                dispatched = true;
+                commandPending.current = true;
+                try { await onOk(); }
+                finally { commandPending.current = false; }
+            },
         });
     };
 

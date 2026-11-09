@@ -88,12 +88,26 @@ install(
   DESTINATION include
 )
 
+# mowgli_hardware_core is exported so out-of-tree bridges can reuse the
+# COBS/CRC/serial/packet layer instead of copying it. The OpenMower sidecar
+# (sensors/openmower/mowgli_openmower_bridge) links
+# mowgli_hardware::mowgli_hardware_core for the LowLevel-board link, whose
+# wire framing is byte-identical to the STM32 one.
 install(
-  TARGETS mowgli_hardware_core hardware_bridge_node
+  TARGETS mowgli_hardware_core
+  EXPORT export_mowgli_hardware_core
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+install(
+  TARGETS hardware_bridge_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
+
+ament_export_targets(export_mowgli_hardware_core HAS_LIBRARY_TARGET)
+ament_export_dependencies(rclcpp)
 
 # ---------------------------------------------------------------------------
 # Testing
@@ -152,6 +166,16 @@ if(BUILD_TESTING)
     test/test_clock_fit.cpp
   )
   target_link_libraries(test_clock_fit
+    mowgli_hardware_core
+  )
+
+  # ---- test_legacy_odometry ----
+  # Previous-protocol (v8) odometry decoder (legacy_odometry.hpp, header-only)
+  # + the shared CRC deframer it rides on.
+  ament_add_gtest(test_legacy_odometry
+    test/test_legacy_odometry.cpp
+  )
+  target_link_libraries(test_legacy_odometry
     mowgli_hardware_core
   )
 
@@ -325,6 +349,14 @@ if(BUILD_TESTING)
     test/test_firmware_params.cpp
   )
   target_include_directories(test_firmware_params
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  ament_add_gtest(test_firmware_param_store_reset_gate
+    test/test_firmware_param_store_reset_gate.cpp
+  )
+  target_include_directories(test_firmware_param_store_reset_gate
     PRIVATE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )

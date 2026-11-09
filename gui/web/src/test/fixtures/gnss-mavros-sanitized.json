@@ -1,0 +1,14 @@
+{
+  "backend": "mavros_gps1",
+  "receiver_vendor": "",
+  "receiver_model": "",
+  "fix_type": 3,
+  "fix_valid": true,
+  "rtk_mode": 3,
+  "capability_flags": 25,
+  "value_flags": 9,
+  "horizontal_accuracy_m": 0,
+  "vertical_accuracy_m": null,
+  "msm_summary_age_s": null,
+  "position_observation_sequence": 42
+}

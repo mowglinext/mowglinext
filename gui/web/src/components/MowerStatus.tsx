@@ -1,7 +1,10 @@
+import {hasEmergency, emergencyClearanceUnverified} from '../utils/statusTelemetry';
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useStatus} from "../hooks/useStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {usePower} from "../hooks/usePower.ts";
+import {useIsMobile} from "../hooks/useIsMobile";
 import {useGnssStatus} from "../hooks/useGnssStatus.ts";
 import {useSettings} from "../hooks/useSettings.ts";
 import {computeBatteryPercent} from "../utils/battery.ts";
@@ -17,19 +20,21 @@ import {useTranslation} from "react-i18next";
 
 // Colour by the NUMERIC high-level state (status_nodes.cpp publishes it every
 // tick): 2=AUTONOMOUS / 3=RECORDING / 4=MANUAL_MOWING are active (primary);
-// 1=IDLE is resting (warning); 0=NULL/EMERGENCY or unknown is danger. The old
+// 1=IDLE is resting (warning); NULL/unknown is neutral unless an emergency is asserted. The old
 // string-allowlist approach mis-coloured legitimate state=2 substates
 // (PLANNING, OBSTACLE_BACKOFF, DYNAMIC_OBSTACLE_CLEARED, AREA_UNREACHABLE) as
 // danger-red because the set never enumerated them.
-const statusColor = (stateNum: number | undefined, isEmergency: boolean, colors: {primary: string; warning: string; danger: string}): string => {
+const statusColor = (stateNum: number | undefined, isEmergency: boolean, colors: {primary: string; warning: string; danger: string; muted: string}): string => {
     if (isEmergency) return colors.danger;
     if (stateNum === 2 || stateNum === 3 || stateNum === 4) return colors.primary;
     if (stateNum === 1) return colors.warning;
-    return colors.danger;
+    return colors.muted;
 };
 
 export const MowerStatus = () => {
+    const asyncHandler = useAsyncHandler();
     const {t} = useTranslation();
+    const isMobile = useIsMobile();
     const {colors, displayMode} = useThemeMode();
     const {highLevelStatus} = useHighLevelStatus();
     const hwStatus = useStatus();
@@ -39,26 +44,26 @@ export const MowerStatus = () => {
     const {settings} = useSettings();
 
     // Derive state with fallbacks
-    const isEmergency = highLevelStatus.emergency ?? emergencyData.active_emergency ?? false;
+    const isEmergency = hasEmergency(emergencyData, highLevelStatus);
     const isCharging = highLevelStatus.is_charging ?? hwStatus.is_charging ?? false;
 
-    const stateName = highLevelStatus.state_name ?? (
-        isEmergency ? "EMERGENCY" :
-        isCharging ? "CHARGING" :
-        hwStatus.mower_status != null ? "IDLE_DOCKED" :
-        undefined
+    const stateName = isEmergency ? "EMERGENCY" : highLevelStatus.state_name ?? (
+        isCharging ? "CHARGING" : undefined
     );
     // Numeric high-level state (reliable, published every tick): 2=AUTONOMOUS,
     // 3=RECORDING, 4=MANUAL_MOWING. Drives colour/pulse/mowing so transient
     // state=2 substates (planning, obstacle backoff) never read as idle.
+    const clearanceUnverified = emergencyClearanceUnverified(emergencyData, highLevelStatus);
     const stateNum = highLevelStatus.state ?? -1;
 
     const gpsStatus = deriveGpsStatus(gnss);
     const gpsColor =
         gpsStatus.fixType === "RTK_FIX" ? colors.primary :
         gpsStatus.fixType === "RTK_FLOAT" ? colors.warning :
-        gpsStatus.fixType === "GPS_FIX" ? colors.warning :
-        colors.danger;
+        gpsStatus.fixType === "DGPS" ? colors.warning :
+        gpsStatus.fixType === "3D_FIX" ? colors.warning :
+        gpsStatus.fixType === "2D_FIX" ? colors.warning :
+        gpsStatus.fixType === "UNKNOWN" ? colors.muted : colors.warning;
 
     const batteryPercent = computeBatteryPercent(
         highLevelStatus.battery_percent, power.v_battery, settings,
@@ -102,8 +107,8 @@ export const MowerStatus = () => {
 
     return (
         <>
-            <Space size="small" style={{flexShrink: 0}}>
-                <Space size={4}>
+            <Space size="small" wrap={isMobile} style={{minWidth: 0, maxWidth: '100%', flexShrink: isMobile ? 1 : 0}}>
+                <Space size={4} style={{maxWidth: '100%'}}>
                     <Badge
                         color={statusColor(stateNum, isEmergency, colors)}
                         style={{
@@ -113,8 +118,8 @@ export const MowerStatus = () => {
                             '--mower-status-active': colors.primary,
                         } as CSSProperties}
                     />
-                    <Typography.Text style={{fontSize: 12, color: colors.text, whiteSpace: 'nowrap'}}>
-                        {stateRenderer(stateName)}
+                    <Typography.Text style={{fontSize: 12, color: colors.text, whiteSpace: isMobile ? 'normal' : 'nowrap'}}>
+                        {clearanceUnverified ? t("telemetry.emergencyClearanceUnverified") : stateName ? stateRenderer(stateName) : t("telemetry.statusUnknown")}
                     </Typography.Text>
                 </Space>
                 {isMowing && hasArea && (
@@ -138,7 +143,7 @@ export const MowerStatus = () => {
                             danger
                             size="small"
                             icon={<AlertOutlined/>}
-                            onClick={resetEmergencyAction}
+                            onClick={asyncHandler(resetEmergencyAction)}
                         >
                             {t('mowerStatus.rearm')}
                         </Button>
@@ -160,7 +165,21 @@ export const MowerStatus = () => {
                                 fontSize: 13,
                             }}/>
                             <Typography.Text style={{fontSize: 12, color: colors.text}}>
-                                <span style={{display: 'inline-block', width: '3ch', textAlign: 'end', fontVariantNumeric: 'tabular-nums'}}>{batteryPercent}</span>%
+                                {Number.isFinite(batteryPercent) ? (
+                                    <>
+                                        <span
+                                            style={{
+                                                display: 'inline-block',
+                                                width: '3ch',
+                                                textAlign: 'end',
+                                                fontVariantNumeric: 'tabular-nums',
+                                            }}
+                                        >
+                                            {batteryPercent}
+                                        </span>
+                                        %
+                                    </>
+                                ) : "—"}
                             </Typography.Text>
                         </Space>
                     </Button>

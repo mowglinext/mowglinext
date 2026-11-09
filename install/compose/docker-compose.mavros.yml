@@ -16,7 +16,8 @@ services:
     volumes:
       - /dev:/dev
       - ./docker/config/mavros:/ros2_ws/config:ro
-      - ./docker/config/cyclonedds.xml:/cyclonedds.xml:ro
+      # The older MAVROS Cyclone DDS cannot parse the main peer pruning option.
+      - ./docker/config/cyclonedds-mavros.xml:/cyclonedds.xml:ro
     environment:
       <<: *ros2-env
       HARDWARE_BACKEND: ${HARDWARE_BACKEND:-mavros}
@@ -27,4 +28,8 @@ services:
       MAVROS_TGT_SYSTEM: ${MAVROS_TGT_SYSTEM:-1}
       MAVROS_TGT_COMPONENT: ${MAVROS_TGT_COMPONENT:-1}
       MAVROS_AUTOPILOT: ${MAVROS_AUTOPILOT:-ardupilot}
+      # Opt-in temporary serial GPS1 canonical source; use only with GNSS stack disabled.
+      MAVROS_GPS1_CANONICAL: ${MAVROS_GPS1_CANONICAL:-false}
+      GNSS_SOURCE: ${GNSS_SOURCE:-direct}
+      GNSS_MAVROS_SOURCE: ${GNSS_MAVROS_SOURCE:-gps1}
     restart: unless-stopped

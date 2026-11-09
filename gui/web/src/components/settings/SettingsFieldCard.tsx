@@ -1,8 +1,10 @@
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React from "react";
-import { Alert, Card, Col, Form, InputNumber, Row, Select, Switch, Typography } from "antd";
+import { Alert, Card, Col, Form, Input, Row, Select, Switch, Typography } from "antd";
 import { useTranslation } from "react-i18next";
 import { SettingFieldLabel } from "./SettingFieldLabel.tsx";
 import type { SettingsFieldGroup, SettingsFieldSpec } from "./settingsFieldGroups.ts";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const { Paragraph } = Typography;
 
@@ -10,7 +12,7 @@ type SettingValue = string | number | boolean | null | undefined;
 
 export interface SettingsFieldCardProps {
     group: SettingsFieldGroup;
-    values: Record<string, SettingValue>;
+    values: SettingsValues;
     onChange: (key: string, value: SettingValue) => void;
     isOverridden?: (key: string) => boolean;
     hasDefault?: (key: string) => boolean;
@@ -18,6 +20,9 @@ export interface SettingsFieldCardProps {
 }
 
 const asBool = (value: SettingValue): boolean => value === true || value === "true";
+
+const optionLabel = (option: number | string): string =>
+    typeof option === "number" && option > 0 ? `+${option}` : `${option}`;
 
 /**
  * Renders one declarative group of mowgli_robot.yaml settings (see
@@ -35,7 +40,8 @@ export const SettingsFieldCard: React.FC<SettingsFieldCardProps> = ({
     const { t } = useTranslation();
 
     const renderInput = (field: SettingsFieldSpec) => {
-        const value = values[field.key];
+        // The schema-typed settings reach this card by key; the card renders scalars only.
+        const value = values[field.key] as SettingValue;
         const label = t(`settingsFields.${field.key}.label`);
         switch (field.kind) {
             case "switch":
@@ -49,26 +55,39 @@ export const SettingsFieldCard: React.FC<SettingsFieldCardProps> = ({
             case "select":
                 return (
                     <Select
-                        value={typeof value === "number" ? value : undefined}
-                        onChange={(next: number) => onChange(field.key, next)}
+                        value={
+                            typeof value === "number" || typeof value === "string" ? value : undefined
+                        }
+                        onChange={(next: number | string) => onChange(field.key, next)}
                         options={field.options.map((option) => ({
                             value: option,
-                            label: option > 0 ? `+${option}` : `${option}`,
+                            label: optionLabel(option),
                         }))}
                         aria-label={label}
                         style={{ width: "100%" }}
                     />
                 );
+            case "text":
+                return (
+                    <Input
+                        value={typeof value === "string" ? value : ""}
+                        onChange={(event) => onChange(field.key, event.target.value)}
+                        placeholder={field.placeholder}
+                        aria-label={label}
+                        spellCheck={false}
+                        autoComplete="off"
+                    />
+                );
             case "number":
                 return (
-                    <InputNumber
+                    <NumberWithAddon
                         value={typeof value === "number" ? value : null}
                         onChange={(next) => onChange(field.key, next)}
                         min={field.min}
                         max={field.max}
                         step={field.step}
                         precision={field.precision}
-                        addonAfter={field.unit}
+                        after={field.unit}
                         aria-label={label}
                         style={{ width: "100%" }}
                     />

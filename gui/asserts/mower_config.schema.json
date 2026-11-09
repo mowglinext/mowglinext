@@ -17,10 +17,26 @@
             "YardForce900ECO",
             "LUV1000RI",
             "Sabo",
+            "Worx500MPlus",
             "CUSTOM"
           ],
           "default": "YardForce500",
           "description": "The type of mower you are using."
+        },
+        "mower_visual_style": {
+          "type": "string",
+          "title": "Body Style",
+          "$comment": "enum generated from web/src/components/robot/appearanceRegistry.ts by npm run generate:appearances",
+          "enum": ["","tron","rounded","sculpted","utility","yardforce","rm1000","worx"],
+          "default": "",
+          "description": "Shared shell and matching dock illustration. Empty follows the mower model. Display only; does not change robot geometry."
+        },
+        "mower_visual_colour": {
+          "type": "string",
+          "title": "Body Colour",
+          "default": "",
+          "pattern": "^(|#[0-9a-fA-F]{6})$",
+          "description": "Shared body panel colour. Empty preserves original artwork. Display only; no ROS restart."
         },
         "robot_name": {
           "type": "string",
@@ -70,11 +86,51 @@
           "default": 0.45,
           "description": "Chassis width in metres."
         },
+        "chassis_z_offset": {
+          "type": "number",
+          "title": "Chassis Vertical Offset",
+          "default": 0.0,
+          "minimum": -0.3,
+          "maximum": 0.3,
+          "description": "Chassis bottom height relative to the rear axle, in metres. Zero preserves the legacy chassis height; model presets may supply a measured or provisional offset."
+        },
         "chassis_height": {
           "type": "number",
           "title": "Chassis Height",
           "default": 0.19,
           "description": "Chassis height in metres."
+        },
+        "dock_visual_length": {
+          "type": "number",
+          "title": "Dock Length",
+          "default": 0.67,
+          "minimum": 0.1,
+          "maximum": 3,
+          "description": "Measure the full dock from front to back, including the charging head, in metres. Scales its visible length in previews and on the map; does not move the docking pose."
+        },
+        "dock_visual_width": {
+          "type": "number",
+          "title": "Dock Width",
+          "default": 0.46,
+          "minimum": 0.1,
+          "maximum": 3,
+          "description": "Measure the full dock from left to right, including a side charging pedestal, in metres. Scales its visible width in top views and on the map."
+        },
+        "dock_visual_x_offset": {
+          "type": "number",
+          "title": "Dock Center X",
+          "default": 0.0,
+          "minimum": -2,
+          "maximum": 2,
+          "description": "Additional forward/backward adjustment from the dock artwork’s built-in alignment, in metres. Zero uses that alignment: the standard dock centre is 0.220 m ahead of the rear axle; the Worx slatted platform is centred on the chassis. Positive moves the dock forwards, negative backwards. Illustration only; does not change the calibrated docking pose."
+        },
+        "dock_visual_y_offset": {
+          "type": "number",
+          "title": "Dock Center Y",
+          "default": 0.0,
+          "minimum": -2,
+          "maximum": 2,
+          "description": "Additional left/right adjustment from the dock artwork’s built-in alignment, in metres. Zero keeps its registered centre aligned with the mower; side charging pedestals do not shift the platform centre. Positive moves left, negative right. Illustration only; does not change docking calibration."
         },
         "chassis_mass_kg": {
           "type": "number",
@@ -94,6 +150,14 @@
           "default": 0.36,
           "description": "Centre-to-centre distance between front casters in metres."
         },
+        "caster_x_offset": {
+          "type": "number",
+          "title": "Caster X Offset",
+          "default": -1.0,
+          "minimum": -1.0,
+          "maximum": 2,
+          "description": "Fixed caster axle position from base_link in metres; positive forward. The compatibility default -1 preserves the legacy chassis-derived position, shown numerically in Hardware. Applying a model preset supplies an explicit position."
+        },
         "ticks_per_meter": {
           "type": "number",
           "title": "Encoder Ticks per Meter",
@@ -105,6 +169,18 @@
           "title": "Mowing Tool Width",
           "default": 0.18,
           "description": "Effective cutting width in metres (2 x blade_radius)."
+        },
+        "blade_x_offset": {
+          "type": "number",
+          "title": "Blade Forward Offset",
+          "default": 0.0,
+          "description": "Blade centre offset from the chassis centre in metres; positive forward, negative backward. Used by the blade URDF transform."
+        },
+        "blade_y_offset": {
+          "type": "number",
+          "title": "Blade Side Offset",
+          "default": 0.0,
+          "description": "Blade centre offset from the chassis centre in metres; positive left, negative right. Used by the blade URDF transform."
         },
         "blade_radius": {
           "type": "number",
@@ -744,6 +820,28 @@
           "default": false,
           "description": "Choose a random blade direction per mowing session, including manual mowing. Keep it through pauses, transits and recharge. Consecutive sessions may choose the same direction; restarting ROS2 starts a new selection. Requires bidirectional blades and firmware with safe stopped reversal support. Takes effect after a ROS2 restart."
         },
+        "blade_ready_min_rpm": {
+          "type": "number",
+          "title": "Blade Ready RPM",
+          "default": 1000.0,
+          "exclusiveMinimum": 0,
+          "description": "Minimum RPM in fresh, active blade-controller reports before a new coverage goal starts. Required for 0.3 seconds. Verify on your blade and firmware. Applied after ROS2 restart."
+        },
+        "blade_spinup_delay_sec": {
+          "type": "number",
+          "title": "Blade Spin-up Fallback Delay",
+          "default": 1.5,
+          "exclusiveMinimum": 0,
+          "description": "Wait in seconds after the blade ON service response, used only when no blade-controller telemetry has ever arrived. Stale or low-RPM reports never use this fallback. Must be shorter than Blade Ready Timeout. Applied after ROS2 restart."
+        },
+        "blade_ready_timeout_sec": {
+          "type": "number",
+          "title": "Blade Ready Timeout",
+          "default": 6.0,
+          "maximum": 30.0,
+          "exclusiveMinimum": 0.3,
+          "description": "Maximum wait in seconds before withholding the coverage goal and requesting blade OFF. Must exceed Blade Spin-up Fallback Delay. Applied after ROS2 restart."
+        },
         "mowing_speed": {
           "type": "number",
           "title": "Mowing Speed",
@@ -927,6 +1025,12 @@
           "title": "Manual Resume Percent",
           "default": 30.0,
           "description": "Floor for an operator-forced resume from the charger: pressing Play while the robot is charging mid-session resumes mowing only above this percentage. Must be greater than Low Percent or the robot re-docks within minutes."
+        },
+        "battery_charge_tail_current_a": {
+          "type": "number",
+          "title": "Charge Tail Current",
+          "default": 0.08,
+          "description": "After a mid-session recharge the robot only resumes once the charge current has dropped to this value [A], on top of reaching Full Percent. Pack voltage under charge reads well above the true state of charge, so percent alone would send it out too early. A higher value resumes earlier with a slightly less full pack; the default matches the firmware's own end-of-charge current."
         },
         "max_charge_voltage": {
           "type": "number",
@@ -1153,6 +1257,18 @@
           "title": "Rain Debounce",
           "default": 10.0,
           "description": "Seconds of continuous rain signal before triggering."
+        },
+        "use_external_rain": {
+          "type": "boolean",
+          "title": "Use External Rain Source",
+          "default": true,
+          "description": "Also treat a yes/no published to MQTT <prefix>/external_rain (e.g. a Home Assistant automation on a roof weather station) as rain. It only adds a reason to stop; the mower's own rain sensor still counts. Needs MQTT enabled."
+        },
+        "external_rain_max_age_minutes": {
+          "type": "number",
+          "title": "External Rain Expiry",
+          "default": 120.0,
+          "description": "Minutes after which an external rain 'yes' is ignored if it has not been refreshed (0 = never expires). Stops a dead automation from holding the mower in the rain wait."
         }
       }
     },
@@ -1387,6 +1503,14 @@
           "maximum": 10.0,
           "description": "Radius (m) around the dock pose, in every direction, exempt from Transit Boundary Margin above -- so the dock approach carries no bias at all, not just \"never blocked\". Only takes effect once a dock pose is set; widen it if your dock sees a lot of GNSS drift (e.g. under a canopy)."
         },
+        "obstacle_transit_margin_m": {
+          "type": "number",
+          "title": "Transit Obstacle Margin",
+          "default": 0.30,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Extra distance (m) outside a drawn obstacle's keepout band that point-to-point TRANSIT moves prefer to keep, planned against the global costmap. A soft preference, never a hard block: transit can still start, end, or pass through it if that is the only option, and the coverage rings stay reachable. It exists because the lethal band is only the body half-width while the controller checks the whole footprint against the real object, so a transit planned right along the band can stop on \"collision ahead\". Coverage/mowing is unaffected. 0 disables it."
+        },
         "tick_rate": {
           "type": "number",
           "title": "Behaviour Tree Tick Rate",
@@ -1440,6 +1564,77 @@
           "title": "Escape Signal Max Age",
           "default": 90.0,
           "description": "How old the last-motion direction may be [s]. Too short is fail-safe (no motion); too long risks acting on a direction that no longer describes how the robot arrived. Hard ceiling 300 in code."
+        }
+      }
+    },
+    "openmower_settings": {
+      "title": "OpenMower Hardware",
+      "type": "object",
+      "properties": {
+        "openmower_ll_port": {
+          "type": "string",
+          "title": "LowLevel Board Port",
+          "description": "Serial device of the OpenMower LowLevel (Pico) board (HARDWARE_BACKEND=openmower). Stock OpenMower v1 on a Raspberry Pi 4 with kernel >= 6.1.28: /dev/ttyAMA0. Applied when the OpenMower bridge restarts. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_type": {
+          "type": "string",
+          "title": "Motor Controller Type",
+          "enum": [
+            "xesc_mini",
+            "xesc_2040"
+          ],
+          "description": "Which xESC drives the wheels and blade: xesc_mini (VESC protocol) or xesc_2040 (COBS protocol). A wrong choice leaves every motor silent (the bridge reports firmware_compatible = false). No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_left_port": {
+          "type": "string",
+          "title": "Left Wheel Controller Port",
+          "description": "Serial device of the left drive xESC. Stock OpenMower v1: /dev/ttyAMA5. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_right_port": {
+          "type": "string",
+          "title": "Right Wheel Controller Port",
+          "description": "Serial device of the right drive xESC. Stock OpenMower v1: /dev/ttyAMA3. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_xesc_mow_port": {
+          "type": "string",
+          "title": "Blade Controller Port",
+          "description": "Serial device of the blade xESC. Stock OpenMower v1: /dev/ttyAMA4. No schema default on purpose: the installer's docker/.env choice applies while this key is unset, and a schema default would make the settings writer prune an explicit choice equal to it, silently handing control back to .env."
+        },
+        "openmower_emergency_input_config": {
+          "type": "string",
+          "title": "Emergency Inputs",
+          "default": "",
+          "description": "OpenMower OM_EMERGENCY_INPUT_CONFIG: what each of the board's four hall inputs is (L = lift, S = stop, ! = active low), e.g. \"!L,!L,S,S\". Empty keeps the board's own wiring (YardForce). Safety-relevant: a wrong mapping can hide a lift or stop sensor."
+        },
+        "openmower_wheel_loop_enabled": {
+          "type": "boolean",
+          "title": "Closed-Loop Wheel Speed",
+          "default": true,
+          "description": "The xESC only takes a duty cycle, so the bridge closes a per-wheel speed loop on the tachometer. Off = OpenMower's own open-loop mapping (speed x duty-per-m/s)."
+        },
+        "openmower_wheel_duty_per_mps": {
+          "type": "number",
+          "title": "Duty per m/s",
+          "default": 1.0,
+          "minimum": 0.1,
+          "maximum": 5.0,
+          "description": "Feed-forward: duty cycle (0..1) per m/s of wheel speed. 1.0 is OpenMower's own mapping."
+        },
+        "openmower_wheel_kp": {
+          "type": "number",
+          "title": "Wheel Loop Kp",
+          "default": 0.5,
+          "minimum": 0.0,
+          "maximum": 10.0,
+          "description": "Proportional gain of the host-side wheel loop [duty per m/s of error]. Unlike the STM32's wheel_pid_kp this is in duty, not PWM counts."
+        },
+        "openmower_wheel_ki": {
+          "type": "number",
+          "title": "Wheel Loop Ki",
+          "default": 2.0,
+          "minimum": 0.0,
+          "maximum": 50.0,
+          "description": "Integral gain of the host-side wheel loop [duty per (m/s x s)]."
         }
       }
     }

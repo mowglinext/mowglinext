@@ -264,6 +264,7 @@ export const enum FirmwareParamsConstants {
   COMMIT_PENDING = 3,
   COMMIT_LOG_FULL = 4,
   COMMIT_ERROR = 5,
+  COMMIT_RESET_PENDING = 6,
 };
 
 export type FirmwareParams = {
@@ -272,6 +273,8 @@ export type FirmwareParams = {
   boot_source?: number;
   last_commit?: number;
   records_left?: number;
+  reset_request_id?: number;
+  store_status_sequence?: number;
   params?: FirmwareParam[];
 };
 
@@ -281,6 +284,9 @@ export const enum GnssStatusConstants {
   FIX_TYPE_RTK_FLOAT = 2,
   FIX_TYPE_RTK_FIXED = 3,
   FIX_TYPE_DEAD_RECKONING = 4,
+  FIX_TYPE_2D_FIX = 5,
+  FIX_TYPE_3D_FIX = 6,
+  FIX_TYPE_DGPS = 7,
   RTK_MODE_UNKNOWN = 0,
   RTK_MODE_NONE = 1,
   RTK_MODE_FLOAT = 2,
@@ -402,6 +408,8 @@ export type GnssStatus = {
   correction_source?: string;
   correction_forwarding_source?: string;
   msm_summary_source?: string;
+  source_id?: string;
+  source_incarnation?: string;
 };
 
 export const enum HighLevelStatusConstants {
@@ -427,6 +435,8 @@ export type HighLevelStatus = {
   battery_percent?: number;
   is_charging?: boolean;
   emergency?: boolean;
+  stop_reason?: string;
+  stop_detail?: string;
 };
 
 export type ImuRaw = {
@@ -463,6 +473,13 @@ export type MapArea = {
   proposed_obstacles?: Polygon[];
   proposed_obstacle_info?: MapObstacleInfo[];
   id?: number;
+  has_mow_angle?: boolean;
+  mow_angle_deg?: number;
+  has_ring_direction?: boolean;
+  ring_direction?: number;
+  has_start_point?: boolean;
+  start_x?: number;
+  start_y?: number;
 };
 
 export const enum MapObstacleInfoConstants {

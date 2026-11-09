@@ -19,6 +19,22 @@ namespace mowgli_nav2_plugins
 namespace
 {
 
+// FTC may begin the outgoing pivot leg within 2 cm of the corner.
+constexpr double kBoundaryRecoveryProjectionSlackM = 0.02;
+constexpr double kBoundaryRecoveryMinHeadingAlignment = 0.9396926207859084;
+constexpr double kBoundaryRecoveryMinMotionAlignment = 0.9396926207859084;
+
+struct PathProjection
+{
+  double arc_m;
+  double distance_m;
+  double segment_length_m;
+  double tangent_x;
+  double tangent_y;
+  double segment_start_x;
+  double segment_start_y;
+};
+
 /// Arc length from the first pose to each pose (element 0 is 0).
 std::vector<double> cumulativeArcLength(const std::vector<geometry_msgs::msg::PoseStamped>& poses)
 {
@@ -30,6 +46,73 @@ std::vector<double> cumulativeArcLength(const std::vector<geometry_msgs::msg::Po
     arc[i] = arc[i - 1] + std::hypot(b.x - a.x, b.y - a.y);
   }
   return arc;
+}
+
+std::optional<PathProjection> projectToArcWindow(
+    const std::vector<geometry_msgs::msg::PoseStamped>& poses,
+    const std::vector<double>& arc,
+    const geometry_msgs::msg::Point& point,
+    double min_arc_m,
+    double max_arc_m,
+    double motion_x = 0.0,
+    double motion_y = 0.0,
+    bool require_forward_motion = false)
+{
+  if (poses.size() < 2 || arc.size() != poses.size() || min_arc_m > max_arc_m)
+  {
+    return std::nullopt;
+  }
+
+  std::optional<PathProjection> best;
+  for (size_t i = 0; i + 1 < poses.size(); ++i)
+  {
+    const double segment_length = arc[i + 1] - arc[i];
+    const double clipped_start = std::max(arc[i], min_arc_m);
+    const double clipped_end = std::min(arc[i + 1], max_arc_m);
+    if (segment_length <= 0.0 || clipped_start > clipped_end)
+    {
+      continue;
+    }
+
+    const auto& a = poses[i].pose.position;
+    const auto& b = poses[i + 1].pose.position;
+    const double segment_x = b.x - a.x;
+    const double segment_y = b.y - a.y;
+    const double start_ratio = (clipped_start - arc[i]) / segment_length;
+    const double end_ratio = (clipped_end - arc[i]) / segment_length;
+    const double start_x = a.x + start_ratio * segment_x;
+    const double start_y = a.y + start_ratio * segment_y;
+    const double clipped_x = (end_ratio - start_ratio) * segment_x;
+    const double clipped_y = (end_ratio - start_ratio) * segment_y;
+    const double clipped_length_sq = clipped_x * clipped_x + clipped_y * clipped_y;
+    const double projection =
+        clipped_length_sq > 0.0
+            ? std::clamp(((point.x - start_x) * clipped_x + (point.y - start_y) * clipped_y) /
+                             clipped_length_sq,
+                         0.0,
+                         1.0)
+            : 0.0;
+    const double projected_x = start_x + projection * clipped_x;
+    const double projected_y = start_y + projection * clipped_y;
+    const double distance = std::hypot(point.x - projected_x, point.y - projected_y);
+    const double tangent_x = segment_x / segment_length;
+    const double tangent_y = segment_y / segment_length;
+    if (require_forward_motion && motion_x * tangent_x + motion_y * tangent_y <= 1e-9)
+    {
+      continue;
+    }
+    if (!best || distance < best->distance_m)
+    {
+      best = PathProjection{clipped_start + projection * (clipped_end - clipped_start),
+                            distance,
+                            segment_length,
+                            tangent_x,
+                            tangent_y,
+                            a.x,
+                            a.y};
+    }
+  }
+  return best;
 }
 
 }  // namespace
@@ -115,6 +198,12 @@ void PathProgressGoalChecker::reset()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   max_reached_index_ = 0;
+  pending_progress_boundary_.reset();
+  pending_progress_boundary_origin_offset_m_.reset();
+  pending_progress_boundary_high_water_offset_m_.reset();
+  pending_progress_boundary_forward_motion_m_ = 0.0;
+  pending_progress_boundary_radius_m_ = 0.0;
+  pending_progress_boundary_minimum_motion_m_ = 0.0;
   last_progress_query_.reset();
   empty_path_first_call_.reset();
 }
@@ -159,6 +248,12 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
     last_path_first_x_ = fx;
     last_path_first_y_ = fy;
     max_reached_index_ = 0;
+    pending_progress_boundary_.reset();
+    pending_progress_boundary_origin_offset_m_.reset();
+    pending_progress_boundary_high_water_offset_m_.reset();
+    pending_progress_boundary_forward_motion_m_ = 0.0;
+    pending_progress_boundary_radius_m_ = 0.0;
+    pending_progress_boundary_minimum_motion_m_ = 0.0;
     last_progress_query_.reset();
     RCLCPP_INFO(logger_,
                 "PathProgressGoalChecker: new path with %zu poses, "
@@ -320,6 +415,7 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
     }
   }
 
+  const auto previous_progress_query = last_progress_query_;
   // Controller-server can call us many times with an unchanged pose while it
   // waits at the endpoint. Without this gate each call advances the bounded
   // search window, turning callback frequency into fake path progress.
@@ -348,17 +444,284 @@ bool PathProgressGoalChecker::isGoalReached(const geometry_msgs::msg::Pose& quer
         best_idx = i;
       }
     }
-    // A query at the goal can be closest to this call's artificial search
-    // boundary even when the robot never traversed the intervening path. Do
-    // not turn that cap into progress; only the real final path index may be
-    // accepted at a window boundary. Normal ordered tracking finds interior
-    // matches until it genuinely reaches the final pose.
+    // A query can be closest to the artificial search boundary without the
+    // robot having traversed the window. Latch the first local query there and
+    // require accumulated forward displacement before accepting the cap. This
+    // handles small controller samples and localization corrections without
+    // letting endpoint jitter or a distant first query create fake progress.
     const size_t search_boundary = end_exclusive - 1;
     const bool boundary_is_final_path_pose = (search_boundary == n - 1);
+    bool query_passed_boundary = false;
+    if (best_idx == search_boundary && search_boundary > start && path_arc_m_.size() == n)
+    {
+      const double search_window_m = path_arc_m_[search_boundary] - path_arc_m_[start];
+      const auto& before = path_poses_[search_boundary - 1].pose.position;
+      const auto& boundary = path_poses_[search_boundary].pose.position;
+      const double incoming_x = boundary.x - before.x;
+      const double incoming_y = boundary.y - before.y;
+      const double incoming_length_sq = incoming_x * incoming_x + incoming_y * incoming_y;
+      const double query_x = progress_pose.position.x;
+      const double query_y = progress_pose.position.y;
+
+      double local_segment_length = std::sqrt(incoming_length_sq);
+      for (size_t i = search_boundary + 1; i < n; ++i)
+      {
+        const auto& after = path_poses_[i].pose.position;
+        const double outgoing_x = after.x - boundary.x;
+        const double outgoing_y = after.y - boundary.y;
+        const double outgoing_length_sq = outgoing_x * outgoing_x + outgoing_y * outgoing_y;
+        if (outgoing_length_sq <= 0.0)
+        {
+          continue;
+        }
+        const double outgoing_length = std::sqrt(outgoing_length_sq);
+        local_segment_length = std::max(local_segment_length, outgoing_length);
+        break;
+      }
+      // Only latch from the local path neighborhood of the artificial
+      // boundary. Arc distance matters as well as distance to the polyline:
+      // a query far down the outgoing leg is on the path, but is not evidence
+      // that the robot traversed this search frontier.
+      const double local_boundary_radius =
+          std::min(search_window_m, std::max(0.10, 3.0 * local_segment_length));
+      const double boundary_arc_m = path_arc_m_[search_boundary];
+      const auto local_projection =
+          projectToArcWindow(path_poses_,
+                             path_arc_m_,
+                             progress_pose.position,
+                             std::max(0.0, boundary_arc_m - local_boundary_radius),
+                             std::min(path_arc_m_.back(), boundary_arc_m + local_boundary_radius));
+      const double boundary_distance = std::hypot(query_x - boundary.x, query_y - boundary.y);
+      // Exclude origins near the true endpoint in XY, even when a loop makes
+      // the local boundary projection choose an earlier coincident segment.
+      // This prevents endpoint correction from proving traversal, while still
+      // allowing recovery when a short path has less than the goal tolerance
+      // remaining at this artificial boundary.
+      double last_nonzero_segment_length = 0.0;
+      for (size_t i = n - 1; i > 0; --i)
+      {
+        const double segment_length = path_arc_m_[i] - path_arc_m_[i - 1];
+        if (segment_length > 0.0)
+        {
+          last_nonzero_segment_length = segment_length;
+          break;
+        }
+      }
+      const double endpoint_exclusion_m =
+          std::min(local_boundary_radius, std::max(0.05, last_nonzero_segment_length));
+      const auto& endpoint = path_poses_.back().pose.position;
+      const double endpoint_distance = std::hypot(query_x - endpoint.x, query_y - endpoint.y);
+      const bool query_is_away_from_endpoint =
+          local_projection && endpoint_distance > endpoint_exclusion_m + 1e-9;
+      const bool locally_at_boundary =
+          local_projection && boundary_distance <= local_boundary_radius + 1e-9 &&
+          local_projection->distance_m <= local_boundary_radius + 1e-9 &&
+          query_is_away_from_endpoint;
+      bool just_latched_boundary = false;
+      if ((!pending_progress_boundary_ || *pending_progress_boundary_ != search_boundary ||
+           !pending_progress_boundary_origin_offset_m_) &&
+          locally_at_boundary)
+      {
+        // Keep the first local observation until the bounded window is
+        // released. Its clamped along-path coordinate lets small samples
+        // accumulate across segment ends without treating motion beyond the
+        // real path endpoint as progress.
+        pending_progress_boundary_ = search_boundary;
+        pending_progress_boundary_origin_offset_m_ = local_projection->arc_m - boundary_arc_m;
+        pending_progress_boundary_high_water_offset_m_ =
+            *pending_progress_boundary_origin_offset_m_;
+        pending_progress_boundary_origin_tangent_x_ = local_projection->tangent_x;
+        pending_progress_boundary_origin_tangent_y_ = local_projection->tangent_y;
+        pending_progress_boundary_forward_motion_m_ = 0.0;
+        pending_progress_boundary_radius_m_ = local_boundary_radius;
+        pending_progress_boundary_minimum_motion_m_ =
+            std::max(0.015, std::min(0.5 * local_projection->segment_length_m, 0.02));
+        just_latched_boundary = true;
+      }
+
+      if (pending_progress_boundary_ && *pending_progress_boundary_ == search_boundary &&
+          pending_progress_boundary_origin_offset_m_ &&
+          pending_progress_boundary_high_water_offset_m_ && !just_latched_boundary)
+      {
+        const double query_motion = previous_progress_query
+                                        ? std::hypot(query_x - previous_progress_query->x,
+                                                     query_y - previous_progress_query->y)
+                                        : 0.0;
+        if (query_motion > pending_progress_boundary_radius_m_)
+        {
+          // A jump larger than the local recovery neighborhood breaks the
+          // consecutive-motion evidence. Do not let a later small correction
+          // at the endpoint reuse an origin from before that discontinuity.
+          pending_progress_boundary_.reset();
+          pending_progress_boundary_origin_offset_m_.reset();
+          pending_progress_boundary_high_water_offset_m_.reset();
+          pending_progress_boundary_forward_motion_m_ = 0.0;
+          pending_progress_boundary_radius_m_ = 0.0;
+          pending_progress_boundary_minimum_motion_m_ = 0.0;
+        }
+        else
+        {
+          const double total_arc = path_arc_m_.back();
+          const double high_water_arc_m =
+              boundary_arc_m + *pending_progress_boundary_high_water_offset_m_;
+          const double min_tracking_arc = std::max(0.0, high_water_arc_m - search_window_m);
+          const double projection_slack =
+              kBoundaryRecoveryProjectionSlackM +
+              std::max(0.0, -*pending_progress_boundary_origin_offset_m_);
+          const double max_tracking_arc =
+              std::min(total_arc, high_water_arc_m + query_motion + projection_slack);
+          const auto current_projection = projectToArcWindow(
+              path_poses_, path_arc_m_, progress_pose.position, min_tracking_arc, max_tracking_arc);
+          if (current_projection &&
+              current_projection->distance_m <= pending_progress_boundary_radius_m_ + 1e-9)
+          {
+            const double query_dx =
+                previous_progress_query ? query_x - previous_progress_query->x : 0.0;
+            const double query_dy =
+                previous_progress_query ? query_y - previous_progress_query->y : 0.0;
+            const auto forward_motion_along = [&](const PathProjection& projection)
+            {
+              return query_dx * projection.tangent_x + query_dy * projection.tangent_y;
+            };
+            const double query_yaw = tf2::getYaw(progress_pose.orientation);
+            const double heading_x = std::cos(query_yaw);
+            const double heading_y = std::sin(query_yaw);
+            const auto is_near_aligned_pivot = [&](const PathProjection& projection)
+            {
+              const double heading_alignment =
+                  heading_x * projection.tangent_x + heading_y * projection.tangent_y;
+              const double motion_heading_alignment =
+                  query_motion > 1e-9 ? (query_dx * heading_x + query_dy * heading_y) / query_motion
+                                      : -1.0;
+              const double query_to_segment_start =
+                  std::hypot(query_x - projection.segment_start_x,
+                             query_y - projection.segment_start_y);
+              return query_to_segment_start <=
+                         kBoundaryRecoveryProjectionSlackM + projection_slack + 1e-9 &&
+                     heading_alignment >= kBoundaryRecoveryMinHeadingAlignment &&
+                     motion_heading_alignment >= kBoundaryRecoveryMinHeadingAlignment;
+            };
+            const auto follows_origin_direction = [&](const PathProjection& projection)
+            {
+              return pending_progress_boundary_origin_tangent_x_ * projection.tangent_x +
+                         pending_progress_boundary_origin_tangent_y_ * projection.tangent_y >=
+                     kBoundaryRecoveryMinHeadingAlignment;
+            };
+            const auto is_direction_change_pivot = [&](const PathProjection& projection)
+            {
+              return !follows_origin_direction(projection) && is_near_aligned_pivot(projection);
+            };
+            const PathProjection* progress_projection =
+                follows_origin_direction(*current_projection) ||
+                        is_direction_change_pivot(*current_projection)
+                    ? &*current_projection
+                    : nullptr;
+            bool advancing_path_projection = false;
+            std::optional<PathProjection> forward_projection;
+            if (max_tracking_arc > high_water_arc_m + 1e-9)
+            {
+              forward_projection = projectToArcWindow(path_poses_,
+                                                      path_arc_m_,
+                                                      progress_pose.position,
+                                                      high_water_arc_m + 1e-9,
+                                                      max_tracking_arc,
+                                                      query_dx,
+                                                      query_dy,
+                                                      true);
+              const bool eligible_forward_projection =
+                  forward_projection && (follows_origin_direction(*forward_projection) ||
+                                         is_direction_change_pivot(*forward_projection));
+              const double forward_projection_slack =
+                  forward_projection && is_direction_change_pivot(*forward_projection)
+                      ? projection_slack
+                      : 1e-9;
+              if (eligible_forward_projection &&
+                  forward_projection->arc_m > high_water_arc_m + 1e-9 &&
+                  forward_projection->distance_m <= pending_progress_boundary_radius_m_ + 1e-9 &&
+                  forward_projection->distance_m <=
+                      current_projection->distance_m + forward_projection_slack &&
+                  forward_motion_along(*forward_projection) / query_motion >=
+                      kBoundaryRecoveryMinMotionAlignment)
+              {
+                progress_projection = &*forward_projection;
+                advancing_path_projection = true;
+              }
+            }
+            if (query_motion > 1e-9 && !advancing_path_projection)
+            {
+              const auto reverse_projection = projectToArcWindow(path_poses_,
+                                                                 path_arc_m_,
+                                                                 progress_pose.position,
+                                                                 min_tracking_arc,
+                                                                 high_water_arc_m,
+                                                                 -query_dx,
+                                                                 -query_dy,
+                                                                 true);
+              if (reverse_projection && reverse_projection->arc_m <= high_water_arc_m + 1e-9 &&
+                  reverse_projection->distance_m <= pending_progress_boundary_radius_m_ + 1e-9 &&
+                  reverse_projection->distance_m <=
+                      current_projection->distance_m + projection_slack + 1e-9)
+              {
+                const double reverse_motion = forward_motion_along(*reverse_projection);
+                if (reverse_motion < -1e-9)
+                {
+                  // A path-aligned retrace cancels earned motion even when a
+                  // nearer incoming segment wins the ordinary projection.
+                  pending_progress_boundary_forward_motion_m_ =
+                      std::max(0.0, pending_progress_boundary_forward_motion_m_ + reverse_motion);
+                }
+              }
+            }
+            if (progress_projection)
+            {
+              const double arc_advance = progress_projection->arc_m - high_water_arc_m;
+              const double forward_motion = forward_motion_along(*progress_projection);
+              const double motion_alignment =
+                  query_motion > 1e-9 ? forward_motion / query_motion : -1.0;
+              if (arc_advance > 1e-9 && motion_alignment >= kBoundaryRecoveryMinMotionAlignment)
+              {
+                const double arc_credit =
+                    std::min(arc_advance,
+                             query_motion + (is_direction_change_pivot(*progress_projection)
+                                                 ? projection_slack
+                                                 : 1e-9));
+                *pending_progress_boundary_high_water_offset_m_ += arc_credit;
+                pending_progress_boundary_forward_motion_m_ += forward_motion;
+              }
+            }
+            const double projected_forward_motion =
+                *pending_progress_boundary_high_water_offset_m_ -
+                *pending_progress_boundary_origin_offset_m_;
+            query_passed_boundary =
+                pending_progress_boundary_forward_motion_m_ >=
+                    pending_progress_boundary_minimum_motion_m_ - 1e-9 &&
+                projected_forward_motion >= pending_progress_boundary_minimum_motion_m_ - 1e-9;
+          }
+        }
+      }
+    }
+    else
+    {
+      pending_progress_boundary_.reset();
+      pending_progress_boundary_origin_offset_m_.reset();
+      pending_progress_boundary_high_water_offset_m_.reset();
+      pending_progress_boundary_forward_motion_m_ = 0.0;
+      pending_progress_boundary_radius_m_ = 0.0;
+      pending_progress_boundary_minimum_motion_m_ = 0.0;
+    }
     if (best_idx > max_reached_index_ &&
-        (best_idx != search_boundary || boundary_is_final_path_pose))
+        (best_idx != search_boundary || boundary_is_final_path_pose || query_passed_boundary))
     {
       max_reached_index_ = best_idx;
+      if (query_passed_boundary)
+      {
+        pending_progress_boundary_.reset();
+        pending_progress_boundary_origin_offset_m_.reset();
+        pending_progress_boundary_high_water_offset_m_.reset();
+        pending_progress_boundary_forward_motion_m_ = 0.0;
+        pending_progress_boundary_radius_m_ = 0.0;
+        pending_progress_boundary_minimum_motion_m_ = 0.0;
+      }
     }
   }
 

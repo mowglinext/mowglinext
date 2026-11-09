@@ -1,3 +1,4 @@
+import '@ant-design/v5-patch-for-react-19';
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import {createHashRouter, Navigate, RouterProvider,} from "react-router-dom";
@@ -7,8 +8,8 @@ import {Spinner} from "./components/Spinner.tsx";
 import {MotionConfig} from "framer-motion";
 import {PALETTE} from "./theme/colors.ts";
 import {ThemeProvider, useThemeMode} from "./theme/ThemeContext.tsx";
-import {NotificationCenterProvider} from "./hooks/useNotificationCenter.tsx";
-import {TimeFormatProvider} from "./hooks/useTimeFormat.tsx";
+import {NotificationCenterProvider} from "./hooks/NotificationCenterProvider";
+import {TimeFormatProvider} from "./hooks/TimeFormatProvider";
 import "./i18n";
 import {useTranslation} from "react-i18next";
 import enUS from "antd/locale/en_US";

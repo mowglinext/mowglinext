@@ -76,6 +76,7 @@ def _build(filename, **overrides):
         for name in (
             "DEFAULT_TOOL_WIDTH_M",
             "chassis_circumscribed_radius",
+            "chassis_footprint",
             "dig_proposal_radius",
             "dig_skip_radius",
             "keepout_obstacle_margin",
@@ -94,6 +95,7 @@ def _build(filename, **overrides):
             "IfCondition": Action,
             "LaunchConfiguration": Configuration,
             "PythonExpression": Action,
+            "EnvironmentVariable": Action,
             "ParameterValue": Parameter,
             "Node": Node,
             "get_package_share_directory": lambda package: str(
@@ -104,14 +106,17 @@ def _build(filename, **overrides):
             ),
         }
     )
-    function = next(
+    # Include the production GNSS helper as well as the launch builder: an
+    # isolated AST of just the builder otherwise fails with a false NameError.
+    functions = [
         item
         for item in _parse(filename).body
         if isinstance(item, ast.FunctionDef)
-        and item.name == "generate_launch_description"
-    )
+        and item.name in ("_gnss_status_pairing_window_s", "generate_launch_description")
+    ]
+    assert any(item.name == "generate_launch_description" for item in functions)
     exec(  # noqa: S102
-        compile(ast.Module(body=[function], type_ignores=[]), filename, "exec"),
+        compile(ast.Module(body=functions, type_ignores=[]), filename, "exec"),
         namespace,
     )
     description = namespace["generate_launch_description"]()

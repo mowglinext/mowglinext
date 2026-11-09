@@ -32,6 +32,20 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - /dev:/dev
       - mowgli_maps:/ros2_ws/maps
+      # The scheduler compares each schedule's HH:mm against THIS container's clock,
+      # so it must run in the host's time zone. Without this the container is UTC
+      # and a schedule set for 08:15 fires at 08:15 UTC (10:15 CEST) — field report
+      # 2026-10-06. /etc/localtime only (not /etc/timezone, which a bind mount would
+      # turn into an empty directory on hosts that lack the file).
+      - /etc/localtime:/etc/localtime:ro
     depends_on:
       - mowgli
+    # HTTP liveness only: ROS readiness is reported separately at /api/health/ros.
+    # Docker reports unhealthy; no restart watchdog is attached to this probe.
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--noproxy", "*", "--connect-timeout", "1", "--max-time", "2", "http://127.0.0.1:4006/api/health/live"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped

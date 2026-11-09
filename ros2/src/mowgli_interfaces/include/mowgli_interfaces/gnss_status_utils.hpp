@@ -40,8 +40,11 @@ inline bool IsRtkFixed(const GnssStatus& status)
   {
     return false;
   }
-  return status.rtk_mode == GnssStatus::RTK_MODE_FIXED ||
-         status.fix_type == GnssStatus::FIX_TYPE_RTK_FIXED;
+  if (HasValue(status, GnssStatus::CAP_RTK_MODE))
+  {
+    return status.rtk_mode == GnssStatus::RTK_MODE_FIXED;
+  }
+  return status.fix_type == GnssStatus::FIX_TYPE_RTK_FIXED;
 }
 
 inline bool IsRtkFloat(const GnssStatus& status)
@@ -50,8 +53,25 @@ inline bool IsRtkFloat(const GnssStatus& status)
   {
     return false;
   }
-  return status.rtk_mode == GnssStatus::RTK_MODE_FLOAT ||
-         status.fix_type == GnssStatus::FIX_TYPE_RTK_FLOAT;
+  if (HasValue(status, GnssStatus::CAP_RTK_MODE))
+  {
+    return status.rtk_mode == GnssStatus::RTK_MODE_FLOAT;
+  }
+  return status.fix_type == GnssStatus::FIX_TYPE_RTK_FLOAT;
+}
+
+inline bool IsBasicPositionFix(const GnssStatus& status)
+{
+  switch (status.fix_type)
+  {
+    case GnssStatus::FIX_TYPE_GPS_FIX:
+    case GnssStatus::FIX_TYPE_2D_FIX:
+    case GnssStatus::FIX_TYPE_3D_FIX:
+    case GnssStatus::FIX_TYPE_DGPS:
+      return true;
+    default:
+      return false;
+  }
 }
 
 inline std::uint8_t AbsolutePoseFlags(const GnssStatus& status)
@@ -96,7 +116,7 @@ inline std::uint8_t BehaviorTreeFixType(const GnssStatus& status)
     return 3u;
   }
 
-  return status.fix_type == GnssStatus::FIX_TYPE_GPS_FIX ? 2u : 0u;
+  return IsBasicPositionFix(status) ? 2u : 0u;
 }
 
 inline float NormalizedQuality(const GnssStatus& status)
@@ -131,12 +151,16 @@ inline float NormalizedQuality(const GnssStatus& status)
   {
     return 0.7f;
   }
-  if (status.fix_type == GnssStatus::FIX_TYPE_GPS_FIX)
+  switch (status.fix_type)
   {
-    return 0.4f;
+    case GnssStatus::FIX_TYPE_GPS_FIX:
+    case GnssStatus::FIX_TYPE_2D_FIX:
+    case GnssStatus::FIX_TYPE_3D_FIX:
+    case GnssStatus::FIX_TYPE_DGPS:
+      return 0.4f;
+    default:
+      return 0.0f;
   }
-
-  return 0.0f;
 }
 
 inline std::uint8_t HardwareQualityPercent(const GnssStatus& status)

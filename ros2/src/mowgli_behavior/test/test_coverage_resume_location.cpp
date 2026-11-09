@@ -21,6 +21,8 @@
 // then drive ~10 m off elsewhere"). This test pins the mapping so that failure
 // mode cannot silently reopen.
 
+#include <map>
+#include <set>
 #include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -57,7 +59,10 @@ std::size_t totalPoses(const std::vector<nav_msgs::msg::Path>& units)
 
 }  // namespace
 
+using mowgli_behavior::resolveFirstDrive;
 using mowgli_behavior::resolveResumeLocation;
+using mowgli_behavior::resolveUnitStartOffsets;
+using mowgli_behavior::resumeOffsetForUnit;
 
 // A cursor of 0 (never interrupted) is not resumable — mow fresh from pose 0.
 TEST(ResolveResumeLocation, ZeroCursorIsFreshStart)
@@ -202,4 +207,143 @@ TEST(ForwardSkipIndex, DegenerateInputsReturnFrom)
   EXPECT_EQ(forwardSkipIndex(makePoses(1, 0.1), 0, 0.8), 0u);  // too short
   const std::vector<geometry_msgs::msg::PoseStamped> empty;
   EXPECT_EQ(forwardSkipIndex(empty, 0, 0.8), 0u);  // empty
+}
+
+// The reproduction of field 2026-10-12: the cursor is in a late unit but the earlier units were
+// never recorded as mowed. FollowStrip drives the FIRST unit not recorded as mowed, so that is
+// where the first transit must go; the cursor's unit is trimmed only when it is reached.
+TEST(ResolveFirstDrive, AnEarlierOpenUnitIsDrivenBeforeTheCursorsUnit)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100), makeUnit(100)};
+  const auto first = resolveFirstDrive(units, {}, true, 250, 300);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 0u);
+  EXPECT_EQ(first.local, 0u) << "the cursor's trim belongs to unit 2, not to the first unit";
+}
+
+TEST(ResolveFirstDrive, TheCursorsUnitIsTrimmedWhenEarlierUnitsAreDone)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100), makeUnit(100)};
+  const auto first = resolveFirstDrive(units, {0, 1}, true, 250, 300);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 2u);
+  EXPECT_EQ(first.local, 50u);
+}
+
+TEST(ResolveFirstDrive, ACursorInTheFirstOpenUnitResumesMidUnit)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100)};
+  const auto first = resolveFirstDrive(units, {}, true, 40, 200);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 0u);
+  EXPECT_EQ(first.local, 40u);
+}
+
+TEST(ResolveFirstDrive, WithoutACursorTheFirstOpenUnitStartsAtItsFront)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100), makeUnit(100)};
+  const auto first = resolveFirstDrive(units, {0}, false, 0, 300);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 1u);
+  EXPECT_EQ(first.local, 0u);
+
+  const auto stale = resolveFirstDrive(units, {0}, false, 250, 300);
+  ASSERT_TRUE(stale.valid);
+  EXPECT_EQ(stale.unit, 1u);
+  EXPECT_EQ(stale.local, 0u) << "a cursor of a stale plan must be ignored";
+}
+
+TEST(ResolveFirstDrive, NothingIsDrivenWhenEveryUnitIsDone)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100)};
+  EXPECT_FALSE(resolveFirstDrive(units, {0, 1}, true, 150, 200).valid);
+}
+
+// The reproduction of field 2026-10-14: unit 5 was driven to 99 % and abandoned, the next pass
+// dispatched unit 7 and the single cursor moved there, so unit 5 restarted from pose 0 four times.
+// Each unit now keeps its own progress.
+TEST(ResolveFirstDrive, AnAbandonedUnitResumesAtItsOwnProgressNotAtItsFront)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100), makeUnit(100)};
+  // The cursor describes unit 2 (a later one); unit 0 is the first undone unit with its own
+  // progress.
+  const std::map<std::size_t, std::size_t> progress{{0, 60}};
+  const auto first = resolveFirstDrive(units, {}, true, 250, 300, &progress);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 0u);
+  EXPECT_EQ(first.local, 60u);
+}
+
+TEST(ResolveFirstDrive, UnitProgressNeverMovesTheStartBackwardsFromTheCursor)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100)};
+  const std::map<std::size_t, std::size_t> progress{{0, 10}};
+  const auto first = resolveFirstDrive(units, {}, true, 40, 200, &progress);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.local, 40u);
+}
+
+// sendFollowGoal resets the cursor to the unit's trim offset while its recorded progress never
+// moves backwards, so the cursor can sit BEHIND the progress of the very unit it lands in. The
+// first transit goal (resolveFirstDrive) and FollowStrip's trim (resolveUnitStartOffsets) must
+// still pick the same pose, or the robot is sent forward and then drives back to where the goal
+// starts.
+TEST(ResolveFirstDrive, ACursorBehindTheUnitsProgressResolvesToTheSameStartForBothCallers)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100)};
+  const std::map<std::size_t, std::size_t> progress{{0, 70}};
+  const auto first = resolveFirstDrive(units, {}, true, 40, 200, &progress);
+  const auto starts = resolveUnitStartOffsets(units, {}, true, 40, 200, &progress);
+  ASSERT_TRUE(first.valid);
+  ASSERT_EQ(starts.size(), units.size());
+  EXPECT_EQ(first.unit, 0u);
+  EXPECT_EQ(first.local, 70u);
+  EXPECT_EQ(starts[0], first.local) << "transit goal and first follow-goal start must coincide";
+  EXPECT_EQ(starts[1], 0u);
+}
+
+TEST(ResolveUnitStartOffsets, EveryOpenUnitStartsAtTheFurtherOfItsCursorAndItsOwnProgress)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100), makeUnit(100)};
+  // Cursor in unit 1 at local 30; unit 1's own progress is 20 (behind), unit 2's 60, unit 0 is
+  // booked mowed so its stale progress is ignored.
+  const std::map<std::size_t, std::size_t> progress{{0, 80}, {1, 20}, {2, 60}, {7, 50}};
+  const auto starts = resolveUnitStartOffsets(units, {0}, true, 130, 300, &progress);
+  ASSERT_EQ(starts.size(), units.size());
+  EXPECT_EQ(starts[0], 0u) << "a unit recorded mowed takes no progress trim";
+  EXPECT_EQ(starts[1], 30u);
+  EXPECT_EQ(starts[2], 60u);
+
+  // The first transit goal names the first open unit at exactly the same pose.
+  const auto first = resolveFirstDrive(units, {0}, true, 130, 300, &progress);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 1u);
+  EXPECT_EQ(first.local, starts[1]);
+}
+
+TEST(ResolveUnitStartOffsets, AStalePlanUsesNeitherTheCursorNorTheProgress)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100)};
+  const auto starts = resolveUnitStartOffsets(units, {}, false, 130, 200, nullptr);
+  EXPECT_EQ(starts, (std::vector<std::size_t>{0, 0}));
+}
+
+TEST(ResolveFirstDrive, ProgressOfAnotherUnitDoesNotTrimTheFirstUnit)
+{
+  const std::vector<nav_msgs::msg::Path> units{makeUnit(100), makeUnit(100)};
+  const std::map<std::size_t, std::size_t> progress{{1, 70}};
+  const auto first = resolveFirstDrive(units, {}, false, 0, 200, &progress);
+  ASSERT_TRUE(first.valid);
+  EXPECT_EQ(first.unit, 0u);
+  EXPECT_EQ(first.local, 0u);
+}
+
+TEST(ResumeOffsetForUnit, ReplaysTheTailAndKeepsAnUntouchedUnitAtItsFront)
+{
+  constexpr std::size_t kReplay = mowgli_interfaces::kCoverageResumeReplayPoses;
+  EXPECT_EQ(resumeOffsetForUnit(2294, 0), 0u);
+  EXPECT_EQ(resumeOffsetForUnit(2294, 1000), 1000u);
+  // An abandoned-at-99 % unit is replayed from the tail, never resumed past it.
+  EXPECT_EQ(resumeOffsetForUnit(2294, 2290), 2294u - kReplay);
+  EXPECT_EQ(resumeOffsetForUnit(kReplay, 5), 0u);
 }

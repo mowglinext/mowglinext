@@ -1,5 +1,9 @@
+import {TextWithAddon} from '../inputs/TextWithAddon';
+import {NumberWithAddon} from '../inputs/NumberWithAddon';
+import {observeAsync} from "../../utils/async";
+import {useAsyncHandler} from "../../hooks/useAsyncHandler";
 import {useCallback, useEffect, useMemo, useState} from "react";
-import {Alert, Button, Card, Collapse, Input, InputNumber, Select, Space, Spin, Switch, Tag, Typography} from "antd";
+import {Alert, Button, Card, Collapse, Select, Space, Spin, Switch, Tag, Typography} from "antd";
 import {WifiOutlined, ReloadOutlined, EnvironmentOutlined} from "@ant-design/icons";
 import {useTranslation} from "react-i18next";
 import {useApi} from "../../hooks/useApi.ts";
@@ -7,6 +11,7 @@ import {useIsMobile} from "../../hooks/useIsMobile.ts";
 import {useThemeMode} from "../../theme/ThemeContext.tsx";
 import {NTRIP_PROVIDERS, NTRIP_PROVIDER_BY_ID, PUBLIC_SOURCETABLE_PROVIDERS, providerForHost, NtripProvider} from "./ntripProviders.ts";
 import {NtripStationMap, MapStation} from "./NtripStationMap.tsx";
+import type {SettingsValues} from "../../types/settings.generated";
 
 const {Text, Paragraph} = Typography;
 
@@ -20,14 +25,15 @@ interface SourcetableStation {
 }
 
 interface Props {
-  values: Record<string, any>;
-  onChange: (key: string, value: any) => void;
+  values: SettingsValues;
+  onChange: (key: string, value: string | number | boolean | null) => void;
 }
 
 // NtripSection: pick a provider, then a base station (from a map or list). The
 // caster host/port and free-network credentials are filled in automatically, so
 // the operator normally never types a host or a password.
 export const NtripSection: React.FC<Props> = ({values, onChange}) => {
+    const asyncHandler = useAsyncHandler();
   const guiApi = useApi();
   const {t} = useTranslation();
   const {colors} = useThemeMode();
@@ -63,7 +69,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
       }
     }
     return all;
-  }, [values.ntrip_host, values.ntrip_port, values.ntrip_user, values.ntrip_password]);
+  }, [guiApi, values.ntrip_host, values.ntrip_port, values.ntrip_user, values.ntrip_password]);
 
   const loadProvider = useCallback(async (p: NtripProvider) => {
     setLoading(true);
@@ -100,7 +106,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
     }
     onChange("ntrip_mountpoint", "");
     setStations([]);
-    if (p.host && !p.requiresOwnCreds) loadProvider(p);
+    if (p.host && !p.requiresOwnCreds) observeAsync(loadProvider(p));
   };
 
   const selectStation = (s: MapStation) => {
@@ -119,7 +125,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
 
   // Auto-load the initially-selected provider's stations on mount.
   useEffect(() => {
-    if (ntripEnabled && provider?.host && !provider.requiresOwnCreds) loadProvider(provider);
+    if (ntripEnabled && provider?.host && !provider.requiresOwnCreds) observeAsync(loadProvider(provider));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -159,7 +165,7 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
                 </button>
               );
             })}
-            <Button size="small" onClick={loadAllFree} icon={<EnvironmentOutlined/>} style={{alignSelf: "center"}}>
+            <Button size="small" onClick={asyncHandler(loadAllFree)} icon={<EnvironmentOutlined/>} style={{alignSelf: "center"}}>
               {t("settingsNtrip.showAllFreeNetworks")}
             </Button>
           </div>
@@ -171,25 +177,25 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
           {/* Manual caster fields for custom / paid providers */}
           {needsManualCaster && (
             <Space wrap style={{marginBottom: 12}}>
-              <Input aria-label={t("settingsNtrip.host")} addonBefore={t("settingsNtrip.host")} style={{width: 240}} value={values.ntrip_host ?? ""}
+              <TextWithAddon aria-label={t("settingsNtrip.host")} before={t("settingsNtrip.host")} style={{width: 240}} value={values.ntrip_host ?? ""}
                      onChange={(e) => onChange("ntrip_host", e.target.value)} placeholder="caster.example.com"/>
-              <InputNumber aria-label={t("settingsNtrip.port")} addonBefore={t("settingsNtrip.port")} value={values.ntrip_port ?? 2101}
+              <NumberWithAddon aria-label={t("settingsNtrip.port")} before={t("settingsNtrip.port")} value={values.ntrip_port ?? 2101}
                            onChange={(v) => onChange("ntrip_port", v)}/>
               {provider?.requiresOwnCreds && (
                 <>
-                  <Input aria-label={t("settingsNtrip.user")} addonBefore={t("settingsNtrip.user")} value={values.ntrip_user ?? ""}
+                  <TextWithAddon aria-label={t("settingsNtrip.user")} before={t("settingsNtrip.user")} value={values.ntrip_user ?? ""}
                          onChange={(e) => onChange("ntrip_user", e.target.value)}/>
-                  <Input.Password aria-label={t("settingsNtrip.pass")} addonBefore={t("settingsNtrip.pass")} value={values.ntrip_password ?? ""}
+                  <TextWithAddon password aria-label={t("settingsNtrip.pass")} before={t("settingsNtrip.pass")} value={values.ntrip_password ?? ""}
                                   onChange={(e) => onChange("ntrip_password", e.target.value)}/>
                 </>
               )}
-              <Button icon={<ReloadOutlined/>} onClick={() => provider && loadProvider(provider)}
+              <Button icon={<ReloadOutlined/>} onClick={asyncHandler(() => provider && loadProvider(provider))}
                       disabled={!values.ntrip_host}>{t("settingsNtrip.loadStations")}</Button>
             </Space>
           )}
 
           {provider?.userIsEmail && (
-            <Input aria-label={t("settingsNtrip.emailAddon")} addonBefore={t("settingsNtrip.emailAddon")} style={{maxWidth: 380, marginBottom: 12}}
+            <TextWithAddon aria-label={t("settingsNtrip.emailAddon")} before={t("settingsNtrip.emailAddon")} style={{maxWidth: 380, marginBottom: 12}}
                    value={values.ntrip_user ?? ""} onChange={(e) => onChange("ntrip_user", e.target.value)}
                    placeholder="you@example.com"/>
           )}
@@ -222,11 +228,11 @@ export const NtripSection: React.FC<Props> = ({values, onChange}) => {
             label: <Text type="secondary" style={{fontSize: 12}}>{t("settingsNtrip.advancedRawFields")}</Text>,
             children: (
               <Space wrap>
-                <Input aria-label={t("settingsNtrip.host")} addonBefore={t("settingsNtrip.host")} value={values.ntrip_host ?? ""} onChange={(e) => onChange("ntrip_host", e.target.value)}/>
-                <InputNumber aria-label={t("settingsNtrip.port")} addonBefore={t("settingsNtrip.port")} value={values.ntrip_port ?? 2101} onChange={(v) => onChange("ntrip_port", v)}/>
-                <Input aria-label={t("settingsNtrip.mountpoint")} addonBefore={t("settingsNtrip.mountpoint")} value={values.ntrip_mountpoint ?? ""} onChange={(e) => onChange("ntrip_mountpoint", e.target.value)}/>
-                <Input aria-label={t("settingsNtrip.user")} addonBefore={t("settingsNtrip.user")} value={values.ntrip_user ?? ""} onChange={(e) => onChange("ntrip_user", e.target.value)}/>
-                <Input.Password aria-label={t("settingsNtrip.pass")} addonBefore={t("settingsNtrip.pass")} value={values.ntrip_password ?? ""} onChange={(e) => onChange("ntrip_password", e.target.value)}/>
+                <TextWithAddon aria-label={t("settingsNtrip.host")} before={t("settingsNtrip.host")} value={values.ntrip_host ?? ""} onChange={(e) => onChange("ntrip_host", e.target.value)}/>
+                <NumberWithAddon aria-label={t("settingsNtrip.port")} before={t("settingsNtrip.port")} value={values.ntrip_port ?? 2101} onChange={(v) => onChange("ntrip_port", v)}/>
+                <TextWithAddon aria-label={t("settingsNtrip.mountpoint")} before={t("settingsNtrip.mountpoint")} value={values.ntrip_mountpoint ?? ""} onChange={(e) => onChange("ntrip_mountpoint", e.target.value)}/>
+                <TextWithAddon aria-label={t("settingsNtrip.user")} before={t("settingsNtrip.user")} value={values.ntrip_user ?? ""} onChange={(e) => onChange("ntrip_user", e.target.value)}/>
+                <TextWithAddon password aria-label={t("settingsNtrip.pass")} before={t("settingsNtrip.pass")} value={values.ntrip_password ?? ""} onChange={(e) => onChange("ntrip_password", e.target.value)}/>
               </Space>
             ),
           }]}/>

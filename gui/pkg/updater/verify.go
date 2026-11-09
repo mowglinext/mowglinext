@@ -134,7 +134,11 @@ func (b DockerBackend) verificationProblems(ctx context.Context, images map[stri
 	if err != nil && !os.IsNotExist(err) {
 		problems = append(problems, "Cannot read the update maintenance marker")
 	}
-	problems = append(problems, readinessProblems(ready, d, err == nil, change)...)
+	protocolTarget := d
+	if b.FirmwareProtocolExempt() {
+		protocolTarget = nil
+	}
+	problems = append(problems, readinessProblems(ready, protocolTarget, err == nil, change)...)
 	return problems, append(warnings, advisoryModuleProblems(ready, names, managed)...)
 }
 

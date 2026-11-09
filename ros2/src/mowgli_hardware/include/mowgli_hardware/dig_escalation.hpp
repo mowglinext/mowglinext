@@ -232,8 +232,9 @@ inline bool ShouldEscalate(
 // radius_m of the escalation anchor (the bridge passes its configurable
 // dig_escalate_clear_distance_m, floored at 0.30 m, as radius_m).
 // Anything closer means the robot could still be sitting against — or have
-// only nudged a few cm from — the object that would have been the 4th latch;
-// clearing there would defeat the guard ShouldEscalate exists to raise.
+// only nudged a few cm from — the object that would have been the 4th latch,
+// so a release there is an ACKNOWLEDGEMENT with probation (below), never a
+// plain clear that would let the grind start over from min_count.
 inline bool CanClearDigEscalation(
     double anchor_x, double anchor_y, double x, double y, double radius_m)
 {
@@ -242,6 +243,47 @@ inline bool CanClearDigEscalation(
     return true;  // escalation itself is disabled at this threshold; never block a clear
   }
   return std::hypot(x - anchor_x, y - anchor_y) > radius_m;
+}
+
+// ── Operator acknowledgement on the spot (probation) ────────────────────────
+// Field report 2026-10-16: with the robot still at the obstruction, Play,
+// Pause and "mow area" were all refused and only HOME acted — the operator
+// had to walk out and carry the robot before the mission could go on. An
+// operator who looked at the robot and judged it free (or wants it to try
+// once more) may now ACKNOWLEDGE the escalation from where it stands: the
+// latch is released, FollowStrip resumes past the session dig skip zone,
+// and the spot is put on PROBATION — the very next dig latch within the
+// same-spot radius of it re-escalates at once (one strike, not
+// min_count), so the 2026-09-04 seventeen-latch grind can cost at most one
+// more dig before the robot is held again. Probation ends where the latch
+// itself would have cleared: at the charger, or kDigEscalationClearFactor x
+// radius away from the spot. A clear past CanClearDigEscalation's distance
+// is still a plain clear — the robot was demonstrably moved away.
+struct DigProbation
+{
+  bool active = false;
+  double x = 0.0;  ///< acknowledged escalation point, map frame [m]
+  double y = 0.0;
+};
+
+/// True when a dig latch at (x, y) falls on an acknowledged spot and must
+/// re-escalate immediately. A non-positive radius never re-escalates
+/// (escalation disabled).
+inline bool DigProbationReEscalates(const DigProbation& probation,
+                                    double x,
+                                    double y,
+                                    double radius_m)
+{
+  return probation.active && radius_m > 0.0 &&
+         std::hypot(x - probation.x, y - probation.y) <= radius_m;
+}
+
+/// True when the robot at (x, y) is provably away from the acknowledged spot
+/// and probation can end — the same rule that releases the latch itself.
+inline bool DigProbationLeft(const DigProbation& probation, double x, double y, double radius_m)
+{
+  return probation.active &&
+         DigEscalationClearedByDisplacement(probation.x, probation.y, x, y, radius_m);
 }
 
 }  // namespace mowgli_hardware

@@ -195,6 +195,14 @@ sandbox_repo() {
   mkdir -p "$target"
   cp -R "$REPO_ROOT/install" "$target/"
   cp -R "$REPO_ROOT/docker" "$target/"
+  # config.sh sources the externally pinned MAVROS image contract from this
+  # integration directory. Keep the sandbox source set as narrow as the
+  # installer itself: it needs this contract, not any sensor implementation.
+  mkdir -p "$target/sensors"
+  cp -R "$REPO_ROOT/sensors/mavros" "$target/sensors/"
+  # The MAVROS writer resolves odometry/safety defaults from the ROS template.
+  mkdir -p "$target/ros2/src/mowgli_bringup/config"
+  cp "$REPO_ROOT/ros2/src/mowgli_bringup/config/mowgli_robot.yaml" "$target/ros2/src/mowgli_bringup/config/"
   cp -R "$REPO_ROOT/docs" "$target/"
   if [ -f "$REPO_ROOT/CLAUDE.md" ]; then
     cp "$REPO_ROOT/CLAUDE.md" "$target/"

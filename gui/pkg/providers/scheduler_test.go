@@ -27,7 +27,7 @@ func acceptStart(_ string, _ any, res any) {
 }
 
 // buildScheduler creates a SchedulerProvider backed by mocks without starting
-// the background goroutine. Tests set coverageResumeKnown because they assign
+// the background goroutine. Tests mark admission inputs known because they assign
 // the scheduler state directly instead of receiving the latched ROS topic.
 func buildScheduler(ros *types.MockRosProvider, db *types.MockDBProvider) *SchedulerProvider {
 	// A healthy behavior_tree_node ACCEPTS the start; tests that need a
@@ -39,6 +39,7 @@ func buildScheduler(ros *types.MockRosProvider, db *types.MockDBProvider) *Sched
 		rosProvider:            ros,
 		dbProvider:             db,
 		hasHighLevelStatus:     true,
+		hasEmergencyStatus:     true,
 		lastHighLevelStateName: "IDLE",
 		coverageSessionKnown:   true,
 		coverageResumeKnown:    true,
@@ -344,6 +345,7 @@ func TestStartupWindow_RechecksWhenAdmissionSignalsArriveInEitherOrder(t *testin
 				{topic: "highLevelStatus", msg: []byte(`{"state":1,"state_name":"CHARGING","emergency":false}`)},
 				{topic: "coverageSession", msg: []byte(`{"session_active":false}`)},
 				{topic: "coverageResumeAvailable", msg: []byte(`{"data":false}`)},
+				{topic: "emergency", msg: []byte(`{"active_emergency":false,"latched_emergency":false}`)},
 			},
 		},
 		{
@@ -354,6 +356,7 @@ func TestStartupWindow_RechecksWhenAdmissionSignalsArriveInEitherOrder(t *testin
 			}{
 				{topic: "coverageSession", msg: []byte(`{"session_active":false}`)},
 				{topic: "coverageResumeAvailable", msg: []byte(`{"data":false}`)},
+				{topic: "emergency", msg: []byte(`{"active_emergency":false,"latched_emergency":false}`)},
 				{topic: "highLevelStatus", msg: []byte(`{"state":1,"state_name":"CHARGING","emergency":false}`)},
 			},
 		},
@@ -407,10 +410,12 @@ func TestStartupWindow_HighLevelEmergencyBlocksStartInEitherSignalOrder(t *testi
 			{topic: "highLevelStatus", msg: []byte(`{"state":1,"state_name":"IDLE","emergency":true}`)},
 			{topic: "coverageSession", msg: []byte(`{"session_active":false}`)},
 			{topic: "coverageResumeAvailable", msg: []byte(`{"data":false}`)},
+			{topic: "emergency", msg: []byte(`{"active_emergency":false,"latched_emergency":false}`)},
 		},
 		{
 			{topic: "coverageSession", msg: []byte(`{"session_active":false}`)},
 			{topic: "coverageResumeAvailable", msg: []byte(`{"data":false}`)},
+			{topic: "emergency", msg: []byte(`{"active_emergency":false,"latched_emergency":false}`)},
 			{topic: "highLevelStatus", msg: []byte(`{"state":1,"state_name":"IDLE","emergency":true}`)},
 		},
 	} {
@@ -455,7 +460,7 @@ func TestStartupWindow_HardwareEmergencyCannotBeClearedByHLS(t *testing.T) {
 				topic string
 				msg   []byte
 			}{
-				{topic: "emergency", msg: []byte(`{"active_emergency":true}`)},
+				{topic: "emergency", msg: []byte(`{"active_emergency":true,"latched_emergency":false}`)},
 				{topic: "highLevelStatus", msg: []byte(`{"state":1,"state_name":"IDLE","emergency":false}`)},
 				{topic: "coverageSession", msg: []byte(`{"session_active":false}`)},
 				{topic: "coverageResumeAvailable", msg: []byte(`{"data":false}`)},
@@ -468,7 +473,7 @@ func TestStartupWindow_HardwareEmergencyCannotBeClearedByHLS(t *testing.T) {
 				msg   []byte
 			}{
 				{topic: "highLevelStatus", msg: []byte(`{"state":1,"state_name":"IDLE","emergency":false}`)},
-				{topic: "emergency", msg: []byte(`{"active_emergency":true}`)},
+				{topic: "emergency", msg: []byte(`{"active_emergency":true,"latched_emergency":false}`)},
 				{topic: "coverageSession", msg: []byte(`{"session_active":false}`)},
 				{topic: "coverageResumeAvailable", msg: []byte(`{"data":false}`)},
 			},

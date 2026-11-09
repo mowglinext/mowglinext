@@ -274,6 +274,7 @@ bool MapServerNode::apply_promoted_obstacle(size_t area_index,
                                             const std::string& name,
                                             uint8_t source)
 {
+  std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
   // Validate + mutate areas_/obstacle_polygons_ under map_mutex_, then
   // release before calling apply_area_classifications (which locks
   // itself). This avoids both deadlock and a long-held mutex during

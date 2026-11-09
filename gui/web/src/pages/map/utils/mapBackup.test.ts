@@ -105,4 +105,43 @@ describe("parseMapBackup ignore lines", () => {
     ])("refuses a backup whose ignore lines are broken (%s)", (_label, extra) => {
         expect(parseMapBackup(JSON.stringify(validMap(extra))).ok).toBe(false);
     });
+
+    it("keeps an area's own mowing lines (angle, winding, start point) untouched", () => {
+        const lines = {
+            has_mow_angle: true, mow_angle_deg: 35,
+            has_ring_direction: true, ring_direction: 2,
+            has_start_point: true, start_x: 9.5, start_y: 4,
+        };
+        const result = parseMapBackup(JSON.stringify({
+            working_area: [{name: "Voor", id: 7, area: square, obstacles: [], ...lines}],
+            navigation_areas: [],
+        }));
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.map.working_area?.[0]).toMatchObject({id: 7, ...lines});
+    });
+
+    it("keeps a legitimate 0 degrees, planner-default winding and (0, 0) start as real overrides", () => {
+        const lines = {
+            has_mow_angle: true, mow_angle_deg: 0,
+            has_ring_direction: true, ring_direction: 0,
+            has_start_point: true, start_x: 0, start_y: 0,
+        };
+        const result = parseMapBackup(JSON.stringify({
+            working_area: [{name: "Voor", area: square, obstacles: [], ...lines}],
+            navigation_areas: [],
+        }));
+        expect(result.ok && result.map.working_area?.[0]).toMatchObject(lines);
+    });
+
+    it("restores an older backup that has no mowing lines as an area that follows the robot-wide settings", () => {
+        const result = parseMapBackup(JSON.stringify(validMap()));
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        const area = result.map.working_area?.[0];
+        expect(area?.has_mow_angle).toBeFalsy();
+        expect(area?.has_ring_direction).toBeFalsy();
+        expect(area?.has_start_point).toBeFalsy();
+    });
 });

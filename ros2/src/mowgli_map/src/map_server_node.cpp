@@ -24,6 +24,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <random>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -55,6 +56,9 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 {
   // ── Declare and read parameters ──────────────────────────────────────────
   resolution_ = declare_parameter<double>("resolution", 0.05);
+  max_grid_cells_ = declare_parameter<int64_t>("max_grid_cells", 4000000);
+  if (!std::isfinite(resolution_) || resolution_ <= 0.0 || max_grid_cells_ <= 0)
+    throw std::runtime_error("Invalid map resolution or max_grid_cells resource budget");
   map_size_x_ = declare_parameter<double>("map_size_x", 20.0);
   map_size_y_ = declare_parameter<double>("map_size_y", 20.0);
   map_frame_ = declare_parameter<std::string>("map_frame", "map");
@@ -166,6 +170,10 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   // both on top of this compiled-in default) — see BoundaryInnerMarginTest
   // for the tests that exercise 0.20 on purpose.
   boundary_inner_margin_m_ = declare_parameter<double>("boundary_inner_margin_m", 0.0);
+  // Kept at 0.0 here for the same reason as boundary_inner_margin_m above: every unit test builds
+  // the node directly, so a non-zero compiled-in default would add the soft band to every existing
+  // keepout-mask test. The fleet default (0.30 m) lives in map_server.yaml + the template.
+  obstacle_transit_margin_m_ = declare_parameter<double>("obstacle_transit_margin_m", 0.0);
   // See map_server_node.hpp: the dock exemption isn't load-bearing for
   // safety with the mid-cost design (a soft-cost cell never fails "Start
   // occupied", so it can no longer strand the robot near the dock the way
@@ -257,12 +265,17 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
 
   keepout_mask_pub_ =
       create_publisher<nav_msgs::msg::OccupancyGrid>("/keepout_mask", transient_qos);
+  planning_grid_error_pub_ =
+      create_publisher<std_msgs::msg::String>("~/planning_grid_error", transient_qos);
 
   lidar_ignore_corridors_pub_ = create_publisher<mowgli_interfaces::msg::LidarIgnoreCorridorArray>(
       "/mowgli/lidar_ignore_corridors", transient_qos);
 
   recorded_area_polygons_pub_ = create_publisher<mowgli_interfaces::msg::RecordedAreaPolygonArray>(
       "/mowgli/recorded_area_polygons", transient_qos);
+  transit_geometry_pub_ =
+      create_publisher<visualization_msgs::msg::MarkerArray>("~/transit_geometry", transient_qos);
+  invalidate_keepout_mask();
 
   // ── Subscribers ──────────────────────────────────────────────────────────
   occupancy_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
@@ -400,6 +413,14 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         on_add_area(req, res);
       });
 
+  set_area_coverage_lines_srv_ = create_service<mowgli_interfaces::srv::SetAreaCoverageLines>(
+      "~/set_area_coverage_lines",
+      [this](const mowgli_interfaces::srv::SetAreaCoverageLines::Request::SharedPtr req,
+             mowgli_interfaces::srv::SetAreaCoverageLines::Response::SharedPtr res)
+      {
+        on_set_area_coverage_lines(req, res);
+      });
+
   get_mowing_area_srv_ = create_service<mowgli_interfaces::srv::GetMowingArea>(
       "~/get_mowing_area",
       [this](const mowgli_interfaces::srv::GetMowingArea::Request::SharedPtr req,
@@ -407,6 +428,21 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
       {
         on_get_mowing_area(req, res);
       });
+
+  // Instance-scoped diagnostic identity, never confused with a persisted revision.
+  std::random_device random;
+  std::ostringstream instance;
+  for (int i = 0; i < 4; ++i)
+    instance << std::hex << std::setw(8) << std::setfill('0') << random();
+  corridor_server_instance_id_ = instance.str();
+  replace_lidar_ignore_corridors_srv_ =
+      create_service<mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors>(
+          "~/replace_lidar_ignore_corridors",
+          [this](mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors::Request::SharedPtr req,
+                 mowgli_interfaces::srv::ReplaceLidarIgnoreCorridors::Response::SharedPtr res)
+          {
+            on_replace_lidar_ignore_corridors(req, res);
+          });
 
   add_lidar_ignore_corridor_srv_ = create_service<mowgli_interfaces::srv::AddLidarIgnoreCorridor>(
       "~/add_lidar_ignore_corridor",
@@ -583,7 +619,9 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
     }
   }
 
-  // Resize map to fit loaded areas (if any).
+  // Build dock geometry before sizing: its approach may be far from the areas.
+  if (docking_pose_set_)
+    rebuild_dock_polygons();
   resize_map_to_areas();
 
   // No baseline area_list_generation_ publish here: it is not persisted and
@@ -638,6 +676,11 @@ void MapServerNode::rebuild_dock_polygons()
   // the dock). +X in dock-local frame points AWAY from the dock (the staging
   // direction); the body sits in -X, behind the docked robot's reference
   // point. The corridor extends further in -X.
+  //
+  // The transit planner recovers the dock heading from exactly this layout
+  // (`transit::dockFrame`: corridor directly behind the body, +X toward the
+  // station) to keep a dock-body exit leg from closing on the station. Keep
+  // the corridor adjacent to the body.
   //
   // Clear first so a re-placement (on_set_docking_point) replaces, not appends.
   dock_body_polygon_.points.clear();
@@ -876,6 +919,7 @@ void MapServerNode::on_odom(nav_msgs::msg::Odometry::ConstSharedPtr /*msg*/)
 
 void MapServerNode::on_obstacles(mowgli_interfaces::msg::ObstacleArray::ConstSharedPtr msg)
 {
+  std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
   // 1. Always cache the latest snapshot so ~/promote_obstacle can
   //    resolve a tracker id → polygon without a round-trip through the
   //    GUI. (Pre-existing behavior; the GUI flow stays unchanged.)
@@ -999,6 +1043,21 @@ bool MapServerNode::is_costmap_blocked(double x, double y) const
 
 void MapServerNode::on_publish_timer()
 {
+  {
+    std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+    if (corridor_publication_pending_)
+    {
+      try
+      {
+        publish_lidar_ignore_corridors();
+      }
+      catch (const std::exception& e)
+      {
+        RCLCPP_WARN(get_logger(), "Corridor publication still pending: %s", e.what());
+      }
+    }
+  }
+
   {
     std::lock_guard<std::mutex> lock(map_mutex_);
 

@@ -31,7 +31,10 @@
 #include <gtest/gtest.h>
 
 using mowgli_behavior::advanceProgressCursor;
+using mowgli_behavior::describeSkippedPath;
 using mowgli_behavior::kMaxProgressAdvanceM;
+using mowgli_behavior::pathLengthBetween;
+using mowgli_behavior::SkippedPathTally;
 using Poses = std::vector<geometry_msgs::msg::PoseStamped>;
 
 namespace
@@ -278,4 +281,77 @@ TEST(StripProgress, AControllerRejoinIsFoundOnlyAsTheExactPoseAhead)
   // Never backwards, never further than the bound.
   EXPECT_FALSE(findControllerRejoin(path, rejoin, path[cursor].pose).has_value());
   EXPECT_FALSE(findControllerRejoin(path, cursor, path[rejoin].pose, 0.5).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// Honest end-of-pass accounting (2026-10-06: "3/3 swaths mowed, 0 skipped" after most of the
+// first unit had been detoured around)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+Poses straightLine(std::size_t n, double step)
+{
+  Poses poses(n);
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    poses[i].pose.position.x = static_cast<double>(i) * step;
+  }
+  return poses;
+}
+}  // namespace
+
+TEST(SkippedPathTally, PathLengthIsTheArcFromOnePoseToTheOther)
+{
+  const Poses path = straightLine(11, 0.1);  // 1.0 m long
+
+  EXPECT_NEAR(pathLengthBetween(path, 2, 7), 0.5, 1e-9);
+  EXPECT_NEAR(pathLengthBetween(path, 0, 10), 1.0, 1e-9);
+  // Clamped into the unit, and zero when "to" is not ahead of "from".
+  EXPECT_NEAR(pathLengthBetween(path, 8, 99), 0.2, 1e-9);
+  EXPECT_NEAR(pathLengthBetween(path, 7, 7), 0.0, 1e-9);
+  EXPECT_NEAR(pathLengthBetween(path, 7, 2), 0.0, 1e-9);
+  EXPECT_NEAR(pathLengthBetween(Poses{}, 0, 3), 0.0, 1e-9);
+}
+
+TEST(SkippedPathTally, StartsEmptyAndANoOpDetourDoesNotCount)
+{
+  SkippedPathTally tally;
+  EXPECT_FALSE(tally.any());
+
+  // A detour whose resume pose is the stuck pose left nothing behind.
+  tally.addDetour(0, 0.0);
+  EXPECT_EQ(tally.detours, 1u);
+  EXPECT_FALSE(tally.any());
+}
+
+TEST(SkippedPathTally, AddsUpDetoursAndControllerRejoinsSeparately)
+{
+  SkippedPathTally tally;
+  tally.addDetour(41, 0.9);
+  tally.addDetour(80, 1.7);
+  tally.addRejoin(4, 0.3);
+
+  EXPECT_TRUE(tally.any());
+  EXPECT_EQ(tally.poses(), 125u);
+  EXPECT_NEAR(tally.metres(), 2.9, 1e-9);
+  EXPECT_EQ(tally.detours, 2u);
+  EXPECT_EQ(tally.detour_poses, 121u);
+  EXPECT_EQ(tally.rejoins, 1u);
+  EXPECT_EQ(tally.rejoin_poses, 4u);
+}
+
+TEST(SkippedPathTally, TheMessageNamesTheTotalsAndBothSources)
+{
+  SkippedPathTally tally;
+  tally.addDetour(41, 0.9);
+  tally.addDetour(80, 1.7);
+  tally.addRejoin(4, 0.3);
+
+  const std::string text = describeSkippedPath(tally);
+
+  EXPECT_NE(text.find("125 poses / 2.9 m of planned path left un-mowed"), std::string::npos)
+      << text;
+  EXPECT_NE(text.find("2 obstacle detours: 121 poses / 2.6 m"), std::string::npos) << text;
+  EXPECT_NE(text.find("1 turn-fallback rejoin: 4 poses / 0.3 m"), std::string::npos) << text;
 }

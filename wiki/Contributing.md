@@ -90,6 +90,8 @@ the E2E test validates, and
 for the full per-area checklist (including the code-generation steps you owe after editing a `.msg`
 or `.srv`, and the COBS protocol-version bump).
 
+When a change affects how the robot drives, localizes or navigates, record the real-mower run with the session monitor and attach the analysis to the PR or issue. See [Diagnostics and Session Monitoring](Diagnostics-and-Session-Monitoring).
+
 ## What CI Checks
 
 - **ROS2 — CI** (`ros2/**`, `tools/motor/**`, `install/config/mowgli/**`) — `colcon build` + `colcon test`, the `mowgli_robot.yaml` config-drift gate, `clang-format` on the lines you changed, and cppcheck. `Build & Test (ROS2 kilted)` is the required status check on `dev`.

@@ -36,6 +36,8 @@ void CleanupPrefix(const std::string& prefix)
   fs::remove(prefix + ".graph", ec);
   fs::remove(prefix + ".scans", ec);
   fs::remove(prefix + ".meta", ec);
+  fs::remove(prefix + ".checkpoint", ec);
+  fs::remove(prefix + ".checkpoint.previous", ec);
 }
 }  // namespace
 

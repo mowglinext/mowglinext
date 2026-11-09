@@ -147,12 +147,56 @@ if(BUILD_TESTING)
     INSTALL_RPATH "/opt/fields2cover-300/lib"
   )
 
+  # Operator-chosen start point: where a ring closes, the outermost ring first, the
+  # pinned first sub-path. Real F2C v3, no ROS.
+  ament_add_gtest(test_start_point test/test_start_point.cpp)
+  target_link_libraries(test_start_point
+    ${PROJECT_NAME}_core
+    Fields2Cover::Fields2Cover
+  )
+  set_target_properties(test_start_point PROPERTIES
+    INSTALL_RPATH "/opt/fields2cover-300/lib"
+  )
+
+  # GUI line preview: ring simplification, heading folding, real-planner checks.
+  ament_add_gtest(test_coverage_preview test/test_coverage_preview.cpp)
+  target_link_libraries(test_coverage_preview
+    ${PROJECT_NAME}_core
+    Fields2Cover::Fields2Cover
+  )
+  set_target_properties(test_coverage_preview PROPERTIES
+    INSTALL_RPATH "/opt/fields2cover-300/lib"
+  )
+
   # Route efficiency, full exported-map geometry and ring-winding preservation.
   ament_add_gtest(test_coverage_route test/test_coverage_route.cpp)
   target_link_libraries(test_coverage_route
     ${PROJECT_NAME}_core
     Fields2Cover::Fields2Cover
   )
+
+  # Passive exact snapshots must not change the planner or connector output.
+  ament_add_gtest(test_planning_trace test/replay/test_trace.cpp)
+  target_link_libraries(test_planning_trace ${PROJECT_NAME}_core Fields2Cover::Fields2Cover)
+
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  include(test/replay/configure_replay.cmake)
+  add_coverage_replay(${PROJECT_NAME}_core)
+  ament_add_test(replay_runner_unit GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/test_runner.py")
+  ament_add_test(replay_comparison_unit GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/test_comparison.py")
+  ament_add_test(replay_provenance_unit GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    ENV "REPLAY_CMAKE=${CMAKE_COMMAND}"
+    COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/test_provenance.py")
+  ament_add_test(replay_matrix GENERATE_RESULT_FOR_RETURN_CODE_ZERO TIMEOUT 600
+    COMMAND "${Python3_EXECUTABLE}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test/replay/run_replay.py"
+    --binary "$<TARGET_FILE:coverage_replay>" --same-process 2 --processes 2
+    --output "${CMAKE_CURRENT_BINARY_DIR}/replay-results")
 endif()
 
 ament_export_include_directories(include)

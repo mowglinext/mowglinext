@@ -232,6 +232,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-lyrical-diagnostic-updater \
     # Foxglove Bridge (WebSocket bridge for GUI and Foxglove Studio)
     ros-lyrical-foxglove-bridge \
+    # Schema/typesupport only: foxglove_bridge runs in this image while the
+    # MAVROS node lives in its sidecar. The GUI reads /mavros/state and calls
+    # /mavros/vehicle_info_get through that bridge.
+    ros-lyrical-mavros-msgs \
     # RTCM message definitions for the public /rtcm topic
     ros-lyrical-rtcm-msgs \
     # tinyxml2 (required at runtime by BehaviorTree.CPP)
@@ -418,6 +422,10 @@ COPY sensors/gps/mowgli_gnss_bridge/ src/mowgli_gnss_bridge/
 # package. Letting colcon discover it shadows its nested ROS package and builds
 # unwanted driver tools; the schema-only overlay is built in Stage 0d instead.
 RUN touch src/external/universal-gnss/COLCON_IGNORE
+
+# MowgliMAVROS is vendored as an external sidecar submodule. Its ROS packages
+# are built in the dedicated MAVROS image, not in the MowgliNext ROS workspace.
+RUN touch src/external/mowglimavros/COLCON_IGNORE
 
 # Skip every opennav_coverage subpackage except _msgs. The upstream server
 # is pinned to F2C 1.2.1 (no TrapezoidalDecomp / generateHeadlandSwaths /

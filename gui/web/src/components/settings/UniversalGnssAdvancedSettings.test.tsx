@@ -1,15 +1,17 @@
 import { App } from "antd";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import React, { useState } from "react";
+import React, { useState, type ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { UniversalGnssAdvancedSettings } from "./UniversalGnssAdvancedSettings.tsx";
+
+type AdvancedSettingsProps = ComponentProps<typeof UniversalGnssAdvancedSettings>;
 
 const renderSignalGroupField = (initialValue = "") => {
     const onChangeSpy = vi.fn();
 
     const Wrapper: React.FC = () => {
-        const [values, setValues] = useState<Record<string, any>>({
+        const [values, setValues] = useState<AdvancedSettingsProps["values"]>({
             gnss_signal_group: initialValue,
         });
 

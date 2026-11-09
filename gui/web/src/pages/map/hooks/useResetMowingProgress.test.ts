@@ -4,7 +4,7 @@ import { useResetMowingProgress } from "./useResetMowingProgress.tsx";
 
 const mocks = vi.hoisted(() => ({
   callCreate: vi.fn(),
-  confirm: vi.fn(),
+  confirm: vi.fn<(options: {onOk: () => Promise<void>}) => void>(),
   success: vi.fn(),
   error: vi.fn(),
 }));

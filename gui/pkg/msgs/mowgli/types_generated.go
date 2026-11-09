@@ -110,6 +110,8 @@ type FirmwareParams struct {
 	BootSource                uint8                          `json:"boot_source"`
 	LastCommit                uint8                          `json:"last_commit"`
 	RecordsLeft               uint16                         `json:"records_left"`
+	ResetRequestId            uint32                         `json:"reset_request_id"`
+	StoreStatusSequence       uint32                         `json:"store_status_sequence"`
 	Params                    []FirmwareParam                `json:"params"`
 }
 
@@ -168,6 +170,8 @@ type GnssStatus struct {
 	CorrectionSource          string                         `json:"correction_source"`
 	CorrectionForwardingSource string                         `json:"correction_forwarding_source"`
 	MsmSummarySource          string                         `json:"msm_summary_source"`
+	SourceId                  string                         `json:"source_id"`
+	SourceIncarnation         string                         `json:"source_incarnation"`
 }
 
 // HighLevelStatus matches mowgli_interfaces/msg/HighLevelStatus.
@@ -186,6 +190,8 @@ type HighLevelStatus struct {
 	BatteryPercent            float32                        `json:"battery_percent"`
 	IsCharging                bool                           `json:"is_charging"`
 	Emergency                 bool                           `json:"emergency"`
+	StopReason                string                         `json:"stop_reason"`
+	StopDetail                string                         `json:"stop_detail"`
 }
 
 // ImuRaw matches mowgli_interfaces/msg/ImuRaw.
@@ -226,6 +232,13 @@ type MapArea struct {
 	ProposedObstacles         []geometry.Polygon             `json:"proposed_obstacles"`
 	ProposedObstacleInfo      []MapObstacleInfo              `json:"proposed_obstacle_info"`
 	Id                        uint32                         `json:"id"`
+	HasMowAngle               bool                           `json:"has_mow_angle"`
+	MowAngleDeg               float64                        `json:"mow_angle_deg"`
+	HasRingDirection          bool                           `json:"has_ring_direction"`
+	RingDirection             uint8                          `json:"ring_direction"`
+	HasStartPoint             bool                           `json:"has_start_point"`
+	StartX                    float64                        `json:"start_x"`
+	StartY                    float64                        `json:"start_y"`
 }
 
 // MapObstacleInfo matches mowgli_interfaces/msg/MapObstacleInfo.

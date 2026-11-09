@@ -1,10 +1,14 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"sort"
 
-	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
 func ConfigRoute(r *gin.RouterGroup, db types.IDBProvider) {
@@ -58,25 +62,40 @@ func ConfigGetKeysRoute(r *gin.RouterGroup, db types.IDBProvider) gin.IRoutes {
 func ConfigSetKeysRoute(r *gin.RouterGroup, db types.IDBProvider) gin.IRoutes {
 	return r.POST("/config/keys/set", func(context *gin.Context) {
 		var body gin.H
-		err := context.BindJSON(&body)
-		if err != nil {
-			context.JSON(500, ErrorResponse{
-				Error: err.Error(),
-			})
+		decoder := json.NewDecoder(context.Request.Body)
+		if err := decoder.Decode(&body); err != nil || body == nil {
+			context.JSON(http.StatusBadRequest, ErrorResponse{Error: "expected a JSON configuration object with string values"})
 			return
 		}
+		// Accept exactly one JSON document. Binding must not acknowledge a valid
+		// prefix of an otherwise malformed request, or write before validation ends.
+		var extra interface{}
+		if err := decoder.Decode(&extra); err != io.EOF {
+			context.JSON(http.StatusBadRequest, ErrorResponse{Error: "expected a single JSON configuration object"})
+			return
+		}
+
+		keys := make([]string, 0, len(body))
 		for key, value := range body {
-			str, ok := value.(string)
-			if !ok {
-				context.JSON(400, gin.H{"error": fmt.Sprintf("key %s: value must be a string", key)})
+			if _, ok := value.(string); !ok {
+				context.JSON(http.StatusBadRequest, ErrorResponse{Error: fmt.Sprintf("key %q: value must be a string", key)})
 				return
 			}
-			err := db.Set(key, []byte(str))
-			if err != nil {
-				continue
+			keys = append(keys, key)
+		}
+
+		// IDBProvider has no batch transaction. Ordering makes a partial failure
+		// deterministic; it does not make these independent writes atomic.
+		sort.Strings(keys)
+		for _, key := range keys {
+			if err := db.Set(key, []byte(body[key].(string))); err != nil {
+				// Storage errors may contain secrets or values. Expose only the key
+				// and the possibility of partial completion, never the raw error.
+				context.JSON(http.StatusInternalServerError, ErrorResponse{Error: fmt.Sprintf("failed to store config key %q; earlier keys may already have been stored", key)})
+				return
 			}
 		}
-		context.JSON(200, body)
+		context.JSON(http.StatusOK, body)
 	})
 }
 

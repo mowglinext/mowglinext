@@ -1,3 +1,9 @@
+import {hasEmergency, emergencyIsKnown, emergencyClearanceUnverified} from '../utils/statusTelemetry';
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
+import {useBladeTelemetry} from "../hooks/useBladeTelemetry";
+import {motorDisplayValue} from "../utils/motorTelemetry";
+import {StatusMowerIllustration} from "../components/dashboard/StatusMowerIllustration";
+import "../components/dashboard/healthCard.css";
 import {liveAreaLabel} from "../utils/areaLabel.ts";
 import type {ReactNode} from "react";
 import {useMemo} from "react";
@@ -23,9 +29,9 @@ import {useMowProgress} from "../hooks/useMowProgress.ts";
 import {useFusionOdom} from "../hooks/useFusionOdom.ts";
 import {rasterizeMowProgress} from "../utils/mowProgress.ts";
 import {useMowerAction} from "../components/MowerActions.tsx";
-import {computeBatteryPercent} from "../utils/battery.ts";
+import {computeBatteryPercent, hasBatteryReading} from "../utils/battery.ts";
 import {deriveGpsStatus} from "../utils/gpsStatus.ts";
-import {deriveIsMoving} from "../utils/mowerMotion.ts";
+import {deriveIsMoving, isSessionActive} from "../utils/mowerMotion.ts";
 import {deriveChargeHold} from "../utils/chargeHold.ts";
 
 import {GlassCard} from "../concept/components/GlassCard.tsx";
@@ -37,9 +43,17 @@ import type {MiniArea, MiniProgress} from "../concept/components/LiveMapMini.tsx
 import {ProgressRibbon} from "../concept/components/ProgressRibbon.tsx";
 import {SoilWetBanner} from "../components/dashboard/SoilWetBanner.tsx";
 import {DigEscalationBanner} from "../components/dashboard/DigEscalationBanner.tsx";
+import {StopReasonBanner} from "../components/dashboard/StopReasonBanner.tsx";
 import {isCoverageScanPaused} from "../components/dashboard/scanPaused.ts";
 import {WeatherChip} from "../concept/components/WeatherChip.tsx";
 import {useWeather} from "../hooks/useWeather.ts";
+import {useHardwareBackend} from "../hooks/useHardwareBackend.ts";
+import {
+  formatMavrosBoardIdentity,
+  formatMavrosFirmwareVersion,
+  mavrosAutopilotName,
+  useMavrosInfo,
+} from "../hooks/useMavrosInfo.ts";
 import {NoiseTexture} from "../concept/components/NoiseTexture.tsx";
 import {staggerParent, riseFade, popIn, springSnap} from "../concept/motion.ts";
 
@@ -51,26 +65,28 @@ import {staggerParent, riseFade, popIn, springSnap} from "../concept/motion.ts";
  * provides the side-rail + header chrome.
  */
 
-function useMowerData() {
+function useMowerData(backend?: string) {
   const {t} = useTranslation();
   const {highLevelStatus} = useHighLevelStatus();
   const coverageSession = useCoverageSession();
   const power = usePower();
   const status = useStatus();
+  const blade = useBladeTelemetry(backend);
   const gnss = useGnssStatus();
   const emergency = useEmergency();
   const {settings} = useSettings();
   const areaMap = useMowingMap();
 
   const isCharging = highLevelStatus.is_charging ?? status.is_charging ?? false;
-  const isEmergency = highLevelStatus.emergency ?? emergency.active_emergency ?? false;
+  const isEmergency = hasEmergency(emergency, highLevelStatus);
+  const commandEmergency = highLevelStatus.emergency ?? emergency.active_emergency ?? false;
   const batteryPercent = computeBatteryPercent(
     highLevelStatus.battery_percent, power.v_battery, settings,
   );
   const gpsStatus = deriveGpsStatus(gnss);
 
-  const stateName = highLevelStatus.state_name ?? (
-    isEmergency ? "EMERGENCY" : isCharging ? "CHARGING" : "IDLE_DOCKED"
+  const stateName = isEmergency ? "EMERGENCY" : highLevelStatus.state_name ?? (
+    isCharging ? "CHARGING" : ""
   );
 
   // Motion is derived from the NUMERIC high-level state, which status_nodes.cpp
@@ -84,23 +100,38 @@ function useMowerData() {
 
   return {
     state: stateName,
+    statusKnown: (highLevelStatus.state !== undefined && highLevelStatus.state !== 0) || isEmergency || isCharging,
+    emergencyKnown: emergencyIsKnown(emergency, highLevelStatus),
+    clearanceUnverified: emergencyClearanceUnverified(emergency, highLevelStatus),
     battery: batteryPercent,
+    batteryKnown: (hasBatteryReading(power.v_battery) && Number.isFinite(batteryPercent)),
     charging: isCharging,
+    // The charging/contact bit is also true on a full docked mower. The BT's
+    // IDLE_DOCKED name can follow a failed return, so it is not dock evidence.
+    docked: power.charger_enabled ?? status.is_charging ?? highLevelStatus.is_charging,
+    settings,
     emergency: isEmergency,
+    commandEmergency,
+    commandState: highLevelStatus.state_name ?? (commandEmergency ? "EMERGENCY" : isCharging ? "CHARGING" : "IDLE_DOCKED"),
     gps: gpsStatus.percent,
     gpsLabel: gpsStatus.label,
-    vBattery: power.v_battery ?? 0,
+    vBattery: power.v_battery ?? NaN,
     // Battery charge current (shown while docked/charging) vs. blade motor
     // current (shown on the Blades tile) are DIFFERENT signals — keep them
     // separate so the Blades tile doesn't read the charger.
-    current: power.charge_current ?? 0,
-    bladeCurrent: status.mower_esc_current ?? 0,
-    rpm: status.mower_motor_rpm ?? 0,
-    escTemp: status.mower_esc_temperature ?? 0,
-    motorTemp: status.mower_motor_temperature ?? 0,
+    current: typeof power.charge_current === "number" && Number.isFinite(power.charge_current)
+      ? power.charge_current : undefined,
+    bladeCurrent: blade.current,
+    rpm: blade.rpm,
+    escTemp: blade.escTemp,
+    motorTemp: blade.motorTemp,
     rain: status.rain_detected ?? false,
+    rainKnown: status.rain_detected !== undefined,
     isMoving,
     scanPaused,
+    stopReason: highLevelStatus.stop_reason ?? "",
+    sessionActive: isSessionActive(stateNum),
+    stopDetail: highLevelStatus.stop_detail ?? "",
     toolWidth: (settings?.tool_width as number | undefined) ?? 0.18,
     batteryFullPercent: (settings?.battery_full_percent as number | undefined) ?? 95,
     batteryManualResumePercent: (settings?.battery_manual_resume_percent as number | undefined) ?? 30,
@@ -119,12 +150,15 @@ function useMowerData() {
 }
 
 export const MowgliNextPage = () => {
+  const asyncHandler = useAsyncHandler();
   const {t} = useTranslation();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
   const {modal, notification} = App.useApp();
   const mowerAction = useMowerAction();
-  const data = useMowerData();
+  const hardware = useHardwareBackend();
+  const data = useMowerData(hardware.loading ? undefined : hardware.backend);
+  const mavros = useMavrosInfo(!hardware.loading && hardware.backend === "mavros");
   const {snapshot} = useDiagnosticsSnapshot();
   const map = useMowingMap();
   const odom = useFusionOdom();
@@ -211,13 +245,14 @@ export const MowgliNextPage = () => {
     : null;
 
   const phase: "idle" | "playing" | "returning" | "alert" =
-    data.emergency ? "alert" :
-    data.state === "RETURNING_HOME" ? "returning" :
+    data.commandEmergency ? "alert" :
+    data.commandState === "RETURNING_HOME" ? "returning" :
     data.isMoving ? "playing" : "idle";
   const chargeHold: ChargeHold | undefined = deriveChargeHold(
-    data.state, data.battery, data.batteryManualResumePercent, data.batteryLowPercent,
+    data.commandState, data.battery, data.batteryManualResumePercent, data.batteryLowPercent,
     data.batteryFullPercent, data.coverageSessionActive,
   );
+  const isResumingMowing = data.commandState === "RESUMING_UNDOCKING";
 
   // ── ETA estimate ──
   //
@@ -239,8 +274,14 @@ export const MowgliNextPage = () => {
   // Headline mirrors the subline's branch order: SCAN_PAUSED gets the operator
   // explanation first while the mission remains active; otherwise a moving mower
   // gets its ETA/mowing copy instead of falling through to the idle text.
-  const headline = data.scanPaused
+  const headline = data.clearanceUnverified
+    ? t("telemetry.emergencyClearanceUnverified")
+    : !data.statusKnown && !data.emergency
+    ? t("telemetry.statusUnknown")
+    : data.scanPaused
     ? <>{t('mowgliNextPage.headlineScanPausedPrefix')}<em style={{fontStyle: 'italic', color: 'var(--amber, #FFB84D)'}}>{t('mowgliNextPage.headlineScanPausedEmphasis')}</em>{t('mowgliNextPage.headlineScanPausedSuffix')}</>
+    : isResumingMowing
+      ? t('mowgliNextPage.headlineResumingMowing')
     : data.isMoving
     ? (remainingMin > 0
         ? <>{t('mowgliNextPage.headlineUntilHomePrefix')}<span style={{
@@ -254,27 +295,33 @@ export const MowgliNextPage = () => {
           background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
           WebkitBackgroundClip: 'text', backgroundClip: 'text',
           WebkitTextFillColor: 'transparent', color: 'transparent',
-        }}>{t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)})}</span></>
+        }}>{(data.batteryKnown ? t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)}) : '—')}</span></>
     : data.charging
       ? <>{t('mowgliNextPage.headlineChargingPrefix')}<span style={{
           background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
           WebkitBackgroundClip: 'text', backgroundClip: 'text',
           WebkitTextFillColor: 'transparent', color: 'transparent',
-        }}>{t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)})}</span></>
+        }}>{(data.batteryKnown ? t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)}) : '—')}</span></>
       : data.emergency
         ? <span style={{color: 'var(--rose, #FF6B7A)'}}>{t('mowgliNextPage.emergencyStop')}</span>
         : <>{t('mowgliNextPage.headlineIdlePrefix')}<em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>{t('mowgliNextPage.headlineIdleEmphasis')}</em>{t('mowgliNextPage.headlineIdleSuffix')}</>;
 
-  const subline = data.scanPaused
+  const subline = data.clearanceUnverified
+    ? t("telemetry.emergencyClearanceUnverified")
+    : !data.statusKnown && !data.emergency
+    ? t("telemetry.statusUnknown")
+    : data.scanPaused
     ? t('mowgliNextPage.sublineScanPaused')
+    : isResumingMowing
+      ? t('mowgliNextPage.sublineResumingMowing')
     : data.isMoving
       ? t('mowgliNextPage.sublineMoving', {gps: data.gpsLabel.toLowerCase(), area: data.currentArea ?? t('mowgliNextPage.activeZone')})
       : chargeHold
         ? chargeHold.autoResume
-          ? t('mowgliNextPage.sublineChargeHold', {full: data.batteryFullPercent, manual: chargeHold.manualResumePercent})
+          ? t('mowgliNextPage.sublineChargeHold')
           : t('mowgliNextPage.sublineManualChargeHold')
         : data.charging
-      ? t('mowgliNextPage.sublineCharging', {current: data.current.toFixed(1)})
+      ? t('mowgliNextPage.sublineCharging', {current: data.current?.toFixed(1) ?? '—'})
       : data.emergency
         ? t('mowgliNextPage.sublineEmergency')
         : t('mowgliNextPage.sublineIdle');
@@ -360,13 +407,15 @@ export const MowgliNextPage = () => {
           <StatusOrb
             tone={data.emergency ? "alert" : data.isMoving ? "live" : data.charging ? "charging" : "resting"}
             size={10}
-            label={data.scanPaused ? t('mowgliNextPage.orbScanPaused') : data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
+            label={!data.statusKnown && !data.emergency ? t("telemetry.statusUnknown") : data.scanPaused ? t('mowgliNextPage.orbScanPaused') : data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
           />
         </motion.header>
 
         {/* Repeat-dig escalation: hardware_bridge halted the mission — the
             operator needs to know why nothing is moving and how to clear it */}
         <DigEscalationBanner variants={riseFade}/>
+        <StopReasonBanner reason={data.stopReason} detail={data.stopDetail}
+                          sessionActive={data.sessionActive} variants={riseFade}/>
 
         {/* IrriSense: the garden is wet — warn before anyone starts a mow */}
         <SoilWetBanner variants={riseFade}/>
@@ -382,9 +431,9 @@ export const MowgliNextPage = () => {
                 todayMowedM2={todayMowedM2} totalArea={totalArea}
               />
             </motion.div>
-            <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} onViewMap={() => navigate("/map")}/></motion.div>
+            <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} onViewMap={asyncHandler(() => navigate("/map"))}/></motion.div>
             <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
-            <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
+            <motion.div variants={riseFade}><HealthCard data={data} hardware={hardware} mavros={mavros}/></motion.div>
           </div>
         ) : (
           <div style={{display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 22, alignItems: 'start'}}>
@@ -398,10 +447,10 @@ export const MowgliNextPage = () => {
                   large
                 />
               </motion.div>
-              <motion.div variants={riseFade}><HealthCard data={data}/></motion.div>
+              <motion.div variants={riseFade}><HealthCard data={data} hardware={hardware} mavros={mavros}/></motion.div>
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-              <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} height={300} onViewMap={() => navigate("/map")}/></motion.div>
+              <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} height={300} onViewMap={asyncHandler(() => navigate("/map"))}/></motion.div>
               <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             </div>
           </div>
@@ -469,7 +518,7 @@ function HeroCard({
             </p>
           </div>
           <BatteryRing
-            percent={data.battery}
+            percent={data.batteryKnown ? data.battery : undefined}
             size={large ? 156 : 124}
             thickness={large ? 11 : 9}
             charging={data.charging}
@@ -478,7 +527,7 @@ function HeroCard({
               fontSize: large ? 38 : 30, fontWeight: 400, lineHeight: 1,
               color: 'var(--ink, #ECFFF4)', letterSpacing: '-0.02em',
             }}>
-              {Math.round(data.battery)}
+              {data.batteryKnown ? Math.round(data.battery) : "—"}
             </div>
             <div style={{
               fontSize: 10, color: 'rgba(236,255,244,0.42)',
@@ -602,11 +651,11 @@ function TilesRow({data}: {data: ReturnType<typeof useMowerData>}) {
     <div style={{display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10}}>
       <StatTile label="GPS" value={`${Math.round(data.gps)}`} unit="%"
                 hint={data.gpsLabel} accent="cyan" icon={<Wifi size={14}/>}/>
-      <StatTile label={t('mowgliNextPage.blades')} value={data.rpm > 0 ? Math.round(data.rpm).toString() : t('mowgliNextPage.bladesOff')}
-                unit={data.rpm > 0 ? 'rpm' : ''} hint={<>{data.bladeCurrent.toFixed(1)} A · <BladeDirectionDisplay compact/></>}
+      <StatTile label={t('mowgliNextPage.blades')} value={!Number.isFinite(data.rpm) ? "—" : data.rpm > 0 ? Math.round(data.rpm).toString() : t('mowgliNextPage.bladesOff')}
+                unit={data.rpm > 0 ? 'rpm' : ''} hint={<>{motorDisplayValue(data.bladeCurrent, 1)} A · <BladeDirectionDisplay compact/></>}
                 accent="amber" icon={<Sparkles size={14}/>}/>
-      <StatTile label={t('mowgliNextPage.motor')} value={data.motorTemp.toFixed(0)} unit="°c"
-                hint={`ESC ${data.escTemp.toFixed(0)} °C`}
+      <StatTile label={t('mowgliNextPage.motor')} value={motorDisplayValue(data.motorTemp)} unit="°c"
+                hint={`ESC ${motorDisplayValue(data.escTemp)} °C`}
                 accent={data.motorTemp > 55 ? "amber" : "lime"}
                 icon={<Thermometer size={14}/>}/>
       <StatTile label={t('mowgliNextPage.rain')} value={data.rain ? t('mowgliNextPage.rainDetected') : t('mowgliNextPage.dry')} unit=""
@@ -671,26 +720,38 @@ function StatTile({label, value, unit, hint, accent, icon}: StatTileProps) {
   );
 }
 
-type HealthRow = {k: string; ok: boolean; note: string; action?: ReactNode};
+type HealthRow = {id: string; k: string; ok: boolean; note: string; action?: ReactNode};
 
-function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
+type DashboardHardware = ReturnType<typeof useHardwareBackend>;
+type DashboardMavros = ReturnType<typeof useMavrosInfo>;
+
+export function HealthCard({data, hardware, mavros}: {
+  data: ReturnType<typeof useMowerData>;
+  hardware: DashboardHardware;
+  mavros: DashboardMavros;
+}) {
+  const asyncHandler = useAsyncHandler();
   const {t} = useTranslation();
   const navigate = useNavigate();
   const weather = useWeather();
   const rows: HealthRow[] = [
-    {k: t('mowgliNextPage.gpsSignal'),         ok: data.gps > 0,           note: data.gpsLabel},
-    {k: data.rain ? t('mowgliNextPage.rainDetectedRow') : t('mowgliNextPage.noRain'),
-                              ok: !data.rain,             note: data.rain ? t('mowgliNextPage.mowingPausedShort') : t('mowgliNextPage.conditionsOk')},
-    {k: data.emergency ? t('mowgliNextPage.alertActive') : t('mowgliNextPage.noAlerts'),
-                              ok: !data.emergency,        note: data.emergency ? t('mowgliNextPage.toRearm') : t('mowgliNextPage.allClear')},
-    {k: t('mowgliNextPage.motorTemp', {temp: data.motorTemp.toFixed(0)}),
-                              ok: data.motorTemp < 55,    note: data.motorTemp >= 55 ? t('mowgliNextPage.runningHot') : t('mowgliNextPage.nominal')},
+    {id: 'gnss', k: t('mowgliNextPage.gpsSignal'),         ok: data.gps > 0,           note: data.gpsLabel},
+    {id: 'rain', k: data.rain ? t('mowgliNextPage.rainDetectedRow') : data.rainKnown ? t('mowgliNextPage.noRain') : t('telemetry.statusUnknown'),
+                              ok: data.rainKnown && !data.rain, note: data.rain ? t('mowgliNextPage.mowingPausedShort') : data.rainKnown ? '' : t('telemetry.statusUnknown')},
+    {id: 'emergency', k: data.clearanceUnverified ? t('telemetry.emergencyClearanceUnverified') : data.emergency ? t('mowgliNextPage.alertActive') : data.emergencyKnown ? t('mowgliNextPage.noAlerts') : t('telemetry.statusUnknown'),
+                              ok: data.emergencyKnown && !data.emergency, note: data.emergency ? t('mowgliNextPage.toRearm') : data.emergencyKnown ? '' : t('telemetry.statusUnknown')},
+    ...(Number.isFinite(data.motorTemp) ? [{id: 'motor-temperature', k: t('mowgliNextPage.motorTemp', {temp: motorDisplayValue(data.motorTemp)}),
+                              ok: data.motorTemp < 55,    note: data.motorTemp >= 55 ? t('mowgliNextPage.runningHot') : t('mowgliNextPage.nominal')}] : []),
   ];
+  // STM32 firmware compatibility belongs exclusively to the native Mowgli
+  // backend. MAVROS leaves those Status fields unset/false, which must never
+  // be interpreted as an incompatible autopilot firmware.
   // Firmware compatibility row — only shown once the bridge has reported a
   // verdict (firmwareCompatible !== null). When incompatible, it reads red and
   // tells the operator to reflash; mowing is blocked by PreFlightCheck.
-  if (data.firmwareCompatible !== null) {
+  if (!hardware.loading && hardware.backend === "mowgli" && data.firmwareCompatible !== null) {
     rows.push({
+      id: 'firmware',
       k: data.firmwareCompatible
         ? t('mowgliNextPage.firmwareOk')
         : t('mowgliNextPage.firmwareIncompatible'),
@@ -704,15 +765,36 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
         <Button
           type="primary"
           size="small"
-          onClick={() => navigate('/settings?section=updates')}
+          onClick={asyncHandler(() => navigate('/settings?section=updates'))}
         >
           {t('mowgliNextPage.firmwareFlashCta')}
         </Button>
       ),
     });
   }
+  if (!hardware.loading && hardware.backend === "mavros") {
+    const provider = mavrosAutopilotName(mavros.vehicle?.autopilot);
+    const firmware = formatMavrosFirmwareVersion(mavros.vehicle);
+    const board = formatMavrosBoardIdentity(mavros.vehicle);
+    rows.push({
+      id: 'fcu-connection',
+      k: mavros.state.connected
+        ? t('mowgliNextPage.mavrosFcuConnected')
+        : t('mowgliNextPage.mavrosFcuDisconnected'),
+      ok: mavros.state.connected === true,
+      note: [provider, firmware].filter(Boolean).join(' · ') || t('mowgliNextPage.mavrosWaitingInfo'),
+    });
+    if (board) {
+      rows.push({
+        id: 'fcu-board',
+        k: t('mowgliNextPage.mavrosAutopilotBoard'),
+        ok: mavros.state.connected === true,
+        note: board,
+      });
+    }
+  }
   return (
-    <GlassCard padding={20}>
+    <GlassCard padding={20} className="health-card">
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         marginBottom: 14,
@@ -727,24 +809,27 @@ function HealthCard({data}: {data: ReturnType<typeof useMowerData>}) {
           <WeatherChip condition={weather.condition} tempC={weather.temp_c} rainSoon={weather.is_raining}/>
         )}
       </div>
-      <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
-        {rows.map(r => (
-          <div key={r.k} style={{display: 'flex', alignItems: 'center', gap: 12}}>
-            <span style={{
-              width: 8, height: 8, borderRadius: 4,
-              background: r.ok ? 'var(--lime, #7CFFB2)' : 'var(--rose, #FF6B7A)',
-              boxShadow: r.ok ? '0 0 8px rgba(124,255,178,0.4)' : '0 0 8px rgba(255,107,122,0.4)',
-              flexShrink: 0,
-            }}/>
-            <div style={{flex: 1, minWidth: 0}}>
-              <div style={{fontSize: 13, fontWeight: 600, color: 'var(--ink, #ECFFF4)'}}>{r.k}</div>
-              <div style={{fontSize: 11, color: 'rgba(236,255,244,0.42)'}}>{r.note}</div>
+      <div className="health-card-body">
+        <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+          {rows.map(r => (
+            <div key={r.id} style={{display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap'}}>
+              <span style={{
+                width: 8, height: 8, borderRadius: 4,
+                background: r.ok ? 'var(--lime, #7CFFB2)' : 'var(--rose, #FF6B7A)',
+                boxShadow: r.ok ? '0 0 8px rgba(124,255,178,0.4)' : '0 0 8px rgba(255,107,122,0.4)',
+                flexShrink: 0,
+              }}/>
+              <div style={{flex: '1 1 90px', minWidth: 0}}>
+                <div style={{fontSize: 13, fontWeight: 600, color: 'var(--ink, #ECFFF4)'}}>{r.k}</div>
+                <div style={{fontSize: 11, color: 'rgba(236,255,244,0.42)'}}>{r.note}</div>
+              </div>
+              {r.action && <div style={{flexShrink: 0}}>{r.action}</div>}
             </div>
-            {r.action && <div style={{flexShrink: 0}}>{r.action}</div>}
-          </div>
-        ))}
+          ))}
+        </div>
+        <StatusMowerIllustration settings={data.settings} docked={data.docked}/>
       </div>
-      <Button type="link" onClick={() => navigate('/settings?section=updates')} style={{paddingLeft: 0, marginTop: 10}}>
+      <Button type="link" onClick={asyncHandler(() => navigate('/settings?section=updates'))} style={{paddingLeft: 0, marginTop: 10}}>
         {t('updates.title')}
       </Button>
     </GlassCard>

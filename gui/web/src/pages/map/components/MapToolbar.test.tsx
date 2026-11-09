@@ -1,3 +1,6 @@
+import type {ComponentProps} from 'react';
+import type AsyncButton from '../../../components/AsyncButton.tsx';
+import type AsyncDropDownButton from '../../../components/AsyncDropDownButton.tsx';
 import {describe, it, expect, vi, beforeEach} from 'vitest';
 import {render, screen} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -5,12 +8,13 @@ import {MapToolbar} from './MapToolbar.tsx';
 import en from "../../../i18n/locales/en.json";
 
 vi.mock('../../../components/AsyncButton.tsx', () => ({
-    default: ({children, onAsyncClick, ...props}: any) => (
-        <button onClick={onAsyncClick} {...props}>{children}</button>
-    ),
+    default: ({children, onAsyncClick, ...props}: Pick<ComponentProps<typeof AsyncButton>, 'children' | 'onAsyncClick' | 'danger'>) => {
+        delete props.danger;
+        return <button onClick={event => {void onAsyncClick(event);}} {...props}>{children}</button>;
+    },
 }));
 vi.mock('../../../components/AsyncDropDownButton.tsx', () => ({
-    default: ({children, ...props}: any) => (
+    default: ({children, ...props}: Pick<ComponentProps<typeof AsyncDropDownButton>, 'children'>) => (
         <button {...props}>{children}</button>
     ),
 }));
@@ -38,6 +42,15 @@ describe('MapToolbar', () => {
         onEmergencyOn: vi.fn().mockResolvedValue(undefined),
         onEmergencyOff: vi.fn().mockResolvedValue(undefined),
     };
+
+    it("links to Hardware instead of offering separate mower/dock image selectors", async () => {
+        const user = userEvent.setup();
+        render(<MapToolbar {...defaultProps} />);
+        await user.click(screen.getByText(en.mapToolbar.more));
+        expect(screen.getByRole("link", {name: en.mowerVisual.hardwareLink})).toHaveAttribute("href", "#/settings?section=hardware");
+        expect(screen.queryByText(en.mapToolbar.dockAppearance)).not.toBeInTheDocument();
+        expect(screen.queryByText(en.mapToolbar.mowerAppearance)).not.toBeInTheDocument();
+    });
 
     beforeEach(() => {
         vi.clearAllMocks();

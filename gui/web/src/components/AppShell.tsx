@@ -1,4 +1,7 @@
-import {type ReactNode, useEffect, useMemo, useState} from "react";
+import {observeAsync} from "../utils/async";
+import {isJsonObject} from "../utils/json";
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
+import {type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {useMatches, useNavigate, useOutlet} from "react-router-dom";
 import {AnimatePresence, motion, LayoutGroup} from "framer-motion";
 import {
@@ -12,6 +15,7 @@ import {MowerStatus} from "./MowerStatus.tsx";
 import {NotificationBell} from "./NotificationBell.tsx";
 import {LanguageSwitcher} from "./LanguageSwitcher.tsx";
 import {LiveStatusStrip} from "./LiveStatusStrip.tsx";
+import {HardwareBackendBadge} from "./HardwareBackendBadge.tsx";
 import {IOSInstallBanner} from "./IOSInstallBanner.tsx";
 import {useIOSInstallPrompt} from "../hooks/useIOSInstallPrompt.ts";
 import {useAutoNotifications} from "../hooks/useNotificationCenter.tsx";
@@ -71,6 +75,7 @@ const PAGE_META: Record<string, {titleKey: string; subtitleKey?: string}> = {
 };
 
 export function AppShell() {
+  const asyncHandler = useAsyncHandler();
   const {colors} = useThemeMode();
   const {t} = useTranslation();
   const navigate = useNavigate();
@@ -89,7 +94,7 @@ export function AppShell() {
   // and we lost it in the AppShell rewrite).
   useEffect(() => {
     if (route.length === 1 && route[0].pathname === '/') {
-      navigate({pathname: '/mowglinext'}, {replace: true});
+      observeAsync(navigate({pathname: '/mowglinext'}, {replace: true}));
     }
   }, [route, navigate]);
 
@@ -97,16 +102,26 @@ export function AppShell() {
   const [configChecked, setConfigChecked] = useState(false);
   useEffect(() => {
     if (configChecked) return;
-    (async () => {
+    let active = true;
+    observeAsync((async () => {
       try {
         const res = await fetch(`${httpBase()}/api/settings/status`);
-        const data = await res.json();
-        if (!data.onboarding_completed && currentPath !== '/onboarding') {
-          navigate({pathname: '/onboarding'});
+        if (!active) return;
+        if (!res.ok) throw new Error('Onboarding status unavailable');
+        const data: unknown = await res.json();
+        if (!active) return;
+        if (!isJsonObject(data) || typeof data.onboarding_completed !== 'boolean') {
+          throw new Error('Invalid onboarding status');
         }
-      } catch { /* ignore */ }
-      setConfigChecked(true);
-    })();
+        if (data.onboarding_completed === false && currentPath !== '/onboarding') {
+          observeAsync(navigate({pathname: '/onboarding'}));
+        }
+      } catch (error) {
+        if (active) console.error('Failed to check onboarding status', error);
+      }
+      if (active) setConfigChecked(true);
+    })());
+    return () => { active = false; };
   }, [configChecked, currentPath, navigate]);
 
   // Auto-notifications hook (BT-state derived push notifications)
@@ -114,7 +129,7 @@ export function AppShell() {
   const emergency = useEmergency();
   const hwStatus = useStatus();
   useAutoNotifications({
-    emergencyActive: highLevelStatus.emergency ?? emergency.active_emergency ?? false,
+    emergencyActive: highLevelStatus.emergency === true || emergency.active_emergency === true,
     emergencyLatched: emergency.latched_emergency ?? false,
     rainDetected: hwStatus.rain_detected ?? false,
     state: highLevelStatus.state_name,
@@ -169,8 +184,13 @@ export function AppShell() {
             <LanguageSwitcher/>
             <NotificationBell/>
           </div>
-          <div style={{width:'100%', display:'flex', justifyContent:'flex-end', marginTop:4}}><MowerStatus/></div>
+          <div style={{width:'100%', display:'flex', flexWrap:'wrap', alignItems:'center', justifyContent:'space-between', gap:8, marginTop:4}}>
+            <HardwareBackendBadge/>
+            <MowerStatus/>
+          </div>
         </header>
+
+        {showInstallBanner && <IOSInstallBanner onDismiss={dismissInstallBanner}/>}
 
         <main style={{
           flex: 1, overflow: 'auto', minHeight: 0,
@@ -180,20 +200,18 @@ export function AppShell() {
           <AnimatedOutlet currentPath={currentPath}/>
         </main>
 
-        {showInstallBanner && <IOSInstallBanner onDismiss={dismissInstallBanner}/>}
-
         <MobileMoreSheet
           open={moreOpen}
           items={overflowItems}
           activePath={currentPath}
           onClose={() => setMoreOpen(false)}
-          onNavigate={(k) => { setMoreOpen(false); navigate({pathname: k}); }}
+          onNavigate={(k) => { setMoreOpen(false); observeAsync(navigate({pathname: k})); }}
         />
 
         <MobileBottomNav
           items={bottomItems}
           activePath={currentPath}
-          onNavigate={(k) => navigate({pathname: k})}
+          onNavigate={asyncHandler((k) => navigate({pathname: k}))}
           onMore={() => setMoreOpen(true)}
           moreActive={overflowItems.some(n => n.key === currentPath) || moreOpen}
         />
@@ -215,7 +233,7 @@ export function AppShell() {
       <DesktopSideRail
         items={NAV}
         activePath={currentPath}
-        onNavigate={(k) => navigate({pathname: k})}
+        onNavigate={asyncHandler((k) => navigate({pathname: k}))}
       />
 
       <div style={{
@@ -246,6 +264,7 @@ export function AppShell() {
             )}
           </div>
           <div style={{display: 'flex', alignItems: 'center', gap: 12}}>
+            <HardwareBackendBadge/>
             <LanguageSwitcher/>
             <NotificationBell/>
             <MowerStatus/>
@@ -287,8 +306,10 @@ function AnimatedOutlet({currentPath}: {currentPath: string}) {
   const outlet = useOutlet();
   // Scrolling pages must grow with their content so main's bottom padding
   // follows the final control instead of sitting behind overflowing children.
-  // Map and logs own their viewport layout and still need a definite height.
-  const fillViewport = currentPath === '/map' || currentPath === '/logs';
+  // Map needs a definite height. Logs flex to fill the viewport but may grow
+  // on short screens, keeping main's bottom clearance after the final control.
+  const fillViewport = currentPath === '/map';
+  const isLogs = currentPath === '/logs';
   return (
     <AnimatePresence mode="wait">
       <motion.div
@@ -297,7 +318,8 @@ function AnimatedOutlet({currentPath}: {currentPath: string}) {
         animate={{opacity: 1, y: 0}}
         exit={{opacity: 0, y: -6}}
         transition={{duration: 0.28, ease: [0.2, 0.7, 0.2, 1]}}
-        style={{minHeight: '100%', height: fillViewport ? '100%' : undefined}}
+        style={{minHeight: '100%', height: fillViewport ? '100%' : undefined,
+          display: isLogs ? 'flex' : undefined, flexDirection: isLogs ? 'column' : undefined}}
       >
         {outlet}
       </motion.div>
@@ -508,17 +530,36 @@ function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreShe
   const navigate = useNavigate();
   const {displayMode} = useThemeMode();
 
-  // Escape closes the sheet (keyboard parity with the backdrop tap / X button).
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, onClose]);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  // Native modal dialogs move/contain focus, make the rest of the document
+  // inert, and restore the opener when closed (including on navigation).
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open) dialog.showModal();
+    else dialog.close();
+    return () => { dialog.close(); };
+  }, [open]);
 
   return (
+    <dialog
+      ref={dialogRef}
+      aria-label={t('nav.more')}
+      onCancel={e => { e.preventDefault(); onClose(); }}
+      onKeyDown={e => {
+        if (e.key !== 'Tab') return;
+        const buttons = e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)');
+        const first = buttons[0], last = buttons[buttons.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }}
+      style={{position: 'fixed', inset: 0, margin: 0, padding: 0, border: 'none', width: '100%', height: '100%', maxWidth: 'none', maxHeight: 'none', background: 'transparent'}}
+    >
     <AnimatePresence>
       {open && (
         <>
@@ -542,7 +583,7 @@ function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreShe
           >
             <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12}}>
               <span style={{fontSize: 13, fontWeight: 600, color: 'rgba(236, 255, 244, 0.66)'}}>{t('nav.more')}</span>
-              <button onClick={onClose} aria-label={t('nav.close')} style={{
+              <button autoFocus onClick={onClose} aria-label={t('nav.close')} style={{
                 background: 'transparent', border: 'none', cursor: 'pointer', color: 'rgba(236, 255, 244, 0.66)',
                 display: 'flex', padding: 4,
               }}>
@@ -573,6 +614,7 @@ function MobileMoreSheet({open, items, activePath, onClose, onNavigate}: MoreShe
         </>
       )}
     </AnimatePresence>
+    </dialog>
   );
 }
 

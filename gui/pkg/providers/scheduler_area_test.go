@@ -162,3 +162,13 @@ func TestCheckSchedules_RejectedAreaStartDoesNotPersistLastRun(t *testing.T) {
 
 	assert.Nil(t, readSchedule(t, db, "rejected").LastRun, "a rejected start is not a run")
 }
+
+func TestDescribeScheduleClock_NamesTheZoneAndTheLocalTime(t *testing.T) {
+	cest := time.FixedZone("CEST", 2*60*60)
+	now := time.Date(2026, 10, 6, 8, 15, 0, 0, cest)
+
+	got := describeScheduleClock(now)
+
+	assert.Contains(t, got, "CEST", "the zone must be visible, a UTC container is the failure to spot")
+	assert.Contains(t, got, "08:15")
+}

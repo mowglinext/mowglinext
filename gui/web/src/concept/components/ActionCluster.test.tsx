@@ -31,13 +31,15 @@ describe("ActionCluster charge holds", () => {
     expect(handlers.onResume).toHaveBeenCalledOnce();
     expect(handlers.onCancelMowing).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", {name: "Emergency stop"})).toBeInTheDocument();
+    expect(screen.getAllByText("Cancel mowing")).toHaveLength(1);
+    expect(screen.getByText("Available from 30%")).toBeInTheDocument();
   });
 
   it("reflects the configured manual-resume floor without replacing BT enforcement", () => {
     renderCluster({stateName: "CHARGING", batteryPercent: 29, batteryFullPercent: 92, manualResumePercent: 30, autoResume: true});
     expect(screen.getByRole("button", {name: "Resume now"})).toBeDisabled();
-    expect(screen.getByText(/resumes automatically at 92%/i)).toBeInTheDocument();
-    expect(screen.getByText(/Resume is available at 30%/)).toBeInTheDocument();
+    expect(screen.getByText("Available from 30%")).toBeInTheDocument();
+    expect(screen.queryByText(/resumes automatically/i)).not.toBeInTheDocument();
   });
 
   it("keeps a manual dock charge hold cancellable without a resume control", () => {
@@ -45,6 +47,7 @@ describe("ActionCluster charge holds", () => {
     expect(screen.queryByRole("button", {name: "Resume now"})).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", {name: "Cancel mowing"}));
     expect(handlers.onCancelMowing).toHaveBeenCalledOnce();
-    expect(screen.getByText(/docked manually/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Cancel mowing")).toHaveLength(1);
+    expect(screen.queryByText(/Available from/)).not.toBeInTheDocument();
   });
 });

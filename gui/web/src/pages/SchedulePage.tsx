@@ -1,3 +1,6 @@
+import {isIntegerSetting} from '../utils/settingsContract';
+import {observeAsync} from "../utils/async";
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
 import {App, Modal, Radio, Switch, Tag, TimePicker, Tooltip} from "antd";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {useTranslation} from "react-i18next";
@@ -25,6 +28,13 @@ interface Schedule {
   lastSkippedAt?: string;
 }
 
+function isConfirmedSchedule(value: unknown): value is Schedule {
+  if (typeof value !== 'object' || value === null) return false;
+  const row = value as Partial<Schedule>;
+  return typeof row.id === 'string' && typeof row.enabled === 'boolean' &&
+    typeof row.time === 'string' && Array.isArray(row.daysOfWeek);
+}
+
 const DAY_KEYS = ["dayMon", "dayTue", "dayWed", "dayThu", "dayFri", "daySat", "daySun"] as const;
 const DAY_LETTER_KEYS = ["letterSun", "letterMon", "letterTue", "letterWed", "letterThu", "letterFri", "letterSat"] as const;
 
@@ -48,6 +58,7 @@ function errorMessage(e: unknown): string | undefined {
 }
 
 export const SchedulePage = () => {
+  const asyncHandler = useAsyncHandler();
   const {t} = useTranslation();
   const {colors} = useThemeMode();
   const {settings} = useSettings();
@@ -60,35 +71,56 @@ export const SchedulePage = () => {
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(false);
   const fetchedRef = useRef(false);
+  const confirmedRef = useRef<Schedule[]>([]);
+  const loadGenerationRef = useRef(0);
+  const needsRefreshRef = useRef(false);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  // Keep click order, but derive every edit from the last server-confirmed
+  // row, never from the render captured while another PUT was pending.
+  const queueWrite = (write: () => Promise<void>) => {
+    const pending = writeQueueRef.current.then(write);
+    writeQueueRef.current = pending.catch(() => undefined);
+    return pending;
+  };
   const map = useMowingMap();
   // The schedule whose area dialog is open, and the choice made in it (0 = all areas).
   const [areaDialogId, setAreaDialogId] = useState<string | null>(null);
   const [areaChoice, setAreaChoice] = useState(0);
 
   const fetchSchedules = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
     try {
       const response = await guiApi.request<{ schedules: Schedule[] }>({
         path: "/schedules", method: "GET", format: "json",
       });
-      setSchedules(response.data.schedules ?? []);
+      if (generation !== loadGenerationRef.current) return false;
+      const confirmed = response.data?.schedules;
+      if (!Array.isArray(confirmed) || !confirmed.every(isConfirmedSchedule)) throw new Error('Invalid schedule response');
+      confirmedRef.current = confirmed;
+      needsRefreshRef.current = false;
+      setSchedules(confirmed);
+      return true;
     } catch {
       notification.error({message: t('schedulePage.failedToLoad')});
+      return false;
     }
   }, [guiApi, notification, t]);
 
   useEffect(() => {
     if (fetchedRef.current) return;
     fetchedRef.current = true;
-    fetchSchedules();
+    observeAsync(fetchSchedules());
   }, [fetchSchedules]);
 
-  const handleCreate = async (body?: Partial<Schedule>) => {
+  const handleCreate = (body?: Partial<Schedule>) => {
     setLoading(true);
-    try {
-      await guiApi.request({
-        path: "/schedules", method: "POST",
-        body: {areaId: 0, time: "09:00", daysOfWeek: [1, 2, 3, 4, 5], enabled: false, ...body},
-        format: "json",
+    return queueWrite(async () => {
+      try {
+        await guiApi.request({
+          path: "/schedules", method: "POST",
+          body: {areaId: 0, time: "09:00", daysOfWeek: [1, 2, 3, 4, 5], enabled: false, ...body},
+          format: "json",
       });
       await fetchSchedules();
       // New schedules are created disabled for safety; tell the operator so an
@@ -102,6 +134,7 @@ export const SchedulePage = () => {
     } finally {
       setLoading(false);
     }
+    });
   };
 
   const STARTER_TEMPLATES: { name: string; subtitle: string; body: Partial<Schedule>; icon: string }[] = [
@@ -133,7 +166,7 @@ export const SchedulePage = () => {
         return (
           <button
             key={tpl.name}
-            onClick={() => handleCreate(tpl.body)}
+            onClick={asyncHandler(() => handleCreate(tpl.body))}
             disabled={loading}
             style={{
               textAlign: 'left',
@@ -163,19 +196,37 @@ export const SchedulePage = () => {
     </div>
   );
 
-  const handleUpdate = async (sched: Schedule) => {
+  const handleUpdate = (id: string, edit: (confirmed: Schedule) => Schedule | null) => queueWrite(async () => {
     try {
-      await guiApi.request({path: `/schedules/${sched.id}`, method: "PUT", body: sched, format: "json"});
-      await fetchSchedules();
+      // A failed write might have reached the server. Do not base another
+      // full PUT on an unconfirmed enabled value if the readback also fails.
+      if (needsRefreshRef.current && !await fetchSchedules()) return;
+      const current = confirmedRef.current.find(s => s.id === id);
+      if (!current) return;
+      const next = edit(current);
+      if (!next) return;
+      ++loadGenerationRef.current;
+      needsRefreshRef.current = true;
+      const response = await guiApi.request<Schedule>({path: `/schedules/${id}`, method: "PUT", body: next, format: "json"});
+      ++loadGenerationRef.current;
+      const confirmed = response.data;
+      if (isConfirmedSchedule(confirmed) && confirmed.id === id) {
+        const rows = confirmedRef.current.map(s => s.id === id ? confirmed : s);
+        confirmedRef.current = rows;
+        needsRefreshRef.current = false;
+        setSchedules(rows);
+      } else {
+        // Compatibility with clients/proxies returning an empty success body:
+        // only a successful readback may make subsequent writes admissible.
+        await fetchSchedules();
+      }
     } catch (e) {
-      // 409 = the change would make two enabled schedules overlap; the server's
-      // message names the clashing start time.
       notification.error({
         message: errorStatus(e) === 409 ? t('schedulePage.overlapTitle') : t('schedulePage.failedToUpdate'),
         description: errorMessage(e),
       });
     }
-  };
+  });
 
   // Mowing areas the operator can pick (navigation areas are never mowed).
   const areaOptions = (map.working_area ?? [])
@@ -202,19 +253,23 @@ export const SchedulePage = () => {
   const saveAreaChoice = () => {
     const sched = schedules.find(s => s.id === areaDialogId);
     setAreaDialogId(null);
-    if (!sched || (sched.areaId ?? 0) === areaChoice) return;
+    if (!sched) return;
     const picked = areaOptions.find(a => a.id === areaChoice);
-    void handleUpdate({...sched, areaId: areaChoice, areaName: picked?.name ?? ""});
+    void handleUpdate(sched.id, current => (current.areaId ?? 0) === areaChoice
+      ? null
+      : {...current, areaId: areaChoice, areaName: picked?.name ?? ""});
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = (id: string) => queueWrite(async () => {
     try {
+      ++loadGenerationRef.current;
+      needsRefreshRef.current = true;
       await guiApi.request({path: `/schedules/${id}`, method: "DELETE", format: "json"});
       await fetchSchedules();
     } catch (e) {
       notification.error({message: t('schedulePage.failedToDelete'), description: errorMessage(e)});
     }
-  };
+  });
 
   const confirmDelete = (id: string) => {
     modal.confirm({
@@ -228,30 +283,29 @@ export const SchedulePage = () => {
   };
 
   const toggleDay = (sched: Schedule, day: number) => {
-    const isRemoving = sched.daysOfWeek.includes(day);
-    // A schedule with zero days is meaningless and the backend rejects it with
-    // a generic 400. Block un-toggling the last remaining day client-side.
-    if (isRemoving && sched.daysOfWeek.length <= 1) return;
-    const days = isRemoving
-      ? sched.daysOfWeek.filter(d => d !== day)
-      : [...sched.daysOfWeek, day];
-    handleUpdate({...sched, daysOfWeek: days});
+    observeAsync(handleUpdate(sched.id, current => {
+      const isRemoving = current.daysOfWeek.includes(day);
+      if (isRemoving && current.daysOfWeek.length <= 1) return null;
+      const days = isRemoving ? current.daysOfWeek.filter(d => d !== day) : [...current.daysOfWeek, day];
+      return {...current, daysOfWeek: days};
+    }));
   };
 
   // Color per schedule index
   const schedColors = [colors.accent, colors.sky, colors.amber, colors.pink];
 
   // Build grid runs from schedules for weekly view
-  const hours = [6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
+  const hours = Array.from({length: 24}, (_, h) => h);
   const gridRuns = schedules.flatMap((sched, si) => {
-    const startH = parseInt(sched.time.split(':')[0]);
+    const startH = Number(sched.time.split(':')[0]);
     return sched.daysOfWeek
       .filter(d => d >= 0 && d <= 6)
       .map(dayIndex => ({
         area: sched.areaId ? areaLabel(sched).text : null,
         day: dayIndex === 0 ? 6 : dayIndex - 1, // convert Sun=0..Sat=6 to Mon=0..Sun=6
-        start: startH,
-        end: Math.min(startH + 1, 20),
+        id: sched.id,
+        hour: startH,
+        time: sched.time,
         color: schedColors[si % schedColors.length],
         enabled: sched.enabled,
       }));
@@ -269,7 +323,7 @@ export const SchedulePage = () => {
           <Switch
             aria-label={t("schedulePage.enableSchedule", {index: idx + 1})}
             checked={sched.enabled}
-            onChange={(checked) => handleUpdate({...sched, enabled: checked})}
+            onChange={asyncHandler((checked) => handleUpdate(sched.id, current => ({...current, enabled: checked})))}
           />
           <Tag color={sched.enabled ? "success" : "default"}>{t(sched.enabled ? "schedulePage.on" : "schedulePage.inactive")}</Tag>
           {/* One area or all: "all" is a plain Start, a specific area goes through
@@ -293,7 +347,7 @@ export const SchedulePage = () => {
           aria-label={t("schedulePage.startTime")}
           value={dayjs(sched.time, "HH:mm")}
           format="HH:mm"
-          onChange={(val) => { if (val) handleUpdate({...sched, time: val.format("HH:mm")}); }}
+          onChange={(val) => { if (val) observeAsync(handleUpdate(sched.id, current => ({...current, time: val.format("HH:mm")}))); }}
           style={{width: '100%'}}
           size="large"
         />
@@ -414,7 +468,7 @@ export const SchedulePage = () => {
       <div style={{display: 'flex', flexDirection: 'column', gap: 12, paddingBottom: 8}}>
         <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12}}>
           {pageHeader}
-          <ActionButton primary icon={<IconPlus size={14}/>} label={t('schedulePage.newRun')} onClick={() => handleCreate()} disabled={loading}/>
+          <ActionButton primary icon={<IconPlus size={14}/>} label={t('schedulePage.newRun')} onClick={asyncHandler(() => handleCreate())} disabled={loading}/>
         </div>
         {schedules.length === 0 && (
           <>
@@ -442,7 +496,10 @@ export const SchedulePage = () => {
       {areaDialog}
       {/* Weekly grid */}
       <DashCard>
-        <div style={{display: 'grid', gridTemplateColumns: '48px repeat(7, 1fr)', gap: 6}}>
+        <div style={{fontSize: 12, color: colors.textSecondary, marginBottom: 12}}>
+          {t('schedulePage.startSpacingHint')}
+        </div>
+        <div role="region" aria-label={t('schedulePage.weeklyOverview')} style={{display: 'grid', gridTemplateColumns: '48px repeat(7, 1fr)', gap: 6}}>
           <div/>
           {DAY_KEYS.map(dKey => (
             <div key={dKey} style={{textAlign: 'center', fontSize: 11, color: colors.textDim, fontWeight: 600, padding: '2px 0 10px'}}>
@@ -455,26 +512,20 @@ export const SchedulePage = () => {
                 {h}:00
               </div>
               {DAY_KEYS.map((_, di) => {
-                const run = gridRuns.find(r => r.day === di && h >= r.start && h < r.end);
-                const isStart = run && run.start === h;
+                const runs = gridRuns.filter(r => r.day === di && r.hour === h)
+                  .sort((a, b) => a.time.localeCompare(b.time));
                 return (
-                  <div key={di} style={{
-                    minHeight: 32,
-                    background: run?.enabled ? `${run.color}22` : colors.bgSubtle,
-                    borderRadius: isStart ? '8px 8px 0 0' : (run && run.end - 1 === h ? '0 0 8px 8px' : 0),
-                    borderStyle: run && !run.enabled ? 'dashed' : 'solid',
-                    borderColor: run ? run.enabled ? run.color : colors.muted : colors.border,
-                    borderWidth: 1,
-                    borderBottomWidth: run && run.end - 1 !== h ? 0 : 1,
-                    borderTopWidth: run && !isStart ? 0 : 1,
-                    padding: isStart ? '6px 8px' : 0,
-                  }}>
-                    {isStart && (
-                      <>
+                  <div key={di} style={{minHeight: 32, background: colors.bgSubtle, border: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', gap: 4}}>
+                    {runs.map(run => (
+                      <div key={run.id} style={{
+                        background: run.enabled ? `${run.color}22` : colors.bgSubtle,
+                        borderRadius: 8, padding: '6px 8px', overflowWrap: 'anywhere',
+                        border: `1px ${run.enabled ? 'solid' : 'dashed'} ${run.enabled ? run.color : colors.muted}`,
+                      }}>
                         <div style={{fontSize: 11, fontWeight: 700, color: run.enabled ? run.color : colors.textSecondary, lineHeight: 1.1}}>{run.enabled ? (run.area ? t('schedulePage.blockStartArea', {area: run.area}) : t('schedulePage.blockStartHint')) : t('schedulePage.inactive')}</div>
-                        <div style={{fontSize: 10, color: colors.textDim, marginTop: 2}}>{run.start}:00 -- {run.end}:00</div>
-                      </>
-                    )}
+                        <time dateTime={run.time} style={{display: 'block', fontSize: 10, color: colors.textDim, marginTop: 2}}>{run.time}</time>
+                      </div>
+                    ))}
                   </div>
                 );
               })}
@@ -517,7 +568,7 @@ export const SchedulePage = () => {
           <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12}}>
             <div style={{fontSize: 13, fontWeight: 600}}>{t('schedulePage.schedules')}</div>
             <ActionButton primary icon={<IconPlus size={14}/>} label={t('schedulePage.newRun')}
-                     onClick={() => handleCreate()} disabled={loading}
+                     onClick={asyncHandler(() => handleCreate())} disabled={loading}
                      style={{padding: '8px 14px', fontSize: 12}}/>
           </div>
           <div style={{fontSize: 13, color: colors.textDim, lineHeight: 1.6}}>
@@ -533,7 +584,7 @@ export const SchedulePage = () => {
             {t('schedulePage.rulesDescription')}
           </div>
           {[
-            {k: t('schedulePage.ruleRainAware'), on: Number.isInteger(rainMode) && rainLabels[rainMode] ? rainMode > 0 : null, hint: Number.isInteger(rainMode) && rainLabels[rainMode] ? t(`settingsRain.${rainLabels[rainMode]}`) : t('schedulePage.unknown')},
+            {k: t('schedulePage.ruleRainAware'), on: isIntegerSetting(rainMode) && rainLabels[rainMode] ? rainMode > 0 : null, hint: isIntegerSetting(rainMode) && rainLabels[rainMode] ? t(`settingsRain.${rainLabels[rainMode]}`) : t('schedulePage.unknown')},
             {k: t('schedulePage.ruleAutoDockLow'), on: typeof batteryLow === 'number' ? true : null, hint: typeof batteryLow === 'number' ? t('schedulePage.ruleAutoDockLowHint', {percent: batteryLow}) : t('schedulePage.unknown')},
           ].map(r => (
             <div key={r.k} style={{display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0'}}>

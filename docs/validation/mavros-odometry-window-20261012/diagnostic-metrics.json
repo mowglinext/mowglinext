@@ -1,0 +1,49 @@
+{
+  "name": "odom_pass_1",
+  "phase": "odometry",
+  "target_speed": 0.4,
+  "measured_speed_mean": 0.0504521119541996,
+  "measured_speed_rms": 0.050758503496650814,
+  "error_mean": 0.3495478880458004,
+  "error_rms": 0.3495922426397071,
+  "overshoot": 0.0,
+  "settling_time": null,
+  "ticks_seen": 133116,
+  "left_ticks_seen": 133292,
+  "right_ticks_seen": 132939,
+  "stall_detected": false,
+  "oscillation_detected": false,
+  "live_oscillation_detected": false,
+  "oscillation_severity": "none",
+  "live_oscillation_severity": "none",
+  "trial_quality": "warning",
+  "integral_saturation_suspected": false,
+  "params_used": {
+    "ticks_per_meter": 343.0
+  },
+  "warnings": [
+    "Low coefficient-derived odometry speed is not proof of physical stall; RTK calibration required."
+  ],
+  "ground_speed_mean": 0.40400444440119526,
+  "ground_error_mean": -0.00400444440119524,
+  "odom_distance_m": 0.32405518033479414,
+  "rtk_distance_m": 2.2308872872615764,
+  "rtk_accepted": true,
+  "left_right_tick_imbalance": 0.0026518324312345292,
+  "notes": [],
+  "calibration_window": {
+    "start_stamp_ns": 1791821863995160983,
+    "end_stamp_ns": 1791821869517098472,
+    "left_motor_revolutions": 98.32763870128338,
+    "right_motor_revolutions": 97.84687436425085,
+    "rtk_distance_m": 2.2308872872615764,
+    "ticks_per_meter": 43.96782262055455,
+    "counter_unit": "motor_revolution",
+    "source": "ardupilot_legacy",
+    "left_epoch": 2,
+    "left_segment": 1,
+    "right_epoch": 2,
+    "right_segment": 1,
+    "gnss_backend": "mavros_gps2"
+  }
+}

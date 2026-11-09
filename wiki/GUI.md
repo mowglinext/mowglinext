@@ -48,11 +48,13 @@ The dashboard adapts to the mower's current state with a **hero card**. It alway
 | State | Headline | Primary button |
 |-------|----------|----------------|
 | **Mowing / recording / manual** | Minutes left before the robot heads home (live ETA from the remaining un-mowed cells) | **Pause** -- stop in place (`COMMAND_STOP`); Nav2 stays up so `COMMAND_START` resumes the mission |
-| **Charging** | Battery percentage | **Start mowing** (`COMMAND_START`) |
+| **Charging with no active mowing session** | Battery percentage | **Start mowing** (`COMMAND_START`) |
+| **Mid-session battery charge hold** | Mowing paused · battery percentage | **Resume now** (`COMMAND_START`), enabled from the displayed manual-resume percentage |
+| **Leaving the dock to resume** | Resuming mowing… | **Pause** (`COMMAND_STOP`) once charging contact ends |
 | **Emergency (latched)** | Emergency stop | **Re-arm** -- asks firmware to clear the latch (it only clears once the physical trigger is released) |
 | **Idle / Docked** | Idle greeting | **Start mowing** (`COMMAND_START`) |
 
-Two secondary buttons flank the primary in every state: an **emergency stop** (behind a confirm dialog -- it latches the firmware emergency) and **Send home** (`COMMAND_HOME`).
+Two secondary buttons normally flank the primary: an **emergency stop** (behind a confirm dialog -- it latches the firmware emergency) and **Send home** (`COMMAND_HOME`). During a charge hold, **Cancel mowing** (`COMMAND_STOP`) replaces Send home. Battery charge holds show one explanation: mowing resumes automatically when charging is complete. The manual-resume availability hint sits below Resume now. A manually docked active session instead asks the operator to take the mower off the dock before resuming and has no Resume now control.
 
 Next to the hero sit a **live mini-map** (areas, obstacles, the mowed-cell overlay and the robot) and a 2x2 grid of **telemetry tiles**:
 - **GPS** -- quality percentage, RTK status (Fixed/Float/GPS)
@@ -92,6 +94,19 @@ Live parameter writes require a reply from the bridge. If an update is reported 
 **unconfirmed**, the node may already have applied it: refresh the parameter list
 and check the current value before retrying. Bridges that do not reply can no
 longer report a successful write by simply echoing the requested value.
+
+### Unsaved settings
+
+YAML and integration edits remain available when switching Settings sections or
+filtering them with search. The shared Save count includes pending Notifications,
+Remote access and IrriSense changes even when their section is hidden. Save writes
+those drafts; Revert discards them. Typed replacement tokens remain in memory
+across section changes, but still need Apply/Set before Save sends them. Leaving
+Settings asks whether to discard unsaved changes or keep editing. Refreshing or closing the tab uses the browser’s
+unsaved-changes warning; drafts are not stored across a confirmed reload.
+
+In onboarding, a failed configuration save keeps the current step and draft for
+retry. It does not advance to readiness or restart GPS after that failed save.
 
 ### Settings: Remote access section
 

@@ -50,6 +50,7 @@
 #include "nav_msgs/msg/path.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "sensor_msgs/msg/nav_sat_status.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include <arpa/inet.h>
 #include <gtest/gtest.h>
 #include <netinet/in.h>
@@ -919,4 +920,644 @@ TEST(SerialiseCoveragePath, ProducesExpectedJson)
   const auto path = path_with_points({{1.0, 2.0}, {3.5, -4.25}, {0.0, 0.0}});
   EXPECT_EQ(MqttBridgeNode::serialise_coverage_path(path),
             "{\"points\":[[1.000,2.000],[3.500,-4.250],[0.000,0.000]]}");
+}
+
+// ===========================================================================
+// external_rain: <prefix>/external_rain -> /external_rain (std_msgs/Bool)
+// ===========================================================================
+
+TEST(ParseExternalRainPayload, AcceptsWetSpellings)
+{
+  for (const char* wet : {"yes", "YES", "On", "true", "TRUE", "rain", "wet", "1", "  yes\n"})
+  {
+    SCOPED_TRACE(wet);
+    const auto parsed = MqttBridgeNode::parse_external_rain_payload(wet);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_TRUE(*parsed);
+  }
+}
+
+TEST(ParseExternalRainPayload, AcceptsDrySpellings)
+{
+  for (const char* dry : {"no", "NO", "Off", "false", "FALSE", "dry", "0", "\tno "})
+  {
+    SCOPED_TRACE(dry);
+    const auto parsed = MqttBridgeNode::parse_external_rain_payload(dry);
+    ASSERT_TRUE(parsed.has_value());
+    EXPECT_FALSE(*parsed);
+  }
+}
+
+TEST(ParseExternalRainPayload, RejectsAnythingElseSoMalformedMessagesCannotFlipTheState)
+{
+  for (const char* bad : {"",
+                          " ",
+                          "maybe",
+                          "2",
+                          "-1",
+                          "yes please",
+                          "nope",
+                          "{\"rain\":true}",
+                          "unavailable",
+                          "unknown",
+                          "none"})
+  {
+    SCOPED_TRACE(bad);
+    EXPECT_FALSE(MqttBridgeNode::parse_external_rain_payload(bad).has_value());
+  }
+}
+
+TEST_F(HomeAssistantDiscoveryNodeTest, ExternalRainIsRelayedToTheRosTopicEvenWhenRetained)
+{
+  auto client = std::make_unique<RecordingMqttClient>();
+  RecordingMqttClient* recording = client.get();
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({rclcpp::Parameter("mqtt_topic_prefix", "back_garden")});
+  auto node = std::make_shared<MqttBridgeNode>(std::move(client), options);
+
+  ASSERT_EQ(recording->subscriptions.count("back_garden/external_rain"), 1U);
+
+  auto listener = std::make_shared<rclcpp::Node>("external_rain_listener");
+  std::vector<bool> received;
+  auto sub = listener->create_subscription<std_msgs::msg::Bool>(
+      "/external_rain",
+      rclcpp::QoS(1).transient_local(),
+      [&received](std_msgs::msg::Bool::ConstSharedPtr msg)
+      {
+        received.push_back(msg->data);
+      });
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  executor.add_node(listener);
+
+  const auto& deliver = recording->subscriptions.at("back_garden/external_rain");
+  const auto spin_until_received = [&](std::size_t count)
+  {
+    for (int i = 0; i < 100 && received.size() < count; ++i)
+    {
+      executor.spin_some(std::chrono::milliseconds(20));
+    }
+  };
+
+  // Retained is accepted: it is STATE (what the weather station last said), and
+  // it is exactly how the last value survives a restart of the bridge. One
+  // message at a time: the topic is transient_local with depth 1, so a verdict
+  // published before the listener has matched would otherwise be overwritten.
+  deliver("back_garden/external_rain", "yes", /*retained=*/true);
+  spin_until_received(1U);
+  deliver("back_garden/external_rain", "garbage", /*retained=*/false);  // ignored
+  deliver("back_garden/external_rain", "no", /*retained=*/false);
+  spin_until_received(2U);
+  executor.remove_node(listener);
+  executor.remove_node(node);
+
+  ASSERT_EQ(received.size(), 2U);
+  EXPECT_TRUE(received[0]);
+  EXPECT_FALSE(received[1]);
+}
+
+TEST_F(HomeAssistantDiscoveryNodeTest, ExternalRainStateIsRelayedRetainedToMqtt)
+{
+  auto client = std::make_unique<RecordingMqttClient>();
+  RecordingMqttClient* recording = client.get();
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({rclcpp::Parameter("mqtt_topic_prefix", "back_garden")});
+  auto node = std::make_shared<MqttBridgeNode>(std::move(client), options);
+
+  auto source = std::make_shared<rclcpp::Node>("external_rain_state_source");
+  auto pub =
+      source->create_publisher<std_msgs::msg::String>("/behavior_tree_node/external_rain_state",
+                                                      rclcpp::QoS(1).transient_local());
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  executor.add_node(source);
+
+  const std::string json = R"({"state":"wet","active":true,"age_s":12})";
+  std_msgs::msg::String msg;
+  msg.data = json;
+  pub->publish(msg);
+
+  const auto relayed = [&]()
+  {
+    for (const auto& publication : recording->publications)
+    {
+      if (publication.topic == "back_garden/external_rain_state")
+      {
+        return &publication;
+      }
+    }
+    return static_cast<const RecordingMqttClient::Publication*>(nullptr);
+  };
+  for (int i = 0; i < 100 && relayed() == nullptr; ++i)
+  {
+    executor.spin_some(std::chrono::milliseconds(20));
+  }
+  executor.remove_node(source);
+  executor.remove_node(node);
+
+  const auto* publication = relayed();
+  ASSERT_NE(publication, nullptr);
+  EXPECT_EQ(publication->payload, json);
+  EXPECT_TRUE(publication->retained);
+}
+
+// ===========================================================================
+// MQTT / Home Assistant traffic (2026-10-25 flood: diagnostics 958 msg/min,
+// emergency 237/min, high_level_status 155/min on an idle docked robot)
+// ===========================================================================
+
+namespace
+{
+
+/// Minimal strict JSON syntax check (RFC 8259 grammar, no semantic checks) so the
+/// discovery document is proven parseable without adding a JSON dependency.
+class JsonSyntaxChecker
+{
+public:
+  explicit JsonSyntaxChecker(const std::string& text) : text_(text)
+  {
+  }
+
+  bool valid()
+  {
+    skip_ws();
+    if (!value())
+    {
+      return false;
+    }
+    skip_ws();
+    return pos_ == text_.size();
+  }
+
+private:
+  void skip_ws()
+  {
+    while (pos_ < text_.size() && std::string{" \n\r\t"}.find(text_[pos_]) != std::string::npos)
+    {
+      ++pos_;
+    }
+  }
+
+  bool literal(const std::string& word)
+  {
+    if (text_.compare(pos_, word.size(), word) != 0)
+    {
+      return false;
+    }
+    pos_ += word.size();
+    return true;
+  }
+
+  bool string_value()
+  {
+    if (pos_ >= text_.size() || text_[pos_] != '"')
+    {
+      return false;
+    }
+    ++pos_;
+    while (pos_ < text_.size())
+    {
+      const char c = text_[pos_++];
+      if (c == '"')
+      {
+        return true;
+      }
+      if (static_cast<unsigned char>(c) < 0x20)
+      {
+        return false;
+      }
+      if (c == '\\')
+      {
+        if (pos_ >= text_.size() ||
+            std::string{"\"\\/bfnrtu"}.find(text_[pos_]) == std::string::npos)
+        {
+          return false;
+        }
+        ++pos_;
+      }
+    }
+    return false;
+  }
+
+  bool number()
+  {
+    const std::size_t start = pos_;
+    while (pos_ < text_.size() &&
+           std::string{"+-0123456789.eE"}.find(text_[pos_]) != std::string::npos)
+    {
+      ++pos_;
+    }
+    return pos_ > start;
+  }
+
+  bool container(char close, bool is_object)
+  {
+    ++pos_;  // opening bracket
+    skip_ws();
+    if (pos_ < text_.size() && text_[pos_] == close)
+    {
+      ++pos_;
+      return true;
+    }
+    while (true)
+    {
+      skip_ws();
+      if (is_object)
+      {
+        if (!string_value())
+        {
+          return false;
+        }
+        skip_ws();
+        if (pos_ >= text_.size() || text_[pos_++] != ':')
+        {
+          return false;
+        }
+        skip_ws();
+      }
+      if (!value())
+      {
+        return false;
+      }
+      skip_ws();
+      if (pos_ >= text_.size())
+      {
+        return false;
+      }
+      const char c = text_[pos_++];
+      if (c == close)
+      {
+        return true;
+      }
+      if (c != ',')
+      {
+        return false;
+      }
+    }
+  }
+
+  bool value()
+  {
+    if (pos_ >= text_.size())
+    {
+      return false;
+    }
+    switch (text_[pos_])
+    {
+      case '{':
+        return container('}', true);
+      case '[':
+        return container(']', false);
+      case '"':
+        return string_value();
+      case 't':
+        return literal("true");
+      case 'f':
+        return literal("false");
+      case 'n':
+        return literal("null");
+      default:
+        return number();
+    }
+  }
+
+  const std::string& text_;
+  std::size_t pos_{0};
+};
+
+class MqttTrafficNodeTest : public HomeAssistantDiscoveryNodeTest
+{
+protected:
+  void make_node(std::vector<rclcpp::Parameter> overrides = {})
+  {
+    auto client = std::make_unique<RecordingMqttClient>();
+    recording_ = client.get();
+    overrides.emplace_back("mqtt_topic_prefix", "lawn");
+    rclcpp::NodeOptions options;
+    options.parameter_overrides(overrides);
+    node_ = std::make_shared<MqttBridgeNode>(std::move(client), options);
+    source_ = std::make_shared<rclcpp::Node>("mqtt_traffic_source");
+    executor_.add_node(node_);
+    executor_.add_node(source_);
+  }
+
+  void TearDown() override
+  {
+    if (node_)
+    {
+      executor_.remove_node(node_);
+      executor_.remove_node(source_);
+    }
+  }
+
+  std::vector<std::string> payloads(const std::string& topic) const
+  {
+    std::vector<std::string> out;
+    for (const auto& publication : recording_->publications)
+    {
+      if (publication.topic == topic)
+      {
+        out.push_back(publication.payload);
+      }
+    }
+    return out;
+  }
+
+  /// Spin until `topic` has `count` publications or `timeout` elapses.
+  void spin_until(const std::string& topic, std::size_t count, std::chrono::milliseconds timeout)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline && payloads(topic).size() < count)
+    {
+      executor_.spin_some(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+
+  /// Messages published before discovery matched the bridge would be lost.
+  template <typename PublisherT>
+  void wait_for_match(const PublisherT& pub)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline && pub->get_subscription_count() == 0U)
+    {
+      spin_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_GT(pub->get_subscription_count(), 0U);
+  }
+
+  void spin_for(std::chrono::milliseconds duration)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + duration;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      executor_.spin_some(std::chrono::milliseconds(10));
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+
+  RecordingMqttClient* recording_{nullptr};
+  std::shared_ptr<MqttBridgeNode> node_;
+  std::shared_ptr<rclcpp::Node> source_;
+  rclcpp::executors::SingleThreadedExecutor executor_;
+};
+
+mowgli_interfaces::msg::Emergency make_emergency(bool active)
+{
+  mowgli_interfaces::msg::Emergency msg;
+  msg.active_emergency = active;
+  msg.latched_emergency = active;
+  msg.reason = active ? "stop button" : "";
+  return msg;
+}
+
+diagnostic_msgs::msg::DiagnosticArray make_diagnostics(const std::string& name, uint8_t level)
+{
+  diagnostic_msgs::msg::DiagnosticArray array;
+  diagnostic_msgs::msg::DiagnosticStatus status;
+  status.name = name;
+  status.level = level;
+  status.message = "msg";
+  array.status.push_back(status);
+  return array;
+}
+
+}  // namespace
+
+TEST_F(MqttTrafficNodeTest, EmergencyRepeatsAreDroppedAndAChangeIsPublishedAtOnce)
+{
+  make_node();
+  auto pub =
+      source_->create_publisher<mowgli_interfaces::msg::Emergency>("/hardware_bridge/emergency",
+                                                                   10);
+  wait_for_match(pub);
+
+  for (int i = 0; i < 4; ++i)
+  {
+    pub->publish(make_emergency(false));
+  }
+  pub->publish(make_emergency(true));
+  spin_until("lawn/emergency", 2U, std::chrono::seconds(3));
+  spin_for(std::chrono::milliseconds(200));
+
+  const auto sent = payloads("lawn/emergency");
+  ASSERT_EQ(sent.size(), 2U);
+  EXPECT_EQ(sent[0], MqttBridgeNode::serialise_emergency(make_emergency(false)));
+  EXPECT_EQ(sent[1], MqttBridgeNode::serialise_emergency(make_emergency(true)));
+  for (const auto& publication : recording_->publications)
+  {
+    if (publication.topic == "lawn/emergency")
+    {
+      EXPECT_TRUE(publication.retained);
+    }
+  }
+}
+
+TEST_F(MqttTrafficNodeTest, UnchangedStateIsResentAsAHeartbeat)
+{
+  make_node({rclcpp::Parameter("state_heartbeat_period_s", 1.0)});
+  auto pub = source_->create_publisher<mowgli_interfaces::msg::HighLevelStatus>(
+      "/behavior_tree_node/high_level_status", 10);
+  mowgli_interfaces::msg::HighLevelStatus msg;
+  msg.state_name = "IDLE_DOCKED";
+  wait_for_match(pub);
+
+  pub->publish(msg);
+  pub->publish(msg);
+  spin_until("lawn/high_level_status", 1U, std::chrono::seconds(3));
+  spin_for(std::chrono::milliseconds(200));
+  EXPECT_EQ(payloads("lawn/high_level_status").size(), 1U);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+  pub->publish(msg);
+  spin_until("lawn/high_level_status", 2U, std::chrono::seconds(3));
+  EXPECT_EQ(payloads("lawn/high_level_status").size(), 2U);
+}
+
+TEST_F(MqttTrafficNodeTest, DiagnosticsAreMergedAndThrottled)
+{
+  make_node({rclcpp::Parameter("diagnostics_publish_period_s", 30.0)});
+  auto pub = source_->create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/diagnostics", 10);
+  wait_for_match(pub);
+
+  // First array: new names, published at once.
+  pub->publish(make_diagnostics("GPS", 0));
+  spin_until("lawn/diagnostics", 1U, std::chrono::seconds(3));
+  ASSERT_EQ(payloads("lawn/diagnostics").size(), 1U);
+
+  // Another publisher's array inside the 1 s minimum interval is held back, then
+  // published merged with the first; identical repeats add nothing.
+  pub->publish(make_diagnostics("controller_server: Nav2 Health", 0));
+  for (int i = 0; i < 5; ++i)
+  {
+    pub->publish(make_diagnostics("GPS", 0));
+  }
+  spin_for(std::chrono::milliseconds(300));
+  EXPECT_EQ(payloads("lawn/diagnostics").size(), 1U);
+  spin_until("lawn/diagnostics", 2U, std::chrono::seconds(3));
+  spin_for(std::chrono::milliseconds(300));
+
+  const auto sent = payloads("lawn/diagnostics");
+  ASSERT_EQ(sent.size(), 2U);
+  EXPECT_EQ(sent[1],
+            R"([{"name":"GPS","level":0,"message":"msg"},)"
+            R"({"name":"controller_server: Nav2 Health","level":0,"message":"msg"}])");
+
+  // A level change goes out after the 1 s minimum interval, long before the 30 s period.
+  spin_for(std::chrono::milliseconds(700));
+  pub->publish(make_diagnostics("GPS", 2));
+  spin_until("lawn/diagnostics", 3U, std::chrono::seconds(3));
+  const auto after = payloads("lawn/diagnostics");
+  ASSERT_EQ(after.size(), 3U);
+  EXPECT_NE(after[2].find(R"({"name":"GPS","level":2,"message":"msg"})"), std::string::npos);
+}
+
+TEST_F(MqttTrafficNodeTest, StationaryGpsIsNotRepublishedEverySecond)
+{
+  make_node({rclcpp::Parameter("publish_rate", 20.0)});
+  auto pub = source_->create_publisher<sensor_msgs::msg::NavSatFix>("/gps/fix", 10);
+  sensor_msgs::msg::NavSatFix fix;
+  fix.latitude = 48.8566;
+  fix.longitude = 2.3522;
+  wait_for_match(pub);
+
+  pub->publish(fix);
+  spin_until("lawn/gps", 1U, std::chrono::seconds(3));
+  for (int i = 0; i < 5; ++i)
+  {
+    fix.latitude += 1e-7;  // ~1 cm receiver jitter
+    pub->publish(fix);
+    spin_for(std::chrono::milliseconds(100));
+  }
+  EXPECT_EQ(payloads("lawn/gps").size(), 1U);
+
+  fix.latitude += 5e-6;  // ~0.55 m: real movement
+  pub->publish(fix);
+  spin_until("lawn/gps", 2U, std::chrono::seconds(3));
+  EXPECT_EQ(payloads("lawn/gps").size(), 2U);
+}
+
+TEST_F(MqttTrafficNodeTest, PoseIsPublishedOnTurningInPlace)
+{
+  make_node({rclcpp::Parameter("publish_rate", 20.0)});
+  auto pub = source_->create_publisher<nav_msgs::msg::Odometry>("/odometry/filtered_map", 10);
+  nav_msgs::msg::Odometry odom;
+  odom.pose.pose.orientation.w = 1.0;
+  wait_for_match(pub);
+
+  pub->publish(odom);
+  spin_until("lawn/pose", 1U, std::chrono::seconds(3));
+  odom.pose.pose.position.x = 0.05;
+  pub->publish(odom);
+  spin_for(std::chrono::milliseconds(300));
+  EXPECT_EQ(payloads("lawn/pose").size(), 1U);
+
+  const double yaw = 10.0 * M_PI / 180.0;
+  odom.pose.pose.orientation.z = std::sin(yaw / 2.0);
+  odom.pose.pose.orientation.w = std::cos(yaw / 2.0);
+  pub->publish(odom);
+  spin_until("lawn/pose", 2U, std::chrono::seconds(3));
+  EXPECT_EQ(payloads("lawn/pose").size(), 2U);
+}
+
+TEST(MotionSample, OdometryHasYawAndGpsHasNoHeading)
+{
+  nav_msgs::msg::Odometry odom;
+  odom.pose.pose.position.x = 1.5;
+  odom.pose.pose.position.y = -2.0;
+  odom.pose.pose.orientation.z = std::sin(M_PI / 4.0);
+  odom.pose.pose.orientation.w = std::cos(M_PI / 4.0);
+  const auto sample = MqttBridgeNode::odometry_motion_sample(odom);
+  EXPECT_DOUBLE_EQ(sample.a, 1.5);
+  EXPECT_DOUBLE_EQ(sample.b, -2.0);
+  ASSERT_TRUE(sample.yaw_rad.has_value());
+  EXPECT_NEAR(*sample.yaw_rad, M_PI / 2.0, 1e-9);
+
+  sensor_msgs::msg::NavSatFix fix;
+  fix.latitude = 48.0;
+  fix.longitude = 2.0;
+  const auto gps = MqttBridgeNode::gps_motion_sample(fix);
+  EXPECT_DOUBLE_EQ(gps.a, 48.0);
+  EXPECT_DOUBLE_EQ(gps.b, 2.0);
+  EXPECT_FALSE(gps.yaw_rad.has_value());
+}
+
+TEST(HomeAssistantDiscovery, DocumentIsValidJson)
+{
+  const std::vector<MqttBridgeNode::AreaSummary> areas{{0, "Front \"lawn\"", 1}, {3, "", 2}};
+  const std::string json = MqttBridgeNode::serialise_home_assistant_discovery("garden", areas);
+  EXPECT_TRUE(JsonSyntaxChecker(json).valid()) << json;
+  // The checker itself rejects a truncated document.
+  EXPECT_FALSE(JsonSyntaxChecker(json.substr(0, json.size() - 1)).valid());
+}
+
+TEST(HomeAssistantDiscovery, RoundsNoisySensorValues)
+{
+  const std::string json = MqttBridgeNode::serialise_home_assistant_discovery("garden");
+  EXPECT_NE(json.find("{{ value_json.v_battery | round(1) }}"), std::string::npos);
+  EXPECT_NE(json.find("{{ value_json.charge_current | round(2) }}"), std::string::npos);
+  EXPECT_NE(json.find("{{ value_json.mower_esc_current | round(2) }}"), std::string::npos);
+  EXPECT_NE(json.find("{{ value_json.mower_motor_rpm | round(0) }}"), std::string::npos);
+  EXPECT_NE(json.find("{{ value_json.battery_percent | round(0) }}"), std::string::npos);
+  EXPECT_NE(json.find("{{ value_json.coverage_percent | round(0) }}"), std::string::npos);
+  EXPECT_NE(json.find("{{ value_json.gps_quality_percent | round(0) }}"), std::string::npos);
+}
+
+TEST(HomeAssistantDiscovery, AttributeTemplatesKeepOnlySlowFields)
+{
+  const std::string json = MqttBridgeNode::serialise_home_assistant_discovery("garden");
+
+  // device_tracker: latitude/longitude only, ~1 m resolution.
+  const auto location = json.find(R"("location":{)");
+  ASSERT_NE(location, std::string::npos);
+  const auto location_end = json.find(R"("source_type")", location);
+  ASSERT_NE(location_end, std::string::npos);
+  const std::string location_component = json.substr(location, location_end - location);
+  EXPECT_NE(location_component.find(
+                R"("json_attributes_template":"{{ {'latitude': value_json.latitude | round(5), )"
+                R"('longitude': value_json.longitude | round(5)} | tojson }}")"),
+            std::string::npos);
+  EXPECT_EQ(location_component.find("altitude"), std::string::npos);
+
+  // lawn_mower: no continuously changing fields.
+  const auto mower = json.find(R"("mower":{)");
+  ASSERT_NE(mower, std::string::npos);
+  const auto mower_end = json.find(R"("start_mowing_command_topic")", mower);
+  ASSERT_NE(mower_end, std::string::npos);
+  const std::string mower_component = json.substr(mower, mower_end - mower);
+  EXPECT_NE(mower_component.find(R"("json_attributes_template":"{{ {'state_name': )"),
+            std::string::npos);
+  EXPECT_NE(mower_component.find("'coverage_percent': value_json.coverage_percent | round(0)"),
+            std::string::npos);
+  EXPECT_NE(mower_component.find("'completed_swaths'"), std::string::npos);
+  EXPECT_NE(mower_component.find("'total_swaths'"), std::string::npos);
+  EXPECT_EQ(mower_component.find("current_path_index"), std::string::npos);
+  EXPECT_EQ(mower_component.find("battery_percent"), std::string::npos);
+  EXPECT_EQ(mower_component.find("gps_quality_percent"), std::string::npos);
+}
+
+TEST(HomeAssistantDiscovery, KeepsExistingUniqueIdsSoEntitiesSurvive)
+{
+  const std::string json = MqttBridgeNode::serialise_home_assistant_discovery("garden");
+  for (const char* key : {"mower",
+                          "battery",
+                          "coverage",
+                          "gps_quality",
+                          "rtk_state",
+                          "blade_rpm",
+                          "blade_current",
+                          "battery_voltage",
+                          "charge_current",
+                          "charging",
+                          "emergency",
+                          "rain",
+                          "location"})
+  {
+    SCOPED_TRACE(key);
+    EXPECT_NE(json.find(std::string{"\""} + key + "\":{"), std::string::npos);
+    EXPECT_NE(json.find(std::string{"\"unique_id\":\"mowglinext_garden_"} + key + "\""),
+              std::string::npos);
+  }
 }

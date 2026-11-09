@@ -20,6 +20,7 @@
 // and session conditions/actions are production nodes. No wall-clock sleeps or
 // source-string assertions are used to decide whether departure is allowed.
 
+#include <chrono>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -30,6 +31,7 @@
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/docking_nodes.hpp"
+#include "mowgli_behavior/external_rain_state.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
 #include <gtest/gtest.h>
 #include <tinyxml2.h>
@@ -504,3 +506,226 @@ TEST_F(RainResumeTest, ExhaustedDepartureBudgetDoesNotBackUp)
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// External rain verdict (/external_rain, e.g. a roof weather station behind
+// Home Assistant). It is OR-ed with the mower's own sensor and can only ever
+// add a reason to stop.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+using SteadyClock = std::chrono::steady_clock;
+
+class ExternalRainTest : public ::testing::Test
+{
+protected:
+  std::shared_ptr<mowgli_behavior::BTContext> ctx;
+  BT::Blackboard::Ptr blackboard;
+  BT::BehaviorTreeFactory factory;
+
+  void SetUp() override
+  {
+    ctx = std::make_shared<mowgli_behavior::BTContext>();
+    blackboard = BT::Blackboard::create();
+    blackboard->set("context", ctx);
+    blackboard->set("rain_mode", 2);
+    blackboard->set("rain_debounce_sec", 0.0);
+    factory.registerNodeType<mowgli_behavior::IsNewRain>("IsNewRain");
+    factory.registerNodeType<mowgli_behavior::IsRainDetected>("IsRainDetected");
+  }
+
+  void SetVerdict(bool wet, std::chrono::seconds age = std::chrono::seconds(0))
+  {
+    ctx->external_rain = wet;
+    ctx->external_rain_stamp = SteadyClock::now() - age;
+  }
+
+  BT::NodeStatus Tick(const char* node)
+  {
+    const std::string xml = std::string("<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><") +
+                            node + "/></BehaviorTree></root>";
+    auto tree = factory.createTreeFromText(xml, blackboard);
+    return tree.tickOnce();
+  }
+};
+
+}  // namespace
+
+TEST_F(ExternalRainTest, NeverReceivedMeansDry)
+{
+  EXPECT_FALSE(ctx->ExternalRainActive(SteadyClock::now()));
+  EXPECT_FALSE(ctx->RainingNow(SteadyClock::now()));
+  EXPECT_EQ(Tick("IsRainDetected"), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(Tick("IsNewRain"), BT::NodeStatus::FAILURE);
+}
+
+TEST_F(ExternalRainTest, FreshWetVerdictCountsAsRain)
+{
+  SetVerdict(true);
+  EXPECT_TRUE(ctx->RainingNow(SteadyClock::now()));
+  EXPECT_EQ(Tick("IsRainDetected"), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(Tick("IsNewRain"), BT::NodeStatus::SUCCESS);
+}
+
+TEST_F(ExternalRainTest, DryVerdictNeverHidesTheMowersOwnSensor)
+{
+  SetVerdict(false);
+  ctx->latest_status.rain_detected = true;
+  EXPECT_TRUE(ctx->RainingNow(SteadyClock::now()));
+  EXPECT_EQ(Tick("IsRainDetected"), BT::NodeStatus::SUCCESS);
+}
+
+TEST_F(ExternalRainTest, WetVerdictExpiresSoADeadAutomationCannotHoldTheMower)
+{
+  ctx->external_rain_max_age_sec = 120.0 * 60.0;
+  SetVerdict(true, std::chrono::minutes(119));
+  EXPECT_TRUE(ctx->ExternalRainActive(SteadyClock::now()));
+  SetVerdict(true, std::chrono::minutes(121));
+  EXPECT_FALSE(ctx->ExternalRainActive(SteadyClock::now()));
+  EXPECT_EQ(Tick("IsRainDetected"), BT::NodeStatus::FAILURE);
+}
+
+TEST_F(ExternalRainTest, ZeroMaxAgeNeverExpires)
+{
+  ctx->external_rain_max_age_sec = 0.0;
+  SetVerdict(true, std::chrono::hours(48));
+  EXPECT_TRUE(ctx->ExternalRainActive(SteadyClock::now()));
+}
+
+TEST_F(ExternalRainTest, MasterSwitchOffIgnoresTheVerdict)
+{
+  ctx->use_external_rain = false;
+  SetVerdict(true);
+  EXPECT_FALSE(ctx->RainingNow(SteadyClock::now()));
+  EXPECT_EQ(Tick("IsRainDetected"), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(Tick("IsNewRain"), BT::NodeStatus::FAILURE);
+}
+
+TEST_F(ExternalRainTest, RainModeZeroStillDisablesRainHandling)
+{
+  blackboard->set("rain_mode", 0);
+  SetVerdict(true);
+  EXPECT_EQ(Tick("IsNewRain"), BT::NodeStatus::FAILURE);
+}
+
+TEST_F(ExternalRainTest, MowingInRainByChoiceIgnoresTheExternalVerdictToo)
+{
+  // The operator started while the mower's OWN sensor was wet: IsNewRain
+  // stays quiet for the session, exactly as before this feature.
+  ctx->raining_at_mow_start = true;
+  SetVerdict(true);
+  EXPECT_EQ(Tick("IsNewRain"), BT::NodeStatus::FAILURE);
+}
+
+TEST_F(ExternalRainTest, ExternalWetAtStartDoesNotLicenceMowingThroughNewRain)
+{
+  // raining_at_mow_start is fed by the mower's own sensor only (WasRainingAtStart),
+  // so a wet roof station at start still pauses the session.
+  ctx->raining_at_mow_start = false;
+  SetVerdict(true);
+  EXPECT_EQ(Tick("IsNewRain"), BT::NodeStatus::SUCCESS);
+}
+
+// ---------------------------------------------------------------------------
+// External rain feedback (what the mower makes of /external_rain). Read-only: it
+// reports the verdict, it never changes what the rain guard does.
+// ---------------------------------------------------------------------------
+
+TEST_F(ExternalRainTest, StatusNoDataBeforeAnythingArrives)
+{
+  const auto status = mowgli_behavior::ComputeExternalRainStatus(*ctx, SteadyClock::now());
+  EXPECT_EQ(status.state, "no_data");
+  EXPECT_FALSE(status.received);
+  EXPECT_FALSE(status.active);
+  EXPECT_EQ(status.age_s, -1);
+  EXPECT_EQ(status.expires_in_s, -1);
+}
+
+TEST_F(ExternalRainTest, StatusWetThenExpired)
+{
+  ctx->external_rain_max_age_sec = 120.0 * 60.0;
+  SetVerdict(true, std::chrono::minutes(10));
+  auto status = mowgli_behavior::ComputeExternalRainStatus(*ctx, SteadyClock::now());
+  EXPECT_EQ(status.state, "wet");
+  EXPECT_TRUE(status.active);
+  EXPECT_NEAR(status.age_s, 600, 2);
+  EXPECT_NEAR(status.expires_in_s, 110 * 60, 2);
+  EXPECT_EQ(status.max_age_s, 7200);
+
+  SetVerdict(true, std::chrono::minutes(130));
+  status = mowgli_behavior::ComputeExternalRainStatus(*ctx, SteadyClock::now());
+  EXPECT_EQ(status.state, "expired");
+  EXPECT_TRUE(status.wet);
+  EXPECT_FALSE(status.active);
+  EXPECT_EQ(status.expires_in_s, -1);
+}
+
+TEST_F(ExternalRainTest, StatusDryDisabledAndOnboardAreReportedSeparately)
+{
+  SetVerdict(false);
+  auto status = mowgli_behavior::ComputeExternalRainStatus(*ctx, SteadyClock::now());
+  EXPECT_EQ(status.state, "dry");
+  EXPECT_FALSE(status.wet);
+  EXPECT_EQ(status.expires_in_s, -1);
+
+  // The mower's own sensor is reported beside it, never folded into the external verdict.
+  ctx->latest_status.rain_detected = true;
+  status = mowgli_behavior::ComputeExternalRainStatus(*ctx, SteadyClock::now());
+  EXPECT_EQ(status.state, "dry");
+  EXPECT_TRUE(status.onboard_wet);
+
+  ctx->use_external_rain = false;
+  SetVerdict(true);
+  status = mowgli_behavior::ComputeExternalRainStatus(*ctx, SteadyClock::now());
+  EXPECT_EQ(status.state, "disabled");
+  EXPECT_TRUE(status.wet);
+  EXPECT_FALSE(status.active);
+}
+
+TEST_F(ExternalRainTest, StatusZeroMaxAgeNeverExpires)
+{
+  ctx->external_rain_max_age_sec = 0.0;
+  SetVerdict(true, std::chrono::hours(48));
+  const auto status = mowgli_behavior::ComputeExternalRainStatus(*ctx, SteadyClock::now());
+  EXPECT_EQ(status.state, "wet");
+  EXPECT_EQ(status.expires_in_s, -1);
+  EXPECT_EQ(status.max_age_s, 0);
+}
+
+TEST(ExternalRainStatusJson, ShapeWithAndWithoutAges)
+{
+  mowgli_behavior::ExternalRainStatus none;
+  none.state = "no_data";
+  EXPECT_EQ(mowgli_behavior::ExternalRainStatusJson(none),
+            "{\"state\":\"no_data\",\"enabled\":true,\"received\":false,\"wet\":false,"
+            "\"active\":false,\"onboard_wet\":false,\"age_s\":null,\"expires_in_s\":null,"
+            "\"max_age_s\":0}");
+
+  mowgli_behavior::ExternalRainStatus wet;
+  wet.state = "wet";
+  wet.received = wet.wet = wet.active = true;
+  wet.age_s = 312;
+  wet.expires_in_s = 6888;
+  wet.max_age_s = 7200;
+  EXPECT_EQ(mowgli_behavior::ExternalRainStatusJson(wet),
+            "{\"state\":\"wet\",\"enabled\":true,\"received\":true,\"wet\":true,"
+            "\"active\":true,\"onboard_wet\":false,\"age_s\":312,\"expires_in_s\":6888,"
+            "\"max_age_s\":7200}");
+}
+
+TEST(ExternalRainStatusJson, HeartbeatIgnoresTheAgesButNotTheState)
+{
+  mowgli_behavior::ExternalRainStatus a;
+  a.state = "wet";
+  a.age_s = 10;
+  mowgli_behavior::ExternalRainStatus b = a;
+  b.age_s = 40;
+  EXPECT_TRUE(mowgli_behavior::SameExternalRainPicture(a, b));
+  b.state = "expired";
+  EXPECT_FALSE(mowgli_behavior::SameExternalRainPicture(a, b));
+  b = a;
+  b.onboard_wet = true;
+  EXPECT_FALSE(mowgli_behavior::SameExternalRainPicture(a, b));
+}

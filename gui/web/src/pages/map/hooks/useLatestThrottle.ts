@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 
 export interface LatestThrottle<T> {
   push: (value: T) => void;
@@ -58,29 +58,28 @@ export function useLatestThrottle<T>(
   callback: (value: T) => void,
   intervalMs: number,
 ): LatestThrottle<T> {
-  const callbackRef = useRef(callback);
-  callbackRef.current = callback;
-  const intervalRef = useRef(intervalMs);
-  intervalRef.current = intervalMs;
-
-  const throttleRef = useRef<LatestThrottle<T> | null>(null);
-  if (throttleRef.current === null) {
-    throttleRef.current = createLatestThrottle<T>(
-      (value) => callbackRef.current(value),
-      () => intervalRef.current,
-    );
-  }
-
-  useEffect(() => {
-    const throttle = throttleRef.current;
-    return () => throttle?.cancel();
-  }, []);
+  // The mutable callback/budget belong to the throttle resource, rather than
+  // exposing render-written refs. Update them only after React commits.
+  const [resource] = useState(() => {
+    let committedCallback = callback;
+    let committedInterval = intervalMs;
+    return {
+      throttle: createLatestThrottle<T>(value => committedCallback(value), () => committedInterval),
+      update: (nextCallback: (value: T) => void, nextInterval: number) => {
+        committedCallback = nextCallback;
+        committedInterval = nextInterval;
+      },
+    };
+  });
+  const throttle = resource.throttle;
+  useLayoutEffect(() => resource.update(callback, intervalMs), [resource, callback, intervalMs]);
+  useEffect(() => () => throttle.cancel(), [throttle]);
 
   // A display-mode change should not leave an old trailing timer running at
   // the previous rate. The next incoming render frame starts the new budget.
   useEffect(() => {
-    throttleRef.current?.cancel();
-  }, [intervalMs]);
+    throttle.cancel();
+  }, [intervalMs, throttle]);
 
-  return throttleRef.current;
+  return throttle;
 }

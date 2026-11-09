@@ -45,9 +45,9 @@ var topicMap = map[string]topicDef{
 	"imu":                 {"/imu/data", "sensor_msgs/msg/Imu"},
 	"ticks":               {"/wheel_ticks", "mowgli_interfaces/msg/WheelTick"},
 	"wheelOdom":           {"/wheel_odom", "nav_msgs/msg/Odometry"},
-	"map":                 {"", ""},                                     // virtual – populated via map_server services
+	"map":                 {"", ""}, // virtual – populated via map_server services
 	"path":                {"/coverage/plan_preview", "mowgli_interfaces/msg/CoveragePlanPreview"},
-	"plan":                {"/plan", "nav_msgs/msg/Path"},               // infrequent event
+	"plan":                {"/plan", "nav_msgs/msg/Path"}, // infrequent event
 	"power":               {"/hardware_bridge/power", "mowgli_interfaces/msg/Power"},
 	"emergency":           {"/hardware_bridge/emergency", "mowgli_interfaces/msg/Emergency"}, // safety-critical
 	"lidar":               {"/scan", "sensor_msgs/msg/LaserScan"},                            // large message
@@ -62,6 +62,9 @@ var topicMap = map[string]topicDef{
 	// the GUI offers "Resume" vs "Start fresh" instead of silently resuming (the
 	// "starts at 2nd/3rd line" report).
 	"coverageResumeAvailable": {"/behavior_tree_node/coverage_resume_available", "std_msgs/msg/Bool"},
+	// Latched std_msgs/String holding JSON: what the mower makes of the external rain
+	// verdict (state, whether it is counted, ages). Feedback only.
+	"externalRainState": {"/behavior_tree_node/external_rain_state", "std_msgs/msg/String"},
 	// Synthetic heading sources fused by fusion_graph_node as yaw unary
 	// factors. Both carry sensor_msgs/Imu with only `orientation` and
 	// `orientation_covariance[8]` populated — see cog_to_imu.py and
@@ -74,6 +77,18 @@ var topicMap = map[string]topicDef{
 	// Latched: what the STM32 actually runs for every runtime parameter, its
 	// envelope and whether it is persisted in the board's flash (protocol v7).
 	"firmwareParams": {"/hardware_bridge/firmware_params", "mowgli_interfaces/msg/FirmwareParams"},
+	// Passive blackbox telemetry; these keys never publish or call services.
+	"cmdVel":           {"/cmd_vel", "geometry_msgs/msg/TwistStamped"},
+	"cmdVelApplied":    {"/hardware_bridge/cmd_vel_applied", "geometry_msgs/msg/TwistStamped"},
+	"digEvent":         {"/hardware_bridge/dig_event", "mowgli_interfaces/msg/DigEvent"},
+	"localizationMode": {"/mowgli/localization/mode_id", "std_msgs/msg/Int32"},
+	"collisionMonitor": {"/collision_monitor_state", "nav2_msgs/msg/CollisionMonitorState"},
+	"gpsRaw":           {"/gps/fix", "sensor_msgs/msg/NavSatFix"},
+	// Native MAVROS inventory surfaces. VehicleInfo is exposed by the
+	// sys_status plugin through a service rather than a topic, so the provider
+	// republishes that unmodified service response as a virtual GUI stream.
+	"mavrosState":       {"/mavros/state", "mavros_msgs/msg/State"},
+	"mavrosVehicleInfo": {"", ""},
 }
 
 // TopicKeys returns every logical topic key the provider can subscribe to, so
@@ -91,8 +106,9 @@ func TopicKeys() []string {
 // ---------------------------------------------------------------------------
 
 // RosSubscriber delivers messages from a ROS2 topic to one registered callback.
-// It runs a background goroutine that drains a single-slot mailbox so that a
-// slow consumer cannot stall the foxglove read pump or other subscribers.
+// It runs a background goroutine so a slow consumer cannot stall the foxglove
+// read pump or other subscribers. Diagnostics use a bounded FIFO; other topics
+// retain their single-slot, latest-value mailbox.
 type RosSubscriber struct {
 	Topic string
 	Id    string
@@ -103,12 +119,13 @@ type RosSubscriber struct {
 	interval    time.Duration // min spacing between deliveries; 0 = unthrottled
 	close       chan struct{}
 	wake        chan struct{} // buffered(1) new-message signal
+	diagnostics *diagnosticQueue
 }
 
 // NewRosSubscriber creates and starts a RosSubscriber. interval is the minimum
-// time between deliveries to cb; messages arriving faster are coalesced so cb
-// always receives the latest value. The caller must eventually call Close to
-// release the background goroutine.
+// time between deliveries to cb. Only the logical "diagnostics" topic preserves
+// accepted messages in FIFO order; other topics coalesce to the latest value.
+// The caller must eventually call Close to release the background goroutine.
 func NewRosSubscriber(topic, id string, interval time.Duration, cb func(msg []byte)) *RosSubscriber {
 	r := &RosSubscriber{
 		Topic:    topic,
@@ -118,14 +135,24 @@ func NewRosSubscriber(topic, id string, interval time.Duration, cb func(msg []by
 		close:    make(chan struct{}),
 		wake:     make(chan struct{}, 1),
 	}
-	go r.run()
+	if topic == "diagnostics" {
+		r.diagnostics = &diagnosticQueue{done: make(chan struct{})}
+		go r.runDiagnostics()
+	} else {
+		go r.run()
+	}
 	return r
 }
 
-// Publish stores msg as the next message to be delivered and signals the
-// delivery loop. If a previous message has not yet been consumed it is silently
-// overwritten (coalesce to latest). Never blocks.
+// Publish queues diagnostics without replacing accepted messages. At a queue
+// limit it rejects the incoming message and counts the transport loss. Other
+// topics keep coalescing to the latest value. It never waits for a callback or
+// queue space.
 func (r *RosSubscriber) Publish(msg []byte) {
+	if r.diagnostics != nil {
+		r.publishDiagnostic(msg)
+		return
+	}
 	r.mtx.Lock()
 	r.nextMessage = msg
 	r.mtx.Unlock()
@@ -137,6 +164,10 @@ func (r *RosSubscriber) Publish(msg []byte) {
 
 // Close stops the background goroutine. It is safe to call from any goroutine.
 func (r *RosSubscriber) Close() {
+	if r.diagnostics != nil {
+		r.closeDiagnostics()
+		return
+	}
 	close(r.close)
 }
 
@@ -189,6 +220,17 @@ type rosClient interface {
 	SetParameters(context.Context, []foxglove.Parameter) ([]foxglove.Parameter, error)
 }
 
+// TransportHealth exposes local heartbeat evidence independently of ROS topic
+// freshness. Kept optional on rosClient so test/alternate clients fail closed.
+func (r *RosProvider) TransportHealth() foxglove.TransportHealth {
+	if client, ok := r.client.(interface {
+		Health() foxglove.TransportHealth
+	}); ok {
+		return client.Health()
+	}
+	return foxglove.TransportHealth{}
+}
+
 type foxgloveSubscription struct {
 	// Serializes reconciliation for one key, never while holding RosProvider.mtx.
 	mtx        sync.Mutex
@@ -228,6 +270,11 @@ type RosProvider struct {
 	// notifier receives highLevelStatus + map payloads for push notifications;
 	// nil until AttachNotifier (guarded by mtx).
 	notifier *NotificationProvider
+
+	// The MAVROS vehicle-info service is polled only while a browser is
+	// listening. This keeps the established Mowgli backend completely idle on
+	// MAVROS-only ROS surfaces.
+	mavrosVehicleInfoPollCancel context.CancelFunc
 }
 
 // AttachNotifier routes highLevelStatus and map payloads to the notification
@@ -259,16 +306,19 @@ var foxgloveAdapters = map[string]func([]byte) ([]byte, error){
 // above the 100 ms downstream throttle so no visible frame is lost. Topics not
 // listed here are deserialized at their native rate.
 var upstreamDecimationMs = map[string]int{
-	"imu":        80,
-	"lidar":      80,
-	"pose":       80,
-	"fusionRaw":  80,
-	"wheelOdom":  80,
-	"ticks":      80,
-	"gps":        80,
-	"gnssStatus": 80,
-	"cogHeading": 150,
-	"magYaw":     150,
+	"imu":           80,
+	"lidar":         80,
+	"pose":          80,
+	"fusionRaw":     80,
+	"wheelOdom":     80,
+	"ticks":         80,
+	"gps":           80,
+	"gnssStatus":    80,
+	"cogHeading":    150,
+	"magYaw":        150,
+	"cmdVel":        100,
+	"cmdVelApplied": 100,
+	"gpsRaw":        100,
 }
 
 // NewRosProvider constructs a RosProvider, reads the foxglove URL from the
@@ -405,6 +455,49 @@ func (r *RosProvider) fanOut(logicalKey string, msg []byte) {
 			r.notifier.EnqueueMap(append([]byte(nil), msg...))
 		}
 	}
+}
+
+func (r *RosProvider) startMavrosVehicleInfoPolling() {
+	r.mtx.Lock()
+	if r.mavrosVehicleInfoPollCancel != nil || len(r.subscribers["mavrosVehicleInfo"]) == 0 {
+		r.mtx.Unlock()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r.mavrosVehicleInfoPollCancel = cancel
+	r.mtx.Unlock()
+
+	go func() {
+		poll := func() {
+			callCtx, callCancel := context.WithTimeout(ctx, 3*time.Second)
+			defer callCancel()
+			result, err := r.client.CallService(
+				callCtx,
+				"/mavros/vehicle_info_get",
+				map[string]interface{}{"sysid": 0, "compid": 0, "get_all": false},
+				"mavros_msgs/srv/VehicleInfoGet",
+			)
+			if err != nil {
+				if ctx.Err() == nil {
+					logrus.Debugf("RosProvider: MAVROS vehicle_info_get unavailable: %v", err)
+				}
+				return
+			}
+			r.fanOut("mavrosVehicleInfo", []byte(result))
+		}
+
+		poll()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				poll()
+			}
+		}
+	}()
 }
 
 // initDockPoseSubscription subscribes to the map_server_node's docking_pose
@@ -636,6 +729,9 @@ func (r *RosProvider) Subscribe(topic string, id string, intervalMs int, cb func
 	}
 	r.mtx.Unlock()
 	r.reconcileFoxgloveSubscription(topic)
+	if topic == "mavrosVehicleInfo" {
+		r.startMavrosVehicleInfoPolling()
+	}
 	return nil
 }
 
@@ -659,6 +755,10 @@ func (r *RosProvider) UnSubscribe(topic string, id string) {
 	delete(subs, id)
 	if len(subs) == 0 {
 		delete(r.subscribers, topic)
+		if topic == "mavrosVehicleInfo" && r.mavrosVehicleInfoPollCancel != nil {
+			r.mavrosVehicleInfoPollCancel()
+			r.mavrosVehicleInfoPollCancel = nil
+		}
 		if def, ok := topicMap[topic]; ok && def.MsgType != "" {
 			// Live telemetry is stale once the last listener leaves. Virtual
 			// topics keep their existing internal polling/cache semantics.

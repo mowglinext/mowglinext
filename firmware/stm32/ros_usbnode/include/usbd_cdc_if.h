@@ -57,6 +57,9 @@
 #define CDC_RX_DATA_HANDLED 1
 #define CDC_RX_DATA_NOTHANDLED 0
 
+/* Main-loop-only, nonblocking USB recovery service. */
+void CDC_ServiceRecovery(void);
+
 #ifndef USE_USB_FS
 // if you are using USB_HS uncomment the following define
 // it is here because ST forgot to define it for USB FS
@@ -186,6 +189,8 @@ uint32_t CDC_GetTxCompleteMissingCount(void);
 uint32_t CDC_GetHostClosedSkipCount(void);
 uint32_t CDC_GetUsbResetSeenCount(void);
 uint32_t CDC_GetUsbSuspendSeenCount(void);
+/* Successful automatic re-enumerations since MCU boot; host resets excluded. */
+uint32_t CDC_GetUsbRecoveryCount(void);
 
 /**
  * @brief  CDC_TransmitString

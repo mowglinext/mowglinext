@@ -30,8 +30,10 @@
 #include "geometry_msgs/msg/point32.hpp"
 #include "geometry_msgs/msg/polygon.hpp"
 #include "mowgli_behavior/blade_direction.hpp"
+#include "mowgli_behavior/blade_ready.hpp"
 #include "mowgli_behavior/cross_hatch.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
+#include "mowgli_behavior/fleet_yield.hpp"
 #include "mowgli_behavior/start_blocked_escape.hpp"
 #include "mowgli_behavior/transit_avoidance.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
@@ -84,9 +86,23 @@ struct BTContext
   std::chrono::steady_clock::time_point last_status_time{};
   mowgli_interfaces::msg::Emergency latest_emergency;
   mowgli_interfaces::msg::Power latest_power;
+  /// Startup barrier: set only after live power has supplied a usable battery
+  /// reading and restored charging intent has been reconciled. Never persisted.
+  bool power_sample_received{false};
 
   /// Timestamp of the last emergency message received.
   std::chrono::steady_clock::time_point last_emergency_time{std::chrono::steady_clock::now()};
+
+  /// Shared IsEmergency/fleet predicate. Caller holds context_mutex.
+  /// A stale stream (>2 s) fails safe even when cached bits are clear. The
+  /// firmware latch also counts: software e-stop can latch without an active
+  /// physical trigger. Keep the existing startup grace and strict > boundary.
+  bool emergencyActiveOrStale(
+      std::chrono::steady_clock::time_point steady_now = std::chrono::steady_clock::now()) const
+  {
+    return latest_emergency.active_emergency || latest_emergency.latched_emergency ||
+           steady_now - last_emergency_time > std::chrono::seconds(2);
+  }
 
   // -----------------------------------------------------------------------
   // Thread safety
@@ -98,6 +114,7 @@ struct BTContext
   /// Does NOT cover the coverage-tracking fields below (command state +
   /// swath-completion model: target_area_index, single_area_target,
   /// attempted_areas, incomplete_retired_areas, area_attempt_count, area_last_coverage,
+  /// area_last_partial_poses,
   /// area_completed_swaths,
   /// area_swath_count, area_resume_pose_index, area_path_pose_count,
   /// area_plan_fingerprint, completed_areas, session_failed_transit_targets,
@@ -124,6 +141,9 @@ struct BTContext
   /// pattern to follow instead of a mutex if that ever happens.
   mutable std::mutex context_mutex;
 
+  /// Fleet stop ownership is never persisted; all access takes context_mutex.
+  FleetYieldState fleet_yield;
+
   // -----------------------------------------------------------------------
   // Command state (set by HighLevelControl service handler)
   // -----------------------------------------------------------------------
@@ -138,6 +158,11 @@ struct BTContext
   /// operator service and explicit start handlers. Direction resets only at
   /// EndSession; operator inhibition also clears on an explicit mowing start.
   bool blade_auto_reverse{false};
+  bool mowing_enabled{true};  // explicit commissioning dry run; hardware also enforces it
+  BladeReadyConfig blade_ready_config;
+  // Sticky provenance: a controller stream that disappears cannot become a
+  // telemetry-less installation and regain permission via the timer fallback.
+  bool blade_telemetry_seen{false};  // guarded by context_mutex
   BladeDirection blade_direction;
   // One DDS request writer preserves ordering between coverage, manual and
   // operator blade requests. Access only from the owning callback group.
@@ -193,17 +218,27 @@ struct BTContext
   /// context_mutex.
   bool critical_charge_stop_latched{false};
 
+  /// Battery-driven charge waits survive guard halts and process restarts.
+  /// Both low and critical holds re-enter the shared critical recovery branch.
+  bool battery_charge_pending{false};
+
+  /// After restoring an active mow, inspect the first power sample. An old
+  /// snapshot may predate battery_charge_pending, but booting on the charger
+  /// must still complete charging before resuming the saved mission.
+  bool restored_mow_charge_check_pending{false};
+
   /// Outcome of the most recent DockRobot attempt. Reset when an action starts
-  /// and set only after its action result reports success. Used by the
+  /// and set after its action result or physical charger contact reports success. Used by the
   /// critical-battery tree to avoid treating a failed navigation attempt as
   /// arrival at the charger.
   bool last_dock_succeeded{false};
 
   /// Latches a failed critical-battery dock attempt. The mower stays stopped
-  /// until an operator sends a new command, rather than retrying at BT rate.
+  /// until a new operator command or physical charger contact resolves it,
+  /// rather than retrying at BT rate.
   bool critical_dock_failure_latched{false};
 
-  /// Set by LatchCriticalDockFailure and consumed by the node after the current
+  /// Set by battery recovery state transitions and consumed after the current
   /// tree tick, so persistence remains serialized with coverage-map access.
   bool critical_dock_failure_persistence_requested{false};
 
@@ -232,6 +267,24 @@ struct BTContext
   /// COMMAND_START (see clearSingleAreaMode) so the next full-lawn run
   /// iterates normally.
   std::optional<uint32_t> single_area_target;
+
+  /// True while coverage progress was KEPT at the end of a session that did not finish
+  /// (EndSession keep_incomplete: failed coverage, HOME) and has not been resumed yet. The next
+  /// plain COMMAND_START then continues it — the area that was in progress, and the single-area
+  /// target it was run under — instead of starting the whole lawn from scratch. Set only by
+  /// EndSession (which also resets it on every other session end), consumed by the START
+  /// handler; see keepsSingleAreaOnStart() and incompleteResumeExpired().
+  bool resume_after_incomplete_end{false};
+  std::chrono::steady_clock::time_point resume_after_incomplete_end_time{};
+
+  /// Set by an operator START (~/high_level_control COMMAND_START, ~/start_in_area) and cleared
+  /// by the first area GetNextUnmowedArea dispatches after it. While set, a scan that finds every
+  /// area already COMPLETE has not mowed a thing for this Start: the progress it found belongs to
+  /// a session that finished without reaching EndSession (its dock was preempted, or the stack
+  /// restarted first). GetNextUnmowedArea then discards that progress and mows the lawn again
+  /// instead of reporting MOWING_COMPLETE — field 2026-10-26, v1.6.0: every Play undocked, said
+  /// "mowing complete" and drove back, for good. Not persisted: a restart is not a Start.
+  bool start_awaiting_dispatch{false};
 
   /// Stable id (mowglinext#637) of the area single_area_target's index
   /// pointed at when it was locked in — captured from the FIRST probe
@@ -273,13 +326,19 @@ struct BTContext
   /// despite advancing 0.3 → 18.6 % across the 5 dispatches. Cleared by
   /// EndSession.
   std::map<uint32_t, uint32_t> area_attempt_count;
-  /// Best coverage_percent seen for an area so far this session, used to
-  /// decide whether a dispatch made progress (and thus resets the
-  /// no-progress attempt counter). Cleared by EndSession.
+  /// High-water mark of the units booked fully mowed in an area this session
+  /// (area_completed_swaths size), used to decide whether a dispatch made
+  /// progress and thus resets the no-progress attempt counter. Cleared by
+  /// EndSession.
   std::map<uint32_t, float> area_last_coverage;
+  /// Its partner (area_progress.hpp): the high-water mark of the furthest
+  /// poses reached inside the area's UNFINISHED units (area_unit_progress), so
+  /// a pass that mowed a long stretch of a long unit is not "no progress".
+  /// Reset with area_last_coverage, everywhere.
+  std::map<uint32_t, std::size_t> area_last_partial_poses;
   static constexpr uint32_t kMaxAreaAttempts = 5;
-  /// Minimum coverage_percent gain that counts as progress (resets the
-  /// no-progress counter). Below this, a dispatch is treated as stuck.
+  /// Share of an area's plan an unfinished unit must gain to count as
+  /// progress (minPartialProgressPoses, never below ~1 m of path).
   static constexpr float kAreaProgressEpsilonPct = 0.5f;
 
   // -----------------------------------------------------------------------
@@ -461,6 +520,14 @@ struct BTContext
   /// a fixed area+params, so the re-planned path is identical and the index is
   /// stable. Cleared (erased) when the area completes; reset by EndSession.
   std::map<uint32_t, std::size_t> area_resume_pose_index;
+  /// How far each INTERRUPTED unit of an area got: area -> (unit -> local pose index inside the
+  /// full unit). area_resume_pose_index is ONE scalar for the unit being driven, so the moment a
+  /// later unit is dispatched it forgets an earlier unit that was abandoned at 99 % (field
+  /// 2026-10-14: a 2294-pose unit was re-driven from pose 0 on four passes in a row). FollowStrip
+  /// records a unit's furthest progress here whenever it persists the cursor and trims the unit at
+  /// it on the next pass; erased when the unit is booked mowed, with the rest of an area's state
+  /// when the plan changes, and by EndSession. Persisted with the resume cursor.
+  std::map<uint32_t, std::map<std::size_t, std::size_t>> area_unit_progress;
   /// Total pose count of the area's continuous full_path (the denominator for
   /// the resume-cursor coverage_percent). Set by FollowStrip at dispatch.
   std::map<uint32_t, std::size_t> area_path_pose_count;
@@ -546,6 +613,11 @@ struct BTContext
   /// Cleared by EndSession so the next COMMAND_START starts without a stale
   /// warning from a previous, unrelated session.
   bool coverage_plausibility_warning{false};
+  /// Why the mower is not mowing (HighLevelStatus.stop_reason / stop_detail). Written by
+  /// recordStopReason (stop_reason.hpp) where a session ends or a hold begins without finishing,
+  /// cleared by the next HighLevelControl command. Empty = nothing to report.
+  std::string stop_reason;
+  std::string stop_detail;
 
   /// Filesystem path the coverage RESUME state (the four maps above +
   /// completed_areas + current_area) is persisted to, so an interrupted session
@@ -555,6 +627,14 @@ struct BTContext
   /// completion, loaded once at node startup, and removed by EndSession. See
   /// coverage_persistence.{hpp,cpp}.
   std::string coverage_resume_path;
+  /// Wall-clock time the snapshot at coverage_resume_path was written (its `saved_at` row),
+  /// filled by loadCoverageResumeState. It is the AGE of restored progress: kept progress older
+  /// than kIncompleteResumeMaxAge is discarded at boot (applyRestoredCommandPolicy) exactly as a
+  /// live process ages it out at the next Play. Field 2026-10-25: without it, three updater
+  /// restarts turned a 6-day-old "4 of 5 sub-paths done" snapshot into a mow that drove the one
+  /// ring unit left and declared the lawn complete. Absent in files written before this row
+  /// (unknown age, resumed as before).
+  std::optional<std::chrono::system_clock::time_point> coverage_resume_saved_at;
   bool mow_cross_hatch{false};
   std::map<uint32_t, CrossHatch> cross_hatch;
   // Disabled sessions still latch their base orientation for resume, but do not
@@ -678,9 +758,54 @@ struct BTContext
   double transit_speed{0.25};
   double mowing_speed{0.2};
 
-  /// True if it was raining when the current mowing session started.
-  /// Set by WasRainingAtStart, checked by IsNewRain.
+  /// True if the MOWER's OWN sensor reported rain when the current mowing
+  /// session started ("the operator chose to mow in the rain"). Set by
+  /// WasRainingAtStart, checked by IsNewRain. Deliberately NOT fed by the
+  /// external verdict: a wet roof station at start must not license mowing
+  /// through the next real shower for the whole session.
   bool raining_at_mow_start{false};
+
+  /// Rain verdict pushed by an EXTERNAL source on `/external_rain`
+  /// (std_msgs/Bool, latched) — e.g. a roof weather station behind a Home
+  /// Assistant automation, relayed by mqtt_bridge_node from
+  /// `<prefix>/external_rain`. It only ever ADDS a reason to stop: the
+  /// on-board sensor (latest_status.rain_detected) is OR-ed with it in
+  /// RainingNow(), never overridden by it, so a "dry" external verdict can
+  /// not hide rain the mower itself feels. Written by the subscription
+  /// callback and read by the rain BT nodes under context_mutex.
+  bool external_rain{false};
+  /// Arrival time of the last /external_rain message; the epoch default
+  /// means "never received".
+  std::chrono::steady_clock::time_point external_rain_stamp{};
+  /// `use_external_rain`: master switch; false ignores /external_rain entirely.
+  bool use_external_rain{true};
+  /// A "wet" verdict older than this is ignored (fail back to the on-board
+  /// sensor alone) so a dead automation, broker or Home Assistant cannot park
+  /// the mower in RAIN_WAITING forever. 0 = never expires.
+  double external_rain_max_age_sec{7200.0};
+
+  /// True while a fresh external "wet" verdict is in force. Caller holds
+  /// context_mutex.
+  bool ExternalRainActive(std::chrono::steady_clock::time_point now) const
+  {
+    if (!use_external_rain || !external_rain || external_rain_stamp.time_since_epoch().count() == 0)
+    {
+      return false;
+    }
+    if (external_rain_max_age_sec <= 0.0)
+    {
+      return true;
+    }
+    return std::chrono::duration<double>(now - external_rain_stamp).count() <=
+           external_rain_max_age_sec;
+  }
+
+  /// Raining by ANY source: the on-board sensor or a fresh external verdict.
+  /// Caller holds context_mutex.
+  bool RainingNow(std::chrono::steady_clock::time_point now) const
+  {
+    return latest_status.rain_detected || ExternalRainActive(now);
+  }
 
   /// First time we observed continuous rain since the last dry sample.
   /// Used by IsNewRain to debounce short rain pulses (rain_debounce_sec).
@@ -767,6 +892,8 @@ struct BTContext
   /// (stopped_goal_checker, which opennav_docking still needs). Set once by
   /// behavior_tree_node from the main tree's directory.
   std::string transit_tree_xml;
+  /// Dedicated planner selection for explicit BoundaryGuard recovery only.
+  std::string boundary_recovery_tree_xml;
 
   /// Goal-checker instance the coverage controller is dispatched with.
   ///
@@ -957,14 +1084,20 @@ struct BTContext
 ///     lawn. The GUI's "mow this area" button calls ~/start_in_area, which
 ///     sets current_command itself and never goes through that handler, so
 ///     clearing there cannot cancel a targeted request.
-///     EXCEPTION, guarded at the call site with isResumableHoldState(): a
-///     plain COMMAND_START received while parked in StopHoldSequence's IDLE
-///     (the operator paused a run with "Pause" and pressed Resume/Start
-///     again) does NOT call this — Resume must continue the SAME targeted
-///     area, not silently widen to the whole lawn (mowglinext field report,
-///     2026-09-18: a paused single-area run restarted at area 0 instead of
-///     finishing the paused area). The charge-hold/emergency case above still
-///     clears unconditionally; only the plain-pause case is exempted.
+///     EXCEPTIONS, decided at the call site by startClearsSingleAreaMode():
+///       - a plain COMMAND_START received while parked in StopHoldSequence's
+///         IDLE (the operator paused a run with "Pause" and pressed
+///         Resume/Start again) does NOT call this — Resume must continue the
+///         SAME targeted area, not silently widen to the whole lawn (field
+///         report 2026-09-18: a paused single-area run restarted at area 0
+///         instead of finishing the paused area).
+///       - nor does a COMMAND_START received in a battery charge hold
+///         (isChargeHoldState): there it is the operator's "Resume now"
+///         (BTContext::manual_resume_requested), which continues the SAME run.
+///         Clearing the clip there sent a targeted run that was nearly done
+///         back to area 0 and a full-lawn plan (field report 2026-10-05, area
+///         2 interrupted by the battery guard).
+///     A START from IDLE_DOCKED or any other state keeps the historical clear.
 /// Also drops an unconsumed target_area_index: a request that was never
 /// picked up (e.g. start_in_area during an emergency) must not silently
 /// hijack a later plain start.
@@ -1006,6 +1139,99 @@ inline bool isChargeHoldState(const std::string& state_name)
 inline bool isResumableHoldState(const std::string& state_name)
 {
   return state_name == "IDLE";
+}
+
+/// Kept coverage progress older than this is not resumed: the grass has grown back, and
+/// "98 % of the area is done" no longer describes the lawn. The next START then begins fresh.
+inline constexpr std::chrono::hours kIncompleteResumeMaxAge{24};
+
+/// True when any coverage progress has been recorded: a finished area, a completed swath or a
+/// mid-path resume cursor. Nothing to keep (or resume) otherwise.
+inline bool hasRecordedCoverageProgress(const BTContext& ctx)
+{
+  if (!ctx.completed_areas.empty() || !ctx.area_resume_pose_index.empty() ||
+      !ctx.area_unit_progress.empty())
+  {
+    return true;
+  }
+  for (const auto& entry : ctx.area_completed_swaths)
+  {
+    if (!entry.second.empty())
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Forget every recorded coverage progress — what hasRecordedCoverageProgress() looks at plus
+/// the plan fingerprints, swath counts and the per-area high-water mark — so the next scan
+/// plans and mows each area from its first line. Session budgets, flags and the single-area
+/// target are the caller's business.
+inline void clearRecordedCoverageProgress(BTContext& ctx)
+{
+  ctx.area_completed_swaths.clear();
+  ctx.area_swath_count.clear();
+  ctx.area_resume_pose_index.clear();
+  ctx.area_unit_progress.clear();
+  ctx.area_path_pose_count.clear();
+  ctx.area_plan_fingerprint.clear();
+  ctx.completed_areas.clear();
+  ctx.area_last_coverage.clear();
+  ctx.area_last_partial_poses.clear();
+  ctx.coverage_plausibility_warning = false;
+}
+
+/// Forget the recorded progress of ONE area, for an explicit "mow this area" request.
+inline void clearAreaCoverageProgress(BTContext& ctx, uint32_t area)
+{
+  ctx.area_completed_swaths.erase(area);
+  ctx.area_resume_pose_index.erase(area);
+  ctx.area_unit_progress.erase(area);
+  ctx.area_last_coverage.erase(area);
+  ctx.area_last_partial_poses.erase(area);
+  ctx.completed_areas.erase(area);
+}
+
+/// Does a plain COMMAND_START keep the single-area clip it finds latched? Yes when the operator
+/// paused a run (isResumableHoldState), and — new — when the previous session ended unfinished
+/// and its progress was kept (BTContext::resume_after_incomplete_end): Play then continues the
+/// area that was in progress rather than widening to the whole lawn.
+inline bool keepsSingleAreaOnStart(const std::string& state_name, bool resume_after_incomplete_end)
+{
+  return isResumableHoldState(state_name) || resume_after_incomplete_end;
+}
+
+/// Has the progress kept by EndSession(keep_incomplete) aged out?
+inline bool incompleteResumeExpired(std::chrono::steady_clock::time_point kept_at,
+                                    std::chrono::steady_clock::time_point now)
+{
+  return now - kept_at > kIncompleteResumeMaxAge;
+}
+
+/// The same question for progress RESTORED from disk at boot, whose age is only known on the
+/// wall clock (BTContext::coverage_resume_saved_at): a steady clock does not survive a restart.
+/// A clock that went backwards since the save reads as a negative age, i.e. not expired — the Pi
+/// has no RTC but systemd restores the last known time, so the wall clock never runs behind a
+/// save made by this robot.
+inline bool restoredProgressExpired(std::chrono::system_clock::time_point saved_at,
+                                    std::chrono::system_clock::time_point now)
+{
+  return now - saved_at > kIncompleteResumeMaxAge;
+}
+
+/// Should a plain COMMAND_START received while the tree publishes `state_name`
+/// drop the single-area clip (clearSingleAreaMode)? No when it continues the
+/// SAME run — a Pause → Play from plain IDLE, or a manual "Resume now" out of
+/// a battery charge hold — and yes everywhere else, where a Start means "mow
+/// the lawn" (IDLE_DOCKED, MOWING, no status yet, ...). A session that ended
+/// unfinished with its progress kept (BTContext::resume_after_incomplete_end) is
+/// continued as well: Play resumes the area that was in progress.
+inline bool startClearsSingleAreaMode(const std::string& state_name,
+                                      bool resume_after_incomplete_end = false)
+{
+  return !keepsSingleAreaOnStart(state_name, resume_after_incomplete_end) &&
+         !isChargeHoldState(state_name);
 }
 
 }  // namespace mowgli_behavior

@@ -1,7 +1,51 @@
 #!/usr/bin/env bash
 
+select_mavros_gnss_source() {
+  local allow_existing="${1:-false}"
+  local normalized=""
+  local default_choice="1"
+
+  if [[ -n "${GNSS_SOURCE:-}" ]]; then
+    normalized="$(normalize_gnss_source "$GNSS_SOURCE")"
+  fi
+
+  if [[ "$allow_existing" == "true" && ( "$normalized" == "mavros" || "$normalized" == "direct" ) ]]; then
+    GNSS_SOURCE="$normalized"
+    info "$MSG_MAVROS_GNSS_SOURCE_EXISTING $GNSS_SOURCE"
+    return 0
+  fi
+
+  [[ "$normalized" == "direct" ]] && default_choice="2"
+
+  echo ""
+  echo "$MSG_MAVROS_GNSS_SOURCE_TITLE"
+  echo "  [1] $MSG_MAVROS_GNSS_SOURCE_PIXHAWK"
+  echo "  [2] $MSG_MAVROS_GNSS_SOURCE_SOC"
+  echo ""
+  prompt "$MSG_CHOICE" "$default_choice"
+
+  case "$REPLY" in
+    1|mavros|pixhawk)
+      export GNSS_SOURCE="mavros"
+      export GNSS_STATUS_SOURCE="external"
+      ;;
+    2|direct|soc)
+      export GNSS_SOURCE="direct"
+      export GNSS_STATUS_SOURCE="universal"
+      ;;
+    *)
+      error "$MSG_MAVROS_GNSS_SOURCE_INVALID"
+      return 1
+      ;;
+  esac
+
+  info "$MSG_MAVROS_GNSS_SOURCE_SELECTED $GNSS_SOURCE"
+}
+
 configure_mavros_backend_details() {
   local allow_existing="${1:-false}"
+
+  select_mavros_gnss_source "$allow_existing" || return 1
 
   if [[ "$allow_existing" == "true" && ( "${MAVROS_AUTOPILOT:-}" == "ardupilot" || "${MAVROS_AUTOPILOT:-}" == "px4" ) ]]; then
     info "Using MAVROS autopilot preset/default: ${MAVROS_AUTOPILOT}"
@@ -47,11 +91,70 @@ configure_mavros_backend_details() {
   fi
 }
 
+# SUPPORTED_HARDWARE_BACKENDS and is_supported_hardware_backend live in
+# config.sh, with the other shared predicates — compose.sh needs them and
+# docker/stack.sh does not source this file. This file owns only the
+# interactive selection flow.
+
+# OpenMower v1 electronics ONLY: LowLevel (Pico) board + three xESC
+# controllers on the Pi's hardware UARTs (open_mower_ros HARDWARE_PLATFORM=1,
+# mower_comms_v1). The bridge runs in the mowgli-openmower sidecar; nothing is
+# flashed. Defaults follow open_mower_ros for kernels >= 6.1.28 (ttyAMA0 =
+# LowLevel, ttyAMA5/3/4 = left/right/mow xESC).
+#
+# OpenMower v2 (HARDWARE_PLATFORM=2, mower_comms_v2) is NOT supported: it drops
+# the serial protocol entirely for xbot_framework service interfaces over
+# Ethernet, so it needs a different bridge, not a parameter here.
+configure_openmower_backend_details() {
+  local allow_existing="${1:-false}"
+
+  : "${OPENMOWER_LL_PORT:=/dev/ttyAMA0}"
+  : "${OPENMOWER_XESC_LEFT_PORT:=/dev/ttyAMA5}"
+  : "${OPENMOWER_XESC_RIGHT_PORT:=/dev/ttyAMA3}"
+  : "${OPENMOWER_XESC_MOW_PORT:=/dev/ttyAMA4}"
+
+  if [[ "$allow_existing" == "true" && ( "${OPENMOWER_XESC_TYPE:-}" == "xesc_mini" || "${OPENMOWER_XESC_TYPE:-}" == "xesc_2040" ) ]]; then
+    info "Using OpenMower ESC type preset/default: ${OPENMOWER_XESC_TYPE}"
+  else
+    select_openmower_xesc_type || return 1
+  fi
+
+  export OPENMOWER_LL_PORT OPENMOWER_XESC_LEFT_PORT OPENMOWER_XESC_RIGHT_PORT \
+    OPENMOWER_XESC_MOW_PORT OPENMOWER_XESC_TYPE
+  info "OpenMower ports: LowLevel=${OPENMOWER_LL_PORT} xESC L=${OPENMOWER_XESC_LEFT_PORT} R=${OPENMOWER_XESC_RIGHT_PORT} M=${OPENMOWER_XESC_MOW_PORT}"
+}
+
+select_openmower_xesc_type() {
+  echo ""
+  echo "Select the OpenMower motor controller type (OM_MOWER_ESC_TYPE):"
+  echo "  [1] xesc_mini — STM32 ESC, VESC protocol (stock YardForce builds)"
+  echo "  [2] xesc_2040 — RP2040 ESC"
+  echo ""
+  prompt "Choice [1-2]" "1"
+  choice="$REPLY"
+
+  case "$choice" in
+    1)
+      export OPENMOWER_XESC_TYPE="xesc_mini"
+      info "Selected OpenMower ESC type: xesc_mini"
+      ;;
+    2)
+      export OPENMOWER_XESC_TYPE="xesc_2040"
+      info "Selected OpenMower ESC type: xesc_2040"
+      ;;
+    *)
+      error "Invalid choice"
+      return 1
+      ;;
+  esac
+}
+
 select_hardware_backend() {
   if [[ "${PRESET_LOADED:-false}" == "true" && -n "${HARDWARE_BACKEND:-}" ]]; then
     case "${HARDWARE_BACKEND}" in
       mowgli)
         export HARDWARE_BACKEND="mowgli"
+        export GNSS_SOURCE="direct"
         export MAVROS_BY_ID=""
         info "Hardware backend pre-configured: Mowgli STM32 board"
         return 0
@@ -62,8 +165,15 @@ select_hardware_backend() {
         configure_mavros_backend_details true || return 1
         return 0
         ;;
+      openmower)
+        export HARDWARE_BACKEND="openmower"
+        export MAVROS_BY_ID=""
+        info "Hardware backend pre-configured: OpenMower v1 electronics (LowLevel + xESC)"
+        configure_openmower_backend_details true || return 1
+        return 0
+        ;;
       *)
-        error "Invalid HARDWARE_BACKEND preset: ${HARDWARE_BACKEND} (expected mowgli or mavros)"
+        error "Invalid HARDWARE_BACKEND preset: ${HARDWARE_BACKEND} (expected ${SUPPORTED_HARDWARE_BACKENDS// /|})"
         return 1
         ;;
     esac
@@ -73,13 +183,15 @@ select_hardware_backend() {
   echo "Select hardware backend:"
   echo "  [1] Mowgli STM32 board"
   echo "  [2] Pixhawk via MAVROS"
+  echo "  [3] OpenMower v1 electronics (LowLevel board + xESC, stock firmware)"
   echo ""
-  prompt "Choice [1-2]" "1"
+  prompt "Choice [1-3]" "1"
   choice="$REPLY"
 
   case "$choice" in
     1)
       export HARDWARE_BACKEND="mowgli"
+      export GNSS_SOURCE="direct"
       export MAVROS_BY_ID=""
       info "Selected backend: Mowgli STM32 board"
       ;;
@@ -87,6 +199,12 @@ select_hardware_backend() {
       export HARDWARE_BACKEND="mavros"
       info "Selected backend: Pixhawk via MAVROS"
       configure_mavros_backend_details false || return 1
+      ;;
+    3)
+      export HARDWARE_BACKEND="openmower"
+      export MAVROS_BY_ID=""
+      info "Selected backend: OpenMower v1 electronics (LowLevel board + xESC)"
+      configure_openmower_backend_details false || return 1
       ;;
     *)
       error "Invalid choice"

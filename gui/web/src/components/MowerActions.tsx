@@ -11,6 +11,7 @@ import {HighLevelStatusConstants} from "../types/ros.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
 import {useTranslation} from "react-i18next";
 import {stringifyValue} from "../utils/stringifyValue.ts";
+import {DIG_OBSTRUCTION_STATE, useDigObstructionAck} from "../hooks/useDigObstructionAck.ts";
 
 const ActionsCard = styled(Card)`
   .ant-card-body > button {
@@ -47,6 +48,12 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
     const resumeAvailable = useCoverageResumeAvailable();
     const {modal} = App.useApp();
     const {colors} = useThemeMode();
+    const stateName = highLevelStatus.state_name;
+    // DIG_OBSTRUCTION is a held robot (numeric state IDLE, wheels hard-stopped
+    // by firmware): offer Start/Continue like IDLE, routed through the
+    // acknowledgement that releases the hold (useDigObstructionAck).
+    const isResting = stateName === "IDLE" || stateName === "IDLE_DOCKED" || stateName === DIG_OBSTRUCTION_STATE;
+    const startMowing = useDigObstructionAck(stateName)(mowerAction("high_level_control", {Command: 1}));
 
     // "Start fresh": discard persisted mowing progress, then start — so the mow
     // begins at the first line instead of resuming a prior interrupted session
@@ -121,12 +128,13 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
         {
             // Match MapToolbar: resting state is IDLE_DOCKED (BT never emits
             // plain IDLE except as the manual-mow fallthrough).
-            key: (highLevelStatus.state_name == "IDLE_DOCKED" || highLevelStatus.state_name == "IDLE") ? "continue" : "pause",
-            label: (highLevelStatus.state_name == "IDLE_DOCKED" || highLevelStatus.state_name == "IDLE") ? t('mowerActions.continue') : t('mowerActions.pause'),
+            key: isResting ? "continue" : "pause",
+            label: isResting ? t('mowerActions.continue') : t('mowerActions.pause'),
             // Continue = START (resumes via persisted mow_progress); Pause =
             // STOP (COMMAND_STOP=8 → StopHoldSequence: mower off, halt in place,
             // Nav2 left up so the mission can resume, no dock drive).
-            actions: (highLevelStatus.state_name == "IDLE_DOCKED" || highLevelStatus.state_name == "IDLE") ? [{
+            // ("continue" runs startMowing in the dropdown handler instead.)
+            actions: isResting ? [{
                 command: "high_level_control",
                 args: {
                     Command: 1,
@@ -193,9 +201,9 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
                     a no-op at best and re-kicks the mission at worst. Operator
                     should use HOME or STOP instead. */}
                 {highLevelStatus.state !== HighLevelStatusConstants.HIGH_LEVEL_STATE_AUTONOMOUS &&
-                 (highLevelStatus.state_name === "IDLE" || highLevelStatus.state_name === "IDLE_DOCKED") ? (
+                 isResting ? (
                     <AsyncButton icon={<PlayCircleOutlined/>} type="primary" key="btnHLC1"
-                                 onAsyncClick={mowerAction("high_level_control", {Command: 1})}
+                                 onAsyncClick={startMowing}
                     >{resumeAvailable ? t('mowerActions.resume') : t('mowerActions.start')}</AsyncButton>
                 ) : null}
                 {/* Mid-session charge hold (low/critical battery docked the
@@ -241,6 +249,10 @@ export const MowerActions: React.FC<React.PropsWithChildren<{bare?: boolean}>> =
                 <AsyncDropDownButton style={{display: "inline"}}  key="drpActions"  menu={{
                     items: actionMenuItems,
                     onAsyncClick: async (e) => {
+                        if (e.key === "continue") {
+                            await startMowing();
+                            return;
+                        }
                         const item = actionMenuItems.find(item => item.key == e.key)
                         for (const action of (item?.actions ?? [])) {
                             await mowerAction(action.command, action.args)();

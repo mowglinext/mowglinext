@@ -1,5 +1,5 @@
 import {describe, expect, test} from "vitest";
-import {nodeFor} from "./BTStateGraph";
+import {nodeFor} from "./btStateGraphModel";
 
 /**
  * Every state_name published by the mowgli_behavior BT XML files

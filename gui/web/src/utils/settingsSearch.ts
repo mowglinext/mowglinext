@@ -47,6 +47,10 @@ const FIELD_TEXT: Record<string, string[]> = {
         "settingsBattery.manualResume",
         "settingsBattery.manualResumeTooltip"
     ],
+    "battery_charge_tail_current_a": [
+        "settingsBattery.chargeTail",
+        "settingsBattery.chargeTailTooltip"
+    ],
     "mowing_speed": [
         "settingsMowing.mowingSpeed",
         "settingsMowing.mowingSpeedTooltip"
@@ -182,6 +186,10 @@ const FIELD_TEXT: Record<string, string[]> = {
         "settingsNavigation.dockExemptRadius",
         "settingsNavigation.dockExemptRadiusTooltip"
     ],
+    "obstacle_transit_margin_m": [
+        "settingsNavigation.obstacleTransitMargin",
+        "settingsNavigation.obstacleTransitMarginTooltip"
+    ],
     "datum_lat": [
         "settingsPositioning.latitude"
     ],
@@ -234,6 +242,7 @@ const FIELD_TEXT: Record<string, string[]> = {
     "chassis_width": [
         "settingsHardware.chassisWidth"
     ],
+    "chassis_z_offset": ["settingsHardware.chassisZOffset", "settingsHardware.chassisZOffsetTooltip"],
     "chassis_height": [
         "settingsHardware.chassisHeight"
     ],
@@ -254,6 +263,7 @@ const FIELD_TEXT: Record<string, string[]> = {
     "caster_radius": [
         "settingsHardware.casterRadius"
     ],
+    "caster_x_offset": ["settingsHardware.casterXOffset", "settingsHardware.casterXOffsetTooltip"],
     "caster_track": [
         "settingsHardware.casterTrack"
     ],
@@ -293,6 +303,14 @@ const FIELD_TEXT: Record<string, string[]> = {
     "rain_debounce_sec": [
         "settingsRain.debounce",
         "settingsRain.debounceTooltip"
+    ],
+    "use_external_rain": [
+        "settingsRain.useExternal",
+        "settingsRain.useExternalTooltip"
+    ],
+    "external_rain_max_age_minutes": [
+        "settingsRain.externalExpiry",
+        "settingsRain.externalExpiryTooltip"
     ],
     "led_count": [
         "settingsLeds.ledCount",

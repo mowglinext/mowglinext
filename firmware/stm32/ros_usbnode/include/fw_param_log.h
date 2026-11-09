@@ -11,9 +11,13 @@
  * stalls the CPU for 20-40 ms (F103 page) up to seconds (F401 128 KB sector).
  * So the running firmware NEVER erases: it only programs one 32-bit word at a
  * time into already-erased space (tens of microseconds each). Erasing happens
- * at boot, before the watchdog is armed, and only when the log is full or
- * holds something that is not a valid record (e.g. leftovers of the stock
- * firmware).
+ * at boot, before the watchdog is armed. Automatic recovery erase is limited
+ * to invalid data when no valid record exists (e.g. leftovers of the stock
+ * firmware); a full or unappendable log with a committed record is retained.
+ * Reclaiming that log requires an explicit, stopped-state operator request:
+ * a request-id marker is armed in RTC backup registers, the next boot erases
+ * and verifies the area, then clears the marker. Losing the backup domain can
+ * cancel an unconsumed request.
  *
  * Record layout, in 32-bit words (erased flash reads 0xFFFFFFFF):
  *   [0]              FW_PARAM_LOG_MAGIC
@@ -107,10 +111,31 @@ typedef struct {
   size_t next_free;
   /** Valid records found (diagnostics). */
   size_t valid_records;
-  /** The area holds something that is not a well-formed record (or data
-   *  after the first erased word): it must be erased before appending. */
+  /** The area holds unrecognized/non-erased data that cannot be safely
+   *  skipped; it must be erased before appending. */
   uint8_t needs_erase;
 } fw_param_log_scan_t;
+
+/**
+ * Recognize only the two-word prefixes that can result from a power cut while
+ * programming the magic/header words on an F103 (which writes a 32-bit word
+ * as two 16-bit halfwords). These prefixes own exactly two words; after them
+ * the normal parser must continue so later appended records remain visible.
+ * Any other malformed data stays fail-closed.
+ */
+static inline uint8_t fw_param_log_is_torn_prefix(const uint32_t *area,
+                                                 size_t off,
+                                                 size_t area_words) {
+  if (off + FW_PARAM_LOG_HEADER_WORDS > area_words) {
+    return 0u;
+  }
+  const uint32_t magic = area[off];
+  const uint32_t header = area[off + 1u];
+  return (uint8_t)((magic == 0xFFFF524Du && header == FW_PARAM_LOG_ERASED) ||
+                   (magic == FW_PARAM_LOG_MAGIC &&
+                    (header == FW_PARAM_LOG_ERASED ||
+                     header == 0xFFFF0001u)));
+}
 
 /** Walk the log and locate the newest valid record and the append point. */
 static inline fw_param_log_scan_t fw_param_log_scan(const uint32_t *area, size_t area_words) {
@@ -130,12 +155,22 @@ static inline fw_param_log_scan_t fw_param_log_scan(const uint32_t *area, size_t
       scan.next_free = off;
       return scan;
     }
-    if (magic != FW_PARAM_LOG_MAGIC || off + FW_PARAM_LOG_HEADER_WORDS > area_words) {
+    if (off + FW_PARAM_LOG_HEADER_WORDS > area_words) {
       scan.needs_erase = 1u;
       scan.next_free = area_words;
       return scan;
     }
     const uint32_t header = area[off + 1u];
+    if (fw_param_log_is_torn_prefix(area, off, area_words)) {
+      off += FW_PARAM_LOG_HEADER_WORDS;
+      scan.next_free = off;
+      continue;
+    }
+    if (magic != FW_PARAM_LOG_MAGIC) {
+      scan.needs_erase = 1u;
+      scan.next_free = area_words;
+      return scan;
+    }
     const size_t entries = header >> 16;
     const size_t words = fw_param_log_record_words(entries);
     if (header == FW_PARAM_LOG_ERASED || (header & 0xFFFFu) != FW_PARAM_LOG_FORMAT ||

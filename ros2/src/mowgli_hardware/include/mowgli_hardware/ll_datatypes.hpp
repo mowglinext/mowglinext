@@ -41,10 +41,9 @@ namespace mowgli_hardware
 // WWDG fired. The same v3 diagnostic stack also uses the config handshake
 // flags byte so the GUI can toggle optional firmware diagnostics on demand.
 // Protocol v7 replaces the four per-group runtime packets (0x54-0x57) with the
-// generic SET_PARAM / GET_PARAM / PARAM_COMMIT protocol: every firmware
-// parameter has a stable id (FirmwareParamId below, mirroring
-// fw_param_catalog.h), the firmware reports the value it applied, and it
-// persists the set in flash so it applies before the host connects.
+// generic SET_PARAM / GET_PARAM / PARAM_COMMIT protocol. Protocol v8 adds an
+// explicit, request-id-correlated parameter-store reset packet; ordinary boot
+// and reconnect paths never erase or retry a reset request.
 //
 // This is the COMPATIBILITY KEY: the bridge sends PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ
 // on every (re)connect and the firmware answers with its own
@@ -53,7 +52,7 @@ namespace mowgli_hardware
 // formats and the operator must reflash. Bump this in lockstep with
 // MOWGLI_PROTOCOL_VERSION in mowgli_protocol.h when an incompatible wire
 // change requires a hard compatibility break.
-static constexpr uint8_t kMowgliProtocolVersion = 7u;
+static constexpr uint8_t kMowgliProtocolVersion = 9u;
 
 // ---------------------------------------------------------------------------
 // Packet type identifiers
@@ -81,10 +80,13 @@ enum PacketId : uint8_t
   PACKET_ID_LL_SET_PARAM = 0x58,  ///< Pi → STM32: set one runtime parameter
   PACKET_ID_LL_GET_PARAM = 0x59,  ///< Pi → STM32: request parameter report(s)
   PACKET_ID_LL_PARAM_COMMIT = 0x5A,  ///< Pi → STM32: persist the parameter set to flash
+  PACKET_ID_LL_PARAM_STORE_RESET = 0x5B,  ///< Pi → STM32: explicit, confirmed store reset request
 };
 
 /// Magic byte in LlParamCommit.
 static constexpr uint8_t kLlParamCommitMagic = 0xC5;
+/// Magic byte in LlParamStoreReset; explicit operator action only.
+static constexpr uint8_t kLlParamStoreResetMagic = 0xD3;
 
 /// Runtime firmware parameter ids — mirror of fw_param_catalog.h (pinned by
 /// test_fw_param_catalog.cpp). Ids are also flash record keys: never renumber.
@@ -138,6 +140,7 @@ constexpr uint8_t PARAM_COMMIT_UNCHANGED = 2u;
 constexpr uint8_t PARAM_COMMIT_PENDING = 3u;
 constexpr uint8_t PARAM_COMMIT_LOG_FULL = 4u;
 constexpr uint8_t PARAM_COMMIT_ERROR = 5u;
+constexpr uint8_t PARAM_COMMIT_RESET_PENDING = 6u;
 
 /// Magic byte in LlReboot — a dedicated reboot packet plus this confirmation
 /// byte prevents a corrupt/misframed packet from accidentally rebooting the
@@ -298,13 +301,14 @@ struct LlUiEvent
  *
  * Signed end-to-end: left_ticks/right_ticks carry direction in their sign
  * (no separate direction byte). Per-wheel velocity is computed on the
- * firmware side using the hardware-timer dt, so the host consumes it
- * directly without dividing by a jittery packet-arrival interval.
+ * firmware side using the hardware-timer dt. The host derives elapsed time
+ * from acquisition_millis alongside cumulative ticks, so skipped packets
+ * cannot lose firmware time. Host receive time is used only for clock fitting.
  */
 struct LlOdometry
 {
   uint8_t type;  ///< Must equal PACKET_ID_LL_ODOMETRY
-  uint16_t dt_millis;  ///< Firmware-measured interval since last packet [ms]
+  uint32_t acquisition_millis;  ///< Firmware HAL tick at encoder acquisition; wraps at 2^32 ms
   int32_t left_ticks;  ///< Signed cumulative left encoder ticks
   int32_t right_ticks;  ///< Signed cumulative right encoder ticks
   int16_t left_velocity_mm_s;  ///< Signed left wheel velocity [mm/s]
@@ -433,6 +437,20 @@ struct LlParamCommit
 };
 
 /**
+ * @brief Explicit request to erase stored firmware parameters at the next boot.
+ */
+struct LlParamStoreReset
+{
+  uint8_t type;  ///< Must equal PACKET_ID_LL_PARAM_STORE_RESET
+  uint8_t magic;  ///< Must equal kLlParamStoreResetMagic (0xD3)
+  uint32_t request_id;  ///< Non-zero id echoed only after the firmware arms this request
+  uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
+};
+static_assert(offsetof(LlParamStoreReset, request_id) == 2u,
+              "LlParamStoreReset.request_id offset drifted");
+static_assert(sizeof(LlParamStoreReset) == 8u, "LlParamStoreReset layout mismatch");
+
+/**
  * @brief One parameter's state from the STM32 (PACKET_ID_LL_PARAM_VALUE = 0x13).
  */
 struct LlParamValue
@@ -465,14 +483,18 @@ struct LlParamStoreStatus
   uint8_t type;  ///< Must equal PACKET_ID_LL_PARAM_STORE_STATUS
   uint8_t boot_source;  ///< PARAM_BOOT_*
   uint8_t last_commit;  ///< PARAM_COMMIT_*
-  uint16_t records_left;  ///< Full records that still fit before a boot-time erase
+  uint16_t records_left;  ///< Full records that still fit before an explicit reset is needed
   uint16_t param_count;  ///< Parameters the firmware knows
+  uint32_t reset_request_id;  ///< Latest retained ID; code 6 means armed or boot reset unresolved
   uint16_t crc;  ///< CRC-16 CCITT over all preceding bytes
 };
 static_assert(offsetof(LlParamStoreStatus, records_left) == 3u,
               "LlParamStoreStatus.records_left offset drifted");
 static_assert(offsetof(LlParamStoreStatus, param_count) == 5u,
               "LlParamStoreStatus.param_count offset drifted");
+static_assert(offsetof(LlParamStoreStatus, reset_request_id) == 7u,
+              "LlParamStoreStatus.reset_request_id offset drifted");
+static_assert(sizeof(LlParamStoreStatus) == 13u, "LlParamStoreStatus layout mismatch");
 
 /**
  * @brief Blade motor status packet from STM32 (PACKET_ID_LL_BLADE_STATUS = 0x05).
@@ -530,7 +552,7 @@ struct LlConfigRsp
 static_assert(sizeof(LlStatus) == 38u, "LlStatus layout mismatch");
 static_assert(sizeof(LlImu) == 41u, "LlImu layout mismatch");
 static_assert(sizeof(LlUiEvent) == 5u, "LlUiEvent layout mismatch");
-static_assert(sizeof(LlOdometry) == 17u, "LlOdometry layout mismatch");
+static_assert(sizeof(LlOdometry) == 19u, "LlOdometry layout mismatch");
 static_assert(sizeof(LlResetCause) == 5u, "LlResetCause layout mismatch");
 static_assert(sizeof(LlHeartbeat) == 5u, "LlHeartbeat layout mismatch");
 static_assert(sizeof(LlHighLevelState) == 5u, "LlHighLevelState layout mismatch");
@@ -543,6 +565,6 @@ static_assert(sizeof(LlSetParam) == 9u, "LlSetParam layout mismatch");
 static_assert(sizeof(LlGetParam) == 5u, "LlGetParam layout mismatch");
 static_assert(sizeof(LlParamCommit) == 4u, "LlParamCommit layout mismatch");
 static_assert(sizeof(LlParamValue) == 23u, "LlParamValue layout mismatch");
-static_assert(sizeof(LlParamStoreStatus) == 9u, "LlParamStoreStatus layout mismatch");
+static_assert(sizeof(LlParamStoreStatus) == 13u, "LlParamStoreStatus layout mismatch");
 
 }  // namespace mowgli_hardware

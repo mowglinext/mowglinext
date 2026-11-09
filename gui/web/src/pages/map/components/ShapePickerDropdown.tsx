@@ -176,7 +176,7 @@ export const ShapePickerDropdown = ({
         <Dropdown
             trigger={['click']}
             placement={placement}
-            dropdownRender={() => dropdownContent}
+            popupRender={() => dropdownContent}
             open={open}
             onOpenChange={setOpen}
         >

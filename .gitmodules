@@ -7,3 +7,6 @@
 	# The gitlink pins a validated Universal GNSS release commit. Normal
 	# submodule updates use that exact commit, not a moving branch head.
 	url = https://github.com/Pepeuch/universal-gnss.git
+[submodule "ros2/src/external/mowglimavros"]
+	path = ros2/src/external/mowglimavros
+	url = https://github.com/Pepeuch/mowglimavros.git

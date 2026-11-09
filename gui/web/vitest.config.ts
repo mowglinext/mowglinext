@@ -23,7 +23,8 @@ export default defineConfig({
         // element" instead of being cut off by this outer timeout.
         testTimeout: 20000,
         // Playwright e2e specs live here and import @playwright/test — keep them
-        // out of the vitest (unit) run.
-        exclude: ['node_modules', 'dist', 'tests/e2e/**'],
+        // out of the vitest (unit) run. The appearance registry suite imports
+        // node:test and runs separately via test:appearances in `npm test`.
+        exclude: ['node_modules', 'dist', 'tests/e2e/**', 'scripts/appearance-registry.test.mjs'],
     },
 })

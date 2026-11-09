@@ -13,11 +13,13 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+const highLevelControlService = "/behavior_tree_node/high_level_control"
+
 // Pure logic
 // ---------------------------------------------------------------------------
 
-func member(id string, autonomous bool, area int, pos *LatLon) fleetMember {
-	return fleetMember{ID: id, Online: true, Autonomous: autonomous, CurrentArea: area, Pos: pos}
+func member(id string, autonomous bool, area int, pos *XY) fleetMember {
+	return fleetMember{ID: id, Online: true, Autonomous: autonomous, StopHold: !autonomous, CurrentArea: area, Pos: pos}
 }
 
 func TestComputeAssignment_ExcludesPeerAreasAndCompletedMemory(t *testing.T) {
@@ -56,11 +58,11 @@ func TestUpdateCompletedMemory_AddsAndExpires(t *testing.T) {
 	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
 	old := map[uint32]time.Time{7: now.Add(-13 * time.Hour), 8: now.Add(-1 * time.Hour)}
 	members := []fleetMember{
-		{ID: "a", Online: true, Completed: []uint32{1, 2}},
+		{ID: "a", Online: true, Completed: []uint32{1, 2}, SessionState: coverageFresh, SessionObservation: &coverageObservation{receivedAt: now}},
 		{ID: "b", Online: false, Completed: []uint32{9}},
 	}
 
-	got := updateCompletedMemory(old, members, now, 12*time.Hour)
+	got := updateCompletedMemory(old, members, now, 12*time.Hour, map[string]completionObservation{})
 
 	assert.Equal(t, []uint32{1, 2, 8}, sortedAreas(got), "expired 7 dropped, offline b's 9 ignored")
 	assert.Equal(t, now, got[1])
@@ -81,61 +83,6 @@ func TestDistanceAndProjection(t *testing.T) {
 	assert.False(t, sameDatum(a, LatLon{Lat: 48.0 + 5e-8, Lon: 2.0}))
 }
 
-func TestDecideYield_StopsForAPriorityPeerAndResumesAfterHold(t *testing.T) {
-	s := DefaultCoordinatorSettings().Normalize()
-	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	here := &LatLon{Lat: 48.0, Lon: 2.0}
-	near := &LatLon{Lat: 48.00001, Lon: 2.0} // ~1.1 m
-	far := &LatLon{Lat: 48.0001, Lon: 2.0}   // ~11 m
-	self := member("b", true, 0, here)
-
-	// A lower-id autonomous peer 1 m away → stop.
-	st, action := decideYield(self, []fleetMember{member("a", true, 1, near)}, yieldState{}, s, now)
-	assert.Equal(t, YieldStop, action)
-	assert.True(t, st.Yielded)
-
-	// We are now IDLE (stop-hold). Peer still near → keep holding.
-	self.Autonomous = false
-	st, action = decideYield(self, []fleetMember{member("a", true, 1, near)}, st, s, now.Add(2*time.Second))
-	assert.Equal(t, YieldNone, action)
-	assert.True(t, st.Yielded)
-
-	// Peer moves away: clear timer starts, no resume before the hold elapses.
-	st, action = decideYield(self, []fleetMember{member("a", true, 1, far)}, st, s, now.Add(4*time.Second))
-	assert.Equal(t, YieldNone, action)
-	st, action = decideYield(self, []fleetMember{member("a", true, 1, far)}, st, s, now.Add(5*time.Second))
-	assert.Equal(t, YieldNone, action)
-	st, action = decideYield(self, []fleetMember{member("a", true, 1, far)}, st, s, now.Add(8*time.Second))
-	assert.Equal(t, YieldStart, action)
-	assert.False(t, st.Yielded)
-}
-
-func TestDecideYield_PriorityRobotNeverYieldsAndIdleRobotsAreLeftAlone(t *testing.T) {
-	s := DefaultCoordinatorSettings().Normalize()
-	now := time.Now()
-	here := &LatLon{Lat: 48.0, Lon: 2.0}
-	near := &LatLon{Lat: 48.00001, Lon: 2.0}
-
-	// "a" has priority over "b": a higher-id peer close by is not a threat.
-	_, action := decideYield(member("a", true, 0, here), []fleetMember{member("b", true, 1, near)}, yieldState{}, s, now)
-	assert.Equal(t, YieldNone, action)
-
-	// An idle robot (operator pause, docked) is never stopped nor resumed.
-	_, action = decideYield(member("b", false, 0, here), []fleetMember{member("a", true, 1, near)}, yieldState{}, s, now)
-	assert.Equal(t, YieldNone, action)
-
-	// A held robot that the operator sent home drops the hold without a resume.
-	self := member("b", false, 0, here)
-	self.StateName = "RETURNING_HOME"
-	st, action := decideYield(self, nil, yieldState{Yielded: true}, s, now)
-	assert.Equal(t, YieldNone, action)
-	assert.False(t, st.Yielded)
-
-	// No fix → no decision.
-	_, action = decideYield(member("b", true, 0, nil), []fleetMember{member("a", true, 1, near)}, yieldState{}, s, now)
-	assert.Equal(t, YieldNone, action)
-}
-
 func TestMemberFromRobot_ReadsTopics(t *testing.T) {
 	row := FleetRobot{
 		Identity: RobotIdentity{ID: "x"},
@@ -146,15 +93,32 @@ func TestMemberFromRobot_ReadsTopics(t *testing.T) {
 			"gps":             json.RawMessage(`{"pose":{"pose":{"position":{"x":48.5,"y":2.5,"z":0}}}}`),
 		},
 	}
-	m := memberFromRobot(row)
+	row.coverageObservation = &coverageObservation{receivedAt: time.Now()}
+	row.TopicAgeS = map[string]float64{"highLevelStatus": 0, "coverageSession": 0, "gps": 0.5}
+	m := memberFromRobotAt(row, LatLon{Lat: 48.5, Lon: 2.5}, peerPoseMaxAge)
 	assert.True(t, m.Autonomous)
 	assert.Equal(t, 4, m.CurrentArea)
 	assert.Equal(t, []uint32{1, 2}, m.Completed)
 	assert.True(t, m.SessionActive)
 	require.NotNil(t, m.Pos)
-	assert.Equal(t, LatLon{Lat: 48.5, Lon: 2.5}, *m.Pos)
+	assert.InDelta(t, 0.0, m.Pos.X, 1e-6)
+	assert.InDelta(t, 0.0, m.Pos.Y, 1e-6)
 
-	empty := memberFromRobot(FleetRobot{Identity: RobotIdentity{ID: "y"}})
+	// A fresh fused pose wins over the fix, in the peer's own map frame.
+	row.Topics["pose"] = poseTopic(3, 4, 0)
+	row.TopicAgeS["pose"] = 0.1
+	withPose := memberFromRobotAt(row, LatLon{Lat: 48.5, Lon: 2.5}, peerPoseMaxAge)
+	require.NotNil(t, withPose.Pos)
+	assert.InDelta(t, 3.0, withPose.Pos.X, 1e-9)
+	assert.InDelta(t, 4.0, withPose.Pos.Y, 1e-9)
+
+	// Stale samples and a robot without a map frame yield no position.
+	row.TopicAgeS["pose"], row.TopicAgeS["gps"] = 9, 9
+	assert.Nil(t, memberFromRobotAt(row, LatLon{Lat: 48.5, Lon: 2.5}, peerPoseMaxAge).Pos)
+	row.TopicAgeS["gps"] = 0
+	assert.Nil(t, memberFromRobotAt(row, LatLon{}, peerPoseMaxAge).Pos, "no datum → no frame")
+
+	empty := memberFromRobotAt(FleetRobot{Identity: RobotIdentity{ID: "y"}}, LatLon{Lat: 48.5, Lon: 2.5}, peerPoseMaxAge)
 	assert.False(t, empty.Autonomous)
 	assert.Equal(t, -1, empty.CurrentArea)
 	assert.Nil(t, empty.Pos)
@@ -217,7 +181,7 @@ func TestCoordinatorTick_DisabledOnlyReconcilesAssignment(t *testing.T) {
 	assert.False(t, c.Status().Enabled)
 }
 
-func TestCoordinatorTick_PushesExclusionsPublishesPeersAndRemembersCompletion(t *testing.T) {
+func TestCoordinatorTick_PushesExclusionsAndRemembersCompletion(t *testing.T) {
 	rows := []FleetRobot{
 		{Identity: RobotIdentity{ID: "b"}, Self: true, Online: true, Topics: map[string]json.RawMessage{
 			"highLevelStatus": json.RawMessage(`{"state":1,"current_area":-1}`),
@@ -229,6 +193,8 @@ func TestCoordinatorTick_PushesExclusionsPublishesPeersAndRemembersCompletion(t 
 			"gps":             gpsTopic(48.0001, 2.0),
 		}},
 	}
+	rows[1].TopicAgeS = map[string]float64{"coverageSession": 0, "highLevelStatus": 0}
+	rows[1].coverageObservation = &coverageObservation{receivedAt: time.Now()}
 	c, db, ros := newTestCoordinator(t, &rows)
 	require.NoError(t, c.SetSettings(CoordinatorSettings{Enabled: true}))
 
@@ -238,60 +204,20 @@ func TestCoordinatorTick_PushesExclusionsPublishesPeersAndRemembersCompletion(t 
 	assert.Equal(t, []uint32{0, 1}, req.ExcludedAreas, "peer's live area + its completed area")
 	assert.Equal(t, int32(1), req.PreferredStartIndex, "rank of b among a,b")
 
-	require.Len(t, ros.Publishes, 1)
-	assert.Equal(t, fleetPeersTopic, ros.Publishes[0].Topic)
-	arr := ros.Publishes[0].Msg.(*poseArrayMsg)
-	require.Len(t, arr.Poses, 1)
-	assert.InDelta(t, 11.13, arr.Poses[0].Position.Y, 0.01, "peer projected into our map frame, north of us")
-	assert.Equal(t, "map", arr.Header.FrameId)
+	assert.Empty(t, ros.Publishes, "peer poses are the FleetProvider feed's job, not the coordinator's")
 
 	raw, err := db.Get(coordinationMemoryKey)
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"0":`, "completed area persisted")
 
-	// Same snapshot again: no second push (unchanged), but peers are republished.
+	// Same snapshot again: no second push (unchanged).
 	c.tick(time.Now())
 	assert.Len(t, serviceCalls(ros, setFleetAssignmentService), 1)
-	assert.Len(t, ros.Publishes, 2)
 
 	st := c.Status()
 	assert.True(t, st.Enabled)
 	assert.Equal(t, []uint32{0, 1}, st.ExcludedAreas)
 	assert.Equal(t, []uint32{0}, st.CompletedAreas)
-}
-
-func TestCoordinatorTick_YieldSendsStopThenResume(t *testing.T) {
-	selfHL := json.RawMessage(`{"state":2,"state_name":"MOWING","current_area":0}`)
-	rows := []FleetRobot{
-		{Identity: RobotIdentity{ID: "b"}, Self: true, Online: true, Topics: map[string]json.RawMessage{
-			"highLevelStatus": selfHL, "gps": gpsTopic(48.0, 2.0),
-		}},
-		{Identity: RobotIdentity{ID: "a"}, Online: true, Topics: map[string]json.RawMessage{
-			"highLevelStatus": json.RawMessage(`{"state":2,"state_name":"MOWING","current_area":1}`),
-			"gps":             gpsTopic(48.00001, 2.0), // ~1 m
-		}},
-	}
-	c, _, ros := newTestCoordinator(t, &rows)
-	now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-	c.now = func() time.Time { return now }
-	require.NoError(t, c.SetSettings(CoordinatorSettings{Enabled: true}))
-
-	hl := serviceCalls(ros, highLevelControlService)
-	require.Len(t, hl, 1)
-	assert.Equal(t, uint8(hlCommandStop), hl[0].Req.(*mowgli.HighLevelControlReq).Command)
-	assert.True(t, c.Status().Yielded)
-
-	// The BT reports IDLE now; the peer drives away; after the hold we resume.
-	rows[0].Topics["highLevelStatus"] = json.RawMessage(`{"state":1,"state_name":"IDLE","current_area":0}`)
-	rows[1].Topics["gps"] = gpsTopic(48.001, 2.0) // ~110 m
-	c.tick(now.Add(2 * time.Second))
-	c.tick(now.Add(4 * time.Second))
-	assert.Len(t, serviceCalls(ros, highLevelControlService), 1, "resume waits for the hold")
-	c.tick(now.Add(6 * time.Second))
-	hl = serviceCalls(ros, highLevelControlService)
-	require.Len(t, hl, 2)
-	assert.Equal(t, uint8(hlCommandStart), hl[1].Req.(*mowgli.HighLevelControlReq).Command)
-	assert.False(t, c.Status().Yielded)
 }
 
 func TestCoordinator_DisablingHandsTheLawnBackOnce(t *testing.T) {
@@ -322,12 +248,15 @@ func TestCoordinator_ResetForgetsCompletedAreas(t *testing.T) {
 			"coverageSession": json.RawMessage(`{"session_active":false,"current_area":-1,"completed_areas":[2]}`),
 		}},
 	}
+	rows[0].TopicAgeS = map[string]float64{"coverageSession": 0}
+	rows[0].coverageObservation = &coverageObservation{receivedAt: time.Now()}
 	c, db, _ := newTestCoordinator(t, &rows)
 	require.NoError(t, c.SetSettings(CoordinatorSettings{Enabled: true}))
 	require.Equal(t, []uint32{2}, c.Status().CompletedAreas)
 
 	// The member has cleared its own session; reset must not re-learn area 2.
 	rows[0].Topics["coverageSession"] = json.RawMessage(`{"session_active":false,"current_area":-1,"completed_areas":[]}`)
+	rows[0].coverageObservation = &coverageObservation{receivedAt: time.Now()}
 	require.NoError(t, c.Reset())
 
 	assert.Empty(t, c.Status().CompletedAreas)
@@ -349,4 +278,11 @@ func TestStripPendingObstacles(t *testing.T) {
 
 	noInfo := mowgli.MapArea{Obstacles: make([]geometry.Polygon, 2)}
 	assert.Len(t, stripPendingObstacles(noInfo).Obstacles, 2, "without obstacle_info nothing is dropped")
+}
+
+func TestCoordinatorSettings_NormalizeFillsTheYieldBounds(t *testing.T) {
+	s := CoordinatorSettings{Enabled: true}.Normalize()
+	assert.Equal(t, 45.0, s.YieldMaxHoldS)
+	assert.Equal(t, 20.0, s.YieldCooldownS)
+	assert.Equal(t, 5.0, CoordinatorSettings{YieldCooldownS: 5}.Normalize().YieldCooldownS)
 }

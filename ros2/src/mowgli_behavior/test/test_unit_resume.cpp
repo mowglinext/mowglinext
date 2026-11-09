@@ -15,6 +15,8 @@
 //
 // Unit tests for the same-unit resume decision (unit_resume.hpp). ROS-free.
 
+#include <set>
+
 #include "gtest/gtest.h"
 #include "mowgli_behavior/unit_resume.hpp"
 
@@ -22,6 +24,7 @@ namespace
 {
 
 using mowgli_behavior::DecideUnitResume;
+using mowgli_behavior::nextUndoneUnit;
 using mowgli_behavior::UnitResumeCfg;
 
 TEST(UnitResume, ResumesTheSerpentineUnitCancelledNearItsStart)
@@ -64,6 +67,24 @@ TEST(UnitResume, CursorAtOrPastTheEndNeverResumes)
 {
   EXPECT_FALSE(DecideUnitResume(100, 99, 100, 0).resume);
   EXPECT_FALSE(DecideUnitResume(100, 99, 250, 0).resume);
+}
+
+// The first unit a pass drives is the first one NOT recorded as mowed — also the rule
+// PlanCoverageArea uses for its first transit (field 2026-10-12: it hopped to unit 7 and
+// FollowStrip sent the robot back to unit 1).
+TEST(NextUndoneUnit, SkipsOnlyUnitsRecordedAsMowed)
+{
+  EXPECT_EQ(nextUndoneUnit(0, 9, {}), 0u);
+  EXPECT_EQ(nextUndoneUnit(0, 9, {0, 1}), 2u);
+  EXPECT_EQ(nextUndoneUnit(0, 9, {3}), 0u) << "a later unit being done does not move the start";
+  EXPECT_EQ(nextUndoneUnit(3, 9, {3, 4}), 5u);
+}
+
+TEST(NextUndoneUnit, ReturnsTheCountWhenNothingIsLeft)
+{
+  EXPECT_EQ(nextUndoneUnit(0, 3, {0, 1, 2}), 3u);
+  EXPECT_EQ(nextUndoneUnit(3, 3, {}), 3u);
+  EXPECT_EQ(nextUndoneUnit(0, 0, {}), 0u);
 }
 
 }  // namespace

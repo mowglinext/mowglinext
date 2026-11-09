@@ -1,0 +1,30 @@
+import {test,expect} from "@playwright/test";
+import {installMockBackend} from "./mock/mockBackend";
+import {SCENARIOS} from "./mock/scenarios";
+import {ROBOT_URDF} from "../../src/test/robotUrdf";
+test("large chassis drag and rotation have independent mobile hit targets",async({page})=>{
+ await page.setViewportSize({width:390,height:844});
+ await page.addInitScript(()=>localStorage.setItem("mowglinext.lang","en"));
+ await installMockBackend(page,{...SCENARIOS[0],topics:{...SCENARIOS[0].topics,robotDescription:{data:ROBOT_URDF}},rest:{"/api/settings/yaml":{mower_model:"CUSTOM",chassis_length:1.2,chassis_width:.6,chassis_center_x:.4,lidar_x:.4,lidar_y:0,lidar_z:.2,lidar_yaw:0,imu_x:0,imu_y:-.2,gps_x:.8,gps_y:0}}});
+ await page.goto("/#/settings?section=sensors");
+ const control=page.locator('[data-sensor-control="lidar"]');
+ const drag=control.locator('circle[fill="transparent"]').first();
+ await drag.scrollIntoViewIfNeeded();
+ const b=(await drag.boundingBox())!;
+ await page.mouse.move(b.x+b.width/2,b.y+b.height/2);await page.mouse.down();
+ await page.mouse.move(b.x+b.width/2+25,b.y+b.height/2,{steps:5});await page.mouse.up();
+ const sensor=page.locator('[data-sensor="lidar"]').first();
+
+ expect(Number(await sensor.getAttribute("data-y"))).toBeLessThan(-.01);
+ const yaw=page.getByRole("spinbutton",{name:/LiDAR.*Yaw/});
+ expect(Number(await yaw.inputValue())).toBe(0);
+ const position=await sensor.getAttribute("data-y");
+ const rotate=control.locator('circle[fill="transparent"]').last();
+ await rotate.scrollIntoViewIfNeeded();
+ const r=(await rotate.boundingBox())!;
+ expect(r.width).toBeGreaterThanOrEqual(47.9);
+ await page.mouse.move(r.x+r.width/2,r.y+r.height/2);await page.mouse.down();
+ await page.mouse.move(r.x+r.width/2+30,r.y+r.height/2+20,{steps:5});await page.mouse.up();
+ expect(Math.abs(Number(await yaw.inputValue()))).toBeGreaterThan(5);
+ expect(await sensor.getAttribute("data-y")).toBe(position);
+});

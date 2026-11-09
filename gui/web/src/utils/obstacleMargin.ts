@@ -24,10 +24,10 @@ const DEFAULT_FTC_CLEARANCE_MARGIN_M = 0.05;
 
 const GLOBAL_COSTMAP_RESOLUTION_M = 0.08;
 
-export const chassisHalfWidthM = (chassisWidthM?: number): number =>
+export const chassisHalfWidthM = (chassisWidthM?: number | null): number =>
     (chassisWidthM ?? DEFAULT_CHASSIS_WIDTH_M) / 2 + CHASSIS_FOOTPRINT_MARGIN_M;
 
-const clampFtcClearanceMargin = (requested?: number): number => {
+const clampFtcClearanceMargin = (requested?: number | null): number => {
     const value = requested ?? DEFAULT_FTC_CLEARANCE_MARGIN_M;
     return Math.min(FTC_CLEARANCE_MARGIN_MAX_M, Math.max(FTC_CLEARANCE_MARGIN_MIN_M, value));
 };
@@ -36,8 +36,8 @@ const keepoutRasterSlackM = GLOBAL_COSTMAP_RESOLUTION_M * Math.sqrt(2);
 
 /** Least distance coverage may plan its centreline from a drawn obstacle. */
 export const planningObstacleMarginFloorM = (
-    chassisWidthM?: number,
-    obstacleClearanceMarginM?: number,
+    chassisWidthM?: number | null,
+    obstacleClearanceMarginM?: number | null,
 ): number => {
     const halfWidth = chassisHalfWidthM(chassisWidthM);
     const controllerDemand =
@@ -50,5 +50,5 @@ export const planningObstacleMarginFloorM = (
 
 /** How the effective obstacle_margin (a centreline distance) reads beside the
  * chassis body — the unit an operator actually judges the gap by. */
-export const besideBodyClearanceM = (marginM: number, chassisWidthM?: number): number =>
+export const besideBodyClearanceM = (marginM: number, chassisWidthM?: number | null): number =>
     marginM - chassisHalfWidthM(chassisWidthM);

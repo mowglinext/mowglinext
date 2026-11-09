@@ -1,3 +1,4 @@
+import {hasEmergency} from '../utils/statusTelemetry';
 import {useHighLevelStatus} from "../hooks/useHighLevelStatus.ts";
 import {useEmergency} from "../hooks/useEmergency.ts";
 import {useThemeMode} from "../theme/ThemeContext.tsx";
@@ -27,7 +28,7 @@ export function LiveStatusStrip({height = 2}: LiveStatusStripProps) {
   const emergency = useEmergency();
 
   const state = highLevelStatus.state_name;
-  const isEmergency = highLevelStatus.emergency ?? emergency.active_emergency ?? false;
+  const isEmergency = hasEmergency(emergency, highLevelStatus);
   const isMoving = state ? MOTION_STATES.has(state) : false;
 
   if (!isMoving && !isEmergency) return null;

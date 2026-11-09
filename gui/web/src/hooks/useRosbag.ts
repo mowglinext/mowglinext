@@ -1,3 +1,5 @@
+import {requestErrorMessage} from "../utils/errors";
+import {observeAsync} from "../utils/async";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {ContentType} from "../api/Api.ts";
 import {useApi} from "./useApi.ts";
@@ -33,9 +35,7 @@ const POLL_INTERVAL_MS = 4000;
 // .message the UI can display.
 function toError(e: unknown, fallback: string): Error {
     if (e instanceof Error) return e;
-    const body = e as any;
-    const msg = body?.error?.error ?? body?.error ?? body?.message;
-    return new Error(typeof msg === "string" ? msg : fallback);
+    return new Error(requestErrorMessage(e) ?? fallback);
 }
 
 // useRosbag drives the "record all topics" panel: it polls recording state,
@@ -65,9 +65,9 @@ export const useRosbag = (enabled: boolean = true) => {
 
     useEffect(() => {
         if (!enabled) return;
-        refresh();
+        observeAsync(refresh());
         const id = setInterval(() => {
-            if (enabledRef.current) refresh();
+            if (enabledRef.current) observeAsync(refresh());
         }, POLL_INTERVAL_MS);
         return () => clearInterval(id);
     }, [enabled, refresh]);

@@ -57,7 +57,24 @@ if [[ "${print_url_only}" -eq 0 ]] && apt-cache policy | grep -Fq "${expected_re
   exit 0
 fi
 
-release_json="$(curl -fsSL "${release_api_url}")"
+# Use authenticated GitHub API requests in CI to avoid the restrictive
+# unauthenticated rate limit. Keep local execution without a token supported.
+api_headers=(
+  -H "Accept: application/vnd.github+json"
+  -H "X-GitHub-Api-Version: 2022-11-28"
+)
+
+if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+  api_headers+=(
+    -H "Authorization: Bearer ${GITHUB_TOKEN}"
+  )
+fi
+
+release_json="$(curl -fsSL \
+  --retry 3 \
+  --retry-delay 2 \
+  "${api_headers[@]}" \
+  "${release_api_url}")"
 asset_url="$(
   jq -r \
     --arg package_name "${package_name}" \

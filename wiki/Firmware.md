@@ -83,7 +83,40 @@ board's flash (`PKT_ID_PARAM_COMMIT`), so the board boots on them before ROS2 co
 and a tuning change never needs a reflash. The firmware coerces every value into an
 absolute envelope compiled in `fw_param_catalog.h` (e.g. `max_mps` 0.1–0.6 m/s): a value
 may be stricter or looser than the default, never outside the envelope. The flash log is
-append-only and only erased at boot, before the window watchdog is armed.
+append-only. A full log or an unappendable tail with a valid record is retained
+across reboots and reports `PARAM_COMMIT_LOG_FULL`: new host values still apply
+in RAM, but cannot be persisted until the reserved log is deliberately reset.
+An unchanged committed set remains marked persisted. A normal firmware reflash
+does not reset this reserved region. Automatic compaction would need another
+persistent copy; boot only erases unusable data when no valid record exists,
+or after an explicit operator reset, before the window watchdog is armed.
+
+Protocol v8 adds an operator recovery path for a full or damaged log. With the
+robot idle, wheels stopped and blade off, use **Reset stored parameters** in the
+firmware parameter diagnostics. Confirm the warning, wait for the board's
+matching reset-pending acknowledgement, then reboot the board. The reset removes
+stored tuning, charging and emergency settings; compiled defaults apply until
+the host sends its saved settings again. Charging limits can therefore increase
+back to their compiled defaults. Check the intended host configuration before
+resetting, and keep the mower and charger safely isolated during recovery.
+
+The request is retained in unused RTC backup registers and consumed only by
+boot-time erase. Failed erase or marker clearing blocks persistence rather than
+allowing a later reboot to erase newly saved values. The request ID currently
+retained in backup registers cannot arm another reset. This is bounded duplicate
+protection: a later explicit arm attempt can replace the ID, including an
+interrupted attempt, and no history of earlier IDs is retained. Loss of the backup
+domain can cancel the request; it is not automatically retried on reconnect. An
+interrupted reset
+may intentionally discard the old set: this is an explicit destructive recovery,
+not power-safe automatic compaction.
+
+The scanner can skip narrowly recognized incomplete record prefixes, including
+the F103 half-programmed header `0xFFFF0001`, and continue appending in verified
+erased space. Unknown malformed data still requires the explicit reset. Existing
+records, reserved flash regions and firmware image limits are unchanged. Hosts
+and boards must both use protocol v8; a v7 board needs the matching firmware
+update before the new host can control it.
 
 ## Yaw-Rate Control — Gyro Loop in Firmware (Option C)
 
@@ -243,7 +276,7 @@ for the runtime-tuning packets, on every field offset). The C++ mirror on the ho
 `ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp`; the two must be
 changed together.
 
-Current wire version: `MOWGLI_PROTOCOL_VERSION` **7**.
+Current wire version: `MOWGLI_PROTOCOL_VERSION` **8**.
 
 ### Firmware → Host
 
@@ -257,7 +290,7 @@ Current wire version: `MOWGLI_PROTOCOL_VERSION` **7**.
 | `0x06` | `pkt_reset_cause_t` | 5 | `reset_cause` (`RESET_CAUSE_*`), `last_stage_before_reset` (WWDG breadcrumb) |
 | `0x12` | `pkt_config_rsp_t` | 8 | `protocol_version`, `active_flags`, `fw_version_{major,minor,patch}` |
 | `0x13` | `pkt_param_value_t` | 23 | `param_id`, `status` (OK / CLAMPED / UNKNOWN_ID / REJECTED), `flags` (PERSISTED / VOLATILE), applied `value`, `default_value`, envelope `min_value` / `max_value` |
-| `0x14` | `pkt_param_store_status_t` | 9 | `boot_source` (defaults / flash / erased at boot), `last_commit`, `records_left`, `param_count` |
+| `0x14` | `pkt_param_store_status_t` | 13 | `boot_source` (defaults / flash / erased at boot), `last_commit`, `records_left`, `param_count`, `reset_request_id` |
 
 The blade packet's legacy `power_watts` field contains **ESC current in milliamps**,
 not watts. Both Yardforce 500 and 500B forward ESC UART bytes 9–10 unchanged.
@@ -278,6 +311,7 @@ for compatibility; no firmware update or protocol version change is required.
 | `0x58` | `pkt_set_param_t` | 9 | `param_id` (`fw_param_catalog.h`), `value` (float; coerced into the envelope) |
 | `0x59` | `pkt_get_param_t` | 5 | `param_id`, or `0xFFFF` for every parameter + the store status |
 | `0x5A` | `pkt_param_commit_t` | 4 | `magic` must equal `PKT_PARAM_COMMIT_MAGIC` (0xC5); persists the set in flash |
+| `0x5B` | `pkt_param_store_reset_t` | 8 | Explicit operator request: `magic` 0xD3 and nonzero `request_id`; arm boot-time erase only when safely idle |
 
 `0x54`–`0x57` (the per-group runtime packets of protocol v2–v6) were retired in v7 and
 must not be reused.

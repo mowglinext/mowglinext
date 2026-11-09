@@ -22,10 +22,9 @@
  *
  * Extracted from hardware_bridge_node's former handle_odometry() as part of
  * the god-node breakup (2616-line TU, see CLAUDE.md task board #11).
- * Behavior-preserving: the packet-handling logic below is a verbatim port —
- * see the .cpp for the detailed rationale comments (16-bit encoder-wrap
- * recovery, tick-spike rejection, 50 ms aggregation window, dock-charging
- * force-zero + covariance policy).
+ * Protocol v9 pairs cumulative ticks with firmware acquisition time, preserving
+ * elapsed time across skipped USB packets. See the .cpp for wrap recovery,
+ * tick-spike rejection, 50 ms aggregation and dock-charging force-zero policy.
  */
 
 #pragma once
@@ -33,6 +32,7 @@
 #include <cstdint>
 
 #include "mowgli_hardware/clock_fit.hpp"
+#include "mowgli_hardware/legacy_odometry.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
 #include "mowgli_interfaces/msg/wheel_tick.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -69,6 +69,19 @@ public:
                      double wheel_track,
                      bool is_charging);
 
+  /**
+   * @brief Process one previous-protocol (v8) odometry packet.
+   *
+   * Converts it through LegacyOdometryDecoder and runs the same path as
+   * handle_packet(), so /wheel_odom stays live while a v9 host runs against
+   * v8 firmware during an update-first transition (docs/UPDATES.md). This is
+   * telemetry only: it never makes the firmware count as compatible.
+   */
+  void handle_legacy_v8_packet(const LlOdometryV8& pkt,
+                               double ticks_per_meter,
+                               double wheel_track,
+                               bool is_charging);
+
   /// True once the most recent aggregation window saw zero net wheel ticks.
   [[nodiscard]] bool wheels_stationary() const
   {
@@ -101,9 +114,22 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_wheel_odom_;
   rclcpp::Publisher<mowgli_interfaces::msg::WheelTick>::SharedPtr pub_wheel_ticks_;
 
+  /// Re-seed time, ticks and clock fit (keeps the wire-format tracking).
+  void reset_stream();
+  /// Re-seed everything when the wire layout changes, then remember it.
+  void select_format(OdometryWireFormat format);
+  void process(const LlOdometry& pkt, double ticks_per_meter, double wheel_track, bool is_charging);
+
   HostFirmwareClockFit odom_clock_fit_;
 
+  // Previous-protocol decoder + the layout of the last packet seen: a switch
+  // between layouts (reflash without a serial reconnect) re-seeds everything,
+  // since the two layouts' time and tick baselines are unrelated.
+  LegacyOdometryDecoder legacy_decoder_;
+  OdometryWireFormat last_format_{OdometryWireFormat::kInvalid};
+
   bool odom_initialized_{false};
+  uint32_t prev_acquisition_ms_{0};
   int32_t prev_left_ticks_{0};
   int32_t prev_right_ticks_{0};
   int32_t odom_acc_delta_left_{0};

@@ -1,5 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import type {ApiVersionsResponse} from '../api/Api';
+import type {ApiInstalledComponent, ApiVersionsResponse} from '../api/Api';
+import {isJsonObject} from '../utils/json';
 import {httpBase} from '../utils/apiHost';
 
 export const browserBuild = {
@@ -8,6 +9,27 @@ export const browserBuild = {
     version: import.meta.env.VITE_BUILD_VERSION as string | undefined,
     built_at: import.meta.env.VITE_BUILD_TIME as string | undefined,
 };
+
+// Generated component/build fields are optional; validate present fields without
+// narrowing component identities, states, version strings or additive metadata.
+function isInstalledComponent(value: unknown): value is ApiInstalledComponent {
+    return isJsonObject(value)
+        && ['architecture', 'built_at', 'component', 'image', 'image_id', 'name', 'revision', 'state', 'version']
+            .every(key => !(key in value) || typeof value[key] === 'string')
+        && (!('metadata_available' in value) || typeof value.metadata_available === 'boolean')
+        && (!('digests' in value) || (Array.isArray(value.digests) && value.digests.every((digest: unknown) => typeof digest === 'string')));
+}
+
+function isVersionsResponse(value: unknown): value is ApiVersionsResponse {
+    if (!isJsonObject(value)) return false;
+    const server = value.server;
+    return typeof value.docker_available === 'boolean'
+        && Array.isArray(value.components) && value.components.every(isInstalledComponent)
+        && (!('observed_at' in value) || typeof value.observed_at === 'string')
+        && (!('server' in value) || (isJsonObject(server)
+            && ['built_at', 'revision', 'version'].every(key => !(key in server) || typeof server[key] === 'string')
+            && (!('modified' in server) || typeof server.modified === 'boolean')));
+}
 
 export function useInstalledVersions() {
     const [data, setData] = useState<ApiVersionsResponse | null>(null);
@@ -22,8 +44,8 @@ export function useInstalledVersions() {
         try {
             const response = await fetch(`${httpBase()}/api/system/versions`, {signal: request.signal, cache: 'no-store'});
             if (!response.ok) throw new Error('version inventory unavailable');
-            const next: ApiVersionsResponse = await response.json();
-            if (!Array.isArray(next.components) || typeof next.docker_available !== 'boolean') throw new Error('invalid inventory');
+            const next: unknown = await response.json();
+            if (!isVersionsResponse(next)) throw new Error('invalid inventory');
             if (!request.signal.aborted) { setData(next); setError(false); }
         } catch {
             if (!request.signal.aborted) setError(true);

@@ -1,5 +1,6 @@
-import {describe, it, expect, vi} from 'vitest';
-import {render, screen} from '@testing-library/react';
+import {ConfigProvider} from 'antd';
+import {afterEach, beforeEach, describe, it, expect, vi, type MockInstance} from 'vitest';
+import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {EditAreaModal} from './EditAreaModal.tsx';
 import {MowingAreaEdit} from '../utils/types.ts';
@@ -119,5 +120,58 @@ describe('EditAreaModal', () => {
         await user.clear(input);
         await user.type(input, 'Back Yard');
         expect(onChange).toHaveBeenCalled();
+    });
+});
+
+// Observe real warnings without suppressing their console output.
+let warningSpy: MockInstance<typeof console.warn>;
+let errorSpy: MockInstance<typeof console.warn>;
+beforeEach(() => {
+    warningSpy = vi.spyOn(console, 'warn');
+    errorSpy = vi.spyOn(console, 'error');
+});
+afterEach(() => {
+    cleanup();
+    for (const spy of [warningSpy, errorSpy]) {
+        expect(spy.mock.calls.flat().join(' ')).not.toMatch(/\[antd: Modal\].*destroyOnClose/);
+    }
+    vi.restoreAllMocks();
+});
+
+describe('EditAreaModal lifecycle', () => {
+    it.each(['workarea', 'navigation', 'obstacle'])('reopens current %s metadata after Save and Cancel without changing order or identity', async feature_type => {
+        const area = {...new MowingAreaEdit(), id: 'stable-area', index: 3, name: 'First', feature_type, mowing_order: 7, orig_mowing_order: 7};
+        const onSave = vi.fn(), onCancel = vi.fn(), onChange = vi.fn();
+        const props = {open: true, area, onSave, onCancel, onChange};
+        const view = render(<EditAreaModal {...props}/>, {wrapper: ({children}) => <ConfigProvider theme={{token: {motion: false}}}>{children}</ConfigProvider>});
+        if (feature_type === 'workarea') {
+            fireEvent.change(screen.getByDisplayValue('First'), {target: {value: 'Edited'}});
+            expect(onChange).toHaveBeenCalledExactlyOnceWith({...area, name: 'Edited'});
+            expect(screen.getByRole('spinbutton')).toHaveValue('7');
+        } else if (feature_type === 'obstacle') {
+            fireEvent.click(screen.getByRole('checkbox'));
+            expect(onChange).toHaveBeenCalledExactlyOnceWith({...area, shrink_recorded: false});
+        }
+        fireEvent.click(screen.getByRole('button', {name: en.mapEditArea.save}));
+        view.rerender(<EditAreaModal {...props} open={false}/>);
+        await waitFor(() => expect(document.querySelector('.ant-modal-body')).toBeNull());
+        expect(onSave).toHaveBeenCalledOnce(); expect(onCancel).not.toHaveBeenCalled();
+        const updated = {...area, name: 'Second', mowing_order: 9, shrink_recorded: false};
+        view.rerender(<EditAreaModal {...props} area={updated}/>);
+        if (feature_type === 'workarea') {
+            expect(screen.getByDisplayValue('Second')).toBeInTheDocument();
+            expect(screen.getByRole('spinbutton')).toHaveValue('9');
+        } else {
+            expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+            if (feature_type === 'obstacle') expect(screen.getByRole('checkbox')).not.toBeChecked();
+        }
+        const editCount = onChange.mock.calls.length;
+        fireEvent.click(screen.getByRole('button', {name: en.mapEditArea.cancel}));
+        view.rerender(<EditAreaModal {...props} open={false}/>);
+        await waitFor(() => expect(document.querySelector('.ant-modal-body')).toBeNull());
+        view.rerender(<EditAreaModal {...props} area={updated}/>);
+        expect(onSave).toHaveBeenCalledOnce(); expect(onCancel).toHaveBeenCalledOnce();
+        expect(onChange).toHaveBeenCalledTimes(editCount);
+        expect(area).toMatchObject({id: 'stable-area', index: 3, mowing_order: 7, orig_mowing_order: 7});
     });
 });

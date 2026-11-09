@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -133,7 +134,7 @@ private:
   void PublishLocalOdom();
   // Launch GraphManager::Save on a detached worker. No-op if a
   // previous async save is still running. `reason` is logged.
-  void DispatchAsyncSave(const char* reason);
+  bool DispatchAsyncSave(const char* reason, std::function<void(bool)> completion = {});
 
   // ── Members ────────────────────────────────────────────────────────
   // shared_ptr (not unique_ptr) so background save / rebase threads
@@ -406,6 +407,7 @@ private:
   double lidar_map_tile_size_m_ = 10.0;
   int lidar_map_radius_tiles_ = 2;
   double lidar_map_insert_period_s_ = 0.5;
+  double lidar_map_insert_min_travel_m_ = 0.10;
   double lidar_map_rebuild_period_s_ = 5.0;
   double lidar_anchor_engage_age_s_ = 1.0;
   double lidar_anchor_apply_age_s_ = 20.0;

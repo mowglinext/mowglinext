@@ -1,6 +1,18 @@
+import {NumberWithAddon} from './inputs/NumberWithAddon';
+import {requestErrorMessage} from '../utils/errors';
+import {finiteNumber, geometryNumber, roundTo, radToDeg, degToRad, yawRadToCompassBearing, compassBearingToYawRad, decodeStoredDockPose, decodeDockWriteAcknowledgement, type PersistedDockPose} from '../utils/robotEditorContract';
+import {useAsyncHandler} from "../hooks/useAsyncHandler";
+import {DEFAULT_DOCK_STYLE} from "./robot/dockAssets";
+import {resolveDockAppearance} from "../constants/mowerAppearances";
+import {DockGraphic} from "./robot/DockGraphic";
+import {dockedAssemblyBounds, dockVisualGeometry, setupDockOpacity} from "./robot/dockGeometry";
+import {LayeredMower, SensorGraphic} from "./robot/LayeredMower";
+import {MowerVisualControls, MowerView} from "./robot/MowerPreview";
+import {previewRobotGeometry, type Bounds} from "../utils/robotModel";
+import {useMowerVisual} from "../hooks/useMowerVisual";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Alert, App, Card, InputNumber, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
+import { Alert, App, Card, Modal, Space, Typography, Row, Col, Tooltip, Button, Tag } from "antd";
 import { AimOutlined, CompassOutlined, EnvironmentOutlined, UndoOutlined } from "@ant-design/icons";
 import { useThemeMode } from "../theme/ThemeContext.tsx";
 import { getColors, inkAlpha } from "../theme/colors.ts";
@@ -15,8 +27,6 @@ import { useStatus } from "../hooks/useStatus.ts";
 
 const { Text } = Typography;
 
-// SVG coordinate system: 1 metre = SCALE pixels
-const SCALE = 500;
 
 type SensorId = "lidar" | "imu" | "gps";
 
@@ -92,41 +102,16 @@ const SENSORS: SensorMeta[] = [
 // the URDF's natural orientation): +X (forward) → up, +Y (left) → left. Drawing
 // the robot facing right made the drive-wheel discs — whose diameter runs along
 // the rolling/forward axis — appear as horizontal bars (issue #404).
-const toSvg = (rx: number, ry: number, cx: number, cy: number): [number, number] => {
-    return [cx - ry * SCALE, cy - rx * SCALE];
-};
-
-const fromSvg = (sx: number, sy: number, cx: number, cy: number): [number, number] => {
-    return [(cy - sy) / SCALE, (cx - sx) / SCALE];
-};
-
-const roundTo = (v: number, decimals: number): number => {
-    const f = Math.pow(10, decimals);
-    return Math.round(v * f) / f;
-};
-
-const radToDeg = (r: number): number => (r * 180) / Math.PI;
-const degToRad = (d: number): number => (d * Math.PI) / 180;
-
-// dock_pose_yaw is stored as ROS/ENU yaw in radians (0 = +X / East,
-// CCW positive). Operators set the dock with a real compass, which
-// reads bearings in 0–360° clockwise from North. These helpers translate
-// between the two so the UI can speak compass while the YAML/firmware
-// keeps speaking ROS yaw.
-const yawRadToCompassBearing = (yawRad: number): number => {
-    const yawDeg = radToDeg(yawRad);
-    return ((90 - yawDeg) % 360 + 360) % 360;
-};
-const compassBearingToYawRad = (bearing: number): number => {
-    return degToRad(90 - bearing);
-};
-
 type Props = {
-    values: Record<string, any>;
-    onChange: (name: string, value: any) => void;
+    values: Record<string, unknown>;
+    onChange: (name: string, value: number | null) => void;
+    onDockPosePersisted?: (pose: PersistedDockPose) => void;
+    onDockCaptureStart?: () => boolean;
+    onDockCaptureFinished?: () => void;
 };
 
-export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
+export const RobotComponentEditor: React.FC<Props> = ({ values, onChange, onDockPosePersisted, onDockCaptureStart, onDockCaptureFinished }) => {
+    const asyncHandler = useAsyncHandler();
     const { t } = useTranslation();
     const { colors, mode } = useThemeMode();
     const isMobile = useIsMobile();
@@ -141,25 +126,25 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     const hwStatus = useStatus();
     const [settingDock, setSettingDock] = useState(false);
 
-    // Pull the robot's current map-frame pose. Yaw is the EKF-fused
-    // motion_heading on AbsolutePose. We capture all three (x, y, yaw)
-    // because the operator's mental model when clicking "Set dock from
-    // current pose" is "treat where the robot is sitting right now as the
-    // canonical dock position and orientation".
+    // The fused pose supplies the required request shape. The service captures
+    // GPS position and preserves the independently calibrated dock yaw.
     const robotX = pose.pose?.pose?.position?.x;
     const robotY = pose.pose?.pose?.position?.y;
     const robotYaw = pose.motion_heading;
-    const poseAvailable = robotX != null && robotY != null && robotYaw != null;
+    const poseAvailable = finiteNumber(robotX) && finiteNumber(robotY) && finiteNumber(robotYaw);
     // Require physical charging contact when calibrating the dock pose.
     // Without this guard, operators sometimes clicked "Set dock pose"
     // while the robot was close-but-not-charging (visually parked on the
     // dock, but the contacts hadn't seated). The stored dock_pose then
     // pointed to that off-contact location, and every subsequent
     // re-docking aimed there — robot stopping 1-3 cm short of the
-    // charging cradle on every run. By gating the action on
-    // is_charging=true we guarantee the captured pose is the exact
-    // physical contact point, removing one source of dock-approach drift.
-    const isCharging = !!hwStatus.is_charging;
+    // charging cradle on every run. Require is_charging=true both before confirmation and before writing.
+    const isCharging = hwStatus.is_charging === true;
+    const charging = useRef(isCharging);
+    const active = useRef(true);
+    const dockWriteLock = useRef(false);
+    useEffect(() => {charging.current = isCharging;}, [isCharging]);
+    useEffect(() => {active.current = true; return () => {active.current = false;};}, []);
 
     const writeDockPose = useCallback(
         async (px: number, py: number, yaw: number) => {
@@ -189,53 +174,58 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             // mowgli_robot.yaml) and reflect THAT in the form — this also
             // correctly reflects the now-unchanged yaw.
             const q = getQuaternionFromHeading(yaw);
+            if (!active.current || dockWriteLock.current) return;
+            if (!charging.current || ![px, py, yaw].every(finiteNumber)) {
+                notification.warning({message: t('robotComponentEditor.tooltipNotCharging')});
+                return;
+            }
+            if (onDockCaptureStart && !onDockCaptureStart()) return;
+            dockWriteLock.current = true;
+            let acknowledged = false;
             try {
                 setSettingDock(true);
-                await guiApi.mowglinext.mapDockingCreate({
-                    docking_pose: {
-                        orientation: {x: q.x!, y: q.y!, z: q.z!, w: q.w!},
-                        position: {x: px, y: py, z: 0},
-                    },
-                    use_gps_position: true,
+                const write = await guiApi.mowglinext.mapDockingCreate({
+                    docking_pose: {orientation: {x: q.x!, y: q.y!, z: q.z!, w: q.w!}, position: {x: px, y: py, z: 0}},
+                    use_gps_position: true, yaw_source: 0,
                 });
-                // Read back the value the service actually stored (GPS-averaged),
-                // not the fused px/py we sent.
-                let storedX = px;
-                let storedY = py;
-                let storedYaw = yaw;
-                try {
-                    const resp = await guiApi.request<{
-                        dock?: {dock_pose_x?: number; dock_pose_y?: number; dock_pose_yaw_rad?: number};
-                    }>({path: "/calibration/status", method: "GET", format: "json"});
-                    const d = resp.data?.dock;
-                    if (d?.dock_pose_x != null) storedX = d.dock_pose_x;
-                    if (d?.dock_pose_y != null) storedY = d.dock_pose_y;
-                    if (d?.dock_pose_yaw_rad != null) storedYaw = d.dock_pose_yaw_rad;
-                } catch {
-                    // Read-back failed; fall back to the sent values for the form.
-                    // The service still persisted the GPS value to yaml.
+                if (!active.current) return;
+                if (write.error || write.ok === false || write.status >= 400) throw new Error(requestErrorMessage(write) ?? 'Dock write was not confirmed');
+                decodeDockWriteAcknowledgement(write.data);
+                acknowledged = true;
+                const read = await guiApi.request<unknown>({path: '/calibration/status', method: 'GET', format: 'json'});
+                if (!active.current) return;
+                if (read.error || read.ok === false || read.status >= 400) throw new Error(requestErrorMessage(read) ?? 'Dock readback was not confirmed');
+                const stored = decodeStoredDockPose(read.data);
+                // Preserve canonical precision, including independently stored yaw.
+                // A readback is not a transaction/observation identifier for this write.
+                if (onDockPosePersisted) {
+                    onDockPosePersisted({dock_pose_x: stored.x, dock_pose_y: stored.y, dock_pose_yaw: stored.yaw});
+                } else {
+                    // Onboarding owns its form independently of the Settings manager.
+                    onChange('dock_pose_x', stored.x);
+                    onChange('dock_pose_y', stored.y);
+                    onChange('dock_pose_yaw', stored.yaw);
                 }
-                onChange("dock_pose_x", roundTo(storedX, 3));
-                onChange("dock_pose_y", roundTo(storedY, 3));
-                onChange("dock_pose_yaw", roundTo(storedYaw, 4));
-                notification.success({
-                    message: t("robotComponentEditor.dockPoseSetFromGps"),
-                    description: t("robotComponentEditor.dockPoseSetFromGpsDescription"),
+                notification.success({message: t('robotComponentEditor.savedDockLoaded'), description: t('robotComponentEditor.savedDockLoadedDesc')});
+            } catch (error) {
+                if (active.current) notification.warning({
+                    message: t(acknowledged ? 'robotComponentEditor.dockReadbackUnconfirmed' : 'robotComponentEditor.dockWriteUnconfirmed'),
+                    description: t('robotComponentEditor.dockUnconfirmedDesc', {reason: requestErrorMessage(error) ?? t('robotComponentEditor.unknownError')}),
                 });
-            } catch (e: unknown) {
-                const message = e instanceof Error ? e.message : t("robotComponentEditor.unknownError");
-                notification.error({message: t("robotComponentEditor.failedToSetDockPose"), description: message});
             } finally {
-                setSettingDock(false);
+                dockWriteLock.current = false;
+                onDockCaptureFinished?.();
+                if (active.current) setSettingDock(false);
             }
         },
-        [guiApi, notification, onChange, t],
+        [guiApi, notification, onChange, onDockPosePersisted, onDockCaptureStart, onDockCaptureFinished, t],
     );
 
     // Open a confirmation modal that previews the change and spells out
     // exactly what gets written. The previous tiny icon-only button buried
     // this action without a confirm step (#173).
     const handleSetDockAtRobot = useCallback(() => {
+        if (!isCharging || settingDock) return;
         if (!poseAvailable) {
             notification.warning({message: t("robotComponentEditor.noRobotPoseYet")});
             return;
@@ -246,9 +236,11 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const yawDeg = roundTo(yawRadToCompassBearing(yawRad), 1);
         const savedX = values.dock_pose_x;
         const savedY = values.dock_pose_y;
-        const savedYawRad = values.dock_pose_yaw;
-        const fmt = (v: any, suffix: string, digits = 3) =>
-            v == null || isNaN(Number(v)) ? "—" : `${roundTo(Number(v), digits)}${suffix}`;
+        const savedYawRad = geometryNumber(values.dock_pose_yaw);
+        const fmt = (v: unknown, suffix: string, digits = 3) => {
+            const number = geometryNumber(v);
+            return number === undefined ? "—" : `${roundTo(number, digits)}${suffix}`;
+        };
 
         // Use the App-context modal (App.useApp().modal) instead of the
         // static Modal.confirm — antd v5 deprecated the static API and it
@@ -300,15 +292,15 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             ),
             onOk: () => writeDockPose(px, py, yawRad),
         });
-    }, [poseAvailable, robotX, robotY, robotYaw, values.dock_pose_x, values.dock_pose_y, values.dock_pose_yaw, writeDockPose, notification, modal, t]);
+    }, [isCharging, settingDock, poseAvailable, robotX, robotY, robotYaw, values.dock_pose_x, values.dock_pose_y, values.dock_pose_yaw, writeDockPose, notification, modal, t]);
     // Dock yaw lives in mowgli_robot.yaml. It is normally written by the
     // IMU auto-calibration service and the "set dock pose" GUI action,
     // but operators can also override it manually here when calibration
     // is unavailable or wrong.
     const dockCal = calibrationStatus?.dock;
-    const dockYawRad = values.dock_pose_yaw ?? (dockCal?.present && dockCal.dock_pose_yaw_rad != null
-        ? dockCal.dock_pose_yaw_rad
-        : 0);
+    const dockYawRad = values.dock_pose_yaw == null
+        ? geometryNumber(dockCal?.pose_values_valid === true || dockCal?.present && dockCal.pose_values_valid === undefined ? dockCal.dock_pose_yaw_rad : undefined)
+        : geometryNumber(values.dock_pose_yaw);
     const dockYawSource = "mowgli_robot.yaml";
 
     // Shared IMU yaw + dock pose calibration logic. The same hook backs
@@ -326,48 +318,78 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         applyCalibration,
     } = useImuYawCalibration({
         onApplyValue: onChange,
-        currentImuYawRad: values.imu_yaw,
+        currentImuYawRad: geometryNumber(values.imu_yaw),
     });
 
-    // Robot geometry from /robot_description URDF topic (falls back to defaults)
-    const robot = useRobotDescription();
-
+    const invalidSensorValues = SENSORS.some(meta => [meta.xKey, meta.yKey, meta.zKey, meta.yawKey].filter(Boolean)
+        .some(key => values[key] != null && geometryNumber(values[key]) === undefined));
+    const liveRobot = useRobotDescription();
+    const robot = useMemo(() => previewRobotGeometry(liveRobot, values), [liveRobot, values]);
+    const [visual] = useMowerVisual(values);
+    // Each sensor-layout session starts see-through, independently of Hardware.
+    const [transparent, setTransparent] = useState(true);
+    const dockStyle = resolveDockAppearance(visual.dockAppearance).layered ?? DEFAULT_DOCK_STYLE;
+    const dockGeometry = dockVisualGeometry(values, robot.wheelXOffset, dockStyle, robot.chassisCenterX);
+    const [dragBounds, setDragBounds] = useState<Bounds | null>(null);
+    const bounds = dragBounds ?? dockedAssemblyBounds(robot, "top", .12,dockStyle,dockGeometry);
     const svgWidth = isMobile ? 340 : 520;
     const svgHeight = isMobile ? 380 : 480;
-    const cx = svgWidth / 2;
-    // Facing-up view: the chassis extends forward (up) from base_link by
-    // chassis_center_x + baseLength/2, and the dock is drawn further in front.
-    // Push the base_link origin down so that forward extent + dock stay on
-    // canvas while keeping the rear axle above the bottom edge.
-    const forwardExtentPx = (robot.chassisCenterX + robot.baseLength / 2 + 0.16) * SCALE;
-    const cy = Math.min(svgHeight - 40, Math.max(svgHeight / 2, 24 + forwardExtentPx));
+    const [svgUnitsPerPixel, setSvgUnitsPerPixel] = useState(1);
+    useEffect(() => {
+        const svg=svgRef.current;
+        if (!svg) return;
+        const update=()=>{
+            const width=svg.getBoundingClientRect().width;
+            if (width>0) setSvgUnitsPerPixel(svgWidth/width);
+        };
+        update();
+        const observer=new ResizeObserver(update);
+        observer.observe(svg);
+        return ()=>observer.disconnect();
+    }, [svgWidth]);
+    const SCALE = Math.min(svgWidth/bounds.width, svgHeight/bounds.height);
+    const cx = (svgWidth-bounds.width*SCALE)/2-bounds.x*SCALE;
+    const cy = (svgHeight-bounds.height*SCALE)/2-bounds.y*SCALE;
+    const toSvg = useCallback((rx: number, ry: number, cx: number, cy: number): [number, number] => {
+        return [cx - ry * SCALE, cy - rx * SCALE];
+    }, [SCALE]);
+
+    const fromSvg = useCallback((sx: number, sy: number, cx: number, cy: number): [number, number] => {
+        return [(cy - sy) / SCALE, (cx - sx) / SCALE];
+    }, [SCALE]);
 
     const getSensorValue = useCallback(
-        (meta: SensorMeta): SensorConfig => ({
-            x: values[meta.xKey] ?? 0,
-            y: values[meta.yKey] ?? 0,
-            yaw: meta.yawKey ? (values[meta.yawKey] ?? 0) : 0,
-            z: values[meta.zKey] ?? 0,
-        }),
-        [values]
+        (meta: SensorMeta): SensorConfig => {
+            const sensor=robot.sensors?.find(s=>s.id === meta.id);
+            const mount=sensor?.mount ?? sensor;
+            return {
+                x: geometryNumber(values[meta.xKey]) ?? mount?.x ?? 0,
+                y: geometryNumber(values[meta.yKey]) ?? mount?.y ?? 0,
+                yaw: meta.yawKey ? (geometryNumber(values[meta.yawKey]) ?? sensor?.yaw ?? 0) : 0,
+                z: geometryNumber(values[meta.zKey]) ?? mount?.z ?? 0,
+            };
+        },
+        [values, robot.sensors]
     );
 
     const handlePointerDown = useCallback(
         (sensorId: SensorId, e: React.MouseEvent | React.TouchEvent) => {
             e.preventDefault();
             e.stopPropagation();
+            setDragBounds(bounds);
             setDragging(sensorId);
         },
-        []
+        [bounds]
     );
 
     const handleRotateDown = useCallback(
         (sensorId: SensorId, e: React.MouseEvent | React.TouchEvent) => {
             e.preventDefault();
             e.stopPropagation();
+            setDragBounds(bounds);
             setRotating(sensorId);
         },
-        []
+        [bounds]
     );
 
     useEffect(() => {
@@ -379,13 +401,14 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             const svg = svgRef.current;
             if (!svg) return;
             const rect = svg.getBoundingClientRect();
-            const sx = clientX - rect.left;
-            const sy = clientY - rect.top;
+            if (rect.width <= 0 || rect.height <= 0 || ![clientX, clientY].every(finiteNumber)) return;
+            const sx = (clientX - rect.left) * svgWidth / rect.width;
+            const sy = (clientY - rect.top) * svgHeight / rect.height;
 
             if (dragging) {
                 const [rx, ry] = fromSvg(sx, sy, cx, cy);
-                const clampedX = roundTo(Math.max(-0.4, Math.min(0.4, rx)), 3);
-                const clampedY = roundTo(Math.max(-0.4, Math.min(0.4, ry)), 3);
+                const clampedX = roundTo(Math.max(-bounds.y-bounds.height, Math.min(-bounds.y, rx)), 3);
+                const clampedY = roundTo(Math.max(-bounds.x-bounds.width, Math.min(-bounds.x, ry)), 3);
                 onChange(meta.xKey, clampedX);
                 onChange(meta.yKey, clampedY);
             }
@@ -404,9 +427,11 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
         const onMouseMove = (e: MouseEvent) => handleMove(e.clientX, e.clientY);
         const onTouchMove = (e: TouchEvent) => {
             e.preventDefault();
-            handleMove(e.touches[0].clientX, e.touches[0].clientY);
+            const touch = e.touches[0];
+            if (touch) handleMove(touch.clientX, touch.clientY);
         };
         const onUp = () => {
+            setDragBounds(null);
             setDragging(null);
             setRotating(null);
         };
@@ -422,7 +447,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             window.removeEventListener("touchmove", onTouchMove);
             window.removeEventListener("touchend", onUp);
         };
-    }, [dragging, rotating, cx, cy, onChange, getSensorValue]);
+    }, [dragging, rotating, cx, cy, SCALE, svgWidth, svgHeight, bounds, onChange, getSensorValue, fromSvg, toSvg]);
 
     // Grid lines
     const gridLines = useMemo(() => {
@@ -447,148 +472,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             );
         }
         return lines;
-    }, [cx, cy, mode]);
+    }, [cx, cy, mode, toSvg]);
 
-    // Draw robot body from URDF geometry
-    const robotBody = useMemo(() => {
-        const ccx = robot.chassisCenterX; // chassis centre offset from base_link
-        const halfL = robot.baseLength / 2;
-        const halfW = robot.baseWidth / 2;
-        const bodyColor = mode === "dark" ? colors.emeraldDeep : colors.primaryLight;
-        const bodyStroke = mode === "dark" ? colors.mint : colors.primaryDark;
-        const wheelColor = mode === "dark" ? inkAlpha(0.35) : inkAlpha(0.7);
-        const bladeColor = colors.muted;
-        const casterColor = mode === "dark" ? inkAlpha(0.25) : inkAlpha(0.55);
-
-        // Chassis rect offset by chassisCenterX (base_link is at the rear wheel
-        // axis, not the chassis centre). Facing up, the front-left corner maps
-        // to the SVG top-left; the box spans baseWidth horizontally and
-        // baseLength vertically.
-        const [bx, by] = toSvg(ccx + halfL, halfW, cx, cy);
-        const bw = robot.baseWidth * SCALE;
-        const bh = robot.baseLength * SCALE;
-
-        const leftWheel = toSvg(robot.wheelXOffset, robot.wheelTrack / 2, cx, cy);
-        const rightWheel = toSvg(robot.wheelXOffset, -robot.wheelTrack / 2, cx, cy);
-        // Drive-wheel disc seen from above: its diameter runs along the forward
-        // (vertical) axis, the thin tyre width runs laterally (horizontal).
-        const ww = robot.wheelWidth * SCALE;
-        const wh = robot.wheelRadius * 2 * SCALE;
-
-        const leftCaster = toSvg(robot.casterXOffset, robot.casterTrack / 2, cx, cy);
-        const rightCaster = toSvg(robot.casterXOffset, -robot.casterTrack / 2, cx, cy);
-        const cr = robot.casterRadius * SCALE;
-
-        const bladeCentre = toSvg(ccx, 0, cx, cy);
-        const br = robot.bladeRadius * SCALE;
-
-        const arrowTip = toSvg(ccx + halfL + 0.04, 0, cx, cy);
-        const arrowLeft = toSvg(ccx + halfL + 0.01, 0.02, cx, cy);
-        const arrowRight = toSvg(ccx + halfL + 0.01, -0.02, cx, cy);
-        const arrowColor = mode === "dark" ? inkAlpha(0.4) : "rgba(0,0,0,0.3)";
-
-        // Dock charging station in front of the robot (robot drives forward to dock)
-        const dockFill = mode === "dark" ? inkAlpha(0.16) : inkAlpha(0.6);
-        const dockStroke = mode === "dark" ? inkAlpha(0.3) : inkAlpha(0.45);
-        const contactColor = colors.warning;
-        const dockLabelColor = mode === "dark" ? inkAlpha(0.4) : "rgba(0,0,0,0.35)";
-        // Dock station drawn in FRONT of the robot (forward = up). All
-        // positions are expressed in robot metres and projected through toSvg
-        // so the dock rotates with the facing-up view like the rest of the body.
-        const frontEdge = ccx + halfL;
-        const plateSpan = robot.baseWidth + 0.08;    // lateral extent (horizontal)
-        const plateDepth = 0.12;                     // forward extent (vertical)
-        const plateNear = frontEdge + 0.02;          // edge nearest the robot
-        const plateFar = plateNear + plateDepth;
-        const [plateX, plateY] = toSvg(plateFar, plateSpan / 2, cx, cy); // top-left
-        const plateWpx = plateSpan * SCALE;
-        const plateHpx = plateDepth * SCALE;
-        // Back wall (the wall the robot pushes against) at the far edge.
-        const [wallX] = toSvg(plateFar, plateSpan * 0.3, cx, cy);
-        const wallWpx = plateSpan * 0.6 * SCALE;
-        const wallHpx = 0.02 * SCALE;
-        // Charging contacts: two copper strips on the robot-facing edge.
-        const contactWpx = 0.04 * SCALE;             // lateral width (horizontal)
-        const contactHpx = 0.015 * SCALE;            // forward depth (vertical)
-        const [contactLX, contactLY] = toSvg(plateNear + 0.01, robot.wheelTrack * 0.35, cx, cy);
-        const [contactRX, contactRY] = toSvg(plateNear + 0.01, -robot.wheelTrack * 0.35, cx, cy);
-
-        return (
-            <g>
-                {/* Dock base plate */}
-                <rect
-                    x={plateX} y={plateY} width={plateWpx} height={plateHpx}
-                    rx={4} ry={4}
-                    fill={dockFill} stroke={dockStroke} strokeWidth={1.5} opacity={0.55}
-                />
-                {/* Back wall (far edge the robot pushes against) */}
-                <rect
-                    x={wallX} y={plateY - wallHpx}
-                    width={wallWpx} height={wallHpx}
-                    rx={2} ry={2}
-                    fill={dockStroke} opacity={0.7}
-                />
-                {/* Charging contacts (two copper strips facing the robot) */}
-                <rect
-                    x={contactLX - contactWpx / 2} y={contactLY - contactHpx / 2}
-                    width={contactWpx} height={contactHpx}
-                    rx={1} fill={contactColor} opacity={0.85}
-                />
-                <rect
-                    x={contactRX - contactWpx / 2} y={contactRY - contactHpx / 2}
-                    width={contactWpx} height={contactHpx}
-                    rx={1} fill={contactColor} opacity={0.85}
-                />
-                <text
-                    x={cx} y={plateY - 5}
-                    textAnchor="middle" fontSize={7}
-                    fill={dockLabelColor} fontFamily="monospace"
-                >
-                    dock
-                </text>
-                {/* Robot body */}
-                <rect
-                    x={bx} y={by} width={bw} height={bh}
-                    rx={8} ry={8}
-                    fill={bodyColor} stroke={bodyStroke} strokeWidth={2} opacity={0.7}
-                />
-                <circle
-                    cx={bladeCentre[0]} cy={bladeCentre[1]} r={br}
-                    fill={bladeColor} opacity={0.4} stroke={bladeColor}
-                    strokeWidth={1} strokeDasharray="4 3"
-                />
-                <rect
-                    x={leftWheel[0] - ww / 2} y={leftWheel[1] - wh / 2}
-                    width={ww} height={wh} rx={3} fill={wheelColor}
-                />
-                <rect
-                    x={rightWheel[0] - ww / 2} y={rightWheel[1] - wh / 2}
-                    width={ww} height={wh} rx={3} fill={wheelColor}
-                />
-                <circle cx={leftCaster[0]} cy={leftCaster[1]} r={cr} fill={casterColor} />
-                <circle cx={rightCaster[0]} cy={rightCaster[1]} r={cr} fill={casterColor} />
-                <polygon
-                    points={`${arrowTip[0]},${arrowTip[1]} ${arrowLeft[0]},${arrowLeft[1]} ${arrowRight[0]},${arrowRight[1]}`}
-                    fill={arrowColor}
-                />
-                <text
-                    x={cx} y={cy + 4}
-                    textAnchor="middle" fontSize={9}
-                    fill={mode === "dark" ? inkAlpha(0.3) : "rgba(0,0,0,0.25)"}
-                    fontFamily="monospace"
-                >
-                    base_link
-                </text>
-                <text
-                    x={arrowTip[0] - 8} y={arrowTip[1] + 4}
-                    textAnchor="end"
-                    fontSize={10} fill={arrowColor} fontFamily="monospace"
-                >
-                    +X
-                </text>
-            </g>
-        );
-    }, [cx, cy, mode, robot, colors]);
+    const robotBody = liveRobot.fromUrdf ? <g transform={`translate(${cx} ${cy}) scale(${SCALE})`}>
+        <g opacity={setupDockOpacity(transparent)} pointerEvents="none"><DockGraphic geometry={dockGeometry} style={dockStyle}/></g>
+        <LayeredMower robot={robot} {...visual} transparent={transparent} sensors={false}/>
+        <path d="M -.01 0 H .01 M 0 -.01 V .01" stroke="#a8ccbe" strokeWidth={.002}/>
+    </g> : null;
 
     // Draw a single sensor
     const renderSensor = useCallback(
@@ -607,19 +497,20 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             const yawEndX = sx - Math.sin(val.yaw) * yawLineLen;
             const yawEndY = sy - Math.cos(val.yaw) * yawLineLen;
 
-            const handleDist = 0.08 * SCALE;
+            // Keep 48 CSS-pixel hit targets disjoint even when a large robot
+            // or outboard sensor makes the automatically fitted model small.
+            const HIT_R = 24 * svgUnitsPerPixel;
+            const handleDist = Math.max(0.08 * SCALE, 2 * HIT_R + 8 * svgUnitsPerPixel);
             const handleX = sx - Math.sin(val.yaw) * handleDist;
             const handleY = sy - Math.cos(val.yaw) * handleDist;
 
             // Transparent ≥44px touch target behind the small visible glyph so
             // dragging works on phones (Apple HIG / Material both call for 44px
             // minimum tap targets). The visible square/circle stays small.
-            const HIT_R = 24; // 48px diameter
-            const activeStroke = colors.text;
             const handleFill = mode === "dark" ? colors.bgElevated : colors.bgCard;
 
             return (
-                <g key={meta.id}>
+                <g key={meta.id} data-sensor-control={meta.id}>
                     {(isActive || isHovered) && (
                         <circle
                             cx={sx} cy={sy} r={sizeInPx + 8}
@@ -639,26 +530,11 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                         onMouseLeave={() => setHoveredSensor(null)}
                     />
 
-                    {meta.shape === "circle" ? (
-                        <circle
-                            cx={sx} cy={sy} r={sizeInPx}
-                            fill={sensorColor}
-                            stroke={isActive ? activeStroke : sensorColor}
-                            strokeWidth={isActive ? 2 : 1}
-                            opacity={0.9}
-                            style={{ cursor: "grab", pointerEvents: "none" }}
-                        />
-                    ) : (
-                        <rect
-                            x={sx - sizeInPx} y={sy - sizeInPx}
-                            width={sizeInPx * 2} height={sizeInPx * 2} rx={2}
-                            fill={sensorColor}
-                            stroke={isActive ? activeStroke : sensorColor}
-                            strokeWidth={isActive ? 2 : 1}
-                            opacity={0.9}
-                            style={{ cursor: "grab", pointerEvents: "none" }}
-                        />
-                    )}
+                    <g transform={`translate(${cx} ${cy}) scale(${SCALE})`} style={{pointerEvents:"none"}}
+                        opacity={meta.id === "imu" && !transparent ? .45 : 1}>
+                        {robot.sensors?.filter(sensor=>sensor.id === meta.id).map(sensor=>
+                            <SensorGraphic key={sensor.id} sensor={sensor} view="top" highlight/>)}
+                    </g>
 
                     {meta.yawKey && (
                         <>
@@ -710,7 +586,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                 </g>
             );
         },
-        [cx, cy, dragging, rotating, hoveredSensor, getSensorValue, handlePointerDown, handleRotateDown, mode, colors]
+        [cx, cy, SCALE, svgUnitsPerPixel, robot, transparent, dragging, rotating, hoveredSensor, getSensorValue, handlePointerDown, handleRotateDown, mode, colors, toSvg]
     );
 
     // Scale labels
@@ -739,7 +615,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
             );
         }
         return labels;
-    }, [cx, cy, mode, robot]);
+    }, [cx, cy, SCALE, mode, robot, toSvg]);
 
     const resetSensor = useCallback(
         (meta: SensorMeta) => {
@@ -757,13 +633,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
     );
 
     return (
-        <Card
+        <Card data-testid="sensor-placement"
             title={
                 <Space>
                     <AimOutlined />
                     <span>{t("robotComponentEditor.sensorPlacement")}</span>
                     <Tag color="blue" style={{ fontSize: 10, marginLeft: 4 }}>
-                        {robot.baseLength.toFixed(2)} x {robot.baseWidth.toFixed(2)} {t("robotComponentEditor.metersFromUrdf")}
+                        {robot.baseLength.toFixed(2)} x {robot.baseWidth.toFixed(2)} m
                     </Tag>
                 </Space>
             }
@@ -773,6 +649,9 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                 {t("robotComponentEditor.dragSensorsHint")}
             </Typography.Paragraph>
 
+            <MowerVisualControls transparent={transparent} onTransparencyChange={setTransparent}/>
+            <Typography.Paragraph type="secondary">{t(liveRobot.fromUrdf ? "mowerVisual.previewNote" : "mowerVisual.waiting")}</Typography.Paragraph>
+            {invalidSensorValues && <Alert type="warning" message={t('robotComponentEditor.invalidGeometry')} />}
             <Row gutter={[16, 16]}>
                 <Col xs={24} lg={14}>
                     <div
@@ -788,17 +667,19 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                     >
                         <svg
                             ref={svgRef}
+                            data-testid="sensor-top-editor"
                             width={svgWidth}
                             height={svgHeight}
                             viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-                            style={{ userSelect: "none", touchAction: "none" }}
+                            style={{ userSelect: "none", touchAction: "none", maxWidth:"100%", height:"auto" }}
                         >
                             {gridLines}
                             {scaleLabels}
                             {robotBody}
-                            {[...SENSORS].reverse().map(renderSensor)}
+                            {liveRobot.fromUrdf && [...SENSORS].reverse().filter(meta => robot.sensors?.some(sensor => sensor.id === meta.id)).map(renderSensor)}
                         </svg>
                     </div>
+                    {liveRobot.fromUrdf && <MowerView values={values} dockGeometry={dockGeometry} robot={robot} view="side" showDock transparent={transparent} highlightSensors maxHeight={190}/>}
                 </Col>
 
                 <Col xs={24} lg={10}>
@@ -832,32 +713,32 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                 <Row gutter={[8, 4]}>
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.xForward")}</Text>
-                                        <InputNumber
+                                        <NumberWithAddon
                                             data-setting-key={meta.xKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.xForward")}, m`}
-                                            value={val.x} onChange={(v) => onChange(meta.xKey, v ?? 0)}
+                                            value={values[meta.xKey] == null ? val.x : geometryNumber(values[meta.xKey]) ?? null} onChange={(v) => onChange(meta.xKey, finiteNumber(v) ? v : null)}
                                             step={0.005} precision={3} size="small"
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Col>
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.yLeft")}</Text>
-                                        <InputNumber
+                                        <NumberWithAddon
                                             data-setting-key={meta.yKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.yLeft")}, m`}
-                                            value={val.y} onChange={(v) => onChange(meta.yKey, v ?? 0)}
+                                            value={values[meta.yKey] == null ? val.y : geometryNumber(values[meta.yKey]) ?? null} onChange={(v) => onChange(meta.yKey, finiteNumber(v) ? v : null)}
                                             step={0.005} precision={3} size="small"
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Col>
                                     <Col span={12}>
                                         <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.zHeight")}</Text>
-                                        <InputNumber
+                                        <NumberWithAddon
                                             data-setting-key={meta.zKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.zHeight")}, m`}
-                                            value={val.z} onChange={(v) => onChange(meta.zKey, v ?? 0)}
+                                            value={values[meta.zKey] == null ? val.z : geometryNumber(values[meta.zKey]) ?? null} onChange={(v) => onChange(meta.zKey, finiteNumber(v) ? v : null)}
                                             step={0.005} precision={3} size="small"
-                                            style={{ width: "100%" }} addonAfter="m"
+                                            style={{ width: "100%" }} after="m"
                                         />
                                     </Col>
                                     {meta.yawKey && (
@@ -865,13 +746,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                             <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.yaw")}</Text>
                                             {meta.id === "imu" ? (
                                                 <Space.Compact style={{ width: "100%" }}>
-                                                    <InputNumber
+                                                    <NumberWithAddon
                                                         data-setting-key={meta.yawKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.yaw")}, °`}
-                                                        value={roundTo(radToDeg(val.yaw), 1)}
-                                                        onChange={(v) => onChange(meta.yawKey, roundTo(degToRad(v ?? 0), 4))}
+                                                        value={values[meta.yawKey] != null && geometryNumber(values[meta.yawKey]) === undefined ? null : roundTo(radToDeg(val.yaw), 1)}
+                                                        onChange={(v) => onChange(meta.yawKey, finiteNumber(v) ? roundTo(degToRad(v), 4) : null)}
                                                         step={1} precision={1} size="small"
-                                                        style={{ width: "100%" }} addonAfter="°"
+                                                        style={{ width: "100%" }} after="°"
                                                     />
                                                     <Tooltip title={t("robotComponentEditor.autoCalibrateImuTooltip")}>
                                                         <Button
@@ -883,13 +764,13 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                                     </Tooltip>
                                                 </Space.Compact>
                                             ) : (
-                                                <InputNumber
+                                                <NumberWithAddon
                                                     data-setting-key={meta.yawKey}
                                             aria-label={`${meta.label} — ${t("robotComponentEditor.yaw")}, °`}
-                                                        value={roundTo(radToDeg(val.yaw), 1)}
-                                                    onChange={(v) => onChange(meta.yawKey, roundTo(degToRad(v ?? 0), 4))}
+                                                        value={values[meta.yawKey] != null && geometryNumber(values[meta.yawKey]) === undefined ? null : roundTo(radToDeg(val.yaw), 1)}
+                                                    onChange={(v) => onChange(meta.yawKey, finiteNumber(v) ? roundTo(degToRad(v), 4) : null)}
                                                     step={1} precision={1} size="small"
-                                                    style={{ width: "100%" }} addonAfter="°"
+                                                    style={{ width: "100%" }} after="°"
                                                 />
                                             )}
                                         </Col>
@@ -915,11 +796,12 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                         <Row gutter={[8, 4]} align="middle">
                             <Col span={12}>
                                 <Text type="secondary" style={{ fontSize: 11 }}>{t("robotComponentEditor.bearingCompass")}</Text>
-                                <InputNumber
+                                <NumberWithAddon
                                     aria-label={t("robotComponentEditor.dockHeading")}
-                                    value={roundTo(yawRadToCompassBearing(dockYawRad), 1)}
+                                    value={dockYawRad === undefined ? null : roundTo(yawRadToCompassBearing(dockYawRad), 1)}
                                     onChange={(v) => {
-                                        const bearing = ((Number(v ?? 0) % 360) + 360) % 360;
+                                        if (!finiteNumber(v)) {onChange('dock_pose_yaw', null); return;}
+                                        const bearing = ((v % 360) + 360) % 360;
                                         onChange("dock_pose_yaw", roundTo(compassBearingToYawRad(bearing), 4));
                                     }}
                                     step={1}
@@ -928,7 +810,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                     max={360}
                                     size="small"
                                     style={{ width: "100%" }}
-                                    addonAfter="°"
+                                    after="°"
                                 />
                             </Col>
                             <Col span={12}>
@@ -952,6 +834,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                             Compass bearing → SVG angle: bearing 0°=N=up, SVG 0°=right (CW),
                                             so svgAngle = bearing - 90. */}
                                         {(() => {
+                                            if (dockYawRad === undefined) return null;
                                             const bearing = yawRadToCompassBearing(dockYawRad);
                                             const svgAngle = bearing - 90;
                                             const rad = svgAngle * Math.PI / 180;
@@ -1019,7 +902,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                                 size="small"
                                                 icon={<EnvironmentOutlined />}
                                                 loading={settingDock}
-                                                disabled={!poseAvailable || !isCharging}
+                                                disabled={!poseAvailable || !isCharging || settingDock}
                                                 onClick={handleSetDockAtRobot}
                                             >
                                                 {t("robotComponentEditor.setDockPose")}
@@ -1044,7 +927,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                 maskClosable={!calibRunning}
                 closable={!calibRunning}
                 footer={null}
-                destroyOnClose
+                destroyOnHidden
             >
                 <Typography.Paragraph>
                     {t("robotComponentEditor.imuCalibIntro1")}{" "}
@@ -1066,7 +949,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                     <div style={{ textAlign: "right", marginTop: 16 }}>
                         <Space>
                             <Button onClick={closeCalibration}>{t("robotComponentEditor.cancel")}</Button>
-                            <Button type="primary" icon={<CompassOutlined />} onClick={startCalibration}>
+                            <Button type="primary" icon={<CompassOutlined />} onClick={asyncHandler(startCalibration)}>
                                 {t("robotComponentEditor.start")}
                             </Button>
                         </Space>
@@ -1095,7 +978,7 @@ export const RobotComponentEditor: React.FC<Props> = ({ values, onChange }) => {
                                         {t("robotComponentEditor.calibConfidence", {dev: calibResult.std_dev_deg.toFixed(2), samples: calibResult.samples_used})}
                                         <br />
                                         <Typography.Text type="secondary">
-                                            {t("robotComponentEditor.calibCurrentValue", {value: roundTo(radToDeg(values.imu_yaw ?? 0), 2)})}
+                                            {t("robotComponentEditor.calibCurrentValue", {value: geometryNumber(values.imu_yaw) === undefined ? '—' : roundTo(radToDeg(geometryNumber(values.imu_yaw) ?? 0), 2)})}
                                         </Typography.Text>
                                     </>
                                 }

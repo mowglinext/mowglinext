@@ -1,0 +1,89 @@
+{
+  "observed_at_utc": "2026-10-16T08:52:30.955735+00:00",
+  "mowgli": {
+    "header": {
+      "frame_id": "gps_link",
+      "stamp": {
+        "nanosec": 876978671,
+        "sec": 1792140750
+      }
+    },
+    "backend": "universal",
+    "fix_type": 6,
+    "fix_valid": true,
+    "rtk_mode": 3,
+    "capability_flags": 260271615,
+    "value_flags": 260074911,
+    "horizontal_accuracy_m": 0.014000000432133675,
+    "vertical_accuracy_m": 0.014000000432133675,
+    "position_observation_sequence": 328265,
+    "dead_reckoning": false,
+    "satellites_used": 24,
+    "satellites_visible": 48,
+    "satellites_tracked": 0,
+    "mean_cn0_db_hz": 23.354839324951172,
+    "max_cn0_db_hz": 34,
+    "correction_stream_status": 3,
+    "msm_summary_seen": true,
+    "msm_summary_decoded": true,
+    "msm_summary_valid": true,
+    "msm_summary_age_s": 0.6000959873199463,
+    "baseline_azimuth_deg": null,
+    "baseline_pitch_deg": null,
+    "baseline_length_m": null,
+    "baseline_solution_status": 0,
+    "dual_antenna_baseline": false,
+    "interference_detected": false,
+    "jamming_detected": false,
+    "differential_corrections": true,
+    "corrections_active": true
+  },
+  "rock5b": {
+    "header": {
+      "frame_id": "gps_link",
+      "stamp": {
+        "nanosec": 948398119,
+        "sec": 1792140750
+      }
+    },
+    "backend": "mavros_gps2",
+    "fix_type": 2,
+    "fix_valid": true,
+    "rtk_mode": 2,
+    "capability_flags": 7455,
+    "value_flags": 7455,
+    "horizontal_accuracy_m": 0.014000000432133675,
+    "vertical_accuracy_m": 0.010999999940395355,
+    "position_observation_sequence": 58730,
+    "dead_reckoning": false,
+    "satellites_used": 0,
+    "satellites_visible": 30,
+    "satellites_tracked": 0,
+    "mean_cn0_db_hz": null,
+    "max_cn0_db_hz": null,
+    "correction_stream_status": 0,
+    "msm_summary_seen": false,
+    "msm_summary_decoded": false,
+    "msm_summary_valid": false,
+    "msm_summary_age_s": null,
+    "baseline_azimuth_deg": null,
+    "baseline_pitch_deg": null,
+    "baseline_length_m": null,
+    "baseline_solution_status": 0,
+    "dual_antenna_baseline": false,
+    "interference_detected": false,
+    "jamming_detected": false,
+    "differential_corrections": true,
+    "corrections_active": true
+  },
+  "mowgli_sequences": [
+    328265,
+    328266,
+    328267
+  ],
+  "rock5b_sequences": [
+    58730,
+    58731,
+    58732
+  ]
+}

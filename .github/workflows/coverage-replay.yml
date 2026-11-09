@@ -1,0 +1,353 @@
+name: Coverage planner replay
+
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'ros2/src/mowgli_coverage/**'
+      - '.github/workflows/coverage-replay.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coverage-replay-${{ github.event.pull_request.head.sha || github.ref }}
+  cancel-in-progress: false
+
+env:
+  ROS_DISTRO: lyrical
+
+jobs:
+  planner-replay:
+    name: Planner replay (${{ matrix.build_type }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        build_type: [Release, Debug, RelWithDebInfo]
+    env:
+      BUILD_TYPE: ${{ matrix.build_type }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Preinstall ROS apt source
+        run: bash .github/scripts/install-ros-apt-source.sh ros2-apt-source
+
+      - name: Setup ROS Lyrical
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: lyrical
+
+      - name: Resolve exact baseline revision
+        id: baseline
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == 'pull_request' ]]; then
+            # The event's base SHA can lag the synthetic merge checkout.
+            # Compare against the base actually merged into this candidate.
+            if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ||
+                  "$(git rev-parse HEAD^2)" != "$PR_HEAD_SHA" ]]; then
+              echo 'Expected the pull request synthetic merge checkout.' >&2
+              exit 1
+            fi
+            BASE_SHA="$(git rev-parse HEAD^1)"
+          else
+            git fetch --no-tags origin dev
+            BASE_SHA="$(git rev-parse FETCH_HEAD)"
+          fi
+          if [[ ! "$BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo 'Baseline must be a full 40-character commit SHA.' >&2
+            exit 1
+          fi
+          git cat-file -e "${BASE_SHA}^{commit}"
+          printf 'sha=%s\n' "$BASE_SHA" >> "$GITHUB_OUTPUT"
+          printf 'BASE_SHA=%s\n' "$BASE_SHA" >> "$GITHUB_ENV"
+
+      - name: Install standalone planner dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git pkg-config time \
+            libeigen3-dev libgdal-dev libgeos++-dev libgeos-dev libgsl-dev \
+            libtinyxml2-dev libpython3-dev python3-dev libtbb-dev \
+            nlohmann-json3-dev libgtest-dev ros-lyrical-ortools-vendor
+
+      - name: Prepare Fields2Cover install prefix
+        run: |
+          sudo mkdir -p /opt/fields2cover-300
+          sudo chown "$(id -u):$(id -g)" /opt/fields2cover-300
+
+      - name: Cache Fields2Cover 3.0.0
+        id: cache-f2c
+        uses: actions/cache@v4
+        with:
+          path: /opt/fields2cover-300
+          key: f2c-3.0.0-884d895-${{ runner.os }}-resolute-lyrical
+
+      - name: Build pinned Fields2Cover 3.0.0
+        if: steps.cache-f2c.outputs.cache-hit != 'true'
+        env:
+          F2C_SHA: 884d895b59192882476e986ba44ea9143a06a6a9
+        run: |
+          # ROS setup reads optional unset variables; enable nounset afterwards.
+          set -eo pipefail
+          source "/opt/ros/${ROS_DISTRO}/setup.bash"
+          set -u
+          export CMAKE_PREFIX_PATH="/opt/fields2cover-300:${CMAKE_PREFIX_PATH:-}"
+          cd "$RUNNER_TEMP"
+          git clone https://github.com/Fields2Cover/Fields2Cover.git f2c3
+          cd f2c3
+          git checkout "$F2C_SHA"
+          sed -i '1i #include <iomanip>' src/fields2cover/utils/visualizer.cpp
+          sed -i '1i #include <algorithm>' src/fields2cover/types/Graph.cpp
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -DCMAKE_INSTALL_PREFIX=/opt/fields2cover-300 \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_PYTHON=OFF \
+            -DBUILD_TUTORIALS=OFF \
+            -DBUILD_DOC=OFF \
+            -DALLOW_PARALLELIZATION=ON \
+            -DBUILD_SHARED_LIBS=ON
+          cmake --build build --parallel 3
+          cmake --install build
+
+      - name: Record dependency environment
+        env:
+          F2C_CACHE_HIT: ${{ steps.cache-f2c.outputs.cache-hit }}
+          CANDIDATE_SHA: ${{ github.sha }}
+          BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
+        run: |
+          set -eo pipefail
+          source "/opt/ros/${ROS_DISTRO}/setup.bash"
+          set -u
+          export LD_LIBRARY_PATH="/opt/fields2cover-300/lib:${LD_LIBRARY_PATH:-}"
+          ROOT="$RUNNER_TEMP/coverage-replay-artifacts/$BUILD_TYPE"
+          mkdir -p "$ROOT/environment"
+          find /opt/fields2cover-300/lib -maxdepth 1 -type f \
+            -name 'libFields2Cover.so*' -print0 | sort -z \
+            | xargs -0 sha256sum > "$ROOT/environment/fields2cover-library-sha256.txt"
+          for package in cmake g++ libeigen3-dev libgdal-dev libgeos++-dev \
+            libgeos-dev libgsl-dev libtinyxml2-dev libtbb-dev nlohmann-json3-dev \
+            libgtest-dev ros-lyrical-ortools-vendor libc6 libstdc++6 binutils; do
+            dpkg-query -W -f='${binary:Package}=${Version}\n' "$package"
+          done | LC_ALL=C sort > "$ROOT/environment/packages.txt"
+          uname -a > "$ROOT/environment/uname.txt"
+          g++ --version > "$ROOT/environment/compiler.txt"
+          lscpu > "$ROOT/environment/cpu.txt"
+          cmake --version > "$ROOT/environment/cmake.txt"
+          mkdir -p "$ROOT/build-metadata/fields2cover"
+          cp -L /opt/fields2cover-300/lib/libFields2Cover.so \
+            "$ROOT/build-metadata/fields2cover/"
+          if [[ -f "$RUNNER_TEMP/f2c3/build/CMakeCache.txt" ]]; then
+            mkdir -p "$ROOT/build-metadata/fields2cover"
+            cp "$RUNNER_TEMP/f2c3/build/CMakeCache.txt" \
+              "$ROOT/build-metadata/fields2cover/"
+            cp "$RUNNER_TEMP/f2c3/build/compile_commands.json" \
+              "$ROOT/build-metadata/fields2cover/"
+          fi
+          python3 - "$ROOT/environment/environment.json" <<'PY'
+          import json
+          import os
+          import pathlib
+          import platform
+          import sys
+
+          root = pathlib.Path(sys.argv[1]).parent
+          package_versions = (root / 'packages.txt').read_text().splitlines()
+          libraries = (root / 'fields2cover-library-sha256.txt').read_text().splitlines()
+          data = {
+              'ros_distro': os.environ['ROS_DISTRO'],
+              'build_type': os.environ['BUILD_TYPE'],
+              'architecture': platform.machine(),
+              'uname': (root / 'uname.txt').read_text().strip(),
+              'compiler': (root / 'compiler.txt').read_text().splitlines()[0],
+              'cmake': (root / 'cmake.txt').read_text().splitlines()[0],
+              'fields2cover_version': '3.0.0',
+              'fields2cover_revision': '884d895b59192882476e986ba44ea9143a06a6a9',
+              'fields2cover_cache_hit': os.environ.get('F2C_CACHE_HIT') == 'true',
+              'fields2cover_compile_commands_available': (
+                  root.parent / 'build-metadata/fields2cover/compile_commands.json'
+              ).is_file(),
+              'fields2cover_library_sha256': libraries,
+              'package_versions': package_versions,
+              'baseline_revision': os.environ['BASELINE_SHA'],
+              'candidate_revision': os.environ['CANDIDATE_SHA'],
+              'replay': {
+                  'fixtures': 26,
+                  'baseline_candidate_runs_per_fixture': 15,
+                  'candidate_trace_runs_per_fixture': 100,
+                  'comparison_input_hashes_required': True,
+              },
+          }
+          pathlib.Path(sys.argv[1]).write_text(
+              json.dumps(data, indent=2, allow_nan=False) + '\n', encoding='utf-8'
+          )
+          PY
+
+      - name: Build baseline and candidate standalone planners
+        env:
+          BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -eo pipefail
+          source "/opt/ros/${ROS_DISTRO}/setup.bash"
+          set -u
+          export CMAKE_PREFIX_PATH="/opt/fields2cover-300:${CMAKE_PREFIX_PATH:-}"
+          export LD_LIBRARY_PATH="/opt/fields2cover-300/lib:${LD_LIBRARY_PATH:-}"
+          REPO="$GITHUB_WORKSPACE"
+          REPLAY="$REPO/ros2/src/mowgli_coverage/test/replay"
+          PACKAGE="$REPO/ros2/src/mowgli_coverage"
+          ROOT="$RUNNER_TEMP/coverage-replay-artifacts/$BUILD_TYPE"
+          BUILD_ROOT="$RUNNER_TEMP/coverage-replay-build/$BUILD_TYPE"
+          BASELINE_SOURCE="$RUNNER_TEMP/coverage-replay-baseline"
+          BASELINE_PLANNER="ros2/src/mowgli_coverage/src/coverage_planning.cpp"
+          BASELINE_HEADER="ros2/src/mowgli_coverage/include/mowgli_coverage/coverage_planning.hpp"
+          mkdir -p "$BASELINE_SOURCE/src" \
+            "$BASELINE_SOURCE/include/mowgli_coverage" "$BASELINE_SOURCE/test" \
+            "$ROOT/build-metadata"
+          git show "${BASELINE_SHA}:${BASELINE_PLANNER}" \
+            > "$BASELINE_SOURCE/src/coverage_planning.cpp"
+          git show "${BASELINE_SHA}:${BASELINE_HEADER}" \
+            > "$BASELINE_SOURCE/include/mowgli_coverage/coverage_planning.hpp"
+          # Keep relative fixture includes with the baseline's own test sources.
+          git -c core.autocrlf=false archive "$BASELINE_SHA" ros2/src/mowgli_coverage/test \
+            | tar -x -C "$BASELINE_SOURCE" --strip-components=3
+          build_variant() {
+            local label="$1"
+            local source="$2"
+            local include="$3"
+            local revision="$4"
+            local baseline_mode="$5"
+            local test_root="$6"
+            local build_dir="$BUILD_ROOT/$label"
+            local metadata_dir="$ROOT/build-metadata/$label"
+            mkdir -p "$metadata_dir"
+            cmake -S "$REPLAY" -B "$build_dir" \
+              -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+              -DCMAKE_PREFIX_PATH="/opt/fields2cover-300:${CMAKE_PREFIX_PATH:-}" \
+              -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+              -DPLANNER_SOURCE="$source" \
+              -DPLANNER_INCLUDE="$include" \
+              -DPLANNER_TEST_ROOT="$test_root" \
+              -DREPLAY_BASELINE="$baseline_mode" \
+              -DREPLAY_REVISION="$revision" \
+              2>&1 | tee "$metadata_dir/configure.log"
+            cmake --build "$build_dir" --parallel "$(nproc)" --verbose \
+              2>&1 | tee "$metadata_dir/build.log"
+            ctest --test-dir "$build_dir" --output-on-failure \
+              2>&1 | tee "$metadata_dir/ctest.log"
+            cp "$build_dir/CMakeCache.txt" "$metadata_dir/"
+            cp "$build_dir/compile_commands.json" "$metadata_dir/"
+            # Compile commands do not reveal implicit ISA/spec defaults. Retain
+            # cc1 switches and binaries so numerical differences can be audited.
+            cp "$build_dir/coverage_replay" "$metadata_dir/"
+            cp "$build_dir/libreplay_planner.a" "$metadata_dir/"
+            readelf -p .GCC.command.line "$build_dir/libreplay_planner.a" \
+              > "$metadata_dir/effective-gcc-switches.txt"
+            objdump -d "$build_dir/coverage_replay" \
+              > "$metadata_dir/replay-disassembly.txt"
+            sha256sum "$build_dir/coverage_replay" "$build_dir/libreplay_planner.a" \
+              > "$metadata_dir/binary-sha256.txt"
+            ldd "$build_dir/coverage_replay" > "$metadata_dir/linked-libraries.txt"
+          }
+          build_variant baseline "$BASELINE_SOURCE/src/coverage_planning.cpp" \
+            "$BASELINE_SOURCE/include" "$BASELINE_SHA" ON "$BASELINE_SOURCE/test"
+          build_variant candidate "$PACKAGE/src/coverage_planning.cpp" \
+            "$PACKAGE/include" "$CANDIDATE_SHA" OFF "$PACKAGE/test"
+
+      - name: Replay identical fixtures and compare evidence
+        env:
+          BASELINE_SHA: ${{ steps.baseline.outputs.sha }}
+          CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          set -eo pipefail
+          source "/opt/ros/${ROS_DISTRO}/setup.bash"
+          set -u
+          export CMAKE_PREFIX_PATH="/opt/fields2cover-300:${CMAKE_PREFIX_PATH:-}"
+          export LD_LIBRARY_PATH="/opt/fields2cover-300/lib:${LD_LIBRARY_PATH:-}"
+          REPO="$GITHUB_WORKSPACE"
+          REPLAY="$REPO/ros2/src/mowgli_coverage/test/replay"
+          ROOT="$RUNNER_TEMP/coverage-replay-artifacts/$BUILD_TYPE"
+          BUILD_ROOT="$RUNNER_TEMP/coverage-replay-build/$BUILD_TYPE"
+          BASELINE_BIN="$BUILD_ROOT/baseline/coverage_replay"
+          CANDIDATE_BIN="$BUILD_ROOT/candidate/coverage_replay"
+          FIXTURE_DIR="$ROOT/fixtures"
+          BASELINE_RESULTS="$ROOT/results/baseline-no-trace"
+          CANDIDATE_RESULTS="$ROOT/results/candidate-no-trace"
+          TRACE_RESULTS="$ROOT/results/candidate-trace"
+          mkdir -p "$FIXTURE_DIR" "$BASELINE_RESULTS" "$CANDIDATE_RESULTS" "$TRACE_RESULTS"
+          python3 - "$REPLAY/run_replay.py" "$CANDIDATE_BIN" "$FIXTURE_DIR" <<'PY'
+          import importlib.util
+          import json
+          import pathlib
+          import sys
+
+          runner_path = pathlib.Path(sys.argv[1])
+          binary = pathlib.Path(sys.argv[2])
+          output = pathlib.Path(sys.argv[3])
+          spec = importlib.util.spec_from_file_location('coverage_run_replay', runner_path)
+          if spec is None or spec.loader is None:
+              raise SystemExit('could not load run_replay.py')
+          runner = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(runner)
+          fixtures = runner.cases(binary)
+          if len(fixtures) != 26:
+              raise SystemExit(f'expected 26 fixtures, got {len(fixtures)}')
+          for name, fixture in fixtures.items():
+              (output / f'{name}.json').write_text(
+                  json.dumps(fixture, indent=2, allow_nan=False) + '\n', encoding='utf-8'
+              )
+          print(f'Wrote {len(fixtures)} shared fixture files; no planner runs performed.')
+          PY
+          mapfile -t FIXTURES < <(find "$FIXTURE_DIR" -maxdepth 1 -type f \
+            -name '*.json' ! -name summary.json -print | LC_ALL=C sort)
+          if [[ "${#FIXTURES[@]}" -ne 26 ]]; then
+            echo "Expected 26 exact fixture files; got ${#FIXTURES[@]}." >&2
+            exit 1
+          fi
+          FIXTURE_ARGS=()
+          for fixture in "${FIXTURES[@]}"; do
+            FIXTURE_ARGS+=(--fixture "$fixture")
+          done
+          python3 "$REPLAY/run_replay.py" --binary "$BASELINE_BIN" \
+            --same-process 5 --processes 3 --no-trace \
+            --output "$BASELINE_RESULTS" "${FIXTURE_ARGS[@]}"
+          python3 "$REPLAY/run_replay.py" --binary "$CANDIDATE_BIN" \
+            --same-process 5 --processes 3 --no-trace \
+            --output "$CANDIDATE_RESULTS" "${FIXTURE_ARGS[@]}"
+          python3 "$REPLAY/run_replay.py" --binary "$CANDIDATE_BIN" \
+            --same-process 20 --processes 5 \
+            --output "$TRACE_RESULTS" "${FIXTURE_ARGS[@]}"
+          python3 "$REPLAY/compare_replay.py" \
+            --baseline-dir "$BASELINE_RESULTS" \
+            --candidate-dir "$CANDIDATE_RESULTS" \
+            --trace-dir "$TRACE_RESULTS" \
+            --environment "$ROOT/environment/environment.json" \
+            --output-json "$ROOT/comparison.json" \
+            --output-markdown "$ROOT/comparison.md" \
+            --expected-cases 26 --expected-runs 15 \
+            --expected-trace-runs 100 --expected-processes 3 \
+            --require-identical
+
+      - name: Upload exact planner replay artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-planner-replay-${{ matrix.build_type }}
+          path: ${{ runner.temp }}/coverage-replay-artifacts/${{ matrix.build_type }}
+          retention-days: 14
+          if-no-files-found: warn

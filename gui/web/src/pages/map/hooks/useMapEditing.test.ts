@@ -10,7 +10,7 @@ interface DeleteDialog {
 }
 const {confirm} = vi.hoisted(() => ({confirm: vi.fn<(dialog: DeleteDialog) => void>()}));
 vi.mock('antd', () => ({App: {useApp: () => ({modal: {confirm}})}}));
-vi.mock('react-i18next', () => ({useTranslation: () => ({t: (key: string) => key})}));
+vi.mock('react-i18next', () => ({useTranslation: () => ({t: (key: string) => key, i18n: {language: 'en'}})}));
 
 describe('map delete confirmation', () => {
     beforeEach(() => confirm.mockClear());
@@ -212,8 +212,28 @@ describe('performSplit re-parents obstacles by where they actually end up', () =
         act(() => {
             hook.result.current.setSelectedFeatureIds([parent.id]);
         });
-        return {hook, parent, obstacle, draw, setFeatures: options.setFeatures as ReturnType<typeof vi.fn>};
+        return {hook, parent, obstacle, draw, notification: options.notification, setFeatures: options.setFeatures as ReturnType<typeof vi.fn>};
     }
+
+    it.each(['split', 'conversion', 'correction'])('refuses a %s that could discard rings from an unsupported draft', action => {
+        const geometry = square(0,0,20,20);
+        if (action !== 'correction') geometry.coordinates.push(square(2,2,4,4).coordinates[0]);
+        const {hook,parent,draw,notification,setFeatures} = setup(geometry,square(10,10,12,12));
+        const before = structuredClone(parent.geometry);
+        if (action === 'split') {
+            act(() => hook.result.current.handleSplit());
+            act(() => hook.result.current.onCreate({features:[{type:'Feature', properties:{}, geometry:{type:'LineString',coordinates:[[5,-1],[5,21]]}}]}));
+            expect(draw.add).not.toHaveBeenCalled();
+        } else {
+            act(() => hook.result.current.setCurMowingAreaFeature({id:parent.id,index:0,name:'Changed',mowing_order:1,orig_mowing_order:1,
+                feature_type:'navigation',orig_feature_type:'workarea',shrink_recorded:false}));
+            const corrected = square(0,0,20,20); corrected.coordinates.push(square(2,2,4,4).coordinates[0]);
+            act(() => hook.result.current.updateMowingArea(action === 'correction' ? corrected : undefined));
+        }
+        expect(setFeatures).not.toHaveBeenCalled(); expect(parent.geometry).toEqual(before);
+        expect(notification.error).toHaveBeenCalledWith({message:'mapFiles.unsupportedGeometry'});
+        expect(notification.success).not.toHaveBeenCalled();
+    });
 
     it("reassigns an obstacle to the new half when the cut leaves it out of the original feature's half", () => {
         // 10x10 square cut at x=5: the segment-hit trace lands the RIGHT half
@@ -279,5 +299,42 @@ describe('performSplit re-parents obstacles by where they actually end up', () =
         updater({[parent.id]: parent, [obstacle.id]: obstacle});
 
         expect(obstacle.getMowingArea()).toBe(parent);
+    });
+});
+
+describe('locally constructed area label properties', () => {
+    function labelsHook() {
+        return renderHook(() => useMapEditing({
+            features: {}, setFeatures: vi.fn(), editMap: false, mowingAreas: [],
+            drawRef: {current: null},
+            notification: {error: vi.fn(), info: vi.fn(), success: vi.fn(), warning: vi.fn(), open: vi.fn(), destroy: vi.fn()},
+            mapInstanceRef: {current: null},
+        }));
+    }
+
+    it('keeps the label text, feature identity and distinct ROS index and stable area ID', () => {
+        const feature = areaFeature('area-label', square(2, 48, 2.00001, 48.00001));
+        feature.setName('  Garden  ');
+        feature.properties.source_working_area_index = 7;
+        feature.properties.source_working_area_id = 42;
+        const hook = labelsHook();
+        const labels = hook.result.current.buildLabels([feature]);
+        expect(labels).toHaveLength(1);
+        expect(labels[0].id).toBe('area-label');
+        expect(labels[0].properties).toEqual({title: 'Garden\n< 1 m²', index: 7, id: 42});
+        expect(labels[0].geometry.type).toBe('Point');
+        expect(feature.getName()).toBe('  Garden  ');
+    });
+
+    it('keeps absent source identifiers and excludes empty areas and non-area features', () => {
+        const feature = areaFeature('unnamed', square(2, 48, 2.00001, 48.00001));
+        const empty = new MowingAreaFeature('empty', 2);
+        const obstacle = new ObstacleFeature('obstacle', feature);
+        const hook = labelsHook();
+        const labels = hook.result.current.buildLabels([feature, empty, obstacle]);
+        expect(labels).toHaveLength(1);
+        expect(labels[0].properties).toEqual({title: 'mapAreasList.unnamedArea\n< 1 m²', index: undefined, id: undefined});
+        expect(Object.prototype.hasOwnProperty.call(labels[0].properties, 'index')).toBe(true);
+        expect(Object.prototype.hasOwnProperty.call(labels[0].properties, 'id')).toBe(true);
     });
 });

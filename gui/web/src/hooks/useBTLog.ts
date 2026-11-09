@@ -1,4 +1,5 @@
 import {useEffect, useRef, useState} from "react";
+import {isJsonObject} from "../utils/json";
 import {useWS} from "./useWS.ts";
 
 export interface BTStatusChange {
@@ -12,9 +13,24 @@ export interface BTLog {
     event_log?: BTStatusChange[];
 }
 
+/** Only fields used by the state projection are required; no UID or timestamp is invented. */
+function decodeStateChanges(raw: unknown): Array<Pick<BTStatusChange, 'node_name' | 'current_status'>> | null {
+    if (!isJsonObject(raw)) return null;
+    if (!('event_log' in raw)) return [];
+    if (!Array.isArray(raw.event_log)) return null;
+    const events: Array<Pick<BTStatusChange, 'node_name' | 'current_status'>> = [];
+    const rawEvents: unknown[] = raw.event_log;
+    for (const event of rawEvents) {
+        if (!isJsonObject(event) || typeof event.node_name !== 'string' || typeof event.current_status !== 'string') return null;
+        events.push({node_name: event.node_name, current_status: event.current_status});
+    }
+    return events;
+}
+
 /** Latest status of a BT node plus when that status was last reported. */
 export interface BTNodeState {
     status: string;
+    /** Browser receipt wall time, not the ROS event timestamp or acquisition time. */
     updatedAt: number;
 }
 
@@ -36,12 +52,13 @@ export const useBTLog = () => {
     const accRef = useRef<Map<string, BTNodeState>>(new Map());
     const throttleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const stream = useWS<string>(() => {}, () => {},
+    const stream = useWS<unknown>(() => {}, () => {},
         (e) => {
-            const msg: BTLog = (e as any);
-            if (msg.event_log) {
+            const events = decodeStateChanges(e);
+            if (!events) return;
+            if (events.length > 0) {
                 const updatedAt = Date.now();
-                for (const ev of msg.event_log) {
+                for (const ev of events) {
                     accRef.current.set(ev.node_name, {status: ev.current_status, updatedAt});
                 }
             }
@@ -54,13 +71,15 @@ export const useBTLog = () => {
             }
         });
 
+    const {start, stop} = stream;
     useEffect(() => {
-        stream.start("/api/mowglinext/subscribe/btLog");
+        start("/api/mowglinext/subscribe/btLog");
         return () => {
-            stream.stop();
+            stop();
             if (throttleRef.current) clearTimeout(throttleRef.current);
+            throttleRef.current = null;
         };
-    }, []);
+    }, [start, stop]);
 
     return nodeStates;
 };

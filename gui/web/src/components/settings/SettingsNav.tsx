@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Badge, Menu, Tabs } from "antd";
 import {
     AimOutlined,
+    ApiOutlined,
     BgColorsOutlined,
     BulbOutlined,
     CloudOutlined,
@@ -27,6 +28,7 @@ import { SettingsSection, SectionMeta } from "../../hooks/useSettingsManager.ts"
 
 const SECTION_ICONS: Record<string, React.ReactNode> = {
     "bg-colors": <BgColorsOutlined />,
+    api: <ApiOutlined />,
     bulb: <BulbOutlined />,
     tool: <ToolOutlined />,
     dashboard: <DashboardOutlined />,

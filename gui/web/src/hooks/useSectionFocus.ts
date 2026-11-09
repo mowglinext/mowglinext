@@ -6,7 +6,7 @@ export function useSectionFocus(ref: RefObject<HTMLElement | null>, context: str
         const section = ref.current;
         if (!section || !ready) return;
         for (let parent = section.parentElement; parent; parent = parent.parentElement) {
-            if (parent.tagName === 'MAIN' || parent.hasAttribute('data-step-scroll')) parent.scrollTop = 0;
+            if (parent.tagName === 'MAIN' || parent.hasAttribute('data-step-scroll')) parent.scrollTo({top: 0, behavior: 'instant'});
         }
         section.focus({preventScroll: true});
     }, [context, ready, ref]);

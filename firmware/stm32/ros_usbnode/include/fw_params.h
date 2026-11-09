@@ -1,14 +1,16 @@
 /* SPDX-License-Identifier: GPL-3.0 */
 /**
  * @file fw_params.h
- * @brief Runtime parameter table: values, host protocol (protocol v7), flash
+ * @brief Runtime parameter table: values, host protocol (protocol v8), flash
  *        persistence.
  *
  * Lifecycle:
  *   1. fw_params_init() — at boot, BEFORE the window watchdog is armed: seeds
- *      every parameter with its compiled default, then overlays the newest
- *      valid record from the flash log. Erases (and rewrites) the log here if it
- *      is full or holds foreign data, because only here may erasing block.
+ *      every parameter with its compiled default, consumes an explicitly
+ *      armed reset marker if present, then overlays the newest valid record
+ *      from the flash log. A full or unappendable log with a valid record is
+ *      retained and reports LOG_FULL. The only other erase is recovery of
+ *      invalid data when no valid record exists.
  *   2. init_ROS() applies every group to the subsystems, so a board that never
  *      hears from the host still runs the persisted values.
  *   3. SET_PARAM (USB RX interrupt) -> fw_params_set(): coerce into the
@@ -17,6 +19,11 @@
  *      interrupt.
  *   4. PARAM_COMMIT -> fw_params_request_commit(); fw_params_service() (main
  *      loop) encodes the persistent set and programs it one word per call.
+ *   5. PARAM_STORE_RESET (USB RX interrupt) -> fw_params_request_reset() only
+ *      queues a request. fw_params_service() writes a request-id marker to
+ *      RTC backup registers; flash is erased only on the following boot,
+ *      before the watchdog, and the marker is cleared only after erase
+ *      verification. Commits are blocked while an accepted marker remains.
  */
 #ifndef FW_PARAMS_H
 #define FW_PARAMS_H
@@ -50,6 +57,12 @@ void fw_params_request_report(uint16_t id);
 
 /** Ask for the current set to be persisted (interrupt-safe). */
 void fw_params_request_commit(void);
+
+/** Queue an explicit next-boot reset request; zero ID and replayed IDs fail. */
+uint8_t fw_params_request_reset(uint32_t request_id);
+
+/** Report an invalid, unsafe, replayed, or conflicting reset request. */
+void fw_params_report_reset_rejected(void);
 
 /**
  * Main-loop service: runs a pending commit (encode + one flash word per call)

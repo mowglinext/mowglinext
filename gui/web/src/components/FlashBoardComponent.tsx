@@ -1,5 +1,5 @@
 import {Alert, App, Button, Col, Collapse, Row, Typography} from "antd";
-import {useEffect, useMemo, useRef, useState} from "react";
+import {useEffect, useEffectEvent, useMemo, useRef, useState} from "react";
 import {fetchEventSource} from "@microsoft/fetch-event-source";
 import {createSchemaField} from "@formily/react";
 import {
@@ -25,8 +25,11 @@ import {
 } from "./firmwareModelDefaults.ts";
 import {PANEL_OPTIONS, VERMUT_BOARD, boardOptionsForModel, hasPrebuiltFirmware} from "./firmwareTargets.ts";
 import {FlashProgressView} from "./FlashProgressView.tsx";
+import {flashActionBarStyle, type FlashBoardVariant} from "./flashActionBar.ts";
 import {parseFlashStage, type FlashStage} from "./flashStage.ts";
 import {FlashTargetSummary} from "./FlashTargetSummary.tsx";
+import {isAbortError} from "../utils/errors";
+import type {SettingsValues} from "../types/settings.generated";
 
 const SchemaField = createSchemaField({
     components: {
@@ -37,6 +40,12 @@ const SchemaField = createSchemaField({
         NumberPicker,
     },
 })
+// A config saved by an earlier GUI: the firmware selection, plus the fields the loader maps or
+// ignores. Parsed from JSON, so every field is optional.
+type SavedFirmwareConfig = FirmwareSelection & Record<string, unknown> & {
+    firmwareSource?: string,
+    expertBuild?: boolean,
+}
 type Config = {
     repository: string
     branch: string
@@ -73,7 +82,12 @@ type Config = {
     firmwareSelectionModel?: string
 }
 
-export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: string }) => {
+export const FlashBoardComponent = (props: {
+    onNext: () => void;
+    mowerModel?: string;
+    variant?: FlashBoardVariant;
+}) => {
+    const inModal = props.variant === "modal";
     const isMobile = useIsMobile();
     const {colors} = useThemeMode();
     const {t} = useTranslation();
@@ -144,9 +158,13 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
         mowerModelRef.current = props.mowerModel;
     }, [props.mowerModel]);
 
+    const reportLoadError = useEffectEvent((error: unknown) => {
+        notification.error({message: t('flashBoard.errorRetrievingConfig'), description: String(error)});
+    });
+
     useEffect(() => {
         let disposed = false;
-        (async () => {
+        void (async () => {
             try {
                 // Keep the existing firmware-config read independent from the
                 // settings read: a settings endpoint failure must not prevent
@@ -155,7 +173,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 let configuredModel: string | undefined;
                 try {
                     const settings = await guiApi.settings.yamlList();
-                    configuredModel = settings.data?.mower_model;
+                    configuredModel = (settings.data as SettingsValues | undefined)?.mower_model;
                 } catch {
                     // Model inference is best-effort; the normal manual form
                     // remains available if settings cannot be read.
@@ -165,7 +183,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 const model = mowerModelRef.current ?? configuredModel;
                 setConfiguredMowerModel(model);
                 if (jsonConfig) {
-                    const saved = JSON.parse(jsonConfig)
+                    const saved = JSON.parse(jsonConfig) as SavedFirmwareConfig
                     // Back-compat: a config saved before the Firmware source
                     // dropdown existed only carried `expertBuild`. Map it so a
                     // returning user's custom-build choice stays preselected.
@@ -214,11 +232,8 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     applyingModelDefaultsRef.current = false;
                 }
                 initializedModelRef.current = true;
-            } catch (e: any) {
-                notification.error({
-                    message: t('flashBoard.errorRetrievingConfig'),
-                    description: e.toString(),
-                });
+            } catch (e) {
+                reportLoadError(e);
             }
         })()
         return () => {
@@ -227,7 +242,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                 abortControllerRef.current.abort();
             }
         };
-    }, []);
+    }, [form, guiApi.config, guiApi.settings]);
 
     // The onboarding wizard keeps the selected mower model in local state. If
     // it changes while this step is mounted, update only fields still following
@@ -333,7 +348,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     setIsFlashing(false);
                 },
                 onerror(err) {
-                    setFlashError(err.toString());
+                    setFlashError(String(err));
                     // Re-throw to stop fetch-event-source's automatic retry.
                     // Otherwise the library re-POSTs on any stream error and
                     // relaunches the flash; we surface the error in the UI and
@@ -341,9 +356,9 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     throw err;
                 },
             });
-        } catch (e: any) {
-            if (e.name !== 'AbortError') {
-                setFlashError(e.toString());
+        } catch (e) {
+            if (!isAbortError(e)) {
+                setFlashError(String(e));
             }
         } finally {
             // Belt-and-braces: whatever path ended the stream (end event,
@@ -407,7 +422,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
             cancelText: t('flashBoard.cancel'),
             onOk: () => {
                 confirmModal.destroy();
-                doFlashFirmware(payload);
+                void doFlashFirmware(payload);
             },
         });
     };
@@ -427,6 +442,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     setStage(null);
                 }}
                 onNext={props.onNext}
+                inModal={inModal}
             />
         );
     }
@@ -434,7 +450,9 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
     // Show config form
     return <Form form={form}>
         <Row>
-            <Col span={24} style={{height: isMobile ? "auto" : "55vh", overflowY: isMobile ? undefined : "auto", paddingBottom: isMobile ? 80 : undefined}}>
+            <Col span={24} style={inModal
+                ? {maxHeight: "60vh", overflowY: "auto"}
+                : {height: isMobile ? "auto" : "55vh", overflowY: isMobile ? undefined : "auto", paddingBottom: isMobile ? 80 : undefined}}>
                 <FormLayout layout="vertical">
                     {!showTargetPicker && (
                         <FlashTargetSummary
@@ -741,16 +759,7 @@ export const FlashBoardComponent = (props: { onNext: () => void; mowerModel?: st
                     />
                 </FormLayout>
             </Col>
-            <Col span={24} style={{
-                position: "fixed",
-                bottom: isMobile ? 'calc(56px + env(safe-area-inset-bottom, 0px))' : 20,
-                left: isMobile ? 0 : undefined,
-                right: isMobile ? 0 : undefined,
-                padding: isMobile ? '8px 12px' : undefined,
-                background: isMobile ? colors.bgCard : undefined,
-                borderTop: isMobile ? `1px solid ${colors.border}` : undefined,
-                zIndex: 50,
-            }}>
+            <Col span={24} data-testid="flash-actions" style={flashActionBarStyle(inModal, isMobile, colors)}>
                 <div style={{width: "100%"}}>
                     {!isTargetComplete && (
                         <Alert

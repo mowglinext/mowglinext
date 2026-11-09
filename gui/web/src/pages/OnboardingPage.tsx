@@ -1,5 +1,6 @@
+import {NumberWithAddon} from '../components/inputs/NumberWithAddon';
 import {useSectionFocus} from "../hooks/useSectionFocus.ts";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -23,7 +24,7 @@ import { useImuYawCalibration } from "../hooks/useImuYawCalibration.ts";
 import { useFirmwareStatus } from "../hooks/useFirmwareStatus.ts";
 import { GnssStatusConstants } from "../types/ros.ts";
 import { CompassOutlined } from "@ant-design/icons";
-import { deriveGpsStatus, gnssReceiverLabel, isGnssFixType } from "../utils/gpsStatus.ts";
+import { deriveGpsStatus, currentCorrectionStreamStatus, gnssReceiverLabel } from "../utils/gpsStatus.ts";
 import { ReadinessStep } from "../components/onboarding/ReadinessStep.tsx";
 import {
     STEP_FIRMWARE, STEP_NTRIP, STEP_GPS, STEP_DATUM,
@@ -32,6 +33,9 @@ import {
 import { RobotComponentEditor } from "../components/RobotComponentEditor.tsx";
 import { FlashBoardComponent } from "../components/FlashBoardComponent.tsx";
 import { MOWER_MODELS } from "../constants/mowerModels.ts";
+import {HardwareBackendCard} from "../components/settings/HardwareBackendCard";
+import { presetValuesForBackend } from "../constants/hardwareBackends.ts";
+import { useHardwareBackend } from "../hooks/useHardwareBackend.ts";
 import {
     restartGps,
     GPS_RESTART_KEYS,
@@ -56,6 +60,10 @@ import { GnssReceiverActionsCard } from "../components/settings/GnssReceiverActi
 import { NtripSection } from "../components/settings/NtripSection.tsx";
 import { GnssLiveStatusSummaryCard } from "../components/gnss/GnssLiveStatusSummaryCard.tsx";
 import { GnssSerialDeviceConfigField } from "../components/settings/GnssSerialDeviceConfigField.tsx";
+import type {SettingsValues} from "../types/settings.generated";
+import {requestErrorMessage} from "../utils/errors";
+import {isJsonObject} from "../utils/json";
+import {voidify} from "../utils/promises";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -136,22 +144,27 @@ const WelcomeStep: React.FC<{ onNext: () => void }> = ({ onNext }) => {
 // ── Step 1: Robot Model ─────────────────────────────────────────────────
 
 type RobotModelStepProps = {
-    values: Record<string, any>;
-    onChange: (key: string, value: any) => void;
+    values: SettingsValues;
+    onChange: (key: string, value: unknown) => void;
 };
 
 // MOWER_MODELS imported from constants/mowerModels.ts
 
 const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
     const { t } = useTranslation();
+    // A model preset describes the machine; keys the hardware backend
+    // overrides (an OpenMower xESC's ticks per metre) take its default.
+    const hardwareInfo = useHardwareBackend();
+    const { defaultOverrides, loading: backendLoading, authority, presetsAvailable } = hardwareInfo;
     const { colors } = useThemeMode();
     const selectedModel = values.mower_model || "YardForce500";
 
     const handleModelSelect = (model: string) => {
+        if (authority !== "confirmed" || !presetsAvailable) return;
         onChange("mower_model", model);
         const preset = MOWER_MODELS.find((m) => m.value === model);
         if (preset?.defaults) {
-            for (const [k, v] of Object.entries(preset.defaults)) {
+            for (const [k, v] of Object.entries(presetValuesForBackend(preset.defaults, defaultOverrides))) {
                 onChange(k, v);
             }
         }
@@ -161,10 +174,12 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
     // user who never taps a card leaves with mower_model unset (no preset
     // applied) even though the YardForce 500 card looks selected. We persist the
     // default so the highlighted card and the saved value always agree.
+    // Waits for the backend: applied earlier, the preset would write the
+    // STM32 ticks_per_meter on an OpenMower robot.
     useEffect(() => {
-        if (!values.mower_model) handleModelSelect("YardForce500");
+        if (!backendLoading && authority === "confirmed" && presetsAvailable && !values.mower_model) handleModelSelect("YardForce500");
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [backendLoading, authority, presetsAvailable]);
 
     return (
         <div style={{ maxWidth: 760, margin: "0 auto" }}>
@@ -191,6 +206,7 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                 </Form.Item>
             </Form>
 
+            {(authority !== 'confirmed' || !presetsAvailable) && <HardwareBackendCard info={hardwareInfo} />}
             <Row gutter={[12, 12]} role="radiogroup" aria-label={t("onboardingPage.robotModelTitle")}>
                 {MOWER_MODELS.map((model) => {
                     const isSelected = selectedModel === model.value;
@@ -250,31 +266,31 @@ const RobotModelStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => 
                         <Row gutter={[16, 0]}>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-wheel_radius" data-setting-key="wheel_radius" label={t("onboardingPage.wheelRadiusLabel")} tooltip={t("onboardingPage.wheelRadiusTooltip")}>
-                                    <InputNumber id="setting-wheel_radius"
+                                    <NumberWithAddon id="setting-wheel_radius"
                                         value={values.wheel_radius ?? 0.04475}
                                         onChange={(v) => onChange("wheel_radius", v)}
                                         step={0.001} precision={5} style={{ width: "100%" }}
-                                        addonAfter="m"
+                                        after="m"
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-wheel_track" data-setting-key="wheel_track" label={t("onboardingPage.wheelTrackLabel")} tooltip={t("onboardingPage.wheelTrackTooltip")}>
-                                    <InputNumber id="setting-wheel_track"
+                                    <NumberWithAddon id="setting-wheel_track"
                                         value={values.wheel_track ?? 0.325}
                                         onChange={(v) => onChange("wheel_track", v)}
                                         step={0.001} precision={3} style={{ width: "100%" }}
-                                        addonAfter="m"
+                                        after="m"
                                     />
                                 </Form.Item>
                             </Col>
                             <Col xs={12} sm={8}>
                                 <Form.Item htmlFor="setting-blade_radius" data-setting-key="blade_radius" label={t("onboardingPage.bladeRadiusLabel")} tooltip={t("onboardingPage.bladeRadiusTooltip")}>
-                                    <InputNumber id="setting-blade_radius"
+                                    <NumberWithAddon id="setting-blade_radius"
                                         value={values.blade_radius ?? 0.09}
                                         onChange={(v) => onChange("blade_radius", v)}
                                         step={0.01} precision={3} style={{ width: "100%" }}
-                                        addonAfter="m"
+                                        after="m"
                                     />
                                 </Form.Item>
                             </Col>
@@ -307,7 +323,7 @@ const NtripStep: React.FC<RobotModelStepProps> = ({ values, onChange }) => {
 
 type GpsStepProps = RobotModelStepProps & {
     gpsRestarting?: boolean;
-    onPersistGnssSettings: (settings: Record<string, any>) => Promise<boolean>;
+    onPersistGnssSettings: (settings: SettingsValues) => Promise<boolean>;
     onJumpToNtrip: () => void;
 };
 
@@ -320,7 +336,7 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
     // A typo'd NTRIP credential otherwise reads as "GPS FIX" forever with no
     // explanation — surface whether RTCM corrections are actually flowing.
     const correctionsActive =
-        gnssStatus?.correction_stream_status === GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE;
+        currentCorrectionStreamStatus(gnssStatus) === GnssStatusConstants.CORRECTION_STREAM_STATUS_ACTIVE;
     const selectedSignalProfile = normalizeGnssSignalProfile(values.gnss_signal_profile);
     const selectedExecutionBaud = (() => {
         const value = normalizeGnssString(values.gnss_execution_baud).toLowerCase();
@@ -332,13 +348,15 @@ const GpsStep: React.FC<GpsStepProps> = ({ values, onChange, gpsRestarting, onPe
             ? "warning"
             : "info";
     const persistCurrentGnssSettings = async () => {
-        const partial: Record<string, any> = {};
+        // Copied key by key from one SettingsValues into another, so the per-key types line up at
+        // runtime; the loop's `key` is a union of names, which TypeScript cannot index with.
+        const partial: Record<string, unknown> = {};
         for (const key of GNSS_ACTION_SETTINGS_KEYS) {
             if (Object.prototype.hasOwnProperty.call(values, key)) {
                 partial[key] = values[key];
             }
         }
-        return onPersistGnssSettings(partial);
+        return onPersistGnssSettings(partial as SettingsValues);
     };
     // The sidecar runtime baud and the target receiver config baud should stay
     // aligned for normal operation. The separate execution/probing baud lives
@@ -601,27 +619,32 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting, 
     const [datumLoading, setDatumLoading] = useState(false);
 
     const gnssStatus = useGnssStatus();
-    const fixType = gnssStatus.fix_type ?? GnssStatusConstants.FIX_TYPE_NO_FIX;
-    const isRtkFixed = isGnssFixType(fixType, GnssStatusConstants.FIX_TYPE_RTK_FIXED);
-    const isRtkFloat = isGnssFixType(fixType, GnssStatusConstants.FIX_TYPE_RTK_FLOAT);
-    const isPlainFix = isGnssFixType(fixType, GnssStatusConstants.FIX_TYPE_GPS_FIX);
-    const fixLabel = isRtkFixed ? "RTK FIX" : isRtkFloat ? "RTK FLOAT" : isPlainFix ? "GPS FIX" : t("onboardingPage.noFix");
+    const gpsStatus = deriveGpsStatus(gnssStatus);
+    const isRtkFixed = gpsStatus.fixType === "RTK_FIX";
+    const isRtkFloat = gpsStatus.fixType === "RTK_FLOAT";
+    const fixLabel = gpsStatus.label;
 
     const setDatumFromGps = async () => {
         setDatumLoading(true);
         try {
             const res = await guiApi.mowglinext.callCreate("set_datum", {});
-            if (res.error) throw new Error(res.error.error);
-            const msg: string = (res.data as any)?.message ?? "";
-            const parts = msg.split(",");
-            if (parts.length === 2) {
-                onChange("datum_lat", parseFloat(parts[0]));
-                onChange("datum_lon", parseFloat(parts[1]));
-            }
-        } catch (e: any) {
+            if (!res.ok || res.error) throw new Error(requestErrorMessage(res) ?? t("onboardingPage.datumSetFailedDesc"));
+            const raw: unknown = res.data;
+            if (!isJsonObject(raw) || typeof raw.message !== "string" || "error" in raw
+                || ("success" in raw && raw.success !== true)) throw new Error(t("onboardingPage.datumSetFailedDesc"));
+            const parts = raw.message.split(",");
+            const decimal = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+            if (parts.length !== 2 || !parts.every(part => decimal.test(part.trim()))
+                || parts.some(part => Number(part) === 0 && /[1-9]/.test(part.split(/[eE]/)[0]))) throw new Error(t("onboardingPage.datumSetFailedDesc"));
+            const lat = Number(parts[0]);
+            const lon = Number(parts[1]);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new Error(t("onboardingPage.datumSetFailedDesc"));
+            onChange("datum_lat", lat);
+            onChange("datum_lon", lon);
+        } catch (e) {
             notification.error({
                 message: t("onboardingPage.datumSetFailedTitle"),
-                description: e.message || t("onboardingPage.datumSetFailedDesc"),
+                description: (typeof e === "string" ? e : requestErrorMessage(e)) || t("onboardingPage.datumSetFailedDesc"),
             });
         } finally {
             setDatumLoading(false);
@@ -674,7 +697,7 @@ const DatumStep: React.FC<DatumStepProps> = ({ values, onChange, gpsRestarting, 
                     <Button
                         icon={<AimOutlined />}
                         loading={datumLoading || gpsRestarting}
-                        onClick={setDatumFromGps}
+                        onClick={voidify(setDatumFromGps)}
                         disabled={!isRtkFixed || gpsRestarting}
                         style={{ marginTop: -8 }}
                     >
@@ -757,7 +780,7 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
             onChange(key, value);
             // Dock pose is persisted server-side into mowgli_robot.yaml; refresh
             // the status panel so the operator sees the updated dock pose card.
-            refreshCalibrationStatus();
+            void refreshCalibrationStatus();
         },
         currentImuYawRad: values.imu_yaw,
     });
@@ -821,7 +844,7 @@ const ImuYawStep: React.FC<RobotModelStepProps> = ({values, onChange}) => {
                     type="primary"
                     size="large"
                     icon={<CompassOutlined/>}
-                    onClick={startCalibration}
+                    onClick={voidify(startCalibration)}
                     loading={calibRunning}
                     disabled={calibRunning}
                 >
@@ -951,7 +974,11 @@ const FirmwareStep: React.FC<{ onNext: () => void; autoFlash?: boolean; mowerMod
                 style={{ marginBottom: 24, textAlign: "left" }}
             />
 
-            <Space size="middle">
+            <Space
+                size="middle"
+                wrap
+                style={{display: "flex", justifyContent: "center", width: "100%"}}
+            >
                 <Button type="primary" size="large" onClick={() => setShowFlash(true)}>
                     {t("onboardingPage.flashFirmware")}
                 </Button>
@@ -1046,7 +1073,7 @@ const OnboardingWizard: React.FC = () => {
     const [currentStep, setCurrentStep] = useState(deepLinkFirmware ? STEP_FIRMWARE : 0);
     const stepRef = useRef<HTMLDivElement>(null);
     useSectionFocus(stepRef, currentStep);
-    const [localValues, setLocalValues] = useState<Record<string, any>>({});
+    const [localValues, setLocalValues] = useState<SettingsValues>({});
     const [saving, setSaving] = useState(false);
     const gpsRestart = useContainerRestart({
         pendingLabel: t('onboardingPage.gpsRestarting'),
@@ -1058,7 +1085,7 @@ const OnboardingWizard: React.FC = () => {
     // Snapshot of saved GPS-related values at the time the user enters
     // step 2 — used to detect whether the GPS container needs an auto-
     // restart when leaving the step.
-    const gpsSnapshotRef = useRef<Record<string, any> | null>(null);
+    const gpsSnapshotRef = useRef<SettingsValues | null>(null);
 
     useEffect(() => {
         if (savedValues) {
@@ -1066,13 +1093,19 @@ const OnboardingWizard: React.FC = () => {
         }
     }, [savedValues]);
 
+    // Capture the committed draft only on step entry; edits within this step
+    // must not replace the comparison baseline used to decide a GPS restart.
+    const snapshotGpsOnEntry = useEffectEvent(() => {
+        const snap: SettingsValues = {};
+        for (const k of GPS_RESTART_KEYS) snap[k] = localValues[k];
+        gpsSnapshotRef.current = snap;
+    });
+
     // Snapshot GPS-affecting fields whenever the user enters the GPS step,
     // so we can compare on Next and decide whether to auto-restart mowgli-gps.
     useEffect(() => {
         if (currentStep === STEP_GPS) {
-            const snap: Record<string, any> = {};
-            for (const k of GPS_RESTART_KEYS) snap[k] = localValues[k];
-            gpsSnapshotRef.current = snap;
+            snapshotGpsOnEntry();
         }
     }, [currentStep]);
 
@@ -1080,7 +1113,7 @@ const OnboardingWizard: React.FC = () => {
     // origin — DatumStep reads it to show an inline required-field error.
     const [datumError, setDatumError] = useState(false);
 
-    const handleChange = useCallback((key: string, value: any) => {
+    const handleChange = useCallback((key: string, value: unknown) => {
         setLocalValues((prev) => ({ ...prev, [key]: value }));
     }, []);
 
@@ -1116,8 +1149,11 @@ const OnboardingWizard: React.FC = () => {
             (currentStep >= STEP_NTRIP && currentStep <= STEP_CALIBRATION);
         if (isConfigStep) {
             setSaving(true);
-            await saveValues(localValues);
-            setSaving(false);
+            try {
+                if (!await saveValues(localValues)) return;
+            } finally {
+                setSaving(false);
+            }
         }
         // Leaving the GPS step: if any GPS/NTRIP/serial field actually
         // changed vs the snapshot taken on entry, bounce the GPS container
@@ -1139,6 +1175,10 @@ const OnboardingWizard: React.FC = () => {
         setCurrentStep((s) => Math.min(s + 1, STEP_TITLES.length - 1));
     }, [currentStep, localValues, saveValues, guiApi, gpsRestart, notification, t]);
 
+    // Construct the async adapter only when invoked, never by inspecting the
+    // ref-bearing GPS transition callback during render.
+    const onNext = () => { voidify(handleNext)(); };
+
     const handlePrev = useCallback(() => {
         setCurrentStep((s) => Math.max(s - 1, 0));
     }, []);
@@ -1151,9 +1191,9 @@ const OnboardingWizard: React.FC = () => {
 
     const stepContent = (
         <div ref={stepRef} tabIndex={-1} role="region" aria-label={t(STEP_TITLES[currentStep])}>
-            {currentStep === 0 && <WelcomeStep onNext={handleNext} />}
+            {currentStep === 0 && <WelcomeStep onNext={onNext} />}
             {currentStep === 1 && <RobotModelStep values={localValues} onChange={handleChange} />}
-            {currentStep === 2 && <FirmwareStep onNext={handleNext} autoFlash={autoFlash} mowerModel={localValues.mower_model} />}
+            {currentStep === 2 && <FirmwareStep onNext={onNext} autoFlash={autoFlash} mowerModel={localValues.mower_model} />}
             {currentStep === 3 && <NtripStep values={localValues} onChange={handleChange} />}
             {currentStep === 4 && (
                 <GpsStep
@@ -1195,7 +1235,7 @@ const OnboardingWizard: React.FC = () => {
                 <Button
                     type="primary"
                     icon={currentStep === STEP_DATUM ? <SaveOutlined /> : <ArrowRightOutlined />}
-                    onClick={handleNext}
+                    onClick={onNext}
                     loading={saving || loading || gpsRestarting}
                 >
                     {gpsRestarting

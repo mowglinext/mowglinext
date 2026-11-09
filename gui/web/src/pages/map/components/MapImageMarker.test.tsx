@@ -1,5 +1,5 @@
 import React from "react";
-import {fireEvent, render, screen, waitFor} from "@testing-library/react";
+import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
 import {beforeEach, describe, expect, it, vi} from "vitest";
 import type {MapImageAppearance} from "../../../constants/mowerAppearances.ts";
 import {MapImageMarker} from "./MapImageMarker.tsx";
@@ -93,16 +93,29 @@ describe("MapImageMarker", () => {
         }
     });
 
-    it("recalculates physical size after map move and resize and cleans up both listeners", () => {
+    it("recalculates physical size after map move and resize and cleans up both listeners", async () => {
         const {unmount} = renderMarker();
         const marker = screen.getByTestId("map-marker");
         const firstSize = Number.parseFloat(marker.style.width);
-        testMap.scale = 20;
-        for (const event of ["move", "resize"]) {
-            for (const handler of testMap.handlers.get(event) ?? []) handler();
-        }
+        expect(Number.isFinite(firstSize)).toBe(true);
+        expect(firstSize).toBeGreaterThan(0);
+        await act(async () => {
+            testMap.scale = 20;
+            for (const handler of testMap.handlers.get("move") ?? []) handler();
+            await Promise.resolve();
+        });
         const updatedSize = Number.parseFloat(screen.getByTestId("map-marker").style.width);
         expect(updatedSize).toBeCloseTo(firstSize * 2);
+        // Compare ratios: absolute pixel tolerances dwarf these tiny mock dimensions.
+        // Six decimal places tolerate floating-point projection noise, not a missed update.
+        expect(updatedSize / firstSize).toBeCloseTo(2, 6);
+        await act(async () => {
+            testMap.scale = 30;
+            for (const handler of testMap.handlers.get("resize") ?? []) handler();
+            await Promise.resolve();
+        });
+        const resizedSize = Number.parseFloat(screen.getByTestId("map-marker").style.width);
+        expect(resizedSize / firstSize).toBeCloseTo(3, 6);
         unmount();
         expect(testMap.off).toHaveBeenCalledTimes(2);
         expect(testMap.handlers.get("move")?.size).toBe(0);

@@ -1,4 +1,4 @@
-import {createContext, useCallback, useContext, useEffect, useMemo, useState} from "react";
+import {createContext, useContext} from "react";
 import {
     DEFAULT_TIME_ZONE_MODE,
     formatAbsoluteTimestamp,
@@ -25,7 +25,7 @@ function isTimeZoneMode(value: string | null): value is TimeZoneMode {
     return value !== null && (TIME_ZONE_MODES as readonly string[]).includes(value);
 }
 
-function readTimeZoneMode(): TimeZoneMode {
+export function readTimeZoneMode(): TimeZoneMode {
     try {
         const stored = window.localStorage.getItem(LOG_TIME_ZONE_STORAGE_KEY);
         return isTimeZoneMode(stored) ? stored : DEFAULT_TIME_ZONE_MODE;
@@ -35,7 +35,7 @@ function readTimeZoneMode(): TimeZoneMode {
     }
 }
 
-interface TimeFormatContextValue {
+export interface TimeFormatContextValue {
     timeZoneMode: TimeZoneMode;
     setTimeZoneMode: (mode: TimeZoneMode) => void;
     /** Short label for the badge: 'UTC' or the browser's IANA zone name. */
@@ -49,51 +49,13 @@ interface TimeFormatContextValue {
     ) => string;
 }
 
-const TimeFormatContext = createContext<TimeFormatContextValue>({
+export const TimeFormatContext = createContext<TimeFormatContextValue>({
     timeZoneMode: DEFAULT_TIME_ZONE_MODE,
     setTimeZoneMode: () => { /* no-op outside the provider */ },
     zoneLabel: resolvedZoneLabel(DEFAULT_TIME_ZONE_MODE),
     formatLogTime: (epochMs, options) => formatLogTimestamp(epochMs, DEFAULT_TIME_ZONE_MODE, options),
     formatAbsolute: (value, options) => formatAbsoluteTimestamp(value, DEFAULT_TIME_ZONE_MODE, options),
 });
-
-export function TimeFormatProvider({children}: {children: React.ReactNode}) {
-    const [timeZoneMode, setTimeZoneMode] = useState<TimeZoneMode>(readTimeZoneMode);
-
-    useEffect(() => {
-        try {
-            window.localStorage.setItem(LOG_TIME_ZONE_STORAGE_KEY, timeZoneMode);
-        } catch {
-            // Storage rejected — the choice still applies for this session.
-        }
-    }, [timeZoneMode]);
-
-    const formatLogTime = useCallback(
-        (epochMs: number, options?: FormatLogTimestampOptions) =>
-            formatLogTimestamp(epochMs, timeZoneMode, options),
-        [timeZoneMode],
-    );
-
-    const formatAbsolute = useCallback(
-        (value: string | number | Date | null | undefined, options?: FormatLogTimestampOptions) =>
-            formatAbsoluteTimestamp(value, timeZoneMode, options),
-        [timeZoneMode],
-    );
-
-    const value = useMemo<TimeFormatContextValue>(() => ({
-        timeZoneMode,
-        setTimeZoneMode,
-        zoneLabel: resolvedZoneLabel(timeZoneMode),
-        formatLogTime,
-        formatAbsolute,
-    }), [timeZoneMode, formatLogTime, formatAbsolute]);
-
-    return (
-        <TimeFormatContext.Provider value={value}>
-            {children}
-        </TimeFormatContext.Provider>
-    );
-}
 
 export function useTimeFormat(): TimeFormatContextValue {
     return useContext(TimeFormatContext);
