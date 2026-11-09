@@ -359,6 +359,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_one_hz_readers fusion_graph_core)
 
+  ament_add_gtest(test_window_prior_tree
+    test/test_window_prior_tree.cpp
+  )
+  target_link_libraries(test_window_prior_tree fusion_graph_core)
+
   # Synthetic mowing-session benchmark (not a test; run by hand, see
   # tools/bench/CMakeLists.txt for the ROS-free standalone build).
   add_executable(bench_graph_session tools/bench/bench_graph_session.cpp)

@@ -327,6 +327,7 @@ try
   auto pin_noise = MakeDiagonal({0.01, 0.01, 0.01});
   gtsam::NonlinearFactorGraph fg;
   gtsam::Values kept_values;
+  std::vector<gtsam::PriorFactor<gtsam::Pose2>> pose_priors;
   for (const auto& key_value : loaded_values)
   {
     const gtsam::Symbol sym(key_value.key);
@@ -339,11 +340,10 @@ try
       continue;
     if (cutoff > 0 && sym.index() < cutoff)
       continue;  // older than the window — drop (its info was already in priors)
-    fg.add(gtsam::PriorFactor<gtsam::Pose2>(key_value.key,
-                                            key_value.value.cast<gtsam::Pose2>(),
-                                            pin_noise));
+    pose_priors.emplace_back(key_value.key, key_value.value.cast<gtsam::Pose2>(), pin_noise);
     kept_values.insert(key_value.key, key_value.value);
   }
+  AddPosePriorTree(fg, pose_priors, kWindowPlainPriors);
   auto restored = isam_;
   restored.update(fg, kept_values);
   isam_ = std::move(restored);
