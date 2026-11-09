@@ -155,6 +155,9 @@ private:
   rclcpp_action::Client<UndockAction>::SharedPtr action_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
+  /// Set by onHalted() so a goal the server accepts afterwards is cancelled
+  /// (cancel_goal.hpp); a fresh one per goal.
+  std::shared_ptr<GoalAbandonment> goal_abandonment_;
 
   /// See DockRobot::outcome_ — same race, same guard (action_outcome.hpp).
   std::shared_ptr<ActionOutcomeSlot> outcome_ = std::make_shared<ActionOutcomeSlot>();
