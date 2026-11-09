@@ -189,6 +189,8 @@ public:
     }
 
     precision_support_ = std::make_shared<PrecisionCoverageSupport>();
+    // Injected by full_system.launch.py: lidar_enabled AND use_lidar_map_anchor.
+    precision_support_->SetLidarMapMode(declare_parameter<bool>("precision_lidar_map_mode", false));
     context_->coverage_precision_ready = [this]()
     {
       const auto ros_now = now();
