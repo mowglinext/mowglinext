@@ -76,30 +76,32 @@ Règles valables pour chaque étape de ce guide :
 |---|---|---|
 | YardForce Classic 500 | STM32F103 | Primary target — everything in this manual was field-tested on it |
 | YardForce 500B | STM32F401 | Supported — different blade-motor UART and panel, own firmware build |
+| YardForce NX100i | STM32F401 | Supported — same mainboard as the 500B, own firmware build; LCD panel and hood ultrasonics not yet |
 | YardForce SA650 | STM32F103 | Supported |
 | YardForce 900 ECO | STM32F103 | Supported |
 | YardForce LUV1000RI | — | Preset exists, **no firmware build yet** (pinout unknown) |
 | Sabo MOWiT 500F | — | Supported (YardForce rebrand) |
 | Custom robot | — | Every chassis parameter entered by hand |
 
-**How to tell a 500 from a 500B:** the 500B has the newer panel with a keypad and a display of LEDs; on the mainboard the MCU marking reads STM32F401 instead of STM32F103. When in doubt, read the chip.
+**How to tell a 500 from a 500B:** the 500B has the newer panel with a keypad and a display of LEDs; on the mainboard the MCU marking reads STM32F401 instead of STM32F103. When in doubt, read the chip. The **NX100i** has an LCD + 18-button panel in the hood; its STM32F401 may have the marking sanded off — identify it by its 100-pin package (25 pins per side) or by the device ID 0x423 that OpenOCD prints.
 
-Select your model in the sidebar now — the 500 and 500B differ in a few steps (firmware build, panel).`,
+Select your model in the sidebar now — the 500, 500B and NX100i differ in a few steps (firmware build, panel, connectors).`,
         fr: `Le firmware Mowgli tourne sur la famille de cartes mères YardForce « GForce » d'origine. L'interface fournit un préréglage par châssis (dimensions, géométrie des roues, largeur de coupe, ticks encodeur, seuils batterie) :
 
 | Modèle | MCU carte mère | Statut |
 |---|---|---|
 | YardForce Classic 500 | STM32F103 | Cible principale — tout ce guide a été testé sur le terrain avec elle |
 | YardForce 500B | STM32F401 | Compatible — UART moteur de lame et panneau différents, build firmware dédié |
+| YardForce NX100i | STM32F401 | Compatible — même carte mère que la 500B, build firmware dédié ; panneau LCD et ultrasons du capot pas encore |
 | YardForce SA650 | STM32F103 | Compatible |
 | YardForce 900 ECO | STM32F103 | Compatible |
 | YardForce LUV1000RI | — | Préréglage présent, **pas encore de build firmware** (brochage inconnu) |
 | Sabo MOWiT 500F | — | Compatible (YardForce rebadgée) |
 | Robot custom | — | Tous les paramètres châssis saisis à la main |
 
-**Distinguer une 500 d'une 500B :** la 500B a le panneau récent avec clavier et voyants ; sur la carte mère, le marquage du MCU indique STM32F401 au lieu de STM32F103. En cas de doute, lisez la puce.
+**Distinguer une 500 d'une 500B :** la 500B a le panneau récent avec clavier et voyants ; sur la carte mère, le marquage du MCU indique STM32F401 au lieu de STM32F103. En cas de doute, lisez la puce. La **NX100i** a un panneau LCD à 18 boutons dans le capot ; son STM32F401 peut avoir le marquage poncé — identifiez-le à son boîtier 100 broches (25 par côté) ou à l'ID de puce 0x423 affiché par OpenOCD.
 
-Sélectionnez votre modèle dans la barre latérale dès maintenant — la 500 et la 500B diffèrent sur quelques étapes (build firmware, panneau).`,
+Sélectionnez votre modèle dans la barre latérale dès maintenant — la 500, la 500B et la NX100i diffèrent sur quelques étapes (build firmware, panneau, connecteurs).`,
       },
     },
     {

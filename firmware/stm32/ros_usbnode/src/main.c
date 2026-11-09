@@ -546,8 +546,10 @@ int main(void)
   // Onboard setup/recovery is serviced without blocking the main loop.
   SW_I2C_Init();
   DB_TRACE(" * Soft I2C (J18) initialized\r\n");
+#ifndef IMU_PROBE_AFTER_POWER_INIT
   DB_TRACE(" * Testing supported IMUs:\r\n");
   IMU_Init();
+#endif
   // IMU calibration is handled on the ROS2 side (hardware_bridge_node)
   // when the robot is on the dock.
   PANEL_Init();
@@ -572,6 +574,15 @@ int main(void)
 
   HAL_GPIO_WritePin(LED_GPIO_PORT, LED_PIN, 0);
   HAL_GPIO_WritePin(TF4_GPIO_PORT, TF4_PIN, 1);
+
+#ifdef IMU_PROBE_AFTER_POWER_INIT
+  // Boards whose J18 IMU hangs off an accessory rail that is only powered by
+  // the motor/TF4 init above (see board.h): probe the IMU now, once the
+  // module has had time to come up, instead of before PANEL_Init().
+  HAL_Delay(100);
+  DB_TRACE(" * Testing supported IMUs:\r\n");
+  IMU_Init();
+#endif
 
   // Initialize Main Timers
   NBT_init(&main_chargecontroller_nbt, 10);

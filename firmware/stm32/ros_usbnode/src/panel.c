@@ -19,6 +19,8 @@
 #include "board.h"
 #include "main.h"
 
+#if PANEL_TYPE != PANEL_TYPE_YARDFORCE_NX100I /* the NX100i LCD panel lives in panel_nx100i.c */
+
 #define PANEL_LENGTH_INIT_MSG 22
 #define PANEL_LENGTH_RQST_MSG 18
 #define PANEL_LENGTH_RECEIVED_MSG 20
@@ -417,3 +419,5 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 
 	}
 }
+
+#endif /* PANEL_TYPE != PANEL_TYPE_YARDFORCE_NX100I */

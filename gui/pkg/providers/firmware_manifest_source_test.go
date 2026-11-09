@@ -13,8 +13,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// manifestBody carries the plain Yardforce500 permutation plus the NX100i
+// variant (500B board and panel, explicit-only target) and deliberately NO
+// plain Yardforce500B permutation, so the tests can prove a targetless 500B
+// config is never handed the NX100i binary.
 func manifestBody(tag string, protocol int) string {
-	return fmt.Sprintf(`{"tag":%q,"protocol_version":%d,"fw_version":"1.2.3","permutations":{"yf500":{"env":"Yardforce500","board":"BOARD_YARDFORCE500","panel":"PANEL_TYPE_YARDFORCE_500_CLASSIC","file":"f.bin","url":"u","sha256":"s","protocol_version":%d,"fw_version":"1.2.3"}}}`, tag, protocol, protocol)
+	return fmt.Sprintf(`{"tag":%q,"protocol_version":%d,"fw_version":"1.2.3","permutations":{`+
+		`"yf500":{"env":"Yardforce500","board":"BOARD_YARDFORCE500","panel":"PANEL_TYPE_YARDFORCE_500_CLASSIC","file":"f.bin","url":"u","sha256":"s","protocol_version":%d,"fw_version":"1.2.3"},`+
+		`"yardforce-nx100i":{"env":"YardforceNX100i","board":"BOARD_YARDFORCE500B","panel":"PANEL_TYPE_YARDFORCE_500B_CLASSIC","file":"n.bin","url":"u","sha256":"s","protocol_version":%d,"fw_version":"1.2.3"}`+
+		`}}`, tag, protocol, protocol, protocol)
 }
 
 // serveReleases serves /download/<release>/manifest.json for the given
@@ -82,6 +89,52 @@ func TestResolveManifestEntryRequiresExactExplicitTarget(t *testing.T) {
 	assert.ErrorContains(t, err, `target "MissingRM1000"`)
 	_, err = resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500_CLASSIC", "BiltemaRM1000")
 	assert.ErrorContains(t, err, `target "BiltemaRM1000"`)
+}
+
+// The NX100i prebuilt shares BOTH the board and the panel with the plain 500B
+// (its only difference is a pull-up on the white stop-button contact, which
+// reads as permanently pressed on a plain 500B), so a targetless 500B config
+// must resolve to the 500B entry every time — the resolver used to take the
+// first panel match out of a Go map, i.e. a coin toss between the two.
+func TestResolveManifestEntryPrefersTheNativeEnvWithoutTarget(t *testing.T) {
+	manifest := &firmwareManifest{Permutations: map[string]firmwareManifestEntry{
+		"yardforce500b": {
+			Env: "Yardforce500B", Board: "BOARD_YARDFORCE500B",
+			Panel: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+		},
+		"biltema-rm1000": {
+			Env: "BiltemaRM1000", Board: "BOARD_YARDFORCE500B",
+			Panel: "PANEL_TYPE_YARDFORCE_900_ECO",
+		},
+		"yardforce-nx100i": {
+			Env: "YardforceNX100i", Board: "BOARD_YARDFORCE500B",
+			Panel: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+		},
+	}}
+
+	for i := 0; i < 50; i++ {
+		entry, err := resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", "")
+		require.NoError(t, err, "iteration %d", i)
+		assert.Equal(t, "Yardforce500B", entry.Env, "iteration %d", i)
+	}
+
+	entry, err := resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", "YardforceNX100i")
+	require.NoError(t, err)
+	assert.Equal(t, "YardforceNX100i", entry.Env)
+	_, err = resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "YardforceNX100i")
+	assert.ErrorContains(t, err, `target "YardforceNX100i"`)
+	_, err = resolveManifestEntry(manifest, "BOARD_YARDFORCE500", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", "YardforceNX100i")
+	assert.ErrorContains(t, err, `target "YardforceNX100i"`)
+
+	// Even when the release carries no plain 500B permutation at all, a
+	// targetless 500B config must not fall through to an explicit-only
+	// variant on a panel match.
+	delete(manifest.Permutations, "yardforce500b")
+	_, err = resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", "")
+	assert.ErrorContains(t, err, "without an explicit firmware target")
+	entry, err = resolveManifestEntry(manifest, "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", "YardforceNX100i")
+	require.NoError(t, err)
+	assert.Equal(t, "YardforceNX100i", entry.Env)
 }
 
 // A dev deployment must flash the firmware built with it (its protocol matches
@@ -266,6 +319,27 @@ func TestAvailableFirmwareForTheSavedBoard(t *testing.T) {
 	assert.False(t, result.Available)
 
 	require.NoError(t, db.Set("gui.firmware.config", []byte(`{"boardType":"BOARD_YARDFORCE500B","panelType":"PANEL_TYPE_YARDFORCE_500B_CLASSIC","firmwareSelectionModel":"BiltemaRM1000"}`)))
+	result, err = fp.AvailableFirmware()
+	require.NoError(t, err)
+	assert.False(t, result.Available)
+
+	// The NX100i permutation is offered only to the explicit NX100i target.
+	require.NoError(t, db.Set("gui.firmware.config", []byte(`{"boardType":"BOARD_YARDFORCE500B","panelType":"PANEL_TYPE_YARDFORCE_500B_CLASSIC","firmwareTarget":"YardforceNX100i","firmwareSelectionModel":"YardForceNX100i"}`)))
+	result, err = fp.AvailableFirmware()
+	require.NoError(t, err)
+	assert.True(t, result.Available)
+	assert.Equal(t, "1.2.3", result.FwVersion)
+
+	// A plain 500B config (same board, same panel, no target) must not be
+	// offered the NX100i binary even though it is the only 500B permutation
+	// this release carries: its stop-button pull-up is wrong for that board.
+	require.NoError(t, db.Set("gui.firmware.config", []byte(`{"boardType":"BOARD_YARDFORCE500B","panelType":"PANEL_TYPE_YARDFORCE_500B_CLASSIC","firmwareSelectionModel":"YardForce500B"}`)))
+	result, err = fp.AvailableFirmware()
+	require.NoError(t, err)
+	assert.False(t, result.Available)
+
+	// An NX100i model without the explicit target is refused outright.
+	require.NoError(t, db.Set("gui.firmware.config", []byte(`{"boardType":"BOARD_YARDFORCE500B","panelType":"PANEL_TYPE_YARDFORCE_500B_CLASSIC","firmwareSelectionModel":"YardForceNX100i"}`)))
 	result, err = fp.AvailableFirmware()
 	require.NoError(t, err)
 	assert.False(t, result.Available)

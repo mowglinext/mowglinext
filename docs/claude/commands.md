@@ -34,6 +34,7 @@ cd ros2 && PACKAGES="mowgli_behavior" ./scripts/test.sh  # one package
 # Build firmware (default env Yardforce500 / STM32F103VC)
 cd firmware/stm32/ros_usbnode && pio run
 cd firmware/stm32/ros_usbnode && pio run -e Yardforce500B   # STM32F401VC board
+cd firmware/stm32/ros_usbnode && pio run -e YardforceNX100i # NX100i (extends Yardforce500B)
 
 # GUI development — run the backend FROM gui/ (it opens asserts/*.json relative to CWD)
 cd gui && make run-backend                # CGO_ENABLED=0 go run main.go, serves :4006

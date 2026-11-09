@@ -34,6 +34,19 @@ describe("firmware model defaults", () => {
             .not.toBe("Yardforce500B");
     });
 
+    it("maps the YardForce NX100i to the 500B board and panel with its own target", () => {
+        expect(firmwareDefaultsForModel("YardForceNX100i")).toEqual({
+            boardType: "BOARD_YARDFORCE500B",
+            panelType: "PANEL_TYPE_YARDFORCE_500B_CLASSIC",
+            firmwareTarget: "YardforceNX100i",
+        });
+        // Board and panel are identical to the plain 500B; only the explicit
+        // target keeps the stop-button pull-up build off a plain 500B.
+        expect(firmwareDefaultsForModel("YardForceNX100i")?.firmwareTarget)
+            .not.toBe("Yardforce500B");
+        expect(modelIdentifiesFirmwareTarget("YardForceNX100i")).toBe(true);
+    });
+
     it("maps the LUV1000RI to the board and panel the firmware names after it", () => {
         expect(firmwareDefaultsForModel("LUV1000RI")).toEqual({
             boardType: "BOARD_LUV1000RI",

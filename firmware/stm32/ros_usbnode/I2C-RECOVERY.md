@@ -43,7 +43,7 @@ production driver against GPIO faults, including release on each clock 1–9,
 permanent SDA/SCL faults, stretching, SCL failure midway and during STOP,
 cooldown/tick wrap, invalid reads, and ACK/NACK handling after recovery.
 
-Build the upstream `Yardforce500` and `Yardforce500B` targets. Existing LFP
+Build the upstream `Yardforce500`, `Yardforce500B` and `YardforceNX100i` targets. Existing LFP
 observations belong to their recorded custom builds, not these new binaries.
 Do not deliberately inject an electrical bus fault into a running mower.
 Unit fault injection establishes logic, not physical timing or field reliability.
