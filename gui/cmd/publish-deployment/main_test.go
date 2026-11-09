@@ -57,12 +57,23 @@ func TestWorkflowUsesVersionedIdentityAndReleaseMarkers(t *testing.T) {
 	for _, tc := range []struct {
 		ref, kind, want string
 		valid           bool
-	}{{"v1.3.0", "tag", "v1.3.0", true}, {"dev", "branch", "deployment-aaaaaaaaaaaa-42-1", true}, {"feat/gui-dashboard-improvements", "branch", "deployment-aaaaaaaaaaaa-42-1", true}, {"v1.3.0-preview", "tag", "", false}} {
-		t.Run(tc.ref, func(t *testing.T) {
+		pullRequest     bool
+		track           string
+	}{{"v1.3.0", "tag", "v1.3.0", true, false, "stable"}, {"dev", "branch", "deployment-aaaaaaaaaaaa-42-1", true, false, "dev"}, {"feat/gui-dashboard-improvements", "branch", "deployment-aaaaaaaaaaaa-42-1", true, false, "custom"}, {"v1.3.0-preview", "tag", "", false, false, ""},
+		// A deploy-preview pull request is always custom, even from a head branch named dev.
+		{"dev", "branch", "deployment-aaaaaaaaaaaa-42-1", true, true, "custom"}, {"fix/near-start", "branch", "deployment-aaaaaaaaaaaa-42-1", true, true, "custom"}} {
+		name := tc.ref
+		if tc.pullRequest {
+			name = "pull-request/" + tc.ref
+		}
+		t.Run(name, func(t *testing.T) {
 			out := filepath.Join(t.TempDir(), "outputs")
 			cmd := exec.Command("bash", "-euo", "pipefail", "-c", script)
 			cmd.Dir = root
 			cmd.Env = append(os.Environ(), "REF="+tc.ref, "TYPE="+tc.kind, "SHA="+strings.Repeat("a", 40), "RUN=42", "ATTEMPT=1", "GITHUB_OUTPUT="+out)
+			if tc.pullRequest {
+				cmd.Env = append(cmd.Env, "PULL_REQUEST=true")
+			}
 			message, err := cmd.CombinedOutput()
 			if (err == nil) != tc.valid {
 				t.Fatalf("unexpected publisher identity result: %v %s", err, message)
@@ -71,6 +82,9 @@ func TestWorkflowUsesVersionedIdentityAndReleaseMarkers(t *testing.T) {
 				data, err := os.ReadFile(out)
 				if err != nil || !strings.Contains(string(data), "version="+tc.want+"\n") || !strings.Contains(string(data), "protocol=") {
 					t.Fatal("wrong publication identity", string(data), err)
+				}
+				if !strings.Contains(string(data), "track="+tc.track+"\n") || !strings.Contains(string(data), "branch=") {
+					t.Fatal("wrong publication track", string(data))
 				}
 			}
 		})

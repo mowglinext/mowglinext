@@ -95,7 +95,7 @@ jobs:
           id="deployment-${SHA:0:12}-${RUN}-${ATTEMPT}"
           track=custom; branch="$REF"; release="$id"
           # A pull request is always a custom deployment, whatever its head branch is called.
-          if [[ "$PULL_REQUEST" == true ]]; then :
+          if [[ "${PULL_REQUEST:-false}" == true ]]; then :
           elif [[ "$TYPE" == tag && "$REF" == v* ]]; then track=stable; branch=main; release="$REF";
           elif [[ "$REF" == dev ]]; then track=dev; fi
           version="$id"
