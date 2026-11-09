@@ -411,8 +411,9 @@ func compactMultiplexNumbers(value any) any {
 //	server → client: MessagePack {"topic": "<key>", "data": <decoded object>[, "seq": n]}
 //	                 or, for a delta subscription, {"topic": "<key>", "patch": {...}} (grid_delta.go)
 //
-// Per-topic throttling reuses topicSubscribeInterval. Unknown topics are
-// ignored. On disconnect, all live subscriptions are released.
+// Per-topic throttling reuses topicSubscribeInterval; diagnostics is further
+// limited per status name (diagnostics_rate.go). Unknown topics are ignored.
+// On disconnect, all live subscriptions are released.
 //
 // @Summary multiplexed topic subscription
 // @Description multiplexed topic subscription
@@ -433,6 +434,9 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			// delta is set for the occupancy-grid topics the browser asked to receive as
 			// patches (see grid_delta.go); nil for every other subscription.
 			delta *gridDelta
+			// diagnostics limits the diagnostics topic per status name
+			// (diagnostics_rate.go); nil for every other subscription.
+			diagnostics *diagnosticsRateGate
 		}
 		var stateMu sync.Mutex
 		state := map[string]*subState{}
@@ -546,6 +550,11 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			if delta && gridDeltaTopics[topic] {
 				sub.delta = &gridDelta{}
 			}
+			if topic == "diagnostics" {
+				sub.diagnostics = newDiagnosticsRateGate(diagnosticsBrowserInterval, func(frame []byte) {
+					writeFrame(topic, frame)
+				})
+			}
 			state[topic] = sub
 			stateMu.Unlock()
 
@@ -557,6 +566,10 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 					sendGrid(topic, sub.delta, msg)
 					return
 				}
+				if sub.diagnostics != nil {
+					sub.diagnostics.deliver(msg)
+					return
+				}
 				writeFrame(topic, msg)
 			})
 			if err != nil {
@@ -564,6 +577,9 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				stateMu.Lock()
 				delete(state, topic)
 				stateMu.Unlock()
+				if sub.diagnostics != nil {
+					sub.diagnostics.close()
+				}
 			}
 		}
 
@@ -574,6 +590,9 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			stateMu.Unlock()
 			if ok {
 				provider.UnSubscribe(topic, s.id)
+				if s.diagnostics != nil {
+					s.diagnostics.close()
+				}
 			}
 		}
 
@@ -582,18 +601,21 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			stateMu.Lock()
 			snapshot := make([]struct {
 				topic string
-				id    string
+				sub   *subState
 			}, 0, len(state))
 			for topic, s := range state {
 				snapshot = append(snapshot, struct {
 					topic string
-					id    string
-				}{topic, s.id})
+					sub   *subState
+				}{topic, s})
 			}
 			state = map[string]*subState{}
 			stateMu.Unlock()
 			for _, s := range snapshot {
-				provider.UnSubscribe(s.topic, s.id)
+				provider.UnSubscribe(s.topic, s.sub.id)
+				if s.sub.diagnostics != nil {
+					s.sub.diagnostics.close()
+				}
 			}
 		}()
 

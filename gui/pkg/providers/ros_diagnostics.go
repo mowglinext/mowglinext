@@ -137,7 +137,9 @@ func (r *RosSubscriber) runDiagnostics() {
 			r.reportDiagnosticDrops()
 			// Respect an explicit caller interval without coalescing its queue.
 			// Current diagnostics WebSocket routes use a negative interval, so
-			// no batch delay or severity-based reordering is introduced.
+			// no batch delay or severity-based reordering is introduced here;
+			// the multiplex route limits per status after this queue
+			// (api/diagnostics_rate.go) and still passes every level change.
 			if r.interval > 0 {
 				if wait := r.interval - time.Since(lastDeliver); wait > 0 {
 					timer := time.NewTimer(wait)
