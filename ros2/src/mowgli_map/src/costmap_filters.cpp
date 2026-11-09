@@ -29,6 +29,7 @@
 #include "mowgli_map/internal_helpers.hpp"
 #include "mowgli_map/map_server_node.hpp"
 #include "mowgli_map/polygon_raster.hpp"
+#include "mowgli_map/ring_repair.hpp"
 
 namespace mowgli_map
 {
@@ -555,8 +556,30 @@ void MapServerNode::publish_transit_geometry()
 {
   visualization_msgs::msg::MarkerArray snapshot;
   const auto append =
-      [&](const geometry_msgs::msg::Polygon& polygon, const std::string& kind, double margin)
+      [&](const geometry_msgs::msg::Polygon& recorded, const std::string& kind, double margin)
   {
+    // Every consumer (BT coverage entry, entry goal checker, FTC gates) rejects the
+    // WHOLE snapshot if one ring is invalid: publish small recording loops removed.
+    const auto repair = repair_ring(recorded);
+    if (repair.status == RingRepair::kRepaired)
+    {
+      RCLCPP_WARN(get_logger(),
+                  "transit_geometry: %s ring #%zu self-intersected (a recording zigzag); "
+                  "published with %zu small loop(s) removed",
+                  kind.c_str(),
+                  snapshot.markers.size(),
+                  repair.loops_removed);
+    }
+    else if (repair.status == RingRepair::kUnrepairable)
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "transit_geometry: %s ring #%zu is self-intersecting beyond repair; "
+                   "coverage entry and transit arrival will refuse the whole map until "
+                   "this boundary is re-recorded or edited",
+                   kind.c_str(),
+                   snapshot.markers.size());
+    }
+    const auto& polygon = repair.polygon;
     visualization_msgs::msg::Marker marker;
     marker.header.frame_id = map_frame_;
     marker.header.stamp = get_clock()->now();

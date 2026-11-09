@@ -47,13 +47,21 @@ public:
     cache->subscription_ = node->create_subscription<visualization_msgs::msg::MarkerArray>(
         "/map_server_node/transit_geometry",
         rclcpp::QoS(1).reliable().transient_local(),
-        [weak = std::weak_ptr<CoverageEntryGeometry>(cache)](
+        [weak = std::weak_ptr<CoverageEntryGeometry>(cache), logger = node->get_logger()](
             const visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
         {
           if (auto current = weak.lock())
           {
             auto next = std::make_shared<const mowgli_nav2_plugins::MowingGeometry>(
                 mowgli_nav2_plugins::MowingGeometry::parse(*message));
+            // Fail closed, but never silently: with no valid snapshot every unit
+            // start needs a transit that the entry goal checker can never end.
+            if (!next->valid && !message->markers.empty())
+              RCLCPP_ERROR(logger,
+                           "CoverageEntryGeometry: /map_server_node/transit_geometry rejected "
+                           "(%zu rings; one is invalid or no mowing area) — coverage cannot "
+                           "start until map_server publishes a valid map",
+                           message->markers.size());
             std::lock_guard<std::mutex> lock(current->mutex_);
             // Empty/malformed publications replace a prior valid snapshot too.
             current->snapshot_ = std::move(next);
