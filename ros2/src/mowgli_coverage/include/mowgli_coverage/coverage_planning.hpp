@@ -663,12 +663,14 @@ double distanceToRing(double x, double y, const std::vector<std::pair<double, do
 // expression on its band's edges only. Exact: an edge crosses the ray only if
 // lo <= y < hi (its y span), floor((v - y_min) * scale) is monotone in v so such
 // an edge is in y's band, the other edges add no crossing, and the parity does
-// not depend on the order. A non-owning view: `ring` must outlive the index.
+// not depend on the order. A non-owning view: `ring` must outlive the index and
+// must not change while it is in use.
 class RingIndex
 {
 public:
   explicit RingIndex(const std::vector<std::pair<double, double>>& ring);
   RingIndex(std::vector<std::pair<double, double>>&&) = delete;  // would dangle
+  RingIndex(const std::vector<std::pair<double, double>>&&) = delete;
 
   // == pointInRing(x, y, ring()).
   bool contains(double x, double y) const;

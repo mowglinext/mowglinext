@@ -2521,6 +2521,10 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
         !sw_in.empty() ? sw_in.front().first : std::pair<double, double>{0.0, 0.0};
     ordered_swaths.reserve(sw_in.size());
     // Cost of continuing from `cur` into swath i (entered from its end if `reversed`).
+    // LOAD-BEARING: every cost must be >= `gap` (the straight distance from `cur` to
+    // the entry), or leastCostNearestFirst may choose differently from the
+    // index-order scan and silently reorder the plan. Holds below: the straight gap
+    // itself, a polyline from `cur` to the entry, or the gap plus a turn penalty.
     auto joinCost = [&](std::size_t i, bool reversed, double gap)
     {
       const auto& entry = reversed ? sw_in[i].second : sw_in[i].first;
@@ -3203,7 +3207,8 @@ RingIndex::RingIndex(const std::vector<std::pair<double, double>>& ring) : ring_
       spans[i] = a == b ? kNoBand : std::pair{band(std::min(a, b)), band(std::max(a, b))};
       total += spans[i] == kNoBand ? 0 : spans[i].second - spans[i].first + 1;
     }
-    if (total <= 16 * n || bands_ == 1)
+    // Terminates by 16 bands at the latest: a span never exceeds the band count.
+    if (total <= 16 * n)
     {
       break;
     }
