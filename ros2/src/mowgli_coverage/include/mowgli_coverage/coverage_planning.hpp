@@ -25,6 +25,7 @@
 #define MOWGLI_COVERAGE__COVERAGE_PLANNING_HPP_
 
 #include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -653,6 +654,67 @@ bool pointInRing(double x, double y, const std::vector<std::pair<double, double>
 // Shortest distance from (x, y) to the nearest edge of `ring` (segment
 // distance, not vertex distance).
 double distanceToRing(double x, double y, const std::vector<std::pair<double, double>>& ring);
+
+// pointInRing() for MANY queries against one ring: the same answer, bit for bit,
+// without visiting every edge. The planner tests every sample of every candidate
+// connector against the boundary and every hole, and the server verifies every
+// pose; with the linear ray cast that was most of a plan's time. The edges are
+// bucketed into horizontal bands and a query evaluates pointInRing's own crossing
+// expression on its band's edges only. Exact: an edge crosses the ray only if
+// lo <= y < hi (its y span), floor((v - y_min) * scale) is monotone in v so such
+// an edge is in y's band, the other edges add no crossing, and the parity does
+// not depend on the order. A non-owning view: `ring` must outlive the index.
+class RingIndex
+{
+public:
+  explicit RingIndex(const std::vector<std::pair<double, double>>& ring);
+  RingIndex(std::vector<std::pair<double, double>>&&) = delete;  // would dangle
+
+  // == pointInRing(x, y, ring()).
+  bool contains(double x, double y) const;
+
+  const std::vector<std::pair<double, double>>& ring() const
+  {
+    return *ring_;
+  }
+
+private:
+  std::size_t band(double y) const;
+
+  const std::vector<std::pair<double, double>>* ring_;
+  bool linear_ = false;  // a non-finite vertex: plain pointInRing
+  double y_min_ = 0.0;
+  double y_max_ = 0.0;
+  double scale_ = 0.0;
+  std::size_t bands_ = 0;
+  std::vector<std::size_t> offsets_;  // band b holds edges_[offsets_[b], offsets_[b + 1])
+  std::vector<std::size_t> edges_;  // edge ring[i - 1] -> ring[i], by its index i
+};
+
+// A candidate of a least-cost choice: `gap`, a lower bound of its cost, and its
+// position in the reference scan order. buildContinuousSubPaths chains the swaths
+// with this: the cost is the length of the join it can drive into a swath, and the
+// gap the straight distance to that swath's entry.
+struct ScanCandidate
+{
+  double gap;
+  std::size_t order;
+};
+
+// The reference choice: visit `candidates` in vector order, skip one whose gap is
+// not below the best cost so far, keep the first of least cost. Returns that
+// candidate's `order`, or nullopt if no cost compares below +max (e.g. all NaN).
+std::optional<std::size_t> leastCostInScanOrder(
+    const std::vector<ScanCandidate>& candidates,
+    const std::function<double(const ScanCandidate&)>& cost);
+
+// The same choice, evaluating far fewer costs: nearest gap first, stopping once a
+// gap exceeds the best cost (with a 1e-6 relative slack for rounding). Equal to
+// leastCostInScanOrder whenever no cost is below its gap by more than that slack —
+// a join is never shorter than the straight line — and it falls back to that scan
+// if the candidate it chose has a cost below its own gap.
+std::optional<std::size_t> leastCostNearestFirst(
+    std::vector<ScanCandidate> candidates, const std::function<double(const ScanCandidate&)>& cost);
 
 // Drop consecutive-duplicate vertices from an F2C ring and return it closed
 // (first == last). A zero-length edge — e.g. a doubled leading vertex
