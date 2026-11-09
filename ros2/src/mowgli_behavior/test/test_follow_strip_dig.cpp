@@ -2815,18 +2815,22 @@ protected:
         "<Sequence><Fallback><TransitToStrip/><AlwaysSuccess/></Fallback>"
         "<FollowStrip/></Sequence></BehaviorTree></root>",
         blackboard));
-    ASSERT_EQ(tickUntil(
-                  [&]
-                  {
-                    return navigate->goalCount() == 1;
-                  },
-                  2.0),
-              BT::NodeStatus::RUNNING);
-    ASSERT_EQ(navigate->goalCount(), 1u);
-    EXPECT_EQ(follow->goalCount(), 0u);
-    EXPECT_FALSE(hasBladeRequest(true, 0));
-    navigate->succeed(0);  // real action result consumed by production TransitToStrip
-    // An admitted axle at the unit start is handed to FTC directly; FollowStrip
+    if (!admitted)
+    {
+      ASSERT_EQ(tickUntil(
+                    [&]
+                    {
+                      return navigate->goalCount() == 1;
+                    },
+                    2.0),
+                BT::NodeStatus::RUNNING);
+      ASSERT_EQ(navigate->goalCount(), 1u);
+      EXPECT_EQ(follow->goalCount(), 0u);
+      EXPECT_FALSE(hasBladeRequest(true, 0));
+      navigate->succeed(0);  // real action result consumed by production TransitToStrip
+    }
+    // An admitted axle next to the unit start needs no Nav2 transit at all
+    // (TransitToStrip, field 2026-11-09) and is handed to FTC directly; FollowStrip
     // no longer forces a second, blade-off transit to the first unit (that
     // requirement made boundary starts unreachable — field 2026-11-08).
     const auto status = tickUntil(
@@ -2850,6 +2854,8 @@ protected:
     // Safety assertions deliberately RED for outside/hole on current production BT.
     EXPECT_EQ(blade_on, admitted);
     EXPECT_EQ(count, admitted ? 1u : 0u);
+    if (admitted)
+      EXPECT_EQ(navigate->goalCount(), 0u) << "an admitted, adjacent start was sent to Nav2";
   }
 };
 TEST_F(CoverageEntryAdmission, CapturedOutsideDenied)
