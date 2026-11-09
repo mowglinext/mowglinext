@@ -468,7 +468,7 @@ def main():
     parser.add_argument('--environment', type=pathlib.Path, required=True)
     parser.add_argument('--output-json', type=pathlib.Path, required=True)
     parser.add_argument('--output-markdown', type=pathlib.Path, required=True)
-    parser.add_argument('--expected-cases', type=int, default=26)
+    parser.add_argument('--expected-cases', type=int, default=29)
     parser.add_argument('--expected-runs', type=int, default=15)
     parser.add_argument('--expected-trace-runs', type=int, default=100)
     parser.add_argument('--expected-processes', type=int, default=3)
