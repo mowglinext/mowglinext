@@ -256,6 +256,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_gps_stuck_gate fusion_graph_core)
 
+  ament_add_gtest(test_motion_input_support
+    test/test_motion_input_support.cpp
+  )
+  target_link_libraries(test_motion_input_support fusion_graph_core)
+
   ament_add_gtest(test_dock_gps_consistency
     test/test_dock_gps_consistency.cpp
   )
