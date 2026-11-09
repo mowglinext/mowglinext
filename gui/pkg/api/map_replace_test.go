@@ -30,6 +30,9 @@ type fakeMapServer struct {
 	failAt    map[string]int   // service → 1-based call number that fails…
 	failWith  map[string]error // …with this error
 	saveNoted string           // non-empty: save_areas answers success=false
+	// non-empty: clear_map answers success=false with this message and leaves
+	// the live map alone — map_server refusing while a mission is running.
+	clearRefusal string
 }
 
 func newFakeMapServer(initial ...mowgli.ReplaceMapArea) *fakeMapServer {
@@ -58,6 +61,10 @@ func (f *fakeMapServer) CallService(_ context.Context, service string, req any, 
 			out.Area.IsNavigationArea = f.live[idx].IsNavigationArea
 		}
 	case mapServiceClearMap:
+		if f.clearRefusal != "" {
+			res.(*triggerRes).Message = f.clearRefusal
+			return nil
+		}
 		f.live = nil
 		res.(*triggerRes).Success = true
 	case mapServiceAddArea:
@@ -471,6 +478,30 @@ func TestReplaceMap_ClearFailureRestoresThePreviousMap(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "clearing the old map")
+	assert.Equal(t, []string{"old"}, areaNames(srv.live))
+}
+
+func TestReplaceMap_RefusedClearLeavesTheMapUnchangedAndSkipsTheRollback(t *testing.T) {
+	// Arrange: map_server refuses clear_map because a mission is running. It
+	// refuses BEFORE touching anything, so there is nothing to restore — the
+	// rollback's own clear_map would be refused too and then be reported as
+	// "the robot may hold a PARTIAL map", which is false.
+	srv := newFakeMapServer(testArea("old", 1))
+	srv.clearRefusal = "Map not cleared: the mower is running a mission. Press Stop to pause"
+
+	// Act
+	err := replaceMapInternal(context.Background(), srv, &mowgli.ReplaceMapReq{Areas: []mowgli.ReplaceMapArea{testArea("new", 0)}})
+
+	// Assert
+	require.Error(t, err)
+	var replacement *mapReplacementError
+	require.ErrorAs(t, err, &replacement)
+	assert.Equal(t, mapUnchanged, replacement.status)
+	assert.Contains(t, err.Error(), "Press Stop")
+	assert.Contains(t, err.Error(), "nothing was changed")
+	assert.NotContains(t, err.Error(), "PARTIAL")
+	assert.Equal(t, 1, srv.calls[mapServiceClearMap], "no rollback clear_map")
+	assert.Zero(t, srv.calls[mapServiceAddArea])
 	assert.Equal(t, []string{"old"}, areaNames(srv.live))
 }
 

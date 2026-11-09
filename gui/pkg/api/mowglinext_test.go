@@ -285,8 +285,8 @@ func TestServiceRoute_StartInAreaMalformedRequest(t *testing.T) {
 
 func TestClearMapRoute(t *testing.T) {
 	mock := types.NewMockRosProvider()
-	mock.ServiceResponder = func(service string, _ any, res any) {
-		if saved, ok := res.(*triggerRes); ok && service == "/map_server_node/save_areas" {
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		if saved, ok := res.(*triggerRes); ok {
 			saved.Success = true
 		}
 	}
@@ -307,8 +307,11 @@ func TestClearMapRoute(t *testing.T) {
 func TestClearMapRoute_SaveRefused(t *testing.T) {
 	mock := types.NewMockRosProvider()
 	mock.ServiceResponder = func(service string, _ any, res any) {
-		if saved, ok := res.(*triggerRes); ok && service == "/map_server_node/save_areas" {
-			saved.Message = "disk full"
+		if saved, ok := res.(*triggerRes); ok {
+			saved.Success = service == "/map_server_node/clear_map"
+			if service == "/map_server_node/save_areas" {
+				saved.Message = "disk full"
+			}
 		}
 	}
 	router := setupMowgliNextRouter(mock)
@@ -319,6 +322,25 @@ func TestClearMapRoute_SaveRefused(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 	assert.Contains(t, w.Body.String(), "disk full")
+}
+
+func TestClearMapRoute_RefusedWhileAMissionIsRunning(t *testing.T) {
+	// map_server answers success=false (and touches nothing) while a mission
+	// is running. That must not read as "map deleted".
+	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(_ string, _ any, res any) {
+		res.(*triggerRes).Message = "Map not cleared: the mower is running a mission. Press Stop to pause"
+	}
+	router := setupMowgliNextRouter(mock)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("DELETE", "/api/mowglinext/map", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	var response ErrorResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Contains(t, response.Error, "Press Stop")
 }
 
 func TestClearMapRoute_Error(t *testing.T) {

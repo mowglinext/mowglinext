@@ -189,6 +189,7 @@ func AddMapAreaRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // @Accept  json
 // @Produce  json
 // @Success 200 {object} OkResponse
+// @Failure 409 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /mowglinext/map [delete]
 func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
@@ -201,9 +202,16 @@ func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			return
 		}
 		defer unlockMapReplacement()
-		err := provider.CallService(ctx, "/map_server_node/clear_map", &mowgli.ClearMapReq{}, &mowgli.ClearMapRes{}, "std_srvs/srv/Trigger")
-		if err != nil {
+		// triggerRes, not the generated ClearMapRes: it has no success/message,
+		// so a refusal (a mission is running) would read as a deleted map.
+		var cleared triggerRes
+		err := provider.CallService(ctx, "/map_server_node/clear_map", &mowgli.ClearMapReq{}, &cleared, "std_srvs/srv/Trigger")
+		switch {
+		case err != nil:
 			c.JSON(500, ErrorResponse{Error: err.Error()})
+			return
+		case !cleared.Success:
+			c.JSON(409, ErrorResponse{Error: cleared.Message})
 			return
 		}
 		if err := persistAreas(ctx, provider); err != nil {
@@ -223,6 +231,7 @@ func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // @Produce  json
 // @Param CallReq body mowgli.ReplaceMapReq true "replace map request body"
 // @Success 200 {object} OkResponse
+// @Failure 409 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /mowglinext/map [put]
 func ReplaceMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
@@ -238,7 +247,12 @@ func ReplaceMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		defer cancel()
 
 		if err := replaceMapInternal(ctx, provider, &CallReq); err != nil {
-			c.JSON(500, ErrorResponse{Error: err.Error()})
+			status := 500
+			var refused *mapClearRefusedError
+			if errors.As(err, &refused) {
+				status = 409 // map_server refused (a mission is running); nothing changed
+			}
+			c.JSON(status, ErrorResponse{Error: err.Error()})
 			return
 		}
 		c.JSON(200, OkResponse{})
