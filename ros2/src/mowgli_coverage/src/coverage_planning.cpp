@@ -2246,9 +2246,9 @@ std::optional<std::size_t> leastCostNearestFirst(
   // Proof sketch. Let m be the least cost and k the first candidate (scan order)
   // costing m. Every candidate before k costs more than m, so when the scan reaches
   // k its best is above m >= gap(k): k is evaluated and taken, and nothing after it
-  // is strictly cheaper. So the scan picks k. Here: once a gap exceeds the best
-  // cost found (times 1 + slack), that candidate and every farther one cost more
-  // than it; every candidate costing m is therefore evaluated, and ties keep the
+  // is strictly cheaper. So the scan picks k. Here: once a gap reaches the best
+  // cost found (times 1 + slack), that candidate and every farther one cannot beat
+  // it; every candidate costing m is therefore evaluated, and ties keep the
   // earliest in scan order — k again. The only assumption, cost >= gap within the
   // slack, is checked for k itself; the slack is ~10 orders of magnitude above the
   // rounding of a summed polyline length.
@@ -2271,7 +2271,10 @@ std::optional<std::size_t> leastCostNearestFirst(
   double best_cost = std::numeric_limits<double>::max();
   for (const auto& c : candidates)
   {
-    if (best != nullptr && c.gap > best_cost * (1.0 + kGapRelSlack))
+    // >=, not >: a gap of exactly best·(1 + slack) still costs more than best when
+    // best > 0, and with best == 0 the later zero gaps come later in scan order and
+    // lose the tie — so coincident entries do not defeat the pruning.
+    if (best != nullptr && c.gap >= best_cost * (1.0 + kGapRelSlack))
     {
       break;
     }

@@ -711,10 +711,11 @@ std::optional<std::size_t> leastCostInScanOrder(
     const std::function<double(const ScanCandidate&)>& cost);
 
 // The same choice, evaluating far fewer costs: nearest gap first, stopping once a
-// gap exceeds the best cost (with a 1e-6 relative slack for rounding). Equal to
+// gap reaches the best cost (with a 1e-6 relative slack for rounding). Equal to
 // leastCostInScanOrder whenever no cost is below its gap by more than that slack —
 // a join is never shorter than the straight line — and it falls back to that scan
-// if the candidate it chose has a cost below its own gap.
+// if the candidate it chose has a cost below its own gap. A cost below its gap on
+// a candidate it never evaluated cannot be detected: callers must keep cost >= gap.
 std::optional<std::size_t> leastCostNearestFirst(
     std::vector<ScanCandidate> candidates, const std::function<double(const ScanCandidate&)>& cost);
 
