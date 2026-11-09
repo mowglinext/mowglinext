@@ -16,6 +16,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -27,6 +28,7 @@
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/dock_stall.hpp"
 #include "nav2_msgs/action/dock_robot.hpp"
+#include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -102,7 +104,14 @@ private:
   /// Diagnostic only — nothing reads the result.
   void log_contact_delta(const std::shared_ptr<BTContext>& ctx, uint16_t num_retries) const;
 
+  /// Clears a navigate_to_pose goal left running by a node that has moved on before the dock
+  /// request: docking_server's staging leg needs the navigator (issue #943).
+  void clearStaleNavigation(const std::shared_ptr<BTContext>& ctx);
+  /// Bounded discovery wait for navigate_to_pose, paid once per node instance.
+  static constexpr std::chrono::milliseconds kStaleNavigationDiscoveryWait{1000};
+
   rclcpp_action::Client<DockAction>::SharedPtr action_client_;
+  rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SharedPtr nav_client_;
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
   std::shared_ptr<GoalAbandonment> goal_abandonment_;

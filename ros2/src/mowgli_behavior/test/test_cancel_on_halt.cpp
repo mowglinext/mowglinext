@@ -49,6 +49,7 @@
 #include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/docking_nodes.hpp"
 #include "nav2_msgs/action/dock_robot.hpp"
+#include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "rcl_interfaces/msg/log.hpp"
 #include <gtest/gtest.h>
 
@@ -63,6 +64,7 @@ using mowgli_behavior::IsDocking;
 using mowgli_behavior::UndockRobot;
 using Dock = nav2_msgs::action::DockRobot;
 using Undock = nav2_msgs::action::UndockRobot;
+using Navigate = nav2_msgs::action::NavigateToPose;
 
 namespace
 {
@@ -186,6 +188,7 @@ private:
 
 using FakeDockServer = FakeActionServer<Dock>;
 using FakeUndockServer = FakeActionServer<Undock>;
+using FakeNavigateServer = FakeActionServer<Navigate>;
 
 bool waitFor(const std::function<bool()>& done, double timeout_s)
 {
@@ -645,6 +648,55 @@ TEST_F(CancelOnHaltTest, DockRobotStillWantedAfterDelayedAcceptanceIsNotCanceled
       5.0));
   EXPECT_TRUE(ctx->last_dock_succeeded);
   EXPECT_FALSE(ctx->docking_active);
+}
+
+// Issue #943: a transit goal nobody owned any more kept bt_navigator busy and docking_server's
+// staging leg was refused, so the mower stayed on the lawn. DockRobot clears such a goal before
+// it asks to dock, and leaves alone the navigation docking_server starts afterwards.
+TEST_F(CancelOnHaltTest, DockRobotCancelsAStaleNavigationGoalButNotALaterOne)
+{
+  FakeNavigateServer navigate(server_node, "/navigate_to_pose");
+  auto other = rclcpp_action::create_client<Navigate>(ctx->node, "/navigate_to_pose");
+  ASSERT_TRUE(other->wait_for_action_server(std::chrono::seconds(5)));
+  auto stale = other->async_send_goal(Navigate::Goal{});
+  ASSERT_EQ(stale.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+  ASSERT_TRUE(stale.get());
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return navigate.goalCount() == 1;
+      },
+      5.0));
+
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><DockRobot/></BehaviorTree></root>",
+      blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+
+  EXPECT_TRUE(waitFor(
+      [&]()
+      {
+        return navigate.isCanceling(0);
+      },
+      5.0))
+      << "the stale navigation goal still holds the navigator";
+
+  // docking_server's own staging goal, sent after the dock request.
+  auto staging = other->async_send_goal(Navigate::Goal{});
+  ASSERT_EQ(staging.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+  ASSERT_TRUE(staging.get());
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return navigate.goalCount() == 2;
+      },
+      5.0));
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  EXPECT_FALSE(navigate.isCanceling(1)) << "the dock's own navigation was cancelled";
+
+  navigate.canceled(0);
+  navigate.succeed(1);
+  tree->haltTree();
 }
 
 // BoundaryGuard's GOTO dock-transit exemption, as shipped in main_tree.xml,

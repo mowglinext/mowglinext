@@ -74,6 +74,7 @@ using mowgli_behavior::BTContext;
 using mowgli_behavior::DigPoint;
 using mowgli_behavior::FollowStrip;
 using mowgli_behavior::insideDigZone;
+using mowgli_behavior::NavigatorRefusalRetry;
 using mowgli_behavior::recordDigPoint;
 using Follow = FollowStrip::Nav2FollowPath;
 using Navigate = FollowStrip::Nav2Navigate;
@@ -202,6 +203,12 @@ public:
           {
             gate.wait();
           }
+          // A busy bt_navigator refuses the goal outright (issue #943).
+          if (reject_goals_.load() > 0)
+          {
+            --reject_goals_;
+            return rclcpp_action::GoalResponse::REJECT;
+          }
           return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
         },
         [this](const std::shared_ptr<Handle>)
@@ -232,6 +239,11 @@ public:
   void rejectCancel(bool reject)
   {
     reject_cancel_.store(reject);
+  }
+  /// Refuse the next `count` goal requests, as a busy navigator does.
+  void rejectGoals(int count)
+  {
+    reject_goals_.store(count);
   }
   std::size_t cancelRequestCount() const
   {
@@ -336,6 +348,7 @@ private:
   std::atomic<std::size_t> goal_requests_{0};
   std::atomic<std::size_t> cancel_requests_{0};
   std::atomic<bool> reject_cancel_{false};
+  std::atomic<int> reject_goals_{0};
 };
 
 }  // namespace
@@ -1840,6 +1853,68 @@ TEST_F(FollowStripDigTest, HaltingBeforeTheTransitIsAnsweredStillCancelsIt)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
   EXPECT_TRUE(canceled) << "the abandoned transit goal was never cancelled";
+}
+
+TEST_F(FollowStripDigTest, RefusedTransitIsSentAgainAfterAPauseInsteadOfSkippingTheUnit)
+{
+  // Issue #943: a busy navigator refuses the transit in milliseconds. Skipping the unit on the
+  // spot (and the area after it) spent the whole dispatch budget in one second.
+  navigate->rejectGoals(1);
+  startFollowStrip({straightUnit(2.0, 4.0)});
+
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalRequests() >= 1;
+                },
+                5.0),
+            BT::NodeStatus::RUNNING);
+  const auto refused_at = std::chrono::steady_clock::now();
+
+  // The refusal neither skips the unit nor drops the blade-off transit state.
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() >= 1;
+                },
+                NavigatorRefusalRetry::kRetryDelaySec + 3.0),
+            BT::NodeStatus::RUNNING);
+  ASSERT_EQ(navigate->goalCount(), 1u) << "the refused transit was never sent again";
+  EXPECT_EQ(navigate->goalRequests(), 2u);
+  EXPECT_GE(std::chrono::duration<double>(std::chrono::steady_clock::now() - refused_at).count(),
+            NavigatorRefusalRetry::kRetryDelaySec - 0.2)
+      << "the transit was re-sent without giving the navigator time to wind down";
+  EXPECT_TRUE(ctx->transiting);
+  EXPECT_EQ(navigate->goal(0)->pose.pose.position.x, 2.0);
+}
+
+TEST_F(FollowStripDigTest, TransitToStripSendsARefusedGoalAgainAfterAPause)
+{
+  navigate->rejectGoals(1);
+  ctx->current_strip_path = straightUnit(2.0, 10.0);
+  ctx->current_transit_goal = ctx->current_strip_path.poses.front();
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><TransitToStrip/></BehaviorTree></root>",
+      blackboard));
+
+  ASSERT_EQ(tickUntil(
+                [&]()
+                {
+                  return navigate->goalCount() >= 1;
+                },
+                NavigatorRefusalRetry::kRetryDelaySec + 5.0),
+            BT::NodeStatus::RUNNING)
+      << "a refused transit failed at once instead of waiting for the navigator";
+  EXPECT_EQ(navigate->goalRequests(), 2u);
+
+  navigate->succeed(0);
+  EXPECT_EQ(tickUntil(
+                [&]()
+                {
+                  return false;
+                },
+                5.0),
+            BT::NodeStatus::SUCCESS);
 }
 
 TEST_F(FollowStripDigTest, ResumeDoesNotCompleteEarlierUnitSkippedAfterTransitFailure)
