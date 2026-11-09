@@ -2284,6 +2284,43 @@ TEST_P(FtcPivotArrival, TranslationSettlingRetainsPivotDeadline)
   EXPECT_THROW(Command(), nav2_core::ControllerException);
 }
 
+TEST_P(FtcPivotArrival, OneTickOdometryNoiseDoesNotStutterASettledPivot)
+{
+  // Field 2026-11-09: an in-place pivot reads +-0.027 m/s on the wheel odometry
+  // (one tick of difference between the wheels). Every such sample used to zero
+  // the rotation command; 6 of 13 pivots then hit the 10 s timeout.
+  controller_.newPathReceived(CornerPlan());
+  bool pivoted = false;
+  for (int i = 0; i < 300; ++i)
+  {
+    const auto command = Command();
+    if (Access::State(controller_) == 5)
+    {
+      pivoted = true;
+      break;
+    }
+    Advance(command, GetParam());
+  }
+  ASSERT_TRUE(pivoted);
+  v_ = 0;
+  Command();  // translation observed settled in this PIVOT
+  for (int i = 0; i < 4; ++i)
+  {
+    v_ = (i % 2 == 0) ? .027 : -.027;
+    const auto command = Command();
+    if (Access::State(controller_) != 5)
+      break;  // the turn may already be complete
+    EXPECT_NE(command.angular.z, 0) << "tick " << i;
+  }
+  // Real translation after the settle still inhibits the rotation.
+  if (Access::State(controller_) == 5)
+  {
+    v_ = .15;
+    const auto command = Command();
+    EXPECT_DOUBLE_EQ(command.angular.z, 0);
+  }
+}
+
 TEST_P(FtcPivotArrival, ObstacleOverlayRetainsArrivalAndSettling)
 {
   SetParameter("enable_obstacle_deviation", true);
