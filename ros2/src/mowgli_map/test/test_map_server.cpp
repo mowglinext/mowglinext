@@ -684,9 +684,9 @@ TEST_F(AreaTypeTest, MowingAndNavigationAreasArePreservedSideBySide)
 // is empty between clear_map and the first add_area or after a failed load - and the file
 // was replaced by that empty map. Only the explicit save_areas may do that now, and the
 // version being replaced is kept as <path>.bak.
-// A whole-map replace (GUI "Save map" = clear_map -> add_area x N, a backup
-// restore = load_areas) drops the keepout mask, the mow progress and the
-// persisted map before the new one is complete. It must wait while the BT says
+// A whole-map replace (GUI "Save map" = clear_map -> add_area x N) drops the
+// keepout mask, the mow progress and the persisted map before the new one is
+// complete (load_areas is not gated yet). It must wait while the BT says
 // a mission is running (map_replace_gate.hpp) — and leave the map untouched
 // when it refuses, because the GUI must not "restore" a map that never changed.
 TEST_F(AreaTypeTest, WholeMapReplaceWaitsWhileAMissionIsRunning)

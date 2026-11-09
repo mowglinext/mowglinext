@@ -231,6 +231,7 @@ func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 // @Produce  json
 // @Param CallReq body mowgli.ReplaceMapReq true "replace map request body"
 // @Success 200 {object} OkResponse
+// @Failure 409 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /mowglinext/map [put]
 func ReplaceMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {

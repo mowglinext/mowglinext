@@ -29,10 +29,12 @@
  * publish IDLE, so "Stop, edit the map, Start" works: progress survives, the
  * robot is not moving, and the replace is allowed.
  *
- * Fail-OPEN on missing or stale status: the BT is what runs missions, so no
- * BT status means no mission, and refusing then would make the map uneditable
- * on a bench, in a map-only bring-up or after a BT crash. The gate protects a
- * running mission from an edit; it is not a safety interlock for motion.
+ * Fail-OPEN on missing or stale status: refusing then would make the map
+ * uneditable on a bench, in a map-only bring-up or after a BT crash. That is a
+ * known gap, not a proof that nothing is running: a status stream that stalls
+ * for more than kHighLevelStatusMaxAgeS while a mission continues lets a
+ * replace through. The gate protects a running mission from an operator edit;
+ * it is not a safety interlock for motion.
  * Incremental edits (add_area on its own, obstacle accept/discard, corridor
  * edits) are NOT gated: they do not drop the map. ~/load_areas (the GUI's
  * backup restore) is NOT gated YET either: that flow overwrites areas.dat

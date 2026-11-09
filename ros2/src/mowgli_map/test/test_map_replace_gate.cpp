@@ -12,8 +12,8 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-// Unit tests for map_replace_gate.hpp: a whole-map replace (clear_map,
-// load_areas) must wait while a mission is running, and only then.
+// Unit tests for map_replace_gate.hpp: a whole-map replace (clear_map)
+// must wait while a mission is running, and only then.
 
 #include "mowgli_map/map_replace_gate.hpp"
 #include <gtest/gtest.h>
