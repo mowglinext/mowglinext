@@ -263,8 +263,10 @@ measured benefit per unit of invasiveness:
      `drivable_subpaths` out of the action result, and everything after reads the context. The
      result is held by the goal handle until the next plan, so the copy kept every pose twice
      for the whole session. The short-lived `units` copy for the resume fingerprint is left as is.
-     Checked: the file compiles (`g++ -fsyntax-only`) and clang-format 18 is clean. Not run: the
-     BT unit tests (the package's other dependencies were not built in this worktree).
+     Checked: clang-format 18 is clean; the package builds; 10 plan/resume-related BT tests pass,
+     plus a new one (`GetNextUnmowedAreaTest.SuccessfulPlanLandsOnTheContextIntact`) that serves a
+     real result from a fake `plan_coverage` server and checks the context fields and transit
+     goal. Memory saved was not measured.
    - Saves ~38–115 MB of transient BT memory and a few tens of ms per plan, at 400k poses.
    - This is analysis from sizes only (`sizeof(PoseStamped)` = 96 B); memory was not measured in
      the BT.

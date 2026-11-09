@@ -1232,6 +1232,78 @@ TEST_F(GetNextUnmowedAreaTest, CrossHatchPhaseReachesPlannerAndEndSessionAdvance
   }
 }
 
+// The plan the server returns is what ends up on the context. PlanCoverageArea moves the three
+// path fields out of the action result (the goal handle would otherwise keep a second copy of
+// every pose for the whole session), so the context must still hold all of them, and the transit
+// goal and plan log are read from the context afterwards.
+TEST_F(GetNextUnmowedAreaTest, SuccessfulPlanLandsOnTheContextIntact)
+{
+  using Plan = mowgli_behavior::PlanCoverageArea::PlanCoverage;
+  auto make_path = [](double x0, std::size_t n)
+  {
+    nav_msgs::msg::Path path;
+    path.header.frame_id = "map";
+    for (std::size_t i = 0; i < n; ++i)
+    {
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header.frame_id = "map";
+      pose.pose.position.x = x0 + 0.03 * static_cast<double>(i);
+      pose.pose.orientation.w = 1.0;
+      path.poses.push_back(pose);
+    }
+    return path;
+  };
+  auto result = std::make_shared<Plan::Result>();
+  result->success = true;
+  result->segments = {make_path(0.0, 4), make_path(10.0, 5)};
+  result->drivable_subpaths = {make_path(0.0, 4), make_path(10.0, 5)};
+  result->full_path = make_path(0.0, 9);
+  result->full_path.header.frame_id = "map";
+  auto action = rclcpp_action::create_server<Plan>(
+      server_node,
+      "/plan_coverage",
+      [](const auto&, const std::shared_ptr<const Plan::Goal>)
+      {
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+      },
+      [](const auto&)
+      {
+        return rclcpp_action::CancelResponse::ACCEPT;
+      },
+      [result](const std::shared_ptr<rclcpp_action::ServerGoalHandle<Plan>> goal_handle)
+      {
+        goal_handle->succeed(std::make_shared<Plan::Result>(*result));
+      });
+  executor.add_node(ctx->node);
+  factory.registerNodeType<mowgli_behavior::PlanCoverageArea>("PlanCoverageArea");
+  areas[0] = {"lawn", false};
+  auto plan = factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Test\"><PlanCoverageArea/>"
+      "</BehaviorTree></root>",
+      blackboard);
+
+  BT::NodeStatus status = BT::NodeStatus::IDLE;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (std::chrono::steady_clock::now() < deadline && status != BT::NodeStatus::SUCCESS)
+  {
+    status = plan.tickOnce();
+    executor.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  ASSERT_EQ(status, BT::NodeStatus::SUCCESS);
+  ASSERT_EQ(ctx->current_strip_segments.size(), 2u);
+  EXPECT_EQ(ctx->current_strip_segments[1].poses.size(), 5u);
+  ASSERT_EQ(ctx->current_strip_subpaths.size(), 2u);
+  EXPECT_EQ(ctx->current_strip_subpaths[0].poses.size(), 4u);
+  EXPECT_EQ(ctx->current_strip_subpaths[1].poses.size(), 5u);
+  EXPECT_DOUBLE_EQ(ctx->current_strip_subpaths[1].poses.front().pose.position.x, 10.0);
+  EXPECT_EQ(ctx->current_strip_path.poses.size(), 9u);
+  EXPECT_EQ(ctx->current_strip_path.header.frame_id, "map");
+  EXPECT_DOUBLE_EQ(ctx->current_transit_goal.pose.position.x, 0.0);
+  EXPECT_EQ(ctx->current_transit_goal.header.frame_id, "map");
+}
+
 TEST_F(GetNextUnmowedAreaTest, SelectedAreaOnlyAdvancesThatArea)
 {
   ctx->mow_cross_hatch = true;
