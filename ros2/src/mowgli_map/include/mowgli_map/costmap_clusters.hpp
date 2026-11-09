@@ -60,7 +60,7 @@ inline std::vector<CellCluster> cluster_costmap_cells(const nav_msgs::msg::Occup
   std::vector<CellCluster> clusters;
   const int w = static_cast<int>(grid.info.width);
   const int h = static_cast<int>(grid.info.height);
-  if (w == 0 || h == 0)
+  if (w <= 0 || h <= 0)
   {
     return clusters;
   }
@@ -73,17 +73,26 @@ inline std::vector<CellCluster> cluster_costmap_cells(const nav_msgs::msg::Occup
   // cell absorbs the rounding of the subtraction and std::hypot (each a few
   // ulp of the radius itself). A NaN/infinite bound or a non-positive
   // resolution disables the early drop; a negative bound can only drop
-  // clusters the radius filter rejects anyway (max_r >= 0 > bound).
+  // clusters the radius filter rejects anyway (max_r >= 0 > bound). So does a
+  // non-finite cell centre (non-finite origin, or one far enough out to
+  // overflow): the original radius was then NaN, which std::max ignores, and
+  // such a cluster passed.
+  const auto finite_centres = [res](double origin, int cells)
+  {
+    return std::isfinite(origin + 0.5 * res) && std::isfinite(origin + (cells - 1 + 0.5) * res);
+  };
   double max_span = std::numeric_limits<double>::infinity();
-  if (res > 0.0 && std::isfinite(2.0 * max_radius + res))
+  if (res > 0.0 && std::isfinite(2.0 * max_radius + res) && finite_centres(ox, w) &&
+      finite_centres(oy, h))
   {
     max_span = 2.0 * max_radius + res;
   }
 
   // open[] = "obstacle cell not yet visited", with a one-cell closed border so
   // a neighbour test is a single load with no bounds check.
-  const std::ptrdiff_t pw = w + 2;
-  std::vector<uint8_t> open(static_cast<std::size_t>(pw) * static_cast<std::size_t>(h + 2), 0U);
+  const std::ptrdiff_t pw = static_cast<std::ptrdiff_t>(w) + 2;
+  const std::ptrdiff_t ph = static_cast<std::ptrdiff_t>(h) + 2;
+  std::vector<uint8_t> open(static_cast<std::size_t>(pw) * static_cast<std::size_t>(ph), 0U);
   for (int y = 0; y < h; ++y)
   {
     const int8_t* const row = grid.data.data() + static_cast<std::size_t>(y) * w;

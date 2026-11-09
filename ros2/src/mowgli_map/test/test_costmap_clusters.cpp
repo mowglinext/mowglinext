@@ -306,6 +306,65 @@ TEST(CostmapClusters, AcceptedClustersMatchTheOriginalForDegenerateRadii)
   }
 }
 
+TEST(CostmapClusters, AcceptedClustersMatchTheOriginalForNonFiniteOrigins)
+{
+  // A NaN/infinite origin makes every old radius NaN, which std::max skips, so
+  // the old code accepted the cluster with max_r = 0 however wide it was (the
+  // early drop must stand down; counterexample from review). NaN != NaN, so
+  // compare bit patterns.
+  const auto same_bits = [](const Accepted& a, const Accepted& b)
+  {
+    if (a.size() != b.size())
+      return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+    {
+      for (std::size_t k = 0; k < 3; ++k)
+      {
+        if (!(a[i][k] == b[i][k] || (std::isnan(a[i][k]) && std::isnan(b[i][k]))))
+          return false;
+      }
+    }
+    return true;
+  };
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  for (const auto& [x, y] :
+       std::vector<std::pair<double, double>>{{0.0, kNaN}, {kNaN, 0.0}, {0.0, kInf}, {-kInf, 0.0}})
+  {
+    SCOPED_TRACE("origin " + std::to_string(x) + ", " + std::to_string(y));
+    auto line = empty_grid(5, 1, 1.0);
+    line.info.origin.position.x = x;
+    line.info.origin.position.y = y;
+    std::fill(line.data.begin(), line.data.end(), 100);
+    const auto expected = legacy_stage(line, 3, 0.0, 1.0);
+    EXPECT_FALSE(expected.empty());  // the case really is accepted
+    EXPECT_TRUE(same_bits(new_stage(line, 3, 0.0, 1.0), expected));
+
+    auto g = random_grid(90, 70, 0.55, 5);
+    g.info.origin.position.x = x;
+    g.info.origin.position.y = y;
+    EXPECT_TRUE(same_bits(new_stage(g, 1, 0.0, 0.3), legacy_stage(g, 1, 0.0, 0.3)));
+  }
+}
+
+TEST(CostmapClusters, NegativeDimensionsYieldNoClusters)
+{
+  // width/height above INT_MAX turn negative in the int the tracker has always
+  // used. Both negative: the old code returned nothing; one negative: it threw
+  // from std::vector<bool>. Neither may allocate a mask here.
+  for (const auto& [w, h] : std::vector<std::pair<uint32_t, uint32_t>>{{4294967293U, 4294967295U},
+                                                                       {4294967293U, 1U},
+                                                                       {1U, 4294967295U}})
+  {
+    nav_msgs::msg::OccupancyGrid g;
+    g.info.width = w;
+    g.info.height = h;
+    g.info.resolution = 0.08F;
+    std::vector<mowgli_map::CellCluster> clusters;
+    EXPECT_NO_THROW(clusters = mowgli_map::cluster_costmap_cells(g, 50, 1, 1.0));
+    EXPECT_TRUE(clusters.empty());
+  }
+}
+
 TEST(CostmapClusters, ExtentStopsOnlyAboveTheRejectBound)
 {
   const auto g = random_grid(120, 90, 0.55, 7);
