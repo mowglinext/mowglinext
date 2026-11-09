@@ -4351,9 +4351,14 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     // Store the EXPLICIT segments (GUI/resume bookkeeping), the concatenated
     // path (GUI / empty-checks), and the hole-free drivable SUB-PATHS that
     // FollowStrip actually follows (issue #333 — one per hole-free field).
-    ctx->current_strip_segments = wrapped.result->segments;
-    ctx->current_strip_path = wrapped.result->full_path;
-    ctx->current_strip_subpaths = wrapped.result->drivable_subpaths;
+    //
+    // MOVED out of the action result, not copied: the result stays alive in
+    // goal_handle_ until the next plan, so a copy held every pose twice for the
+    // whole session (~25-90 MB on a large lawn). Nothing reads the result's
+    // path fields after this point — the rest of this block reads the context.
+    ctx->current_strip_segments = std::move(wrapped.result->segments);
+    ctx->current_strip_path = std::move(wrapped.result->full_path);
+    ctx->current_strip_subpaths = std::move(wrapped.result->drivable_subpaths);
 
     // Area geometry for FollowStrip's end-of-pass coverage-plausibility
     // cross-check (issue #680) — same get_mowing_area response as area_
@@ -4377,8 +4382,7 @@ BT::NodeStatus PlanCoverageArea::onRunning()
       plan_preview_pub_ = ctx->node->create_publisher<mowgli_interfaces::msg::CoveragePlanPreview>(
           "/coverage/plan_preview", rclcpp::QoS(1).transient_local());
     }
-    plan_preview_pub_->publish(
-        mowgli_behavior::makeCoveragePreview(wrapped.result->drivable_subpaths));
+    plan_preview_pub_->publish(mowgli_behavior::makeCoveragePreview(ctx->current_strip_subpaths));
 
     // Transit goal = the pose FollowStrip will ACTUALLY start driving from.
     // TransitToStrip (Nav2 Smac, obstacle/boundary-aware) drives the robot there
@@ -4400,13 +4404,13 @@ BT::NodeStatus PlanCoverageArea::onRunning()
     // transit — never a blade-on crossing.
     const uint32_t area_idx =
         (ctx->current_area >= 0) ? static_cast<uint32_t>(ctx->current_area) : 0u;
-    auto transit_goal = wrapped.result->drivable_subpaths.front().poses.front();
+    auto transit_goal = ctx->current_strip_subpaths.front().poses.front();
     {
       // Build the drivable units EXACTLY as FollowStrip does (poses.size() >= 2),
       // so the fingerprint and the resume mapping match its authoritative pass.
       std::vector<nav_msgs::msg::Path> units;
       std::size_t total = 0;
-      for (const auto& sp : wrapped.result->drivable_subpaths)
+      for (const auto& sp : ctx->current_strip_subpaths)
       {
         if (sp.poses.size() >= 2)
         {
@@ -4468,15 +4472,15 @@ BT::NodeStatus PlanCoverageArea::onRunning()
       }
     }
     ctx->current_transit_goal = transit_goal;
-    ctx->current_transit_goal.header = wrapped.result->full_path.header;
+    ctx->current_transit_goal.header = ctx->current_strip_path.header;
 
     RCLCPP_INFO(ctx->node->get_logger(),
                 "PlanCoverageArea: %u ring(s) + %u swath(s) = %zu segments "
                 "(%zu drivable sub-path(s)), %.1fm total (planned in %.0fms)",
                 wrapped.result->ring_count,
                 wrapped.result->swath_count,
-                wrapped.result->segments.size(),
-                wrapped.result->drivable_subpaths.size(),
+                ctx->current_strip_segments.size(),
+                ctx->current_strip_subpaths.size(),
                 wrapped.result->total_distance,
                 1e3 * wrapped.result->planning_time_s);
     return BT::NodeStatus::SUCCESS;

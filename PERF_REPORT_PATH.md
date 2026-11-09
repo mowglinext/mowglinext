@@ -41,8 +41,8 @@ path handler's per-cycle `vector::erase`.
 feedback. It is upstream code, and no plugin can reach it (see "Upstream follow-ups").
 
 **The one-off transport costs are real, but much smaller in total.** They are listed below with
-numbers, as proposals. None of them is implemented, because each changes an interface or a
-topic's semantics.
+numbers, as proposals. Only the BT move (proposal 3) is implemented, in a later commit; the
+others change an interface or a topic's semantics.
 
 ## How big are the paths? (e2e, real `coverage_server`, shipped parameters)
 
@@ -259,6 +259,12 @@ measured benefit per unit of invasiveness:
      `test_follow_strip_dig.cpp` uses, so the test needs rework. Moderate risk; not done.
 3. **BT copies:** move the plan result into `BTContext` instead of copying, and stop copying the
    sub-paths again for the resume fingerprint.
+   - **Half done, in a later commit:** `PlanCoverageArea` now moves `segments`, `full_path` and
+     `drivable_subpaths` out of the action result, and everything after reads the context. The
+     result is held by the goal handle until the next plan, so the copy kept every pose twice
+     for the whole session. The short-lived `units` copy for the resume fingerprint is left as is.
+     Checked: the file compiles (`g++ -fsyntax-only`) and clang-format 18 is clean. Not run: the
+     BT unit tests (the package's other dependencies were not built in this worktree).
    - Saves ~38–115 MB of transient BT memory and a few tens of ms per plan, at 400k poses.
    - This is analysis from sizes only (`sizeof(PoseStamped)` = 96 B); memory was not measured in
      the BT.
