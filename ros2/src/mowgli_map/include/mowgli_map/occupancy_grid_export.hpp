@@ -91,8 +91,15 @@ inline void layer_to_occupancy_grid(const grid_map::GridMap& grid_map,
 
   const grid_map::Matrix& data = grid_map[layer];
   const grid_map::Index& start = grid_map.getStartIndex();
-  const int start_x = start(0);
-  const int start_y = start(1);
+  // GridMap::setStartIndex() accepts any index and upstream wraps it to the
+  // buffer (wrapIndexToRange, a true modulo); do the same.
+  const auto wrap = [](int index, int size)
+  {
+    const int r = index % size;
+    return r < 0 ? r + size : r;
+  };
+  const int start_x = wrap(start(0), size_x);
+  const int start_y = wrap(start(1), size_y);
   int8_t* const out = occupancy_grid.data.data();
   // Unwrapped columns [0, tail_y) are buffer columns [start_y, size_y).
   const int tail_y = size_y - start_y;

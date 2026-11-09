@@ -153,6 +153,28 @@ TEST(OccupancyGridExport, WrappedBufferIsActuallyExercised)
 // floor((x - origin.x) / res), row floor((y - origin.y) / res), data index
 // row * width + col — checked here from the position side, independently of
 // how either converter walks the buffer.
+TEST(OccupancyGridExport, MatchesUpstreamForOutOfRangeStartIndices)
+{
+  // setStartIndex() stores any index; upstream wraps it to the buffer.
+  for (const auto& start : std::vector<grid_map::Index>{grid_map::Index(2, 0),
+                                                        grid_map::Index(7, -3),
+                                                        grid_map::Index(-12, 9),
+                                                        grid_map::Index(-1000003, 1000001)})
+  {
+    SCOPED_TRACE("start " + std::to_string(start(0)) + ", " + std::to_string(start(1)));
+    auto one = make_map(0.1, 0.1, 0.1, 0);
+    ASSERT_EQ(one.getSize()(0) * one.getSize()(1), 1);
+    one[kLayer].setConstant(100.0F);
+    one.setStartIndex(start);
+    expect_same_as_upstream(one, 0.0F, 100.0F);
+
+    auto map = make_map(0.5, 0.4, 0.1, 0);  // 5 x 4 cells
+    fill_random(map, 11);
+    map.setStartIndex(start);
+    expect_same_as_upstream(map, 0.0F, 100.0F);
+  }
+}
+
 TEST(OccupancyGridExport, CellLandsAtItsMapPosition)
 {
   for (int shift : {0, 23})
