@@ -100,6 +100,21 @@
  * off, `use_external_detection_pose` stays false and the legacy graph-TF
  * approach runs unchanged. This is the reversible escape hatch.
  *
+ * ── Final-approach refinement (dock_approach_refinement.hpp) ────────────
+ * While opennav_docking drives the final approach (forward commands on
+ * /cmd_vel_docking), two things change:
+ *   - TRACK FIT: Δ comes from a rigid fit between the antenna's RTK-Fixed map
+ *     positions and the same point in odom, accumulated since the approach
+ *     started, instead of the fused heading (gyro-only during the approach). It
+ *     is blended in between track_fit_min_extent_m and track_fit_full_extent_m
+ *     of travel and gated against the TF Δ.
+ *   - FREEZE: inside freeze_distance_m of the dock the detection stops being
+ *     re-anchored, so GPS noise cannot move the target where the 1/r control
+ *     law is most sensitive to it.
+ * Every sample is anchored on the GPS ANTENNA (lever arm from TF) rather than
+ * on the lever-arm-corrected base, so the fused heading stays out of the
+ * position as well, and the odom pose is read at the GPS stamp.
+ *
  * fusion_graph keeps owning all TF — this node publishes NO TF and writes NO
  * graph state; it only publishes a PoseStamped on detected_dock_pose.
  */
@@ -107,13 +122,16 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <string>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
+#include "geometry_msgs/msg/twist_stamped.hpp"
 #include "mowgli_interfaces/msg/absolute_pose.hpp"
 #include "mowgli_localization/delta_gate.hpp"
+#include "mowgli_localization/dock_approach_refinement.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "tf2/LinearMath/Quaternion.hpp"
@@ -203,6 +221,20 @@ public:
     // <= 0 to disable (legacy hold-forever behaviour).
     reseed_after_s_ = declare_parameter<double>("reseed_after_s", 5.0);
 
+    // Final-approach refinement (see dock_approach_refinement.hpp).
+    track_fit_enabled_ = declare_parameter<bool>("track_fit_enabled", true);
+    TrackFitConfig fit_cfg;
+    fit_cfg.min_extent_m = declare_parameter<double>("track_fit_min_extent_m", 0.30);
+    fit_cfg.full_extent_m = declare_parameter<double>("track_fit_full_extent_m", 0.60);
+    fit_cfg.max_disagreement_rad =
+        declare_parameter<double>("track_fit_max_disagreement_deg", 10.0) * M_PI / 180.0;
+    fit_cfg.max_rms_m = declare_parameter<double>("track_fit_max_rms_m", 0.04);
+    track_fit_ = TrackRotationFit(fit_cfg);
+    freeze_distance_m_ = declare_parameter<double>("freeze_distance_m", 0.5);
+    approach_episode_ =
+        ApproachEpisode(declare_parameter<double>("approach_active_timeout_s", 1.0));
+    gps_frame_ = declare_parameter<std::string>("gps_frame", "gps_link");
+
     gate_ = mowgli_localization::DeltaGate(mowgli_localization::DeltaGateConfig{
         cog_yaw_max_jump_deg_ * M_PI / 180.0, cog_yaw_ema_alpha_, reseed_after_s_});
 
@@ -215,6 +247,15 @@ public:
         [this](mowgli_interfaces::msg::AbsolutePose::ConstSharedPtr msg)
         {
           on_absolute_pose(msg);
+        });
+
+    // The docking controller's output: forward commands mark the final approach.
+    docking_cmd_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
+        "/cmd_vel_docking",
+        rclcpp::SensorDataQoS(),
+        [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
+        {
+          approach_episode_.on_command(msg->twist.linear.x, now().seconds());
         });
 
     // COG yaw (GPS course-over-ground, map frame, graph-INDEPENDENT) →
@@ -256,6 +297,10 @@ private:
   {
     using AbsPose = mowgli_interfaces::msg::AbsolutePose;
 
+    // Episode bookkeeping first, so an approach that ends under Float still
+    // resets the fit and the freeze.
+    const bool approach = update_approach_state();
+
     // RTK-Fixed gate. Float / DR / no-fix do NOT refresh the detection; we
     // keep republishing the last good one (see on_timer / class doc).
     const bool is_fixed = (msg->flags & AbsPose::FLAG_GPS_RTK_FIXED) != 0;
@@ -264,10 +309,17 @@ private:
       return;
     }
 
-    // Robot's continuous-DR pose in odom (TF odom→base_footprint). This is the
+    // Inside the freeze radius: hold the detection for the rest of the approach.
+    if (approach && frozen_)
+    {
+      return;
+    }
+
+    // Robot's continuous-DR pose in odom (TF odom→base_footprint) at the GPS
+    // stamp, so a moving robot is not paired with a newer odom pose. This is the
     // half of the graph that never jumps; map→odom does NOT enter here.
     tf2::Transform robot_odom;
-    if (!lookup_robot_odom(robot_odom))
+    if (!lookup_robot_odom(robot_odom, rclcpp::Time(msg->header.stamp)))
     {
       return;  // odom→base_footprint not available yet; try next sample.
     }
@@ -277,39 +329,137 @@ private:
     // here (gated on RTK-Fixed via the early-return above) is far more reliable
     // than the COG estimator, which inverts on the slow/reverse dock approach.
     // apply_delta_sample() jump-rejects a corrupt-reload step and EMA-smooths.
+    double tf_delta = gate_.value();
+    bool have_tf_delta = false;
     if (delta_from_map_odom_)
     {
       double yaw_mo;
       if (lookup_map_odom_yaw(yaw_mo))
       {
         apply_delta_sample(yaw_mo, "map→odom TF");
+        tf_delta = yaw_mo;
+        have_tf_delta = true;
       }
     }
 
-    // POSITION: re-anchor the world robot→dock displacement at the robot's odom
-    // position. map→odom is NOT rotation-free — odom is zeroed at the robot's
-    // start heading, so a yaw offset Δ (often tens of degrees) separates map and
-    // odom. The displacement is computed in map (from GPS) and MUST be rotated by
-    // −Δ into odom; otherwise, far from the dock (large displacement during the
-    // approach) the target is flung to the wrong side. Δ = gate_.value(), the
-    // SAME offset the orientation below uses, so the two stay consistent.
-    const double delta = gate_.value();  // Δ = map→odom yaw (stabilised by gate_)
-    const double dx = dock_pose_x_ - msg->pose.pose.position.x;  // dock − robot, in map
-    const double dy = dock_pose_y_ - msg->pose.pose.position.y;
-    const double c = std::cos(delta);  // R(−Δ): map displacement → odom
-    const double s = std::sin(delta);
-    const double dx_odom = c * dx + s * dy;
-    const double dy_odom = -s * dx + c * dy;
-    const double dock_x_odom = robot_odom.getOrigin().x() + dx_odom;
-    const double dock_y_odom = robot_odom.getOrigin().y() + dy_odom;
+    // Anchor on the ANTENNA, seen in both frames. navsat_to_absolute_pose
+    // subtracted R(fused map yaw)·lever from it; the fused map yaw is
+    // odom yaw + map→odom yaw, so adding the same term back recovers the
+    // measured antenna, free of the fused heading.
+    const double robot_yaw_odom = tf2::getYaw(robot_odom.getRotation());
+    const Vec2 lever = lever_arm();
+    const Vec2 lever_odom = rotate(lever, robot_yaw_odom);
+    const Vec2 lever_map =
+        rotate(lever, robot_yaw_odom + (have_tf_delta ? tf_delta : gate_.value()));
+    const Vec2 antenna_odom{robot_odom.getOrigin().x() + lever_odom.x,
+                            robot_odom.getOrigin().y() + lever_odom.y};
+    const Vec2 antenna_map{msg->pose.pose.position.x + lever_map.x,
+                           msg->pose.pose.position.y + lever_map.y};
 
-    // ORIENTATION: map dock yaw minus the map→odom yaw Δ. Δ comes from the live
-    // map→odom TF (default) or /imu/cog_heading, stabilised by gate_; 0 until the
-    // first sample seeds it (map/odom heading aligned right after a clean seed).
-    const double dock_yaw_odom = dock_pose_yaw_ - delta;
+    // Δ = gate_.value() (stabilised TF Δ), replaced during the final approach by
+    // the GPS track fit once the robot has travelled far enough.
+    double delta = gate_.value();
+    if (approach && track_fit_enabled_)
+    {
+      track_fit_.add(antenna_odom, antenna_map);
+      last_fit_ = track_fit_.fit();
+      last_blend_ = blend_track_delta(delta, last_fit_, track_fit_.config());
+      delta = last_blend_.delta;
+    }
 
-    last_dock_odom_ = make_planar_transform(dock_x_odom, dock_y_odom, dock_yaw_odom);
+    // POSITION + ORIENTATION: re-anchor the world antenna→dock displacement at
+    // the antenna's odom position, rotated by −Δ (map→odom is NOT rotation-free:
+    // odom is zeroed at the robot's start heading). The dock heading in odom is
+    // dock_pose_yaw − Δ. Both use the same Δ so they stay consistent.
+    const PlanarPose dock_odom = dock_in_odom(antenna_odom,
+                                              antenna_map,
+                                              {dock_pose_x_, dock_pose_y_, dock_pose_yaw_},
+                                              delta);
+    last_dock_odom_ = make_planar_transform(dock_odom.x, dock_odom.y, dock_odom.yaw);
     have_detection_ = true;
+
+    const Vec2 robot_xy{robot_odom.getOrigin().x(), robot_odom.getOrigin().y()};
+    if (approach && should_freeze(robot_xy, dock_odom, freeze_distance_m_))
+    {
+      frozen_ = true;
+      RCLCPP_INFO(get_logger(),
+                  "Dock approach: within %.2f m of the dock, holding the detection. %s",
+                  freeze_distance_m_,
+                  describe_fit().c_str());
+    }
+  }
+
+  // Track start/end of the forward final approach. Returns whether it is active.
+  bool update_approach_state()
+  {
+    const bool active = approach_episode_.active(now().seconds());
+    if (active == approach_active_)
+    {
+      return active;
+    }
+    if (active)
+    {
+      RCLCPP_INFO(get_logger(), "Dock approach started: GPS track fit reset.");
+    }
+    else
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Dock approach ended (frozen=%s). %s",
+                  frozen_ ? "yes" : "no",
+                  describe_fit().c_str());
+    }
+    approach_active_ = active;
+    track_fit_.reset();
+    last_fit_ = TrackFitResult{};
+    last_blend_ = TrackBlend{};
+    frozen_ = false;
+    return active;
+  }
+
+  std::string describe_fit() const
+  {
+    static const char* const kStates[] = {"tf_only", "blending", "track", "rejected"};
+    const double deg = 180.0 / M_PI;
+    char buf[256];
+    std::snprintf(buf,
+                  sizeof(buf),
+                  "track fit: state=%s weight=%.2f pairs=%zu extent=%.2f m rms=%.3f m "
+                  "fit=%.2f° tf=%.2f° (fit−tf=%.2f°)",
+                  kStates[static_cast<int>(last_blend_.state)],
+                  last_blend_.weight,
+                  last_fit_.pairs,
+                  last_fit_.extent_m,
+                  last_fit_.rms_m,
+                  last_fit_.delta * deg,
+                  gate_.value() * deg,
+                  wrap_to_pi(last_fit_.delta - gate_.value()) * deg);
+    return std::string(buf);
+  }
+
+  // Antenna offset in base_frame (static URDF TF), resolved once. Zero until
+  // available, which reproduces the pre-refinement base-anchored behaviour.
+  Vec2 lever_arm()
+  {
+    if (!lever_known_)
+    {
+      try
+      {
+        const auto tf = tf_buffer_->lookupTransform(base_frame_, gps_frame_, tf2::TimePointZero);
+        lever_ = {tf.transform.translation.x, tf.transform.translation.y};
+        lever_known_ = true;
+        RCLCPP_INFO(get_logger(),
+                    "GPS lever arm from TF %s→%s: x=%.3f y=%.3f",
+                    base_frame_.c_str(),
+                    gps_frame_.c_str(),
+                    lever_.x,
+                    lever_.y);
+      }
+      catch (const tf2::TransformException&)
+      {
+        return {};
+      }
+    }
+    return lever_;
   }
 
   // Track the map→odom yaw offset Δ from GPS course-over-ground, WITHOUT the
@@ -417,6 +567,23 @@ private:
     detection_pub_->publish(out);
   }
 
+  // odom→base_frame at `stamp`, falling back to the latest transform when the
+  // stamp is outside the buffer (e.g. a GPS stamp just ahead of the last TF).
+  bool lookup_robot_odom(tf2::Transform& out, const rclcpp::Time& stamp)
+  {
+    geometry_msgs::msg::TransformStamped tf;
+    try
+    {
+      tf = tf_buffer_->lookupTransform(fixed_frame_, base_frame_, stamp);
+    }
+    catch (const tf2::TransformException&)
+    {
+      return lookup_robot_odom(out);
+    }
+    to_transform(tf, out);
+    return true;
+  }
+
   bool lookup_robot_odom(tf2::Transform& out)
   {
     geometry_msgs::msg::TransformStamped tf;
@@ -428,6 +595,12 @@ private:
     {
       return false;
     }
+    to_transform(tf, out);
+    return true;
+  }
+
+  static void to_transform(const geometry_msgs::msg::TransformStamped& tf, tf2::Transform& out)
+  {
     out.setOrigin(tf2::Vector3(tf.transform.translation.x,
                                tf.transform.translation.y,
                                tf.transform.translation.z));
@@ -435,7 +608,6 @@ private:
                                     tf.transform.rotation.y,
                                     tf.transform.rotation.z,
                                     tf.transform.rotation.w));
-    return true;
   }
 
   // Parameters
@@ -451,6 +623,9 @@ private:
   double cog_yaw_max_jump_deg_{25.0};
   double cog_yaw_ema_alpha_{0.15};
   double reseed_after_s_{5.0};
+  bool track_fit_enabled_{true};
+  double freeze_distance_m_{0.5};
+  std::string gps_frame_{"gps_link"};
 
   // State
   tf2::Transform last_dock_odom_;
@@ -459,11 +634,21 @@ private:
   // (delta_from_map_odom_); legacy COG estimator when false. Owns the seed /
   // jump-reject+EMA / stale-latch re-seed logic (delta_gate.hpp). 0 until seeded.
   mowgli_localization::DeltaGate gate_{};
+  // Final approach (dock_approach_refinement.hpp).
+  ApproachEpisode approach_episode_{};
+  bool approach_active_{false};
+  bool frozen_{false};
+  TrackRotationFit track_fit_{};
+  TrackFitResult last_fit_{};
+  TrackBlend last_blend_{};
+  bool lever_known_{false};
+  Vec2 lever_{};
 
   // ROS
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr detection_pub_;
   rclcpp::Subscription<mowgli_interfaces::msg::AbsolutePose>::SharedPtr abs_pose_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr cog_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr docking_cmd_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
   std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;

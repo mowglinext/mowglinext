@@ -17,7 +17,7 @@
 | Localization mode string/enum, debounce | `ros2/src/mowgli_localization/src/localization_monitor_node.cpp` `evaluate_mode()` L192, `on_publish_timer()`; enum in `include/.../localization_monitor_node.hpp` L62–68 |
 | LiDAR scan smeared while rotating (deskew, IMU buffer, "no scans" watchdog) | `ros2/src/mowgli_localization/src/scan_deskew_node.cpp` `on_scan()` L342, `on_scan_watchdog()` L311 |
 | Dock/chassis self-return blanking, ground filter (gravity + terrain reference, `include/mowgli_localization/scan_ground_filter.hpp`), `/scan_collision` split | `ros2/src/mowgli_localization/src/costmap_scan_filter_node.cpp` `filter_scan()` L217, `apply_ground_filter()` L250, `is_blank_active()` L437 |
-| Docking goes to the wrong spot / `detected_dock_pose` geometry, Δ (map→odom yaw) gate | `ros2/src/mowgli_localization/src/gps_dock_detection_node.cpp` header doc L17–105, `apply_delta_sample()` L344, `on_timer()` L399; gate in `include/.../delta_gate.hpp` |
+| Docking goes to the wrong spot / `detected_dock_pose` geometry, Δ (map→odom yaw) gate | `ros2/src/mowgli_localization/src/gps_dock_detection_node.cpp` header doc L17–105, `apply_delta_sample()` L344, `on_timer()` L399; gate in `include/.../delta_gate.hpp`; final-approach track fit of Δ + freeze radius in `include/.../dock_approach_refinement.hpp` |
 | One-click dock calibration (CalibrateDock action / GUI start service / status topic) | `ros2/src/mowgli_localization/src/calibrate_imu_yaw_node.cpp` `run_dock_calibration_core()`, `capture_dock_antenna_with_wait()`, `persist_dock_pose()`, `persist_dock_via_map_server()`, `dock_start_cb()`; the `set_docking_point` requests + the success/failure verdict and operator messages are pure in `include/mowgli_localization/dock_persist_plan.hpp` (`DockPoseStep`, `DockYawStep`, `DecideDockVerdict`; `test_dock_persist_plan`) |
 | COG-coherence gate for the dock reverse leg | `ros2/src/mowgli_localization/include/mowgli_localization/dock_cog_gate.hpp` `evaluate_dock_cog_gate()` |
 | Legacy blocking IMU-yaw / pitch-roll / mag figure-8 calibration service | `calibrate_imu_yaw_node.cpp` `calibrate_cb()` L1679, legacy dock pre-phase `run_dock_yaw_drive()` (persists through map_server like the one-click flow: on-dock antenna capture, then `persist_dock_pose()`) |
@@ -46,7 +46,7 @@
 | `calibrate_imu_yaw_node.cpp` | ~2.3k | IMU-yaw/pitch-roll/mag calibration service + one-click `CalibrateDock` action + GUI façade (start service + status topic) |
 | `cog_to_imu_node.cpp` | ~1.0k | GPS course-over-ground → `/imu/cog_heading`; stationary latch; online mag hard-iron fit |
 | `costmap_scan_filter_node.cpp` | 497 | Chassis/dock radial blank + gravity ground filter → `/scan_costmap`; blanked-only → `/scan_collision` |
-| `gps_dock_detection_node.cpp` | 480 | RTK-anchored dock pose in `odom` for opennav_docking external detection |
+| `gps_dock_detection_node.cpp` | ~650 | RTK-anchored dock pose in `odom` for opennav_docking external detection; during the forward final approach Δ comes from a GPS-track rigid fit and the target freezes inside `freeze_distance_m` |
 | `localization_monitor_node.cpp` | 258 | GPS-freshness/RTK mode → `/mowgli/localization/mode(_id)` with dwell debounce |
 | `mag_yaw_publisher_node.cpp` | 327 | Hard/soft-iron cal + tilt compensation → `/imu/mag_yaw`; idles until cal file appears |
 | `navsat_to_absolute_pose_node.cpp` | 461 | `/gps/fix` + `/gps/status` → `/gps/absolute_pose` + `/gps/pose_cov`; `~/set_datum` |
@@ -95,7 +95,7 @@
 | `/scan_collision` | `LaserScan` (blanked, NOT ground-filtered) | pub (costmap_scan_filter L116, L404) | `SensorDataQoS` | collision_monitor `nav2_params_lidar.yaml:273` |
 | `/hardware_bridge/status` | `mowgli_interfaces/Status` | sub (costmap_scan_filter L118 `is_charging`; calibrate_imu_yaw L220) | reliable(10) | `hardware_bridge` |
 | `/hardware_bridge/emergency`, `/behavior_tree_node/high_level_status` | `Emergency`, `HighLevelStatus` | sub (calibrate_imu_yaw L228, L236) | reliable(10) | abort / state gating for calibration drives |
-| `/cmd_vel_docking` | `geometry_msgs/TwistStamped` | pub (calibrate_imu_yaw L250) | reliable(10) | twist_mux priority 15 (Invariant 13) — collision_monitor stays in loop |
+| `/cmd_vel_docking` | `geometry_msgs/TwistStamped` | pub (calibrate_imu_yaw L250) | reliable(10) | twist_mux priority 15 (Invariant 13) — collision_monitor stays in loop; also read by `gps_dock_detection` (forward commands = final approach episode) |
 | `detected_dock_pose` → `/detected_dock_pose` | `geometry_msgs/PoseStamped` in `odom` | pub (gps_dock_detection L210) | `QoS(1)`, `publish_rate_hz` | opennav_docking `SimpleChargingDock` (`use_external_detection_pose`) |
 | `~/dock_calibration/status` (`/calibrate_imu_yaw_node/dock_calibration/status`) | `mowgli_interfaces/DockCalibrationStatus` | pub (L335) | reliable(10) | GUI `gui/web/src/hooks/useDockCalibration.ts` |
 
@@ -121,14 +121,14 @@ All are read once in the constructor (no dynamic reconfigure). Template defaults
 | localization_monitor | `gps_timeout` (2.0), `pose_timeout` (0.5, **declared but unused**), `publish_rate` (10), `mode_debounce_sec` (1.0) L73–76 | C++ defaults only |
 | scan_deskew | `input_topic`, `output_topic`, `imu_topic`, `reference` ("end"), `imu_max_age_s` (0.5), `imu_buffer_horizon_s` (0.5), `linear_comp_enabled` (false), `wheel_topic`, `scan_watchdog_period_s` (20) L64–155 | `navigation.launch.py` L1193–1198 |
 | costmap_scan_filter | `dock_blank_range` (0.70), `chassis_blank_range` (0.0), `post_undock_blank_sec` (5), `enable_ground_filter` (true), `min_obstacle_z_m` (0.08), `max_obstacle_z_m` (1.5), `lidar_height_m` (0.30), `lidar_mount_yaw` (0.0), `min_ground_run` (8), `terrain_tilt_time_constant_s` (3.0, 0 = gravity-only), `imu_max_age_s` (0.5), `accel_g_tolerance_ms2` (3.0) L89–119 | `navigation.launch.py` L1209–1247 (`lidar_z`, `lidar_yaw`, `imu_yaw` from template L206–213) |
-| gps_dock_detection | `dock_pose_x/y/yaw`, `fixed_frame` (odom), `base_frame` (base_footprint), `map_frame` (map), `delta_from_map_odom` (true), `publish_rate_hz` (10), `require_rtk_fixed` (true), `cog_yaw_max_jump_deg` (25), `cog_yaw_ema_alpha` (0.15), `reseed_after_s` (5) L152–204 | `navigation.launch.py` L1266–1280 (dock pose from the merged robot config `rt_rp`, L543–545 — calibration output, so normally the installed yaml) |
+| gps_dock_detection | `dock_pose_x/y/yaw`, `fixed_frame` (odom), `base_frame` (base_footprint), `map_frame` (map), `delta_from_map_odom` (true), `publish_rate_hz` (10), `require_rtk_fixed` (true), `cog_yaw_max_jump_deg` (25), `cog_yaw_ema_alpha` (0.15), `reseed_after_s` (5), `track_fit_enabled` (true), `track_fit_min_extent_m` (0.30), `track_fit_full_extent_m` (0.60), `track_fit_max_disagreement_deg` (10), `track_fit_max_rms_m` (0.04), `freeze_distance_m` (0.5), `approach_active_timeout_s` (1.0), `gps_frame` (gps_link) L152–204 | `navigation.launch.py` L1266–1280 (dock pose from the merged robot config `rt_rp`, L543–545 — calibration output, so normally the installed yaml) |
 | calibrate_imu_yaw | `undock_distance/speed`, `dock_calib_reverse_distance_m` (2.0), `dock_calib_reverse_speed_ms` (0.15), `dock_calib_redock_overshoot_m` (0.30), `dock_calib_rtk_wait_timeout_s` (10), `dock_calib_redock_charge_timeout_s` (30), `dock_calib_cog_min_samples` (8), `dock_calib_cog_std_max_rad` (0.70), `dock_calib_cog_bearing_match_max_rad` (0.35), `dock_calib_min_baseline_displacement_m` (0.5) L264–294 | template L470–502 via `full_system.launch.py` L492–513 |
 | wheel_odometry | `wheel_distance` (0.35), `ticks_per_meter` (300), `publish_tf` (false) L85–87 | never launched; yaml shipped but unused |
 
 ### TF frames
 - navsat: looks up `base_footprint→gps_link` once (lever arm, L260) and `map→base_footprint` per fix (yaw for lever-arm rotation, L309). Falls back to raw antenna position until both exist.
 - mag_yaw_publisher: `base_footprint→imu_link` per sample (L207).
-- gps_dock_detection: `map→odom` (Δ source when `delta_from_map_odom`, L385) and `odom→base_footprint` (L425). Publishes NO TF.
+- gps_dock_detection: `map→odom` (Δ source when `delta_from_map_odom`, L385) `odom→base_footprint` (looked up at the GPS stamp) and the static `base_footprint→gps_link` lever arm. Publishes NO TF.
 - wheel_odometry: broadcasts `odom→base_footprint` only if `publish_tf` (L252) — must stay false (Invariant 2; guarded by `mowgli_bringup/test/test_tf_ownership.py`).
 
 ## Build, test, run
