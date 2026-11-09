@@ -24,8 +24,6 @@
 //   bench_graph_session --minutes 120 --dump out.bin
 //   bench_graph_session --compare a.bin b.bin
 
-#include <sys/resource.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -39,6 +37,7 @@
 #include <vector>
 
 #include "fusion_graph/graph_manager.hpp"
+#include <sys/resource.h>
 
 namespace fg = fusion_graph;
 
@@ -252,8 +251,16 @@ int main(int argc, char** argv)
 
   const auto script = CoverageScript(minutes, park_end_minutes);
   minutes += park_end_minutes;
-  std::vector<Record> out;
-  out.reserve(static_cast<size_t>(minutes * 60 * 30));
+  // Records stream straight to the dump file and timing goes into fixed-size
+  // tables allocated up front, so RSS growth reflects GraphManager alone.
+  std::ofstream dump_f;
+  if (!dump.empty())
+    dump_f.open(dump, std::ios::binary);
+  auto emit = [&](const Record& r)
+  {
+    if (dump_f)
+      dump_f.write(reinterpret_cast<const char*>(&r), sizeof(r));
+  };
 
   // Integer microsecond clock so event cadences are exact.
   const int64_t kEnd = static_cast<int64_t>(minutes * 60e6);
@@ -276,15 +283,18 @@ int main(int argc, char** argv)
   std::vector<Truth> hist(kHist);
 
   double t_tick = 0, t_rebase = 0, t_viz = 0, t_inputs = 0;
-  std::vector<double> tick_ms;
-  tick_ms.reserve(out.capacity());
-  // Per-node (sim time, tick ms) trace for the before/after-rebase breakdown.
-  std::vector<std::pair<double, double>> tick_trace;
-  tick_trace.reserve(out.capacity());
+  // Node-tick latency histogram (1 us bins up to 200 ms) and per-second sums.
+  constexpr size_t kHistBins = 200000;
+  std::vector<uint32_t> tick_hist(kHistBins + 1, 0);
+  double tick_max_ms = 0.0;
+  const size_t seconds = static_cast<size_t>(minutes * 60.0) + 2;
+  std::vector<double> sec_sum(seconds, 0.0);
+  std::vector<uint32_t> sec_n(seconds, 0);
   std::vector<double> rebase_times;
   size_t nodes = 0, rebases = 0;
   long rss_start = 0, rss_peak = 0;
   std::vector<std::pair<double, long>> rss_trace;
+  rss_trace.reserve(static_cast<size_t>(minutes) + 2);
   uint64_t token = 0;
   bool initialized = false;
 
@@ -330,7 +340,11 @@ int main(int argc, char** argv)
         const double vm =
             still ? 0.0 : v * (1.0 + 0.01 * nv1) + 0.002 * nv2 + (std::abs(w) > 0.3 ? 0.02 : 0.0);
         const double wm = still ? 0.0 : w * 1.03 + 0.01 * nw;
-        timed(t_inputs, [&] { gm.AddWheelTwist(vm, 0.0, wm, (us - last_wheel) * 1e-6); });
+        timed(t_inputs,
+              [&]
+              {
+                gm.AddWheelTwist(vm, 0.0, wm, (us - last_wheel) * 1e-6);
+              });
       }
       last_wheel = us;
     }
@@ -339,7 +353,11 @@ int main(int argc, char** argv)
       if (last_imu >= 0)
       {
         const double gz = w + kGyroBias + 0.005 * n01(rng);
-        timed(t_inputs, [&] { gm.AddGyroDelta(gz, (us - last_imu) * 1e-6); });
+        timed(t_inputs,
+              [&]
+              {
+                gm.AddGyroDelta(gz, (us - last_imu) * 1e-6);
+              });
       }
       last_imu = us;
     }
@@ -373,7 +391,11 @@ int main(int argc, char** argv)
         std::abs(w) < 1e-6)
     {
       const double yaw = gth + 0.05 * n01(rng);
-      timed(t_inputs, [&] { gm.QueueYaw(yaw, 0.15); });
+      timed(t_inputs,
+            [&]
+            {
+              gm.QueueYaw(yaw, 0.15);
+            });
     }
     if (us % kTickUs == 0)
     {
@@ -387,8 +409,10 @@ int main(int argc, char** argv)
       if (r)
       {
         ++nodes;
-        tick_ms.push_back(dt * 1e3);
-        tick_trace.emplace_back(t, dt * 1e3);
+        ++tick_hist[std::min(kHistBins, static_cast<size_t>(dt * 1e6))];
+        tick_max_ms = std::max(tick_max_ms, dt * 1e3);
+        sec_sum[static_cast<size_t>(t)] += dt * 1e3;
+        ++sec_n[static_cast<size_t>(t)];
         Record rec{};
         rec.kind = 0;
         rec.t = now_s;
@@ -398,7 +422,7 @@ int main(int argc, char** argv)
         rec.y = r->pose.y();
         rec.th = r->pose.theta();
         std::memcpy(rec.cov, r->covariance.data(), sizeof(rec.cov));
-        out.push_back(rec);
+        emit(rec);
       }
     }
     if (viz && us % kVizUs == 0 && initialized)
@@ -436,7 +460,7 @@ int main(int argc, char** argv)
               rec.cov[1] = sx;
               rec.cov[3] = sy;
             });
-      out.push_back(rec);
+      emit(rec);
       if (us % 60000000 == 0)
       {
         const long rss = RssKb();
@@ -447,22 +471,37 @@ int main(int argc, char** argv)
     }
     if (rebase && us % kMaintUs == 0 && us > 0 && gm.RebaseDue(2000))
     {
-      timed(t_rebase, [&] { gm.RebaseISAM2(); });
+      timed(t_rebase,
+            [&]
+            {
+              gm.RebaseISAM2();
+            });
       ++rebases;
       rebase_times.push_back(t);
       Record rec{};
       rec.kind = 2;
       rec.t = t;
-      out.push_back(rec);
+      emit(rec);
     }
   }
 
   struct rusage ru;
   getrusage(RUSAGE_SELF, &ru);
   rss_peak = ru.ru_maxrss;
-  std::sort(tick_ms.begin(), tick_ms.end());
   auto pct = [&](double p)
-  { return tick_ms.empty() ? 0.0 : tick_ms[static_cast<size_t>(p * (tick_ms.size() - 1))]; };
+  {
+    if (p >= 1.0)
+      return tick_max_ms;
+    const double target = p * static_cast<double>(nodes);
+    double acc = 0;
+    for (size_t i = 0; i <= kHistBins; ++i)
+    {
+      acc += tick_hist[i];
+      if (acc >= target)
+        return (static_cast<double>(i) + 0.5) * 1e-3;
+    }
+    return tick_max_ms;
+  };
   const double session_s = minutes * 60.0;
   std::printf(
       "[bench] minutes=%.1f nodes=%zu rebases=%zu | tick %.3f s (%.3f%% of 1 core) "
@@ -482,12 +521,13 @@ int main(int argc, char** argv)
       t_inputs,
       t_tick + t_rebase + t_viz + t_inputs,
       100.0 * (t_tick + t_rebase + t_viz + t_inputs) / session_s);
-  std::printf("[bench] rss_start=%ld kB peak=%ld kB", rss_start, rss_peak);
+  std::printf("[bench] rss_start=%ld kB end=%ld kB peak=%ld kB", rss_start, RssKb(), rss_peak);
   if (rss_trace.size() >= 2)
   {
     const auto& a = rss_trace[rss_trace.size() / 2];
     const auto& b = rss_trace.back();
-    std::printf(" growth(2nd half)=%.1f kB/h", (b.second - a.second) / ((b.first - a.first) / 60.0));
+    std::printf(" growth(2nd half)=%.1f kB/h",
+                (b.second - a.second) / ((b.first - a.first) / 60.0));
   }
   std::printf("\n");
   // Mean node-tick cost in 5-minute blocks, and in the 60 s windows either side
@@ -497,12 +537,11 @@ int main(int argc, char** argv)
     {
       double s = 0;
       size_t n = 0;
-      for (const auto& [tt, ms] : tick_trace)
-        if (tt >= a && tt < b)
-        {
-          s += ms;
-          ++n;
-        }
+      for (size_t i = static_cast<size_t>(std::max(0.0, a)); i < std::min<size_t>(seconds, b); ++i)
+      {
+        s += sec_sum[i];
+        n += sec_n[i];
+      }
       return n ? s / n : 0.0;
     };
     std::printf("[bench] mean node tick ms per 5 min:");
@@ -510,16 +549,11 @@ int main(int argc, char** argv)
       std::printf(" %.3f", mean_in(a, a + 300));
     std::printf("\n");
     if (!rebase_times.empty())
-      std::printf("[bench] first rebase at %.0f s: mean tick 60 s before=%.3f ms, 60 s after=%.3f ms\n",
-                  rebase_times[0],
-                  mean_in(rebase_times[0] - 60, rebase_times[0]),
-                  mean_in(rebase_times[0], rebase_times[0] + 60));
-  }
-  if (!dump.empty())
-  {
-    std::ofstream f(dump, std::ios::binary);
-    f.write(reinterpret_cast<const char*>(out.data()),
-            static_cast<std::streamsize>(out.size() * sizeof(Record)));
+      std::printf(
+          "[bench] first rebase at %.0f s: mean tick 60 s before=%.3f ms, 60 s after=%.3f ms\n",
+          rebase_times[0],
+          mean_in(rebase_times[0] - 60, rebase_times[0]),
+          mean_in(rebase_times[0], rebase_times[0] + 60));
   }
   return 0;
 }

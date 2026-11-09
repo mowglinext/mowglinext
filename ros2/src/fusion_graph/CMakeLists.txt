@@ -354,6 +354,11 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_gnss_observation_freshness fusion_graph_core)
 
+  # Synthetic mowing-session benchmark (not a test; run by hand, see
+  # tools/bench/CMakeLists.txt for the ROS-free standalone build).
+  add_executable(bench_graph_session tools/bench/bench_graph_session.cpp)
+  target_link_libraries(bench_graph_session fusion_graph_core)
+
   # Performance benchmarks. Long-running (~30 s on ARM); only meaningful
   # in Release builds. Output is grep-friendly for tracking regressions.
   ament_add_gtest(test_perf
