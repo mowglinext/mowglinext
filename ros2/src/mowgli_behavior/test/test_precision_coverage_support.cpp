@@ -301,3 +301,46 @@ TEST(PrecisionCoverage, FreshRawFixedCannotRefreshOldAppliedFixSteadyAge)
   }
   EXPECT_FALSE(p.Ready(3 * S + 200000000, 11 * S + 60000000, tf));
 }
+
+TEST(PrecisionCoverage, TfCurrentAcceptsTheNewestBroadcastJustBeforeNow)
+{
+  // The newest transform is always a little in the past: that is current.
+  EXPECT_TRUE(PrecisionCoverageSupport::TfCurrent(10 * S - 80000000, 10 * S));
+  EXPECT_TRUE(PrecisionCoverageSupport::TfCurrent(10 * S, 10 * S));
+  // fusion_graph future-dates its TF slightly.
+  EXPECT_TRUE(PrecisionCoverageSupport::TfCurrent(10 * S + 50000000, 10 * S));
+  // A localizer that stopped publishing is not.
+  EXPECT_FALSE(
+      PrecisionCoverageSupport::TfCurrent(10 * S - PrecisionCoverageSupport::kMaxTfLagNs - 1,
+                                          10 * S));
+  EXPECT_FALSE(PrecisionCoverageSupport::TfCurrent(0, 10 * S));
+}
+
+TEST(PrecisionCoverage, StaysReadyAcrossTicksBetweenTfBroadcasts)
+{
+  // Field 2026-11-09: RTK-Fixed, robot still, reports every 0.2 s, TF newest
+  // stamp 4-80 ms behind each BT tick. The gate must not flap.
+  PrecisionCoverageSupport p;
+  for (int64_t k = 0; k < 20; ++k)
+  {
+    const int64_t t = S + k * 200000000LL;
+    p.AddStatus(Fixed(t, static_cast<uint64_t>(k + 1)), t, t);
+    p.AddFix(Gps(t), t + 5000000, t + 5000000);
+    p.AddReport(Commit(Gps(t), t + 40000000, static_cast<uint64_t>(k + 1)),
+                t + 30000000,
+                t + 30000000);
+  }
+  const int64_t newest_tf = S + 19 * 200000000LL + 40000000;
+  for (int64_t tick = 0; tick < 5; ++tick)
+  {
+    const int64_t now = newest_tf + 4000000 + tick * 15000000;  // 4-64 ms after it
+    EXPECT_TRUE(p.Ready(now,
+                        now,
+                        [&](int64_t support)
+                        {
+                          return support <= newest_tf &&
+                                 PrecisionCoverageSupport::TfCurrent(newest_tf, now);
+                        }))
+        << "tick " << tick;
+  }
+}
