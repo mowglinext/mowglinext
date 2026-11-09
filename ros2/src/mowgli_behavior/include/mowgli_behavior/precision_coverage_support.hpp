@@ -40,6 +40,20 @@ public:
   using Fix = sensor_msgs::msg::NavSatFix;
   using Status = mowgli_interfaces::msg::GnssStatus;
   using Report = mowgli_interfaces::msg::GnssFusionUpdate;
+  /// Newest map->base_footprint transform may be at most this old for the pose
+  /// support to count as current.
+  static constexpr int64_t kMaxTfLagNs = 500000000LL;
+  /// Whether the localizer's TF is current at @p now_ns, given the stamp of the
+  /// NEWEST map->base_footprint transform (future-dated stamps are current).
+  /// Never ask for the transform AT now: the newest broadcast is always a few
+  /// ms to ~0.1 s in the past, so that lookup failed on most BT ticks; each
+  /// failure moved loss_stamp_ past every collected fix, and the gate flapped
+  /// about once a second with RTK-Fixed and the robot still (field
+  /// 2026-11-09: blade ON/OFF every ~0.5 s for 35 s, coverage never sent).
+  static bool TfCurrent(int64_t latest_tf_ns, int64_t now_ns)
+  {
+    return latest_tf_ns > 0 && now_ns - latest_tf_ns <= kMaxTfLagNs;
+  }
   static int64_t Stamp(const builtin_interfaces::msg::Time& stamp)
   {
     return int64_t(stamp.sec) * 1000000000LL + stamp.nanosec;

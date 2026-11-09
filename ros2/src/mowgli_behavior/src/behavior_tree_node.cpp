@@ -202,8 +202,16 @@ public:
             try
             {
               const rclcpp::Time support(support_ns, get_clock()->get_clock_type());
-              return context_->tf_buffer->canTransform("map", "base_footprint", support) &&
-                     context_->tf_buffer->canTransform("map", "base_footprint", ros_now);
+              if (!context_->tf_buffer->canTransform("map", "base_footprint", support))
+                return false;
+              // Available at now (a static or future-dated chain), or the newest
+              // broadcast is recent: see PrecisionCoverageSupport::TfCurrent.
+              if (context_->tf_buffer->canTransform("map", "base_footprint", ros_now))
+                return true;
+              const auto latest =
+                  context_->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+              return PrecisionCoverageSupport::TfCurrent(
+                  rclcpp::Time(latest.header.stamp).nanoseconds(), ros_now.nanoseconds());
             }
             catch (const std::exception&)
             {
