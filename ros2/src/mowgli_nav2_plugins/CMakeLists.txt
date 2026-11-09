@@ -53,6 +53,8 @@ add_library(${PROJECT_NAME} SHARED
   src/ftc_corner_geometry.cpp
   src/ftc_controller.cpp
   src/ftc_controller_turn_fallback.cpp
+  src/ftc_contour_bypass.cpp
+  src/ftc_controller_contour_bypass.cpp
   src/ftc_controller_plugin.cpp
   src/coverage_entry_goal_checker.cpp
   src/path_progress_goal_checker.cpp
@@ -356,6 +358,28 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_ftc_turn_fallback
+    ${geometry_msgs_TARGETS}
+    ${nav2_costmap_2d_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    mowgli_interfaces::mowgli_interfaces_headers
+  )
+
+  # Bug2-style contour bypass PROTOTYPE (ftc_contour_bypass.hpp): not wired
+  # into FTCController; evaluated offline (lattice_replay --contour). ROS-free.
+  ament_add_gtest(test_ftc_contour_bypass
+    test/test_ftc_contour_bypass.cpp
+    src/ftc_contour_bypass.cpp
+    src/ftc_turn_fallback.cpp
+    src/obstacle_deviation.cpp
+  )
+
+  target_include_directories(test_ftc_contour_bypass
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  target_link_libraries(test_ftc_contour_bypass
     ${geometry_msgs_TARGETS}
     ${nav2_costmap_2d_TARGETS}
     ${tf2_TARGETS}

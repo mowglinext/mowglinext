@@ -193,32 +193,6 @@ struct MotionShapes
   ObstacleDeviation::Footprint body;
 };
 
-/// `fp` grown by `margin` in every direction (vertices pushed away from the
-/// centroid along both axes: exact for the rectangular chassis).
-ObstacleDeviation::Footprint GrowFootprint(const ObstacleDeviation::Footprint& fp, double margin)
-{
-  if (margin <= 0.0 || fp.empty())
-  {
-    return fp;
-  }
-  double cx = 0.0;
-  double cy = 0.0;
-  for (const auto& v : fp)
-  {
-    cx += v.x;
-    cy += v.y;
-  }
-  cx /= static_cast<double>(fp.size());
-  cy /= static_cast<double>(fp.size());
-  ObstacleDeviation::Footprint out = fp;
-  for (auto& v : out)
-  {
-    v.x += (v.x >= cx) ? margin : -margin;
-    v.y += (v.y >= cy) ? margin : -margin;
-  }
-  return out;
-}
-
 /// A planned rotation the executing PIVOT will accept whatever direction it
 /// takes: up to unambiguous_rotation_rad the short way is certain and only that
 /// sweep is checked; beyond it (up to 180 deg) the robot's real heading on
@@ -305,6 +279,32 @@ FallbackPose BackedUp(const FallbackPose& pose, double distance_m)
   return {pose.x - distance_m * std::cos(pose.yaw),
           pose.y - distance_m * std::sin(pose.yaw),
           pose.yaw};
+}
+
+// `fp` grown by `margin` in every direction (vertices pushed away from the
+/// centroid along both axes: exact for the rectangular chassis).
+ObstacleDeviation::Footprint GrowFootprint(const ObstacleDeviation::Footprint& fp, double margin)
+{
+  if (margin <= 0.0 || fp.empty())
+  {
+    return fp;
+  }
+  double cx = 0.0;
+  double cy = 0.0;
+  for (const auto& v : fp)
+  {
+    cx += v.x;
+    cy += v.y;
+  }
+  cx /= static_cast<double>(fp.size());
+  cy /= static_cast<double>(fp.size());
+  ObstacleDeviation::Footprint out = fp;
+  for (auto& v : out)
+  {
+    v.x += (v.x >= cx) ? margin : -margin;
+    v.y += (v.y >= cy) ? margin : -margin;
+  }
+  return out;
 }
 
 double PlanHeadingSweep(const std::vector<geometry_msgs::msg::PoseStamped>& plan,

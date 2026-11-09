@@ -264,6 +264,10 @@ bool ReverseSweepClear(const nav2_costmap_2d::Costmap2D& costmap,
                        double distance_m,
                        double margin_m = 0.0);
 
+/// `fp` grown by `margin` in every direction (vertices pushed away from the
+/// centroid along both axes: exact for the rectangular chassis).
+ObstacleDeviation::Footprint GrowFootprint(const ObstacleDeviation::Footprint& fp, double margin);
+
 /// `pose` backed straight up by `distance_m`.
 FallbackPose BackedUp(const FallbackPose& pose, double distance_m);
 

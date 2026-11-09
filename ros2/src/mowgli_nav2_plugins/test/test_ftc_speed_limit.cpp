@@ -584,7 +584,8 @@ protected:
                                         {"obstacle_reverse_enabled", true},
                                         {"obstacle_reverse_speed_mps", 0.15},
                                         {"obstacle_reverse_max_dist_m", 0.30},
-                                        {"turn_fallback_enabled", false}})
+                                        {"turn_fallback_enabled", false},
+                                        {"contour_bypass_enabled", false}})
     {
       node_->declare_parameter(std::string(kPlugin) + "." + parameter.get_name(),
                                parameter.get_parameter_value());

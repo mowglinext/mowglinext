@@ -28,6 +28,9 @@
 //   * An obstacle that appears once the fallback is under way: it stops and the
 //     goal is aborted (hold, then ControllerException), never driven into.
 //   * The no-LiDAR overlay (obstacle flags off): the fallback is unreachable.
+//   * The contour bypass (ftc_contour_bypass.hpp) on a wall across a straight:
+//     the robot walks round the wall's end on spliced legs and pivots, rejoins
+//     the swath past it and finishes, never with a lethal cell under its body.
 
 #include <algorithm>
 #include <chrono>
@@ -129,6 +132,9 @@ public:
   {
     bool fallback{true};
     bool lidar{true};  // false = the no-LiDAR overlay's obstacle flags
+    /// contour_bypass_enabled (ftc_contour_bypass.hpp): off unless a test is
+    /// about it, so the other scenes keep pinning the WEDGED path.
+    bool contour{false};
   };
 
   explicit Harness(const Options& opt)
@@ -372,6 +378,7 @@ private:
     set("obstacle_reverse_max_dist_m", rclcpp::ParameterValue(0.30));
     set("obstacle_reverse_speed_mps", rclcpp::ParameterValue(0.15));
     set("turn_fallback_enabled", rclcpp::ParameterValue(opt.fallback));
+    set("contour_bypass_enabled", rclcpp::ParameterValue(opt.contour));
   }
 
   static std::int64_t Ns(double seconds)
@@ -586,6 +593,28 @@ TEST_F(FtcTurnFallbackController, ObstacleAppearingDuringTheFallbackStopsAndAbor
   EXPECT_EQ(h.steps_in_lethal_, 0);
   h.Drain();
   EXPECT_TRUE(h.progress_plans_.empty());  // it never reached the rejoin
+}
+
+TEST_F(FtcTurnFallbackController, ContourBypassWalksRoundAWallAcrossAStraight)
+{
+  Harness h({true, true, true});
+  h.MarkWallX(3.0, -1.5, 1.5);
+  h.SetRobot(0.0, 0.0, 0.0);
+  h.SetPlan(StraightPlan(0.0, 6.0));
+  h.Run(180.0);
+  EXPECT_FALSE(h.aborted_.has_value()) << *h.aborted_;
+  EXPECT_TRUE(h.finished_);
+  // Walked round, on the contour legs, never into the wall.
+  EXPECT_EQ(h.steps_in_lethal_, 0);
+  EXPECT_GT(h.min_clearance_m_, 0.0);
+  EXPECT_GE(h.in_place_episodes_, 2);
+  // The progress trackers got the remainder from a rejoin past the wall, on
+  // the swath.
+  h.Drain();
+  ASSERT_FALSE(h.progress_plans_.empty());
+  const auto& front = h.progress_plans_.back().poses.front().pose;
+  EXPECT_GT(front.position.x, 3.0);
+  EXPECT_NEAR(front.position.y, 0.0, 1e-9);
 }
 
 TEST_F(FtcTurnFallbackController, NoLidarOverlayNeverReachesTheFallback)

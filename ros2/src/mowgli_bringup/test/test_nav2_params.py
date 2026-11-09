@@ -899,6 +899,32 @@ def test_ftc_turn_fallback_is_configured_and_bounded() -> None:
         assert 10.0 <= fcp["turn_fallback_timeout_s"] <= 120.0
 
 
+def test_ftc_contour_bypass_is_configured_and_bounded() -> None:
+    """FTC's contour bypass (ftc_contour_bypass.hpp) walks the bladed robot round
+    an obstacle neither the lattice nor the turn fallback can pass, off its plan
+    for metres. Every knob that bounds it must be set explicitly (a missing key
+    silently runs the C++ default) and stay inside the ranges FTCController
+    accepts: a contour of a few metres, a follow distance that keeps the body
+    (0.285 m + margins) off the obstacle without turning the skirt into a lawn
+    crossing, and a finite deadline long enough for the pivots it plans.
+    """
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        for key in ("contour_bypass_enabled", "contour_bypass_max_contour_m",
+                    "contour_bypass_max_rejoin_arc_m", "contour_bypass_follow_distance_m",
+                    "contour_bypass_timeout_s"):
+            assert key in fcp, f"FollowCoveragePath.{key} missing from merged config"
+        assert isinstance(fcp["contour_bypass_enabled"], bool)
+        assert 1.0 <= fcp["contour_bypass_max_contour_m"] <= 15.0
+        assert 0.5 <= fcp["contour_bypass_max_rejoin_arc_m"] <= 10.0
+        assert 0.35 <= fcp["contour_bypass_follow_distance_m"] <= 1.0, (
+            "the contour must keep the body off the obstacle and stay a skirt"
+        )
+        assert 30.0 <= fcp["contour_bypass_timeout_s"] <= 300.0, (
+            "an 8 m contour with several pivots takes ~30-60 s"
+        )
+
+
 def test_turn_fallback_reaches_both_variants() -> None:
     """The fallback runs where FTC's obstacle deviation runs — since 2026-10-10
     in BOTH overlays: the no-LiDAR local costmap carries the fleet peers layer,
