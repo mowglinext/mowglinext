@@ -219,6 +219,8 @@ private:
   // Last applied blade-load scale (1.0 = not limiting); kept for the
   // limit-engaged/released log lines.
   double blade_load_scale_{1.0};
+  /// Blade spin-up gate (ftc_blade_load.hpp); tracks the blade, not the goal.
+  FtcBladeSpinUp blade_spin_up_;
 
   /// Apply the blade-load slowdown (Config::blade_load_*) to a carrot target
   /// speed, reading the latest blade telemetry under blade_mutex_.
