@@ -11,10 +11,12 @@
 // server's planning_time_s (the whole planCoverage callback) and the client round trip.
 //
 //   e2e_plan_coverage REPS FIXTURE.json...   (replay schema 1, first polygon)
+// With E2E_SAMPLES=<file>, every repetition's times are appended there as JSON lines.
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <stdexcept>
@@ -191,6 +193,18 @@ int main(int argc, char** argv)
         break;
       }
       const std::string name = args[f].substr(args[f].find_last_of('/') + 1);
+      if (const char* samples = std::getenv("E2E_SAMPLES"))
+      {
+        std::ofstream out(samples, std::ios::app);
+        out << nlohmann::json{{"fixture", name.substr(0, name.size() - 5)},
+                              {"poses", poses},
+                              {"base_server_ms", server_ms[0]},
+                              {"cand_server_ms", server_ms[1]},
+                              {"base_roundtrip_ms", wall_ms[0]},
+                              {"cand_roundtrip_ms", wall_ms[1]}}
+                   .dump()
+            << '\n';
+      }
       std::printf("%-20s %9zu %5zu %12.1f %12.1f %7.1fx %12.1f %12.1f  identical(%zu B)\n",
                   name.substr(0, name.size() - 5).c_str(),
                   poses,
