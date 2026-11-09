@@ -20,6 +20,14 @@ inline constexpr int64_t kMotionSupportGapNs = 1000000000;
 // every command and it could not undock. Graph and dead-reckoning state are
 // kept through a loss, so resuming is a publication decision only.
 inline constexpr int64_t kMotionRecoveryNs = 2000000000;
+// hardware_bridge stamps IMU / wheel samples a few ms AHEAD of their receipt
+// (field bag 2026-11-09: up to +6 ms, on ~45 % of samples). Treating every such
+// sample as "from the future" made the 20 Hz TF thread skip ticks at random:
+// odom->base_footprint gaps of 100-200 ms on 13 % of intervals, and
+// collision_monitor (transform_tolerance 0.1 s) declared its scan source
+// invalid and stopped the robot. Inputs up to this far ahead of now() are
+// current; anything further is still refused as a clock fault.
+inline constexpr int64_t kMotionInputFutureToleranceNs = 100000000;
 
 // All access belongs under FusionGraphNode::tf_state_mu_. A new callback alone
 // cannot renew support: only a validated, advancing acquisition stamp may do so.
@@ -73,7 +81,8 @@ public:
       recovery_.reset();
       ++recoveries_;
     }
-    if (lost_ || !wheel_ || !imu_ || *wheel_ > now || *imu_ > now)
+    if (lost_ || !wheel_ || !imu_ || *wheel_ > now + kMotionInputFutureToleranceNs ||
+        *imu_ > now + kMotionInputFutureToleranceNs)
       return false;
     if (target < now || target - *wheel_ >= kMotionSupportGapNs ||
         target - *imu_ >= kMotionSupportGapNs)
