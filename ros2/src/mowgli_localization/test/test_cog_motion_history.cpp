@@ -87,6 +87,21 @@ TEST(CogMotionHistory, InvalidFutureDuplicateAndReorderedMotionCannotReplaceAcce
   EXPECT_DOUBLE_EQ(history.At(2 * S)->gyro_z, .1);
 }
 
+TEST(CogMotionHistory, InputStampedSlightlyAheadOfReceiptIsCurrent)
+{
+  CogMotionHistory history;
+  history.ObserveClock(3 * S);
+  EXPECT_TRUE(history.AddWheel(3 * S + 6000000, .3, 0));
+  EXPECT_TRUE(history.AddGyro(3 * S + 6000000, .1));
+  EXPECT_TRUE(history.AddWheel(3 * S + kCogMotionFutureToleranceNs, .3, 0));
+  EXPECT_FALSE(history.AddWheel(3 * S + kCogMotionFutureToleranceNs + 1, .3, 0));
+  EXPECT_FALSE(history.AddGyro(3 * S + kCogMotionFutureToleranceNs + 1, .1));
+  EXPECT_FALSE(history.At(3 * S));
+  const auto ahead = history.At(3 * S + 6000000);
+  ASSERT_TRUE(ahead);
+  EXPECT_DOUBLE_EQ(ahead->gyro_z, .1);
+}
+
 TEST(CogMotionHistory, RetiredAndUncoveredHistoryNeverUsesNewerInput)
 {
   CogMotionHistory history(2);

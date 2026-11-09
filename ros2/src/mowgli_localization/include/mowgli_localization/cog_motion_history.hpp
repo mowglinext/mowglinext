@@ -13,6 +13,12 @@
 namespace mowgli_localization
 {
 
+// hardware_bridge stamps wheel / IMU samples a few ms ahead of their receipt
+// (field bag 2026-11-09: up to +6 ms on ~45 % of samples). Such samples are
+// current; anything further ahead of now() is still refused as a clock fault.
+// Same bound as fusion_graph's kMotionInputFutureToleranceNs.
+inline constexpr std::int64_t kCogMotionFutureToleranceNs = 100000000;
+
 // Source-stamped, held motion inputs for the COG baseline. These records describe
 // accepted inputs, not freshness inferred from callback arrival. A bounded-history
 // miss is explicit; a newer motion sample never substitutes for an older fix.
@@ -157,7 +163,7 @@ private:
 
   bool ValidStamp(std::int64_t stamp_ns) const
   {
-    return now_ns_ && stamp_ns >= 0 && stamp_ns <= *now_ns_;
+    return now_ns_ && stamp_ns >= 0 && stamp_ns <= *now_ns_ + kCogMotionFutureToleranceNs;
   }
 
   std::size_t capacity_;
