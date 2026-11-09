@@ -49,6 +49,13 @@ namespace
 constexpr double kIntendedCommandHorizonSec = 0.1;  // shipped controller_frequency: 10 Hz
 constexpr double kMaxControlIntervalSec = 0.5;  // existing supported PID interval
 constexpr double kStoppedTranslationMps = 0.01;
+// Once a PRE_ROTATE/PIVOT episode has seen the translation settled, only motion
+// above this re-inhibits the rotation. The in-place rotation itself makes the
+// wheel odometry read +-0.027 m/s (one tick of difference between the wheels
+// per 66 ms sample); against kStoppedTranslationMps every such sample zeroed
+// the command, the robot stuttered and 6 of 13 pivots hit the 10 s timeout
+// (field 2026-11-09, bag 113449Z). Real coasting (>= 2 ticks) still holds it.
+constexpr double kRotationTranslationNoiseMps = 0.05;
 }  // namespace
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -876,6 +883,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   pivot_approach_start_.reset();
   current_state_ = PlannerState::PRE_ROTATE;
   state_entered_time_ = clock_->now();
+  ++state_entry_seq_;
   is_crashed_ = false;
 
   // Reset deviation state with the new path so a previous strip's avoidance
@@ -1058,6 +1066,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
                 global_plan_.size());
     current_state_ = PlannerState::FINISHED;
     state_entered_time_ = clock_->now();
+    ++state_entry_seq_;
   }
 
   global_plan_pub_->publish(pub_path);
@@ -1331,9 +1340,17 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     throw nav2_core::ControllerException(
         "FTCController: terminal failure in planner state machine.");
   }
+  const bool rotating_state =
+      current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT;
+  const double measured_translation = std::hypot(velocity.linear.x, velocity.linear.y);
+  if (rotating_state && measured_translation <= kStoppedTranslationMps)
+    rotation_settled_entry_ = state_entry_seq_;
+  const bool settled_this_episode =
+      rotation_settled_entry_ && *rotation_settled_entry_ == state_entry_seq_;
   const bool settling_rotation =
-      (current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT) &&
-      !(std::hypot(velocity.linear.x, velocity.linear.y) <= kStoppedTranslationMps);
+      rotating_state &&
+      !(measured_translation <=
+        (settled_this_episode ? kRotationTranslationNoiseMps : kStoppedTranslationMps));
   if ((current_state_ == PlannerState::PRE_ROTATE || current_state_ == PlannerState::PIVOT) &&
       new_state == PlannerState::FOLLOWING)
   {
@@ -1364,6 +1381,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       leavePivot();
     }
     state_entered_time_ = clock_->now();
+    ++state_entry_seq_;
     current_state_ = new_state;
   }
 

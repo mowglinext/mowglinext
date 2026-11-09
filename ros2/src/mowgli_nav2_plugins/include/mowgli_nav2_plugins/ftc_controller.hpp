@@ -127,6 +127,10 @@ private:
 
   PlannerState current_state_{PlannerState::PRE_ROTATE};
   rclcpp::Time state_entered_time_;
+  /// Incremented with every state_entered_time_ assignment (one state episode).
+  uint64_t state_entry_seq_{0};
+  /// The state episode in which PRE_ROTATE/PIVOT last measured settled translation.
+  std::optional<uint64_t> rotation_settled_entry_;
   bool is_crashed_{false};
 
   /// Seconds elapsed since the current state was entered.
