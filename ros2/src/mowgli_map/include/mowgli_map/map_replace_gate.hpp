@@ -17,11 +17,11 @@
  * @brief When a whole-map REPLACE must wait — pure, no ROS deps.
  *
  * A GUI "Save map" is clear_map -> add_area x N -> save_areas. It throws the
- * whole map away before the new one is complete: the keepout mask goes empty (the garden keepout layer then
- * fills the GLOBAL costmap lethal, so transit and docking plans fail), the
- * mow-progress grid is wiped, every add_area auto-saves a PARTIAL areas.dat,
- * and the area-list generation moves under the behaviour tree. A mower that
- * is undocking, mowing, in transit or driving home is standing on that map.
+ * whole map away before the new one is complete: the keepout mask goes empty (the garden keepout
+ * layer then fills the GLOBAL costmap lethal, so transit and docking plans fail), the mow-progress
+ * grid is wiped, every add_area auto-saves a PARTIAL areas.dat, and the area-list generation moves
+ * under the behaviour tree. A mower that is undocking, mowing, in transit or driving home is
+ * standing on that map.
  *
  * HIGH_LEVEL_STATE_AUTONOMOUS is the BT's own "a mission is running" state
  * (undock, transit, mowing, recovery and RETURNING_HOME — see
