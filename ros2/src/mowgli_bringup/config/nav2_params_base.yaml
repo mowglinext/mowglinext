@@ -756,6 +756,26 @@ controller_server:
       turn_fallback_max_rejoin_arc_m: 3.0    # path a rejoin may skip, [0.2, 10.0]
       turn_fallback_min_turn_deg: 45.0       # a straight (post, wall) is not a turn, [10, 180]
       turn_fallback_timeout_s: 45.0          # whole manoeuvre, else the goal aborts, [5, 300]
+      # CONTOUR BYPASS (ftc_contour_bypass.hpp), Bug2-style, FIELD TEST. Third
+      # stage after the lattice and the turn fallback: where neither can pass
+      # (an obstacle on a STRAIGHT wider than the lattice's lateral reach, or a
+      # turn with no single-connector rejoin), FTC walks round the obstacle's
+      # contour — an iso-distance line contour_bypass_follow_distance_m from the
+      # LiDAR's true-lethal cells AND the zone band (the recorded boundary is a
+      # virtual wall), both sides tried, the faster kept — until it meets the
+      # plan again past the blockage (Bug2's leave rule), then drives it BLADE-ON
+      # as straight legs joined by pivots spliced into its plan: the turn
+      # fallback's execution path (PIVOT sweep gate, lattice and
+      # currentBodyInLethal every cycle, hold -> abort on anything new, deadline
+      # contour_bypass_timeout_s). Legs planned with a 0.10 m margin. No reverse
+      # of its own: too close to turn = the WEDGED reverse-escape, then retry.
+      # Before it: WEDGED -> reverse -> hold -> abort -> FollowStrip blade-off
+      # detour (the skirted stretch never mowed).
+      contour_bypass_enabled: true
+      contour_bypass_max_contour_m: 8.0        # contour walked per side, [1, 15]
+      contour_bypass_max_rejoin_arc_m: 8.0     # plan past the blockage, [0.5, 10]
+      contour_bypass_follow_distance_m: 0.65   # base_link to obstacle, [0.35, 1.0]
+      contour_bypass_timeout_s: 90.0           # whole manoeuvre, else the goal aborts, [5, 300]
 
 # ---------------------------------------------------------------------------
 # Planner server

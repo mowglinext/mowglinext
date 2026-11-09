@@ -48,6 +48,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_nav2_plugins/ftc_blade_load.hpp"
 #include "mowgli_nav2_plugins/ftc_collision_monitor_hold.hpp"
+#include "mowgli_nav2_plugins/ftc_contour_bypass.hpp"
 #include "mowgli_nav2_plugins/ftc_corner_geometry.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
@@ -357,6 +358,11 @@ private:
     /// last rejoin), so a turn that stays blocked cannot loop.
     std::optional<std::size_t> rearm_idx;
     std::size_t count{0};
+    /// Deadline of the running manoeuvre (s): turn_fallback_timeout_s, or
+    /// contour_bypass_timeout_s for a contour bypass.
+    double timeout_s{45.0};
+    /// The running manoeuvre is a contour bypass (log wording only).
+    bool contour{false};
   };
 
   TurnFallbackState turn_fallback_;
@@ -388,10 +394,49 @@ private:
                                     std::size_t& window_first,
                                     TurnFallbackProblem* problem_out = nullptr);
 
+  /// The inputs both manoeuvres are planned from: the plan window around the
+  /// robot (`window_ahead_m` past the carrot) in the costmap frame, the robot
+  /// pose, the shapes, and a `followable` predicate that captures `guard` and
+  /// `body` by reference (valid while the caller's arguments are). False with
+  /// `why` set when an input is missing.
+  bool buildFallbackProblem(std::size_t carrot_idx,
+                            const BoundaryGuard& guard,
+                            const ObstacleDeviation::Footprint& body,
+                            double window_ahead_m,
+                            std::size_t& window_first,
+                            TurnFallbackProblem& problem,
+                            std::string& why);
+
   /// Replace the skipped part of global_plan_ by the fallback's runtime pivot
   /// corners and connector, and start driving them. False when the robot pose
   /// is unavailable (nothing changed).
   bool spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t window_first);
+
+  // ── Contour bypass (ftc_contour_bypass.hpp) ───────────────────────────────
+  //
+  // Third stage after the lattice and the turn fallback: where neither can
+  // drive past the blockage (an obstacle on a STRAIGHT, or a turn with no
+  // single-connector rejoin), a Bug2-style walk round the obstacle's contour
+  // is planned, simplified into straight legs joined by pivots, and spliced
+  // into global_plan_ exactly like the turn fallback (runtime pivot corners,
+  // executed by PIVOT / FOLLOWING, re-checked every cycle, completion and
+  // deadline in turnFallbackProgress). No reverse of its own: a robot too close
+  // to turn takes the WEDGED reverse-escape and tries again from there.
+
+  /// Plan and engage a contour bypass. Same contract as tryTurnFallback.
+  bool tryContourBypass(std::size_t carrot_idx,
+                        const BoundaryGuard& guard,
+                        const ObstacleDeviation::Footprint& body);
+
+  /// Splice the chosen side's legs (costmap frame) into global_plan_.
+  bool spliceContourBypass(const ContourSide& side, std::size_t window_first);
+
+  /// Adopt `spliced` as the working plan (rejoin at `rejoin_idx`), reset the
+  /// deviation / hold / reverse state, recompute the pivot corners, and start
+  /// driving it (PIVOT when it opens on a corner). Returns whether it does.
+  bool adoptFallbackPlan(std::vector<geometry_msgs::msg::PoseStamped>&& spliced,
+                         std::size_t rejoin_idx,
+                         double skipped_arc_m);
 
   /// One tick of the fallback's straight reverse; emits into cmd_vel.
   void turnFallbackReverseTick(double dt, geometry_msgs::msg::TwistStamped& cmd_vel);
@@ -878,6 +923,18 @@ private:
     /// The whole fallback (reverse, pivots, connector) must reach its rejoin
     /// within this time (s), else the goal is aborted.
     double turn_fallback_timeout_s{45.0};
+
+    /// Contour bypass (ftc_contour_bypass.hpp): Bug2-style walk round an
+    /// obstacle neither the lattice nor the turn fallback can pass.
+    bool contour_bypass_enabled{true};
+    /// Longest contour walked per side (m).
+    double contour_bypass_max_contour_m{8.0};
+    /// Furthest plan arc past the blockage the rejoin may be (m).
+    double contour_bypass_max_rejoin_arc_m{8.0};
+    /// base_link distance to the obstacle the contour keeps (m).
+    double contour_bypass_follow_distance_m{0.65};
+    /// The whole bypass must reach its rejoin within this time (s).
+    double contour_bypass_timeout_s{90.0};
   };
 
   Config config_;

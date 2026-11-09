@@ -49,6 +49,10 @@
 //   --margin M      planning margin around the swept shapes, default 0.05
 //   --max-rot D     largest rotation checked one way only, default 160
 //   --ascii         draw the fallback (odom frame, 0.05 m per character)
+//   --contour       where the lattice is WEDGED, also run the Bug2-style contour
+//                   bypass PROTOTYPE (ftc_contour_bypass.hpp) on the same inputs
+//                   and print both sides; with --ascii, draw the chosen legs
+//   --contour-all   the contour bypass on every sample
 //
 // Output per sample: FEASIBLE/WEDGED, fallback level, planned horizon; for a
 // degraded or wedged solve, one row per station (left = +max .. right = -max):
@@ -70,6 +74,7 @@
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "mowgli_nav2_plugins/ftc_carrot_lead.hpp"
+#include "mowgli_nav2_plugins/ftc_contour_bypass.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_offset_lattice.hpp"
 #include "mowgli_nav2_plugins/ftc_pivot.hpp"
@@ -95,6 +100,8 @@ struct Options
   bool fallback{false};
   bool fallback_all{false};
   bool ascii{false};
+  bool contour{false};
+  bool contour_all{false};
   double fallback_reverse{0.40};
   double fallback_arc{3.0};
   double fallback_min_turn_deg{45.0};
@@ -167,6 +174,10 @@ bool ParseArgs(int argc, char** argv, Options& o)
       o.fallback = true;
     else if (a == "--fallback-all")
       o.fallback = o.fallback_all = true;
+    else if (a == "--contour")
+      o.contour = true;
+    else if (a == "--contour-all")
+      o.contour = o.contour_all = true;
     else if (a == "--ascii")
       o.ascii = true;
     else if (a == "--reverse")
@@ -531,6 +542,131 @@ void DrawFallback(const nav2_costmap_2d::Costmap2D& local,
   }
 }
 
+void PrintContourSide(const char* name, const mn::ContourSide& s, std::size_t first)
+{
+  if (!s.reached)
+  {
+    std::printf("     %-5s FAILED: %s (walked %.2fm)\n", name, s.why.c_str(), s.walk_m);
+    return;
+  }
+  std::printf(
+      "     %-5s reverse %.2fm, walk %.2fm -> %zu legs %.2fm, %zu pivots (%.0f deg total), "
+      "rejoin idx %zu, plan skipped %.2fm, min clearance %.2fm, ~%.1fs\n",
+      name,
+      s.reverse_m,
+      s.walk_m,
+      s.legs.size() - 1,
+      s.legs_m,
+      s.pivots,
+      s.rotation_rad * 180.0 / M_PI,
+      first + s.rejoin,
+      s.skipped_arc_m,
+      s.min_clearance_m,
+      s.est_time_s);
+}
+
+/// Odom-frame ASCII view of the chosen contour: '#' lethal, 'z' zone, '*' plan,
+/// 'o' raw walk, 'L' leg vertices, 'R' robot, 'B' first blocked pose.
+void DrawContour(const nav2_costmap_2d::Costmap2D& local,
+                 const mn::BoundaryGuard& guard,
+                 const mn::ContourBypassProblem& problem,
+                 const mn::ContourBypassPlan& plan)
+{
+  constexpr double kCell = 0.05;
+  constexpr int kHalf = 50;
+  const double cx = problem.robot.x;
+  const double cy = problem.robot.y;
+  std::map<std::pair<int, int>, char> marks;
+  const auto mark = [&](double x, double y, char ch)
+  {
+    marks[{static_cast<int>(std::lround((x - cx) / kCell)),
+           static_cast<int>(std::lround((y - cy) / kCell))}] = ch;
+  };
+  for (const auto& p : problem.plan)
+  {
+    mark(p.pose.position.x, p.pose.position.y, '*');
+  }
+  if (const mn::ContourSide* s = plan.Best())
+  {
+    for (const auto& q : s->walk)
+    {
+      mark(q.x, q.y, 'o');
+    }
+    for (const auto& q : s->legs)
+    {
+      mark(q.x, q.y, 'L');
+    }
+  }
+  const auto& b = problem.plan[plan.blocked].pose.position;
+  mark(b.x, b.y, 'B');
+  mark(cx, cy, 'R');
+  for (int j = kHalf; j >= -kHalf; --j)
+  {
+    std::string row = "   ";
+    for (int i = -kHalf; i <= kHalf; ++i)
+    {
+      const double x = cx + i * kCell;
+      const double y = cy + j * kCell;
+      char ch = '.';
+      unsigned int mx = 0;
+      unsigned int my = 0;
+      if (local.worldToMap(x, y, mx, my) &&
+          mn::ObstacleDeviation::isObstacleCell(local.getCost(mx, my)))
+      {
+        ch = '#';
+      }
+      else if (guard.isLethalAt(x, y))
+      {
+        ch = 'z';
+      }
+      const auto it = marks.find({i, j});
+      if (it != marks.end())
+      {
+        ch = it->second;
+      }
+      row += ch;
+    }
+    std::printf("%s\n", row.c_str());
+  }
+}
+
+/// What the Bug2-style contour bypass prototype decides on the same inputs.
+void ReplayContour(const nav2_costmap_2d::Costmap2D& local,
+                   const mn::BoundaryGuard& guard,
+                   const mn::TurnFallbackProblem& problem,
+                   std::size_t first,
+                   const Options& o)
+{
+  // As FTCController::tryContourBypass configures it.
+  mn::ContourBypassCfg cfg;
+  cfg.plan_margin_m = mn::kContourBypassPlanMarginM;
+  cfg.max_reverse_m = 0.0;
+  cfg.blockage_scan_m = kHorizon;
+  const auto t0 = std::chrono::steady_clock::now();
+  const mn::ContourBypassPlan plan = mn::PlanContourBypass(problem, cfg);
+  const double ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+  std::printf(
+      "   CONTOUR %s: blocked idx %zu (%.2fm ahead), chosen %s, %zu evaluations (%.1f ms)\n",
+      mn::ToString(plan.verdict),
+      first + plan.blocked,
+      plan.blocked_arc_m,
+      plan.chosen > 0 ? "left" : (plan.chosen < 0 ? "right" : "none"),
+      plan.evaluations,
+      ms);
+  if (plan.verdict == mn::ContourBypassVerdict::kNoBlockage ||
+      plan.verdict == mn::ContourBypassVerdict::kBadInput)
+  {
+    return;
+  }
+  PrintContourSide("left", plan.left, first);
+  PrintContourSide("right", plan.right, first);
+  if (o.ascii)
+  {
+    DrawContour(local, guard, problem, plan);
+  }
+}
+
 /// What FTCController's turn fallback would decide on this sample.
 void ReplayFallback(const std::vector<geometry_msgs::msg::PoseStamped>& plan,
                     std::size_t carrot,
@@ -606,6 +742,14 @@ void ReplayFallback(const std::vector<geometry_msgs::msg::PoseStamped>& plan,
   };
   const auto t0 = std::chrono::steady_clock::now();
   const mn::TurnFallbackPlan fb = mn::PlanTurnFallback(problem, cfg);
+  if (!o.fallback)
+  {
+    if (o.contour)
+    {
+      ReplayContour(local, guard, problem, first, o);
+    }
+    return;
+  }
   const double ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
   if (fb.verdict != mn::TurnFallbackVerdict::kPlanned)
@@ -650,9 +794,13 @@ void ReplayFallback(const std::vector<geometry_msgs::msg::PoseStamped>& plan,
         fb.evaluated,
         ms);
   }
-  if (o.ascii)
+  if (o.ascii && o.fallback)
   {
     DrawFallback(local, guard, problem, fb);
+  }
+  if (o.contour)
+  {
+    ReplayContour(local, guard, problem, first, o);
   }
 }
 
@@ -714,7 +862,7 @@ void ReplaySample(const std::string& dir, const Options& o)
   {
     PrintGrid(solver, o);
   }
-  if (o.fallback && (o.fallback_all || !sol.plan.feasible))
+  if ((o.fallback || o.contour) && (o.fallback_all || o.contour_all || !sol.plan.feasible))
   {
     ReplayFallback(plan, carrot, m, local, guard, cfg, o);
   }

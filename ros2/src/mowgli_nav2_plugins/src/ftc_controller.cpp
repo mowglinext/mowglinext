@@ -399,6 +399,25 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.turn_fallback_timeout_s =
       std::clamp(declare_double("turn_fallback_timeout_s", 45.0), 5.0, 300.0);
 
+  // Contour bypass (ftc_contour_bypass.hpp). Declared defaults = the shipped
+  // nav2_params_base.yaml values.
+  config_.contour_bypass_enabled = declare_bool("contour_bypass_enabled", true);
+  config_.contour_bypass_max_contour_m =
+      std::clamp(declare_double("contour_bypass_max_contour_m", 8.0),
+                 kContourBypassMinContourM,
+                 kContourBypassMaxContourCapM);
+  config_.contour_bypass_max_rejoin_arc_m =
+      std::clamp(declare_double("contour_bypass_max_rejoin_arc_m", 8.0),
+                 kContourBypassMinRejoinArcM,
+                 kContourBypassMaxRejoinArcCapM);
+  config_.contour_bypass_follow_distance_m =
+      std::clamp(declare_double("contour_bypass_follow_distance_m", 0.65),
+                 kContourBypassMinFollowM,
+                 kContourBypassMaxFollowM);
+  config_.contour_bypass_timeout_s = std::clamp(declare_double("contour_bypass_timeout_s", 90.0),
+                                                kContourBypassMinTimeoutS,
+                                                kContourBypassMaxTimeoutS);
+
   // Register parameter-change callback.
   param_cb_handle_ = node->add_on_set_parameters_callback(
       [this](const std::vector<rclcpp::Parameter>& params)
@@ -867,6 +886,36 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 5.0, 300.0))
         break;
       config_.turn_fallback_timeout_s = p.as_double();
+    }
+    else if (key == "contour_bypass_enabled")
+    {
+      config_.contour_bypass_enabled = p.as_bool();
+    }
+    else if (key == "contour_bypass_max_contour_m")
+    {
+      if (reject_invalid(
+              key, p.as_double(), kContourBypassMinContourM, kContourBypassMaxContourCapM))
+        break;
+      config_.contour_bypass_max_contour_m = p.as_double();
+    }
+    else if (key == "contour_bypass_max_rejoin_arc_m")
+    {
+      if (reject_invalid(
+              key, p.as_double(), kContourBypassMinRejoinArcM, kContourBypassMaxRejoinArcCapM))
+        break;
+      config_.contour_bypass_max_rejoin_arc_m = p.as_double();
+    }
+    else if (key == "contour_bypass_follow_distance_m")
+    {
+      if (reject_invalid(key, p.as_double(), kContourBypassMinFollowM, kContourBypassMaxFollowM))
+        break;
+      config_.contour_bypass_follow_distance_m = p.as_double();
+    }
+    else if (key == "contour_bypass_timeout_s")
+    {
+      if (reject_invalid(key, p.as_double(), kContourBypassMinTimeoutS, kContourBypassMaxTimeoutS))
+        break;
+      config_.contour_bypass_timeout_s = p.as_double();
     }
   }
 

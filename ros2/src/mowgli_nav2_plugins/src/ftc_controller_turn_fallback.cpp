@@ -45,27 +45,20 @@ namespace mowgli_nav2_plugins
 
 // ── Turn fallback (ftc_turn_fallback.hpp) ─────────────────────────────────────
 
-TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
-                                                 const BoundaryGuard& guard,
-                                                 const ObstacleDeviation::Footprint& body,
-                                                 double max_reverse_m,
-                                                 std::size_t& window_first,
-                                                 TurnFallbackProblem* problem_out)
+bool FTCController::buildFallbackProblem(std::size_t carrot_idx,
+                                         const BoundaryGuard& guard,
+                                         const ObstacleDeviation::Footprint& body,
+                                         double window_ahead_m,
+                                         std::size_t& window_first,
+                                         TurnFallbackProblem& problem,
+                                         std::string& why)
 {
-  TurnFallbackPlan none;
-  none.verdict = TurnFallbackVerdict::kBadInput;
   window_first = 0;
   if (costmap_map_ == nullptr || global_plan_.size() < 3)
   {
-    return none;
+    why = "no costmap or plan";
+    return false;
   }
-  TurnFallbackCfg cfg;
-  cfg.max_reverse_m = std::max(0.0, max_reverse_m);
-  cfg.max_rejoin_arc_m = config_.turn_fallback_max_rejoin_arc_m;
-  cfg.min_turn_rad = config_.turn_fallback_min_turn_deg * (M_PI / 180.0);
-  cfg.blockage_scan_m = config_.avoidance_horizon_m;
-
-  TurnFallbackProblem problem;
   problem.costmap = costmap_map_;
   problem.guard = guard;
   problem.footprint = costmap_ros_->getRobotFootprint();
@@ -73,8 +66,8 @@ TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
   geometry_msgs::msg::PoseStamped robot_pose;  // costmap frame (odom)
   if (!costmap_ros_->getRobotPose(robot_pose))
   {
-    none.why = "robot pose unavailable";
-    return none;
+    why = "robot pose unavailable";
+    return false;
   }
   problem.robot = {robot_pose.pose.position.x,
                    robot_pose.pose.position.y,
@@ -99,34 +92,33 @@ TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
   }
   catch (const tf2::TransformException& ex)
   {
-    none.why = std::string("no transform: ") + ex.what();
-    return none;
+    why = std::string("no transform: ") + ex.what();
+    return false;
   }
-  const auto [first, last] = FallbackWindow(global_plan_,
-                                            carrot_idx,
-                                            rx,
-                                            ry,
-                                            kFallbackRobotSearchBackM,
-                                            cfg.blockage_scan_m + cfg.max_rejoin_arc_m);
+  const auto [first, last] =
+      FallbackWindow(global_plan_, carrot_idx, rx, ry, kFallbackRobotSearchBackM, window_ahead_m);
   window_first = first;
   if (!planWindowInCostmapFrame(first, last, problem.plan))
   {
-    none.why = "plan window not in the costmap frame";
-    return none;
+    why = "plan window not in the costmap frame";
+    return false;
   }
-  const auto to_costmap = [&](const geometry_msgs::msg::PoseStamped& p)
-  {
-    if (same_frame)
-    {
-      return p;
-    }
-    geometry_msgs::msg::PoseStamped out;
-    tf2::doTransform(p, out, plan_to_costmap);
-    return out;
-  };
   const LatticeSolverCfg solver_cfg = latticeSolverCfg();
-  problem.followable = [&, first = first](std::size_t w)
+  const double horizon = config_.avoidance_horizon_m;
+  problem.followable =
+      [this, &guard, &body, first = first, same_frame, plan_to_costmap, solver_cfg, horizon](
+          std::size_t w)
   {
+    const auto to_costmap = [&](const geometry_msgs::msg::PoseStamped& p)
+    {
+      if (same_frame)
+      {
+        return p;
+      }
+      geometry_msgs::msg::PoseStamped out;
+      tf2::doTransform(p, out, plan_to_costmap);
+      return out;
+    };
     const std::size_t j = first + w;
     const auto [leg_first, leg_last] = PivotLeg(pivot_corners_, j, global_plan_.size());
     return LatticeFeasibleFrom(*costmap_map_,
@@ -139,12 +131,41 @@ TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
                                NextPivotCorner(pivot_corners_, j),
                                to_costmap,
                                solver_cfg,
-                               config_.avoidance_horizon_m);
+                               horizon);
   };
+  return true;
+}
+
+TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
+                                                 const BoundaryGuard& guard,
+                                                 const ObstacleDeviation::Footprint& body,
+                                                 double max_reverse_m,
+                                                 std::size_t& window_first,
+                                                 TurnFallbackProblem* problem_out)
+{
+  TurnFallbackPlan none;
+  none.verdict = TurnFallbackVerdict::kBadInput;
+  TurnFallbackCfg cfg;
+  cfg.max_reverse_m = std::max(0.0, max_reverse_m);
+  cfg.max_rejoin_arc_m = config_.turn_fallback_max_rejoin_arc_m;
+  cfg.min_turn_rad = config_.turn_fallback_min_turn_deg * (M_PI / 180.0);
+  cfg.blockage_scan_m = config_.avoidance_horizon_m;
+
+  TurnFallbackProblem problem;
+  if (!buildFallbackProblem(carrot_idx,
+                            guard,
+                            body,
+                            cfg.blockage_scan_m + cfg.max_rejoin_arc_m,
+                            window_first,
+                            problem,
+                            none.why))
+  {
+    return none;
+  }
   const TurnFallbackPlan plan = PlanTurnFallback(problem, cfg);
   if (problem_out != nullptr)
   {
-    problem.followable = nullptr;  // captures locals of this frame
+    problem.followable = nullptr;  // captures the caller's guard and body
     *problem_out = std::move(problem);
   }
   return plan;
@@ -157,7 +178,8 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
   // Only at the ONSET of a wedge while following the plan: not while a
   // reverse-escape or an obstacle hold already owns the output, and never a
   // second fallback on top of a running one.
-  if (!config_.turn_fallback_enabled || current_state_ != PlannerState::FOLLOWING ||
+  if ((!config_.turn_fallback_enabled && !config_.contour_bypass_enabled) ||
+      current_state_ != PlannerState::FOLLOWING ||
       turn_fallback_.phase != TurnFallbackPhase::kIdle || reverse_escape_active_ ||
       obstacle_waiting_)
   {
@@ -174,6 +196,10 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
                          *turn_fallback_.rearm_idx,
                          kTurnFallbackRearmM);
     return false;
+  }
+  if (!config_.turn_fallback_enabled)
+  {
+    return tryContourBypass(carrot_idx, guard, body);
   }
   // The reverse obeys the operator's reverse switch, like the reverse-escape.
   const double max_reverse = config_.obstacle_reverse_enabled
@@ -200,7 +226,7 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
     RCLCPP_WARN(logger_,
                 "FTCController: turn fallback not possible at idx=%u (%s%s%s): blockage at idx %zu "
                 "(%.2f, %.2f) %.2f m ahead, plan turn %.0f deg, rear clear %.2f m, %zu "
-                "candidates, %.1f ms — WEDGED handling as before.",
+                "candidates, %.1f ms.",
                 current_index_,
                 ToString(plan.verdict),
                 plan.why.empty() ? "" : ": ",
@@ -213,7 +239,9 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
                 plan.reverse_limit_m,
                 plan.evaluated,
                 ms);
-    return false;
+    // Not a turn, or no single-connector rejoin: walk the obstacle's contour.
+    return config_.contour_bypass_enabled && plan.verdict != TurnFallbackVerdict::kBadInput &&
+           tryContourBypass(carrot_idx, guard, body);
   }
   const TurnFallbackClearances cl =
       MeasureTurnFallbackClearances(problem, plan, kTurnFallbackClearanceLogCapM);
@@ -250,6 +278,8 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
   turn_fallback_.started = clock_->now();
   turn_fallback_.reverse_done_m = 0.0;
   turn_fallback_.reverse_time_s = 0.0;
+  turn_fallback_.timeout_s = config_.turn_fallback_timeout_s;
+  turn_fallback_.contour = false;
   ++turn_fallback_.count;
   if (plan.reverse_m > kTurnFallbackReverseDoneM)
   {
@@ -356,6 +386,25 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
                  global_plan_.begin() + static_cast<std::ptrdiff_t>(j + 1),
                  global_plan_.end());
 
+  const bool pivot_first = adoptFallbackPlan(std::move(spliced), rejoin_idx, plan.skipped_arc_m);
+  RCLCPP_INFO(logger_,
+              "FTCController: turn fallback spliced at (%.2f, %.2f): %s%.2f m straight, rejoin at "
+              "working idx %zu (%.2f, %.2f); %zu pivot corner(s) in the plan now.",
+              sx,
+              sy,
+              pivot_first ? "pivot, " : "",
+              plan.connector_m > 0.0 ? connector : 0.0,
+              rejoin_idx,
+              jx,
+              jy,
+              pivot_corners_.size());
+  return true;
+}
+
+bool FTCController::adoptFallbackPlan(std::vector<geometry_msgs::msg::PoseStamped>&& spliced,
+                                      std::size_t rejoin_idx,
+                                      double skipped_arc_m)
+{
   global_plan_ = std::move(spliced);
   // Corner indices now belong to a different path, even when their numeric
   // values match. Its own approach must not inherit the replaced leg's age.
@@ -399,7 +448,7 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
   current_progress_ = 0.0;
   turn_fallback_.phase = TurnFallbackPhase::kRunning;
   turn_fallback_.rejoin_idx = rejoin_idx;
-  turn_fallback_.skipped_arc_m = plan.skipped_arc_m;
+  turn_fallback_.skipped_arc_m = skipped_arc_m;
   // Visualisation only (/<plugin>/global_plan, what newPathReceived publishes):
   // the plan FTC now drives, detour included.
   {
@@ -410,17 +459,6 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
     global_plan_pub_->publish(working);
   }
   const bool pivot_first = !pivot_corners_.empty() && pivot_corners_.front() == 0;
-  RCLCPP_INFO(logger_,
-              "FTCController: turn fallback spliced at (%.2f, %.2f): %s%.2f m straight, rejoin at "
-              "working idx %zu (%.2f, %.2f); %zu pivot corner(s) in the plan now.",
-              sx,
-              sy,
-              pivot_first ? "pivot, " : "",
-              plan.connector_m > 0.0 ? connector : 0.0,
-              rejoin_idx,
-              jx,
-              jy,
-              pivot_corners_.size());
   state_entered_time_ = clock_->now();
   if (pivot_first)
   {
@@ -447,7 +485,7 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
     d_lon_filt_ = 0.0;
     d_angle_filt_ = 0.0;
   }
-  return true;
+  return pivot_first;
 }
 
 void FTCController::turnFallbackReverseTick(double dt, geometry_msgs::msg::TwistStamped& cmd_vel)
@@ -554,24 +592,25 @@ void FTCController::turnFallbackProgress()
     remaining.poses.assign(global_plan_.begin() + static_cast<std::ptrdiff_t>(fb.rejoin_idx),
                            global_plan_.end());
     progress_plan_pub_->publish(remaining);
-    RCLCPP_WARN(
-        logger_,
-        "FTCController: TURN FALLBACK complete — rejoined the plan at working idx %zu after "
-        "%.1f s (%.2f m of path skipped, fallback #%zu of this goal); republished the "
-        "remaining %zu poses.",
-        fb.rejoin_idx,
-        elapsed,
-        fb.skipped_arc_m,
-        fb.count,
-        remaining.poses.size());
+    RCLCPP_WARN(logger_,
+                "FTCController: %s complete — rejoined the plan at working idx %zu after "
+                "%.1f s (%.2f m of path skipped, fallback #%zu of this goal); republished the "
+                "remaining %zu poses.",
+                fb.contour ? "CONTOUR BYPASS" : "TURN FALLBACK",
+                fb.rejoin_idx,
+                elapsed,
+                fb.skipped_arc_m,
+                fb.count,
+                remaining.poses.size());
     fb.phase = TurnFallbackPhase::kIdle;
     return;
   }
-  if (elapsed > config_.turn_fallback_timeout_s)
+  if (elapsed > fb.timeout_s)
   {
     RCLCPP_ERROR(logger_,
-                 "FTCController: turn fallback did not reach its rejoin within %.0f s — aborting.",
-                 config_.turn_fallback_timeout_s);
+                 "FTCController: %s did not reach its rejoin within %.0f s — aborting.",
+                 fb.contour ? "contour bypass" : "turn fallback",
+                 fb.timeout_s);
     fb.phase = TurnFallbackPhase::kIdle;
     is_crashed_ = true;
     throw nav2_core::ControllerException(
