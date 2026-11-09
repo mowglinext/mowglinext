@@ -196,8 +196,10 @@ func TestPostImportOpenMower_ObservableOutcomes(t *testing.T) {
 				server.failNth(mapServiceSaveAreas, 1, context.DeadlineExceeded)
 				expected = mapActiveUnconfirmed
 			case "clear rejected":
+				// map_server refuses before touching anything, so the map is
+				// unchanged (it used to be reported as unconfirmed, because the
+				// rollback's own clear was refused too).
 				server.clearRejected = true
-				expected = mapUnconfirmed
 			}
 			w := importHTTP(t, server, true)
 			requireImportOutcome(t, w, http.StatusInternalServerError, expected, dockNotAttempted)

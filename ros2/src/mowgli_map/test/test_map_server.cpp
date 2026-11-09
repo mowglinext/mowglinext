@@ -35,6 +35,7 @@
 #include "mowgli_map/map_types.hpp"
 #include <gtest/gtest.h>
 #include <mowgli_interfaces/msg/dig_event.hpp>
+#include <mowgli_interfaces/msg/high_level_status.hpp>
 #include <mowgli_interfaces/msg/map_obstacle_info.hpp>
 #include <mowgli_interfaces/srv/add_mowing_area.hpp>
 #include <mowgli_interfaces/srv/clear_obstacle.hpp>
@@ -676,6 +677,34 @@ TEST_F(AreaTypeTest, MowingAndNavigationAreasArePreservedSideBySide)
     EXPECT_EQ(res->area.name, "nav_corridor");
     EXPECT_TRUE(res->area.is_navigation_area);
   }
+}
+
+// A whole-map replace (GUI "Save map" = clear_map -> add_area x N, a backup
+// restore = load_areas) drops the keepout mask, the mow progress and the
+// persisted map before the new one is complete. It must wait while the BT says
+// a mission is running (map_replace_gate.hpp) — and leave the map untouched
+// when it refuses, because the GUI must not "restore" a map that never changed.
+TEST_F(AreaTypeTest, WholeMapReplaceWaitsWhileAMissionIsRunning)
+{
+  ASSERT_TRUE(add_area("lawn", make_rect(-2, -2, 2, 2), false));
+
+  node_->high_level_state_for_test(
+      mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS);
+  auto refused = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->clear_map_for_test(refused);
+  EXPECT_FALSE(refused->success);
+  EXPECT_NE(refused->message.find("Stop"), std::string::npos);
+  // Untouched: the area is still there.
+  EXPECT_TRUE(get_area(0)->success);
+  // Incremental edits are not a replace and stay possible mid-mission.
+  EXPECT_TRUE(add_area("extra", make_rect(3, 3, 4, 4), false));
+
+  // STOP hold / charge hold / docked all publish IDLE: replace is allowed.
+  node_->high_level_state_for_test(mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_IDLE);
+  auto allowed = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->clear_map_for_test(allowed);
+  EXPECT_TRUE(allowed->success);
+  EXPECT_FALSE(get_area(0)->success);
 }
 
 // Field loss: areas.dat ended up holding only the LiDAR-ignore lines. Every IMPLICIT save

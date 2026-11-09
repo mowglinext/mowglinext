@@ -61,6 +61,16 @@ const (
 	mapPersisted         MapWriteStatus = "persisted"
 )
 
+// mapClearRefusedError is map_server answering clear_map with
+// success=false — today because a mission is running (map_replace_gate.hpp).
+// map_server refuses BEFORE touching anything, so there is nothing to restore:
+// replaceMapLocked must report the map as unchanged and must not run the
+// rollback, whose own clear_map would be refused too and then be reported as
+// "the robot may hold a PARTIAL map".
+type mapClearRefusedError struct{ message string }
+
+func (e *mapClearRefusedError) Error() string { return e.message }
+
 type mapReplacementError struct {
 	status MapWriteStatus
 	err    error
@@ -149,7 +159,7 @@ func writeAreas(ctx context.Context, provider types.IRosProvider, areas []mowgli
 		return fmt.Errorf("clearing the old map: %w", err)
 	}
 	if !cleared.Success {
-		return fmt.Errorf("clearing the old map: map_server rejected it: %s", cleared.Message)
+		return &mapClearRefusedError{message: cleared.Message}
 	}
 	for i, element := range areas {
 		req := mowgli.AddMowingAreaReq{
@@ -218,6 +228,10 @@ func replaceMapLocked(ctx context.Context, provider types.IRosProvider, req *mow
 	}
 
 	if err := writeAreas(ctx, provider, req.Areas); err != nil {
+		var refused *mapClearRefusedError
+		if errors.As(err, &refused) {
+			return &mapReplacementError{mapUnchanged, fmt.Errorf("replace map: %w — nothing was changed", err)}
+		}
 		status, message := restorePreviousMap(ctx, provider, previous)
 		return &mapReplacementError{status, fmt.Errorf("replace map failed while %w — %s", err, message)}
 	}

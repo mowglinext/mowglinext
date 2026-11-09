@@ -306,6 +306,16 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         on_mower_status(std::move(msg));
       });
 
+  // The BT's "a mission is running" state, for the whole-map replace gate
+  // (map_replace_gate.hpp). Reliable depth 10 to match the publisher.
+  high_level_status_sub_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
+      "/behavior_tree_node/high_level_status",
+      rclcpp::QoS(10),
+      [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
+      {
+        on_high_level_status(msg->state);
+      });
+
   auto odom_topic = declare_parameter<std::string>("odom_topic", "/odometry/filtered_map");
   odom_sub_ =
       create_subscription<nav_msgs::msg::Odometry>(odom_topic,
