@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "mowgli_localization/scan_ground_filter.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 
 // Expose the static helpers without dragging in rclcpp at link time.
@@ -40,73 +41,15 @@ sensor_msgs::msg::LaserScan filter_scan_for_test(const sensor_msgs::msg::LaserSc
   return out;
 }
 
-struct Vec3ForTest
+// The ground filter itself is the production code (scan_ground_filter.hpp),
+// not a mirror: these aliases keep the historical test names.
+using Vec3ForTest = Vec3;
+using GroundFilterConfigForTest = GroundFilterConfig;
+inline void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
+                                         const GroundFilterConfigForTest& cfg,
+                                         const std::optional<Vec3ForTest>& up_in_imu)
 {
-  double x{0.0};
-  double y{0.0};
-  double z{1.0};
-};
-
-struct GroundFilterConfigForTest
-{
-  bool enabled{false};
-  double min_obstacle_z_m{0.08};
-  double max_obstacle_z_m{1.5};
-  double lidar_height_m{0.22};
-  double lidar_mount_yaw{0.0};
-  int min_ground_run{8};
-};
-
-// Mirror of the production apply_ground_filter (costmap_scan_filter_node.cpp):
-// two-pass classify + run-length-gated ground strip. Kept in lockstep with the
-// node so this test guards the deployed behaviour.
-void apply_ground_filter_for_test(sensor_msgs::msg::LaserScan& io,
-                                  const GroundFilterConfigForTest& cfg,
-                                  const std::optional<Vec3ForTest>& up_in_imu)
-{
-  if (!cfg.enabled || !up_in_imu.has_value())
-    return;
-  const auto& u = *up_in_imu;
-  const float min_z = static_cast<float>(cfg.min_obstacle_z_m);
-  const float max_z = static_cast<float>(cfg.max_obstacle_z_m);
-  const float inf = std::numeric_limits<float>::infinity();
-  const double a0 = io.angle_min;
-  const double da = io.angle_increment;
-  const size_t n = io.ranges.size();
-  std::vector<uint8_t> klass(n, 0);  // 0=keep, 1=ground (low), 2=overhead (high)
-  for (size_t i = 0; i < n; ++i)
-  {
-    const float r = io.ranges[i];
-    if (!std::isfinite(r))
-      continue;
-    const double psi = a0 + da * static_cast<double>(i) + cfg.lidar_mount_yaw;
-    const double z_dir = u.x * std::cos(psi) + u.y * std::sin(psi);
-    const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
-    if (return_z > max_z)
-      klass[i] = 2;
-    else if (return_z < min_z)
-      klass[i] = 1;
-  }
-  const int min_run = std::max(1, cfg.min_ground_run);
-  for (size_t i = 0; i < n; ++i)
-  {
-    if (klass[i] == 2)
-    {
-      io.ranges[i] = inf;
-      continue;
-    }
-    if (klass[i] != 1)
-      continue;
-    size_t j = i;
-    while (j < n && klass[j] == 1)
-      ++j;
-    if (static_cast<int>(j - i) >= min_run)
-    {
-      for (size_t k = i; k < j; ++k)
-        io.ranges[k] = inf;
-    }
-    i = j - 1;
-  }
+  apply_ground_filter(io, cfg, up_in_imu);
 }
 
 /// Build the up-in-IMU vector for a robot pitched `pitch_rad` (positive
@@ -882,4 +825,138 @@ TEST(CostmapScanFilterCorridor, ProjectsOntoCorridorChecksEverySegment)
   mowgli_localization::CorridorForTest single_point{{mowgli_localization::Point2DForTest{0.0, 0.0}},
                                                     0.5};
   EXPECT_FALSE(mowgli_localization::point_projects_onto_corridor_for_test(0.0, 0.0, single_point));
+}
+
+// ── Terrain reference (field 2026-11-09) ────────────────────────────────────
+// On a uniform slope the terrain is parallel to the wheels: a beam stays level
+// relative to it, but gravity alone says every downhill beam descends. With the
+// robot's real geometry (lidar 0.20 m, floor 0.15 m) an 8° slope made every
+// downhill return beyond 0.36 m "ground", and a trunk 0.7 m away (~14 beams >
+// min_ground_run) vanished from the costmap.
+
+namespace
+{
+using mowgli_localization::GroundFilterConfig;
+using mowgli_localization::TerrainTiltTracker;
+using mowgli_localization::Vec3;
+
+constexpr double kRobotLidarHeightM = 0.20;
+constexpr double kRobotFloorM = 0.15;
+constexpr double kBeamIncRad = 0.0138;  // LD19, 455 bins
+
+// A trunk straight ahead (base bearing 0): `width` beams at `range_m`.
+sensor_msgs::msg::LaserScan trunk_ahead(float range_m, int width = 14)
+{
+  sensor_msgs::msg::LaserScan s;
+  s.angle_increment = static_cast<float>(kBeamIncRad);
+  s.angle_min = static_cast<float>(-kBeamIncRad * (width / 2));
+  s.range_min = 0.03f;
+  s.range_max = 12.0f;
+  s.ranges.assign(static_cast<std::size_t>(width), range_m);
+  s.angle_max = s.angle_min + s.angle_increment * static_cast<float>(width - 1);
+  return s;
+}
+
+TerrainTiltTracker converged_on(const Vec3& up, double tau = 3.0)
+{
+  TerrainTiltTracker t(tau);
+  for (int i = 0; i <= 2000; ++i)  // 20 s at 100 Hz
+    t.update(up, i * 0.01);
+  return t;
+}
+
+std::size_t kept(const sensor_msgs::msg::LaserScan& s)
+{
+  return static_cast<std::size_t>(std::count_if(s.ranges.begin(),
+                                                s.ranges.end(),
+                                                [](float r)
+                                                {
+                                                  return std::isfinite(r);
+                                                }));
+}
+}  // namespace
+
+TEST(CostmapScanFilterGround, GravityOnlyStripsATrunkOnAUniformSlope)
+{
+  // The field defect, reproduced: nothing but gravity on an 8° slope.
+  auto scan = trunk_ahead(0.7f);
+  const GroundFilterConfig cfg{true, kRobotFloorM, 1.5, kRobotLidarHeightM, 0.0, 8};
+  mowgli_localization::apply_ground_filter(scan,
+                                           cfg,
+                                           mowgli_localization::up_from_pitch_rad(0.1396));
+  EXPECT_EQ(kept(scan), 0u);
+}
+
+TEST(CostmapScanFilterGround, TerrainReferenceKeepsATrunkOnAUniformSlope)
+{
+  const Vec3 up = mowgli_localization::up_from_pitch_rad(8.0 * M_PI / 180.0);
+  const auto terrain = converged_on(up);
+  auto scan = trunk_ahead(0.7f);
+  const GroundFilterConfig cfg{true, kRobotFloorM, 1.5, kRobotLidarHeightM, 0.0, 8};
+  mowgli_localization::apply_ground_filter(scan, cfg, up, terrain.relative(up));
+  EXPECT_EQ(kept(scan), 14u);  // level with the slope it stands on: an obstacle
+}
+
+TEST(CostmapScanFilterGround, FreshPitchOnASlopeStillStripsTheGroundItCauses)
+{
+  // 8° slope, then a bump pitches the nose a further 12°: the beam now really
+  // dips into the ground ahead (relative pitch 12°, hits it at ~0.96 m).
+  const auto terrain = converged_on(mowgli_localization::up_from_pitch_rad(8.0 * M_PI / 180.0));
+  const Vec3 now = mowgli_localization::up_from_pitch_rad(20.0 * M_PI / 180.0);
+  auto scan = trunk_ahead(1.2f, 20);
+  const GroundFilterConfig cfg{true, kRobotFloorM, 1.5, kRobotLidarHeightM, 0.0, 8};
+  mowgli_localization::apply_ground_filter(scan, cfg, now, terrain.relative(now));
+  EXPECT_EQ(kept(scan), 0u);
+}
+
+TEST(CostmapScanFilterGround, LevelRobotIsUnchangedByTheTerrainReference)
+{
+  const Vec3 level{0.0, 0.0, 1.0};
+  const auto terrain = converged_on(level);
+  auto with_terrain = trunk_ahead(2.0f);
+  auto gravity_only = trunk_ahead(2.0f);
+  const GroundFilterConfig cfg{true, kRobotFloorM, 1.5, kRobotLidarHeightM, 0.0, 8};
+  mowgli_localization::apply_ground_filter(with_terrain, cfg, level, terrain.relative(level));
+  mowgli_localization::apply_ground_filter(gravity_only, cfg, level);
+  EXPECT_EQ(with_terrain.ranges, gravity_only.ranges);
+}
+
+TEST(TerrainTiltTracker, RelativeOfTheTerrainItselfIsLevel)
+{
+  const Vec3 up{0.12, -0.21, std::sqrt(1.0 - 0.12 * 0.12 - 0.21 * 0.21)};
+  const auto rel = converged_on(up).relative(up);
+  ASSERT_TRUE(rel.has_value());
+  EXPECT_NEAR(rel->x, 0.0, 1e-6);
+  EXPECT_NEAR(rel->y, 0.0, 1e-6);
+  EXPECT_NEAR(rel->z, 1.0, 1e-6);
+}
+
+TEST(TerrainTiltTracker, FollowsAChangeWithItsTimeConstant)
+{
+  TerrainTiltTracker t(3.0);
+  const Vec3 level{0.0, 0.0, 1.0};
+  const Vec3 slope = mowgli_localization::up_from_pitch_rad(10.0 * M_PI / 180.0);
+  t.update(level, 0.0);
+  for (int i = 1; i <= 300; ++i)  // 3 s = one time constant
+    t.update(slope, i * 0.01);
+  const auto terrain = t.terrain();
+  ASSERT_TRUE(terrain.has_value());
+  const double pitch = std::atan2(-terrain->x, terrain->z) * 180.0 / M_PI;
+  EXPECT_NEAR(pitch, 10.0 * (1.0 - std::exp(-1.0)), 0.3);  // ~63 % of the way
+}
+
+TEST(TerrainTiltTracker, GapOrDisabledFallsBackSafely)
+{
+  TerrainTiltTracker disabled(0.0);
+  disabled.update(Vec3{0.0, 0.0, 1.0}, 0.0);
+  EXPECT_FALSE(disabled.relative(Vec3{0.0, 0.0, 1.0}).has_value());  // gravity-only
+
+  TerrainTiltTracker t(3.0);
+  EXPECT_FALSE(t.relative(Vec3{0.0, 0.0, 1.0}).has_value());  // nothing seen yet
+  const Vec3 slope = mowgli_localization::up_from_pitch_rad(8.0 * M_PI / 180.0);
+  t.update(Vec3{0.0, 0.0, 1.0}, 0.0);
+  t.update(slope, 5.0);  // > 1 s gap: restart from the new sample, no stale blend
+  const auto rel = t.relative(slope);
+  ASSERT_TRUE(rel.has_value());
+  EXPECT_NEAR(rel->z, 1.0, 1e-9);
 }
