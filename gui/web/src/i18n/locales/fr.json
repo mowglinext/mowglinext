@@ -4573,6 +4573,17 @@
     "unsavedSource": "Enregistrez la source avant de préparer une mise à jour.",
     "forkHelpTitle": "Utiliser un autre dépôt ou fork",
     "forkHelp": "Choisissez un dépôt autorisé par votre administrateur, puis Production, Développement ou Branche personnalisée. Saisissez le nom complet de la branche, barres obliques comprises. Elle doit publier un déploiement complet pour être installable. Les forks sont ajoutés à trusted_repositories dans /etc/mowgli-updater.json sur l’hôte.",
+    "pullRequests": {
+      "label": "Pull request",
+      "placeholder": "Choisir une pull request ouverte",
+      "refresh": "Actualiser",
+      "installable": "installable",
+      "fork": "fork : non installable",
+      "building": "en cours de construction",
+      "notBuilt": "non construite : ajouter le label {{label}}",
+      "help": "Liste les pull requests ouvertes de ce dépôt. Une pull request devient installable quand la CI a publié son déploiement : ajoutez le label {{label}} sur GitHub (les pull requests venant de forks ne sont pas construites). La choisir remplit la branche ; puis Enregistrer les réglages et vérifier l’installation.",
+      "unavailable": "Pull requests indisponibles"
+    },
     "technicalDetails": "Détails des versions et historique",
     "imageDetails": "Détails des images des conteneurs",
     "componentsToUpdate": "Composants",

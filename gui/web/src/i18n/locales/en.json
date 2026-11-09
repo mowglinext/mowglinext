@@ -4573,6 +4573,17 @@
     "unsavedSource": "Save source settings before reviewing an update.",
     "forkHelpTitle": "Using another repository or fork",
     "forkHelp": "Choose a repository enabled by your administrator, then Production, Development or Custom branch. Enter the full branch name, including slashes. A branch must publish a complete deployment before it can be installed. Forks are added to trusted_repositories in /etc/mowgli-updater.json on the host.",
+    "pullRequests": {
+      "label": "Pull request",
+      "placeholder": "Choose an open pull request",
+      "refresh": "Refresh",
+      "installable": "installable",
+      "fork": "fork: not installable",
+      "building": "being built",
+      "notBuilt": "not built: add label {{label}}",
+      "help": "Lists the open pull requests of this repository. A pull request becomes installable once CI publishes its deployment: add the label {{label}} on GitHub (pull requests from forks are not built). Choosing one fills in the branch; then Save settings and review the installation.",
+      "unavailable": "Pull requests unavailable"
+    },
     "technicalDetails": "Version details and history",
     "imageDetails": "Container image details",
     "componentsToUpdate": "Components",

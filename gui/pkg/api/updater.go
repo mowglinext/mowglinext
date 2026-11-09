@@ -141,6 +141,13 @@ func UpdaterRoutes(r *gin.RouterGroup, ros types.IRosProvider, db types.IDBProvi
 		_, _ = io.Copy(c.Writer, io.LimitReader(response.Body, 4*1024*1024))
 	}
 	r.POST("/system/updater/:operation", proxy)
+	registerUpdaterPullRequests(r, &pullRequestLister{
+		api:     "https://api.github.com",
+		github:  &http.Client{Timeout: 20 * time.Second},
+		trusted: trustedFromUpdater(client),
+		now:     time.Now,
+		cache:   map[string]cachedPullRequests{},
+	})
 	registerUpdaterStatus(r, proxy)
 	var mu sync.Mutex
 	var status mowgli.Status
