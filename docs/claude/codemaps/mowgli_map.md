@@ -17,6 +17,12 @@ Map edits publish an empty keepout mask until the settled raster is ready; the l
 Transit geometry snapshots and dock/obstacle rings are published by
 `costmap_filters.cpp::publish_transit_geometry` after the complete keepout mask.
 `area_manager.cpp` invalidates snapshots while recorded geometry is edited.
+Each ring goes through `ring_repair.hpp::repair_ring` first: its consumers
+(`MowingGeometry::parse` in the BT entry check, the entry goal checker, FTC) reject the
+WHOLE snapshot on one invalid ring, so a few-cm recording zigzag (a self-crossing loop
+with perimeter <= 0.5 m) is removed before publishing; a larger crossing is published
+as recorded with an ERROR (field 2026-11-09: one zigzag made every transit spin until
+its bound). Only the published snapshot is repaired, never `areas.dat`.
 | Task | Start here |
 |------|------------|
 | Add / rename a `map_server_node` publisher, subscriber, service or parameter | `ros2/src/mowgli_map/src/map_server_node.cpp` constructor `MapServerNode::MapServerNode` (L51-493); members in `include/mowgli_map/map_server_node.hpp` (L515-889) |
