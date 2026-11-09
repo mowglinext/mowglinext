@@ -66,9 +66,28 @@ Each selected source must publish the same complete deployment format with
 readable release assets and GHCR images for the host architecture. A forked branch
 with code but no complete published deployment shows **No installable build**.
 Production/dev tracks can also be selected within a trusted fork. The upstream
-source remains available for switching back. The current PR branch has not yet
-completed an end-to-end deployment publication/field trial; ordinary branch image
-builds by themselves do not make it installable through this screen.
+source remains available for switching back. Ordinary branch image builds by
+themselves do not make a branch installable through this screen.
+
+### Installing a pull request
+
+1. On GitHub, add the label **`deploy-preview`** to a pull request opened from a
+   branch of this repository. `.github/workflows/deployment-release.yml` then
+   runs the ROS2 and GUI quality gates and publishes a complete custom
+   deployment of the PR's head commit, titled `<head branch> deployment-…`, and
+   publishes a new one on every later push. Pull requests from forks are never
+   built: the workflow has no write token for them and their code is untrusted.
+2. In the GUI, open **Updates → Advanced → Update settings**, choose
+   **Custom branch**, then pick the PR in **Pull request**. The list shows every
+   open PR of the selected repository: *installable* once its deployment is
+   published, *being built* while the label is set but nothing is published yet,
+   *not built* without the label. Choosing one fills in its head branch.
+3. **Save settings**, then review and install as for any custom branch. Switch
+   the source back to Development when the test is done.
+
+The list comes from `GET /api/system/updater/pull-requests?repository=…`. It only
+accepts the updater's `trusted_repositories`, uses the unauthenticated GitHub API,
+and caches each repository's listing for two minutes.
 
 ## Supported installations
 
