@@ -26,9 +26,51 @@
 namespace fusion_graph
 {
 
+void FusionGraphNode::ObserveMotionClockEpoch()
+{
+  const auto now = this->now();
+  const auto epoch = motion_clock_epoch_.load(std::memory_order_acquire);
+  if (epoch != motion_callback_epoch_ ||
+      (last_motion_callback_clock_ && now < *last_motion_callback_clock_))
+  {
+    // A ROS-clock epoch is shared by both streams. Whichever callback arrives
+    // first invalidates both baselines/rate caches, so an IMU-first restart
+    // cannot integrate the previous epoch's wheel velocity. The next callback
+    // in this epoch must preserve any newly received wheel observation.
+    last_wheel_stamp_.reset();
+    last_imu_stamp_.reset();
+    wheel_vx_ = 0.0;
+    wheel_wz_ = 0.0;
+    {
+      std::lock_guard<std::mutex> lock(tf_state_mu_);
+      dr_last_gz_ = 0.0;
+      dr_last_vx_eff_ = 0.0;
+    }
+    ResetLidarTiming();
+  }
+  motion_callback_epoch_ = epoch;
+  last_motion_callback_clock_ = now;
+}
+
 void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
 {
+  ObserveMotionClockEpoch();
+  if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000u ||
+      !std::isfinite(msg->twist.twist.linear.x) || !std::isfinite(msg->twist.twist.linear.y) ||
+      !std::isfinite(msg->twist.twist.angular.z))
+    return;
   const rclcpp::Time stamp(msg->header.stamp);
+  if (last_wheel_stamp_ && stamp <= *last_wheel_stamp_)
+    return;
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    const auto now_ns = this->now().nanoseconds();
+    motion_support_.Accept(true,
+                           stamp.nanoseconds(),
+                           now_ns,
+                           motion_clock_epoch_.load(std::memory_order_acquire));
+    MotionPublicationAllowedLocked(now_ns, now_ns);
+  }
   // Latest forward velocity for the local-frame DR integration in OnImu.
   // twist.linear.y is non-holonomically locked to 0 by hardware_bridge
   // (tight vy covariance) — we mirror that by only integrating vx.
@@ -37,7 +79,7 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
   if (last_wheel_stamp_)
   {
     double dt = (stamp - *last_wheel_stamp_).seconds();
-    if (dt > 0.0 && dt < 1.0)
+    if (dt > 0.0 && dt < kMotionIntegrationGapS)
     {
       graph_->AddWheelTwist(msg->twist.twist.linear.x,
                             msg->twist.twist.linear.y,
@@ -61,13 +103,26 @@ void FusionGraphNode::OnWheelOdom(nav_msgs::msg::Odometry::ConstSharedPtr msg)
 
 void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
 {
-  const rclcpp::Time stamp(msg->header.stamp);
-  if (last_imu_stamp_ && stamp == *last_imu_stamp_)
+  ObserveMotionClockEpoch();
+  if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000u ||
+      !std::isfinite(msg->angular_velocity.z))
     return;
+  const rclcpp::Time stamp(msg->header.stamp);
+  if (last_imu_stamp_ && stamp <= *last_imu_stamp_)
+    return;
+  {
+    std::lock_guard<std::mutex> lock(tf_state_mu_);
+    const auto now_ns = this->now().nanoseconds();
+    motion_support_.Accept(false,
+                           stamp.nanoseconds(),
+                           now_ns,
+                           motion_clock_epoch_.load(std::memory_order_acquire));
+    MotionPublicationAllowedLocked(now_ns, now_ns);
+  }
   if (last_imu_stamp_)
   {
     double dt = (stamp - *last_imu_stamp_).seconds();
-    if (dt > 0.0 && dt < 1.0)
+    if (dt > 0.0 && dt < kMotionIntegrationGapS)
     {
       graph_->AddGyroDelta(msg->angular_velocity.z, dt);
       // Local-frame dead reckoning. Yaw integrates the bias-corrected
@@ -107,8 +162,6 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       abs_dtheta_since_last_gps_sample_rad_ += std::abs(gz) * dt;
     }
   }
-  if (last_imu_stamp_ && stamp <= *last_imu_stamp_)
-    ResetLidarTiming();
   const auto odom =
       lidar_anchor_odom_.Advance(Sophus::SE2d(dr_yaw_, Eigen::Vector2d(dr_x_, dr_y_)));
   lidar_scan_history_.Push(stamp.seconds(),
@@ -149,6 +202,8 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   using mowgli_interfaces::gnss_observation_freshness::ObservationUpdate;
   if (observation_update == ObservationUpdate::kRosTimeDiscontinuity)
   {
+    graph_->InvalidateGnssSupport();
+    SynchronizeSupportEpoch();
     last_rtk_fixed_stamp_.reset();
     last_usable_gnss_stamp_.reset();
     last_gps_map_xy_.reset();
@@ -449,6 +504,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                                 dock,
                                 dock_reanchor_sigma_xy_m_,
                                 std::max(dock_pose_yaw_sigma_rad_, 0.035));
+            SynchronizeSupportEpoch();
           }
           last_dock_reanchor_node_ = snap->node_index;
         }
@@ -563,7 +619,9 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     }
   }
 
-  if (!graph_->QueueGnss(mx, my, sigma, /*robust=*/true, measurement_node))
+  SynchronizeSupportEpoch();
+  const uint64_t ingestion_token = ++next_ingestion_token_;
+  if (!graph_->QueueGnss(mx, my, sigma, /*robust=*/true, measurement_node, ingestion_token))
   {
     RCLCPP_WARN_THROTTLE(get_logger(),
                          *get_clock(),
@@ -571,6 +629,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                          "fusion_graph: GNSS epoch node left the live graph; sample dropped");
     return;
   }
+  RememberSupportFix(ingestion_token, *msg);
   commit_current_gnss_evidence();
   // Latch whether the most recent seed came from RTK-Fixed so the next
   // graph initialization can use a tight prior matching that quality.
@@ -626,12 +685,10 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
         // enough to let COG correct it without fighting if the
         // autoloaded yaw is wrong.
         graph_->ForceAnchor(snap->node_index, anchor, 0.005, 5.0 * M_PI / 180.0);
+        SynchronizeSupportEpoch();
         ResetLidarTiming();
-        // ForceAnchor shifts latest_.pose without bumping node_index;
-        // OnTimer's "node_index changed" check would miss it, leaving
-        // map→odom anchored at the pre-override correction. Force a
-        // refresh so the next OnTimer recomputes against fresh dr_*.
-        t_map_odom_anchor_valid_ = false;
+        // ForceAnchor publishes an estimate revision; OnTimer applies its
+        // rigid correction while retaining any DR tail beyond the head.
         rtk_autoload_override_done_ = true;
         RCLCPP_WARN(get_logger(),
                     "fusion_graph: RTK-Fixed override of autoloaded pose — "

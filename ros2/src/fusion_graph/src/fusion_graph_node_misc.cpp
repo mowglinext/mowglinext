@@ -40,6 +40,7 @@ void FusionGraphNode::SeedFromDockPose()
   if (!graph_->IsInitialized())
   {
     graph_->Initialize(pose, this->now().seconds());
+    SynchronizeSupportEpoch();
     t_map_odom_anchor_valid_ = false;
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: bootstrap init from dock pose "
@@ -80,6 +81,7 @@ void FusionGraphNode::SeedFromDockPose()
   {
     const gtsam::Pose2 correction = pose.compose(snap->pose.inverse());
     graph_->RigidTransformAll(correction, sigma_xy, sigma_theta);
+    SynchronizeSupportEpoch();
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: gauge reset to dock (%.2f, %.2f, %.1f°) — "
                 "rigid-transformed %.2f m offset",
@@ -91,6 +93,7 @@ void FusionGraphNode::SeedFromDockPose()
   else
   {
     graph_->ForceAnchor(snap->node_index, pose, sigma_xy, sigma_theta);
+    SynchronizeSupportEpoch();
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: re-anchored at dock (%.2f, %.2f, %.1f°)",
                 pose.x(),

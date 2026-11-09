@@ -24,6 +24,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -38,6 +39,7 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -46,11 +48,13 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_nav2_plugins/ftc_blade_load.hpp"
 #include "mowgli_nav2_plugins/ftc_collision_monitor_hold.hpp"
+#include "mowgli_nav2_plugins/ftc_corner_geometry.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
+#include "mowgli_nav2_plugins/retrace.hpp"
 #include <Eigen/Geometry>
 #include <visualization_msgs/msg/marker.hpp>
 
@@ -138,6 +142,14 @@ private:
   /// Compute the look-ahead distance along the remaining straight path.
   double distanceLookahead() const;
 
+  // Local point approach for a forward-monotone prefix ending at an explicit
+  // corner. Recovery/deviation keep their existing output ownership.
+  std::optional<std::size_t> stopCornerApproach(bool starting = false) const;
+  double stopCornerTravel(std::size_t corner, double x, double y, double yaw) const;
+  std::optional<double> pivot_approach_speed_limit_;
+  std::optional<double> pivot_approach_response_limit_;
+  std::optional<std::pair<std::size_t, rclcpp::Time>> pivot_approach_start_;
+
   // ── Pivot corners (ftc_pivot.hpp) ─────────────────────────────────────────
 
   /// Plan indices of the pivot corners' FIRST (incoming-heading) poses, found
@@ -155,14 +167,22 @@ private:
   /// PIVOT -> FOLLOWING from the corner's outgoing pose.
   void leavePivot();
 
-  /// True when the chassis footprint, rotated in place from the current
-  /// heading to the pivot target, overlaps a TRUE-lethal local-costmap cell.
-  bool pivotSweepBlocked();
-
-  /// Obstacle gate of a pivot: holds (and eventually aborts, like every other
-  /// obstacle hold) while pivotSweepBlocked(); returns true when the pivot may
-  /// rotate this tick.
-  bool pivotSweepGate(double dt);
+  // Per-compute rotation/departure checks. Map and filled local-body queries
+  // use the same supported epoch; no certificate survives into another call.
+  bool rotationDeparturePermitted(const CornerGeometry& geometry);
+  bool rotationRestartPermitted(const geometry_msgs::msg::Pose& pose,
+                                const CornerGeometry& geometry) const;
+  bool cornerRotationGate(double dt);
+  bool localRotationBlocked(double turn);
+  geometry_msgs::msg::Pose pivotMapPose() const;
+  std::optional<rclcpp::Time> pivot_pose_epoch_;
+  std::mutex corner_geometry_mutex_;
+  std::shared_ptr<const CornerGeometry> corner_geometry_;
+  std::shared_ptr<const CornerGeometry> checked_corner_geometry_;
+  // Per-tick directed permission; separate from the geometric error used by
+  // handoff tolerances and I/D bookkeeping. Never reused after a new check.
+  std::optional<double> checked_corner_turn_;
+  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr corner_geometry_sub_;
 
   std::vector<geometry_msgs::msg::PoseStamped> global_plan_;
   Eigen::Affine3d current_control_point_;  ///< Carrot pose in map frame.
@@ -516,6 +536,18 @@ private:
   // ONLY, so a skirt never leaves the zone. (The offset samples are in the LOCAL
   // costmap / odom frame here, so the guard affine is boundary(map) <- odom.)
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr boundary_costmap_sub_;
+
+  // ── Boundary-safe reverse (retrace.hpp) ───────────────────────────────────
+  // Every reverse FTC performs (the reverse-escape and the turn fallback's reverse) is blind to the
+  // recorded boundary: the local costmap has none. Field 2026-10-26 a 0.30 m reverse-escape took
+  // the mower from 0.00 m to 0.33 m outside the area. A reverse is therefore only allowed when the
+  // robot is inside every recorded area (outside_area_) AND the piece it would undo is a straight
+  // forward drive it just made (reverse_crumbs_), i.e. ground that is known to be inside.
+  retrace::Breadcrumbs reverse_crumbs_;
+  std::atomic<bool> outside_area_{false};
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr outside_area_sub_;
+  /// The longest reverse (<= `wanted`) that is allowed here, 0 when none is.
+  double reverseAllowedDistance(double wanted);
   std::unique_ptr<nav2_costmap_2d::Costmap2D> boundary_costmap_;
   std::string boundary_frame_;  ///< frame_id of the global costmap (e.g. "map").
   std::mutex boundary_mutex_;
@@ -656,6 +688,12 @@ private:
     /// straight after a corner is one swath spacing long, too short for the
     /// lateral loop to absorb a large heading error before the next pivot.
     double pivot_angle_tolerance_deg{10.0};
+    /// Declared upper bound on residual forward travel / speed after STOP.
+    /// This is a response assumption, not a calibrated physical stopping time.
+    double pivot_coast_time_bound_s{0.5};
+    /// How far outside the recorded line the axle keeps mowing authority in
+    /// the rotation gates (robot_config_util.coverage_entry_tolerance).
+    double coverage_entry_tolerance_m{0.0};
     double goal_timeout{5.0};
     double max_follow_distance{1.0};
     /// Max longitudinal carrot lead (m); <= 0 derives it (ftc_carrot_lead.hpp).
@@ -810,6 +848,10 @@ private:
     /// enable only after a supervised field test. When false the wedged case
     /// holds/aborts exactly as before.
     bool obstacle_reverse_enabled{false};
+    /// Boundary-safe reverse (retrace.hpp, reverseAllowedDistance): a reverse only runs while the
+    /// robot is inside every recorded area, over a straight forward piece it just drove. False in
+    /// the struct (unit tests build the controller directly), true in nav2_params_base.yaml.
+    bool reverse_boundary_safe{false};
     /// Hard cap on total reversed distance (m) per escape. Never exceeded.
     double obstacle_reverse_max_dist_m{0.30};
     /// Straight reverse speed (m/s). Must clear the firmware deadband (~0.05).

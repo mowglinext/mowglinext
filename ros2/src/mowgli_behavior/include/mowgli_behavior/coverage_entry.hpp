@@ -1,0 +1,96 @@
+// Copyright 2026 Mowgli Project
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+#pragma once
+
+#include <algorithm>
+#include <cmath>
+#include <memory>
+#include <mutex>
+#include <utility>
+
+#include "mowgli_nav2_plugins/mowing_geometry.hpp"
+#include "rclcpp/rclcpp.hpp"
+
+namespace mowgli_behavior
+{
+// Owned by the BT blackboard, rather than action state: map replacements must
+// also revoke admission while waiting for blade readiness or reacquisition.
+class CoverageEntryGeometry
+{
+public:
+  static std::shared_ptr<CoverageEntryGeometry> create(const rclcpp::Node::SharedPtr& node)
+  {
+    auto cache = std::make_shared<CoverageEntryGeometry>();
+    // coverage_entry_tolerance_m: how far outside the recorded line the axle
+    // still counts as inside (robot_config_util.coverage_entry_tolerance — the
+    // planner's own outward field growth for the outermost ring). Undeclared
+    // (unit tests) or invalid keeps the exact line.
+    if (node->has_parameter("coverage_entry_tolerance_m"))
+    {
+      const double tolerance = node->get_parameter("coverage_entry_tolerance_m").as_double();
+      if (std::isfinite(tolerance) && tolerance > 0.0)
+        cache->tolerance_ = std::min(tolerance, kMaxEntryToleranceM);
+    }
+    cache->subscription_ = node->create_subscription<visualization_msgs::msg::MarkerArray>(
+        "/map_server_node/transit_geometry",
+        rclcpp::QoS(1).reliable().transient_local(),
+        [weak = std::weak_ptr<CoverageEntryGeometry>(cache), logger = node->get_logger()](
+            const visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+        {
+          if (auto current = weak.lock())
+          {
+            auto next = std::make_shared<const mowgli_nav2_plugins::MowingGeometry>(
+                mowgli_nav2_plugins::MowingGeometry::parse(*message));
+            // Fail closed, but never silently: with no valid snapshot every unit
+            // start needs a transit that the entry goal checker can never end.
+            if (!next->valid && !message->markers.empty())
+              RCLCPP_ERROR(logger,
+                           "CoverageEntryGeometry: /map_server_node/transit_geometry rejected "
+                           "(%zu rings; one is invalid or no mowing area) — coverage cannot "
+                           "start until map_server publishes a valid map",
+                           message->markers.size());
+            std::lock_guard<std::mutex> lock(current->mutex_);
+            // Empty/malformed publications replace a prior valid snapshot too.
+            current->snapshot_ = std::move(next);
+          }
+        });
+    return cache;
+  }
+
+  bool contains(double x, double y) const
+  {
+    std::shared_ptr<const mowgli_nav2_plugins::MowingGeometry> snapshot;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      snapshot = snapshot_;
+    }
+    return snapshot && snapshot->contains({x, y}, tolerance_);
+  }
+
+  double tolerance() const
+  {
+    return tolerance_;
+  }
+
+private:
+  // A tolerance is a geometric allowance, never a way to disable the check.
+  static constexpr double kMaxEntryToleranceM = 0.5;
+  double tolerance_{0.0};
+  mutable std::mutex mutex_;
+  std::shared_ptr<const mowgli_nav2_plugins::MowingGeometry> snapshot_;
+  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr subscription_;
+};
+}  // namespace mowgli_behavior

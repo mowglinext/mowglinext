@@ -45,6 +45,7 @@ add_library(fusion_graph_core
   src/factors.cpp
   src/graph_manager.cpp
   src/graph_manager_node.cpp
+  src/graph_manager_measurements.cpp
   src/graph_manager_rebase.cpp
   src/graph_manager_persistence.cpp
   src/checkpoint_file.cpp
@@ -84,7 +85,7 @@ target_link_libraries(fusion_graph_core PUBLIC
 # Executable: fusion_graph_node
 # ---------------------------------------------------------------------------
 
-add_executable(fusion_graph_node
+add_library(fusion_graph_node_objects OBJECT
   src/fusion_graph_node.cpp
   src/fusion_graph_node_setup_params.cpp
   src/fusion_graph_node_setup_comms.cpp
@@ -96,12 +97,15 @@ add_executable(fusion_graph_node
   src/fusion_graph_node_lidar_anchor.cpp
 )
 
-target_link_libraries(fusion_graph_node
+target_link_libraries(fusion_graph_node_objects PUBLIC
   fusion_graph_core
 )
-target_link_libraries(fusion_graph_node
+target_link_libraries(fusion_graph_node_objects PUBLIC
   ${beluga_ros_TARGETS}
 )
+
+add_executable(fusion_graph_node src/fusion_graph_main.cpp)
+target_link_libraries(fusion_graph_node fusion_graph_node_objects)
 
 # ---------------------------------------------------------------------------
 # Install
@@ -320,6 +324,25 @@ if(BUILD_TESTING)
     test/test_lidar_map_xy_prior.cpp
   )
   target_link_libraries(test_lidar_map_xy_prior fusion_graph_core)
+
+  ament_add_gtest(test_stationary_gnss test/test_stationary_gnss.cpp)
+  target_link_libraries(test_stationary_gnss fusion_graph_core)
+
+  ament_add_gtest(test_estimate_publication test/test_estimate_publication.cpp)
+  target_link_libraries(test_estimate_publication fusion_graph_node_objects)
+
+  find_package(rosgraph_msgs REQUIRED)
+  find_package(tf2_msgs REQUIRED)
+  ament_add_ros_isolated_gtest(test_tf_cadence test/test_tf_cadence.cpp TIMEOUT 60)
+  target_link_libraries(test_tf_cadence fusion_graph_node_objects
+    ${rosgraph_msgs_TARGETS} ${tf2_msgs_TARGETS})
+
+  ament_add_ros_isolated_gtest(test_motion_publication test/test_motion_publication.cpp TIMEOUT 60)
+  target_link_libraries(test_motion_publication fusion_graph_node_objects ${tf2_msgs_TARGETS})
+
+  ament_add_gtest(test_sensor_input_node test/test_sensor_input_node.cpp TIMEOUT 60)
+  target_link_libraries(test_sensor_input_node fusion_graph_node_objects)
+  set_tests_properties(test_sensor_input_node PROPERTIES ENVIRONMENT "ROS_DOMAIN_ID=187")
 
   ament_add_gtest(test_gnss_timestamp
     test/test_gnss_timestamp.cpp

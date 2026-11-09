@@ -2786,9 +2786,9 @@ void MapServerNode::apply_area_classifications_locked()
     }
   }
 
-  // Dock body cells → OBSTACLE_PERMANENT. The strip planner stops at
-  // OBSTACLE_PERMANENT, and Smac sees them as lethal — so the robot
-  // never tries to mow into or path through the dock structure.
+  // Dock body cells → OBSTACLE_PERMANENT. This layer only labels them: what
+  // actually keeps the robot out is the keepout mask + transit geometry
+  // (publish_keepout_mask) and coverage_server's hole, all from this polygon.
   if (has_dock_exclusion_ && dock_body_polygon_.points.size() >= 3)
   {
     fill(dock_body_polygon_, CellType::OBSTACLE_PERMANENT);

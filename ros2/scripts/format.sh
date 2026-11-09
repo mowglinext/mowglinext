@@ -11,12 +11,22 @@ ROS2_DIR="$(dirname "$SCRIPT_DIR")"
 STYLE="file:${ROS2_DIR}/.clang-format"
 REQUIRED_MAJOR=18
 
-if ! command -v clang-format &>/dev/null; then
-  echo "ERROR: clang-format not found. Install: pip install clang-format==18.1.8"
+# Binary selection: $CLANG_FORMAT if set, else clang-format-18 if installed
+# (apt / brew llvm@18), else plain clang-format.
+if [ -z "${CLANG_FORMAT:-}" ]; then
+  if command -v clang-format-18 &>/dev/null; then
+    CLANG_FORMAT=clang-format-18
+  else
+    CLANG_FORMAT=clang-format
+  fi
+fi
+
+if ! command -v "$CLANG_FORMAT" &>/dev/null; then
+  echo "ERROR: $CLANG_FORMAT not found. Install: pip install clang-format==18.1.8"
   exit 1
 fi
 
-VERSION=$(clang-format --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
+VERSION=$("$CLANG_FORMAT" --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
 MAJOR=${VERSION%%.*}
 if [ "$MAJOR" != "$REQUIRED_MAJOR" ]; then
   echo "WARNING: clang-format $VERSION detected, CI uses 18.x."
@@ -40,9 +50,9 @@ if [ -z "$FILES" ]; then
 fi
 
 if [ "${1:-}" = "--check" ]; then
-  echo "$FILES" | xargs clang-format --dry-run --Werror -style="$STYLE"
+  echo "$FILES" | xargs "$CLANG_FORMAT" --dry-run --Werror -style="$STYLE"
   echo "All files are correctly formatted."
 else
-  echo "$FILES" | xargs clang-format -i -style="$STYLE"
+  echo "$FILES" | xargs "$CLANG_FORMAT" -i -style="$STYLE"
   echo "Formatted $(echo "$FILES" | wc -l | tr -d ' ') files."
 fi

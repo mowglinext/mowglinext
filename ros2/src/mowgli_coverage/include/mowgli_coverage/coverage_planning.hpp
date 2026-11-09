@@ -287,7 +287,9 @@ std::optional<double> longestValidSwathAngle(const f2c::types::Swaths& swaths);
 //                (pivotSharpCorners). A fillet cuts the corner off and leaves
 //                the tip uncut. Corners where the sweep does not fit (beside a
 //                drawn obstacle, too far past the recorded line) and corners
-//                between 30° and 60° keep today's arc.
+//                between 30° and 60° try today's arc. A retained corner that
+//                cannot be filleted is marked as a required stop by the final
+//                classifier; runtime must check its executable signed arc.
 BoustrophedonPlan planBoustrophedon(
     const f2c::types::Cell& field_cell,
     double op_width,
@@ -490,18 +492,25 @@ struct PivotJoinLimits
 bool pivotSweepFits(double x, double y, const PivotJoinLimits& limits);
 
 // Turn every zero-radius corner of `pts` sharper than `min_turn_rad` into a
-// pivot corner (a bit-exact twin, see coverage_geometry.hpp) where
-// pivotSweepFits() allows it. Existing twins and every other pose are kept
+// required stopped reorientation (a bit-exact twin, see coverage_geometry.hpp).
+// This marker is not a clearance certificate: FTC must check the actual signed
+// rotation arc, even when the nominal full pivot disc does not fit. Existing
+// twins and every other pose are kept
 // unchanged; with pivots disabled (sweep_radius <= 0) `pts` is returned as is.
 // Used on finished sub-paths, after fillets: a corner left sharp there is one
 // FTC would otherwise drive as a curve, sweeping the chassis nose wide.
+// With min_turn_radius > 0, also classify concentrated same-direction turns
+// whose aggregate exceeds min_turn_rad across sub-minimum-radius chords.
+// Their existing vertices receive the same required-stop markers. Creating new
+// pivot joins still requires pivotSweepFits(); classification adds no geometry.
 // `is_twin`, when given with one flag per pose, is kept in step (new twins
 // flagged true) for enforcePivotCornerContract.
 std::vector<std::pair<double, double>> pivotSharpCorners(
     const std::vector<std::pair<double, double>>& pts,
     double min_turn_rad,
     const PivotJoinLimits& limits,
-    std::vector<bool>* is_twin = nullptr);
+    std::vector<bool>* is_twin = nullptr,
+    double min_turn_radius = 0.0);
 
 // Yaw of every pose of a drivable sub-path, honouring the pivot corner
 // contract: a pose followed by a pose at the SAME position (a pivot corner)
@@ -691,6 +700,33 @@ f2c::types::LinearRing erodeRingInward(const f2c::types::LinearRing& in, double 
 f2c::types::Cell removeNarrowBoundaryTongues(const f2c::types::Cell& in,
                                              double min_width,
                                              double* removed_area = nullptr);
+
+// A forbidden ring (already grown by its margin) applied to a field's exterior:
+// the charging station, which an operator typically records the lawn right up to.
+struct FieldWithKeepout
+{
+  f2c::types::LinearRing shell;
+  // Set when the ring lies wholly inside the field.
+  std::optional<f2c::types::LinearRing> hole;
+  // Field area lost because the ring cut the field apart (only the largest piece
+  // is kept: a coverage plan is one cell). 0 in every other case.
+  double dropped_area{0.0};
+};
+
+// Disjoint: the shell comes back UNCHANGED (same vertices, so the plan and its
+// resume fingerprint stay bit-identical on a lawn the station is not part of).
+// Wholly inside: a hole. Crossing the exterior: a notch, cut here rather than
+// left to the planner's hole repair, so every planning branch sees one valid
+// field and the outermost ring rides the notch at the keepout's full margin.
+// An invalid shell (a recorded line crossing itself) or a difference GEOS cannot
+// compute falls back to a hole: never drop the keepout. Pure function — testable.
+FieldWithKeepout subtractKeepoutFromField(const f2c::types::LinearRing& shell,
+                                          const f2c::types::LinearRing& keepout);
+
+// Union of the rings that overlap; rings that touch nothing come back untouched,
+// so a lone station stays bit-identical. Pure function — testable.
+std::vector<f2c::types::LinearRing> mergeOverlappingRings(
+    const std::vector<f2c::types::LinearRing>& rings);
 
 }  // namespace mowgli_coverage
 

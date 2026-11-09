@@ -46,7 +46,8 @@ from std_msgs.msg import Bool
 from std_srvs.srv import SetBool, Trigger
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from openmower_v1_emulator import HEARTBEAT_MILLIS, OpenMowerV1Rig  # noqa: E402
+from openmower_v1_emulator import HEARTBEAT_MILLIS  # noqa: E402
+from rig_process import RemoteRig  # noqa: E402
 from measurements import calibration_attempt, drives_running, odometry_mean, run_scenario  # noqa: E402
 from native_trace import NativeTrace, blade_receipts, commanded_zero, heartbeat_cadence, matching_blade_write, stale_blade_window, wheel_recovery  # noqa: E402
 
@@ -60,6 +61,7 @@ ROBOT_TEMPLATE = os.path.normpath(os.path.join(
 BACKEND_DEFAULTS = os.path.join(os.path.dirname(ROBOT_TEMPLATE), 'backends', 'openmower.yaml')
 DRIVES = ('left', 'right')
 HLS_PERIOD_S = 0.5  # Original 2 Hz publication cadence, also the stale observation unit.
+CMD_PERIOD_S = 0.05  # cmd_vel at 20 Hz, as a controller would publish it.
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +98,7 @@ class Probe(Node):
         self.imu = []
         self.applied = []
         self.hlc_commands = []
-        self.cmd = None          # (vx, wz) published at 20 Hz while set
+        self.cmd = None          # (vx, wz) published at 20 Hz while set (_publish_loop)
         self.hl_state = None     # published at 2 Hz while set
         rel = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         latched = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
@@ -119,8 +121,38 @@ class Probe(Node):
         self.reboot = self.create_client(Trigger, '/hardware_bridge/reboot_board')
         self.fw_debug = self.create_client(SetBool, '/hardware_bridge/set_firmware_debug')
         self.get_params = self.create_client(GetParameters, '/hardware_bridge/get_parameters')
-        self.create_timer(0.05, self._publish_cmd)
-        self.create_timer(HLS_PERIOD_S, self._publish_hl)
+        # What the BT and the velocity mux would publish, on a dedicated thread
+        # rather than executor timers: the executor also runs the 50-100 Hz
+        # IMU/odom/applied subscriptions, and on a loaded runner it starved
+        # these timers for 0.8-1.7 s (6 s once). The bridge then correctly
+        # treated cmd_vel as stale (1 s), held the wheels and re-ramped, and the
+        # scenario measured that instead of the bridge.
+        self._publishing = threading.Event()
+        self._publishing.set()
+        self._publisher_thread = threading.Thread(
+            target=self._publish_loop, name='om-sim-probe-publisher', daemon=True)
+        self._publisher_thread.start()
+
+    def _publish_loop(self):
+        """cmd_vel at 20 Hz and HighLevelStatus at 1/HLS_PERIOD_S, on a fixed
+        monotonic schedule; an overrun skips ahead rather than bursting."""
+        periods = ((CMD_PERIOD_S, self._publish_cmd), (HLS_PERIOD_S, self._publish_hl))
+        due = [time.monotonic()] * len(periods)
+        while self._publishing.is_set():
+            now = time.monotonic()
+            for i, (period, publish) in enumerate(periods):
+                if now >= due[i]:
+                    try:
+                        publish()
+                    except Exception:  # keep publishing; a dead thread would read as a stalled BT
+                        traceback.print_exc()
+                    due[i] = max(due[i] + period, now)
+            time.sleep(max(0.0, min(due) - time.monotonic()))
+
+    def destroy_node(self):
+        self._publishing.clear()
+        self._publisher_thread.join(timeout=2.0)
+        return super().destroy_node()
 
     def _keeper(self, key):
         def cb(msg):
@@ -1181,7 +1213,7 @@ SCENARIOS = [s01_boot, s02_boot_latch, s03_straight, s04_pivot, s05_slew, s06_cm
 def run_one(esc: str, R: Report, logdir: str, only=None):
     print(f'\n========== {esc} ==========', flush=True)
     workdir = tempfile.mkdtemp(prefix=f'omsim-{esc}-')
-    rig = OpenMowerV1Rig(workdir, esc)
+    rig = RemoteRig(workdir, esc)
     rig.start()
     bridge_log = os.path.join(logdir, f'bridge-{esc}.log')
     bridge = start_bridge(rig, esc, workdir, bridge_log)
@@ -1227,7 +1259,7 @@ def run_gui_config(R: Report, logdir: str):
     S = 'gui config'
     print(f'\n========== {S} ==========', flush=True)
     workdir = tempfile.mkdtemp(prefix='omsim-gui-')
-    rig = OpenMowerV1Rig(workdir, 'xesc_2040')
+    rig = RemoteRig(workdir, 'xesc_2040')
     rig.start()
     yaml_keys = (f"    openmower_ll_port: \"{rig.paths['ll']}\"\n"
                  '    openmower_xesc_type: "xesc_2040"\n'
@@ -1269,11 +1301,12 @@ def run_gui_config(R: Report, logdir: str):
 
 
 def main():
-    # The emulator thread stands in for microcontrollers that answer within a
-    # millisecond, but it shares the GIL with the probe's executor threads.
-    # With Python's default 5 ms switch interval a starved runner made it
-    # answer tens of ms late, and the bridge's (correct) timing then measured
-    # the EMULATOR's latency as speed noise. Switch every 0.5 ms instead.
+    # The emulator stands in for microcontrollers that answer within a
+    # millisecond. It runs in its own process (rig_process.RemoteRig): sharing
+    # the GIL with this probe's executor threads starved it for up to ~0.5 s on
+    # a GitHub runner, long enough for the bridge to (correctly) declare the
+    # LowLevel board lost mid-scenario. The short switch interval stays for the
+    # probe's own timing; the rig process sets the same one for its threads.
     sys.setswitchinterval(0.0005)
     ap = argparse.ArgumentParser()
     ap.add_argument('--esc', choices=['xesc_mini', 'xesc_2040', 'both'], default='both')

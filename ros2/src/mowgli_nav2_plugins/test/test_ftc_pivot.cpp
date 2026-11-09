@@ -177,13 +177,35 @@ TEST(FtcPivot, PlanOpeningOnACornerStartsAtItsOutgoingPose)
 
 TEST(FtcPivot, ArrivalAndAlignment)
 {
-  EXPECT_FALSE(PivotArrived(0.10, kPivotArrivalToleranceM));
-  EXPECT_TRUE(PivotArrived(0.015, kPivotArrivalToleranceM));
-  EXPECT_TRUE(PivotArrived(-0.03, kPivotArrivalToleranceM)) << "overshoot still pivots";
+  EXPECT_FALSE(PivotArrived(0.10, 0, kPivotArrivalToleranceM));
+  EXPECT_TRUE(PivotArrived(0.015, 0, kPivotArrivalToleranceM));
+  EXPECT_FALSE(PivotArrived(-0.03, 0, kPivotArrivalToleranceM));
+  EXPECT_FALSE(PivotArrived(0.0, 0.125, kPivotArrivalToleranceM));
+  EXPECT_TRUE(PivotArrived(0.012, -0.016, kPivotArrivalToleranceM));
   const double tol = 10.0 * M_PI / 180.0;
   EXPECT_FALSE(PivotAligned(0.5, tol));
   EXPECT_TRUE(PivotAligned(0.1, tol));
   EXPECT_TRUE(PivotAligned(2.0 * M_PI + 0.05, tol)) << "wrapped, like PRE_ROTATE";
+}
+
+TEST(FtcPivot, DirectedSweepKeepsBothLongArcsAndTheirEndpoints)
+{
+  for (double sign : {-1.0, 1.0})
+    for (double from : {0.0, M_PI - .1, -M_PI + .1})
+    {
+      const double turn = sign * (M_PI + .7);
+      const auto yaws = DirectedPivotSweepYaws(from, turn, .05);
+      ASSERT_GT(yaws.size(), 2u);
+      EXPECT_DOUBLE_EQ(yaws.front(), from);
+      EXPECT_NEAR(yaws.back(), from + turn, 1e-15);
+      for (std::size_t i = 1; i < yaws.size(); ++i)
+      {
+        EXPECT_GT(sign * (yaws[i] - yaws[i - 1]), 0);
+        EXPECT_LE(std::abs(yaws[i] - yaws[i - 1]), .05 + 1e-15);
+      }
+    }
+  EXPECT_TRUE(DirectedPivotSweepYaws(0, 2 * M_PI + .01, .1).empty());
+  EXPECT_TRUE(DirectedPivotSweepYaws(0, NAN, .1).empty());
 }
 
 TEST(FtcPivot, SweepYawsCoverTheShortestRotation)

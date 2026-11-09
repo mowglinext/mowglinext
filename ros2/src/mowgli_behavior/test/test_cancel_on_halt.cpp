@@ -25,12 +25,16 @@
  * frozen in RETURNING_HOME on the dock.
  */
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <regex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -42,8 +46,10 @@
 #include "behaviortree_cpp/bt_factory.h"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
+#include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/docking_nodes.hpp"
 #include "nav2_msgs/action/dock_robot.hpp"
+#include "rcl_interfaces/msg/log.hpp"
 #include <gtest/gtest.h>
 
 using mowgli_behavior::abandonGoal;
@@ -52,6 +58,8 @@ using mowgli_behavior::cancelGoalQuietly;
 using mowgli_behavior::cancelWhenAbandoned;
 using mowgli_behavior::DockRobot;
 using mowgli_behavior::GoalAbandonment;
+using mowgli_behavior::IsCommand;
+using mowgli_behavior::IsDocking;
 using mowgli_behavior::UndockRobot;
 using Dock = nav2_msgs::action::DockRobot;
 using Undock = nav2_msgs::action::UndockRobot;
@@ -143,10 +151,28 @@ public:
     handles_.at(i)->succeed(std::make_shared<typename Action::Result>());
   }
 
-  void canceled(std::size_t i)
+  void canceled(std::size_t i, uint16_t code = 0, const std::string& message = {})
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    handles_.at(i)->canceled(std::make_shared<typename Action::Result>());
+    auto result = std::make_shared<typename Action::Result>();
+    result->error_code = code;
+    result->error_msg = message;
+    handles_.at(i)->canceled(result);
+  }
+
+  void abort(std::size_t i, uint16_t code, const std::string& message)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto result = std::make_shared<typename Action::Result>();
+    result->error_code = code;
+    result->error_msg = message;
+    handles_.at(i)->abort(result);
+  }
+
+  std::string goalId(std::size_t i)
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return rclcpp_action::to_string(handles_.at(i)->get_goal_id());
   }
 
 private:
@@ -183,6 +209,10 @@ protected:
   void SetUp() override
   {
     ctx = std::make_shared<BTContext>();
+    ctx->coverage_precision_ready = []
+    {
+      return true;
+    };  // mocked precision-support module
     ctx->node = rclcpp::Node::make_shared("test_cancel_on_halt");
     server_node = rclcpp::Node::make_shared("fake_docking_server");
     dock = std::make_unique<FakeDockServer>(server_node, "/dock_robot");
@@ -213,6 +243,51 @@ protected:
       spinner.join();
     }
     dock.reset();
+  }
+
+  void captureDockResults()
+  {
+    result_logs = server_node->create_subscription<rcl_interfaces::msg::Log>(
+        "/rosout",
+        rclcpp::RosoutQoS(),
+        [this](const rcl_interfaces::msg::Log& log)
+        {
+          if (log.name == ctx->node->get_logger().get_name() &&
+              log.msg.starts_with("DockRobot: result "))
+          {
+            std::lock_guard<std::mutex> lock(log_mutex);
+            logs.push_back(log);
+          }
+        });
+    ASSERT_TRUE(waitFor(
+        [this]()
+        {
+          return result_logs->get_publisher_count() > 0;
+        },
+        5.0));
+  }
+
+  bool hasDockResult(const std::string& goal_id,
+                     const std::string& status,
+                     uint16_t code,
+                     const std::string& message,
+                     uint8_t level)
+  {
+    std::lock_guard<std::mutex> lock(log_mutex);
+    return std::any_of(logs.begin(),
+                       logs.end(),
+                       [&](const auto& log)
+                       {
+                         return log.level == level &&
+                                log.msg.find("status=" + status + " ") != std::string::npos &&
+                                log.msg.find("goal_id=" + goal_id + " ") != std::string::npos &&
+                                log.msg.find("error_code=" + std::to_string(code) + " ") !=
+                                    std::string::npos &&
+                                log.msg.find("error_msg='" + message + "'") != std::string::npos &&
+                                log.msg.find("dock_id='home_dock'") != std::string::npos &&
+                                log.msg.find("dock_type='simple_charging_dock'") !=
+                                    std::string::npos;
+                       });
   }
 
   /// A goal on the fake server, with the result already delivered to `client`
@@ -255,7 +330,115 @@ protected:
   BT::Blackboard::Ptr blackboard;
   BT::BehaviorTreeFactory factory;
   std::unique_ptr<BT::Tree> tree;
+  std::mutex log_mutex;
+  std::vector<rcl_interfaces::msg::Log> logs;
+  rclcpp::Subscription<rcl_interfaces::msg::Log>::SharedPtr result_logs;
 };
+
+TEST_F(CancelOnHaltTest, DockAbortReportsServerFailureAndGoalIdentity)
+{
+  captureDockResults();
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><DockRobot/></BehaviorTree></root>",
+      blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 1;
+      },
+      5.0));
+  const auto goal_id = dock->goalId(0);
+  const std::string message = "Navigation request to staging pose failed: 100% blocked";
+  dock->abort(0, 903, message);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return hasDockResult(goal_id, "ABORTED", 903, message, rcl_interfaces::msg::Log::WARN);
+      },
+      5.0));
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_FALSE(ctx->docking_active);
+  EXPECT_FALSE(ctx->last_dock_succeeded);
+}
+
+TEST_F(CancelOnHaltTest, DockImmediateSuccessIsReportedBeforeTheNextTick)
+{
+  captureDockResults();
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><DockRobot/></BehaviorTree></root>",
+      blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 1;
+      },
+      5.0));
+  const auto goal_id = dock->goalId(0);
+  dock->succeed(0);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return hasDockResult(goal_id, "SUCCEEDED", 0, "", rcl_interfaces::msg::Log::INFO);
+      },
+      5.0));
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_TRUE(ctx->last_dock_succeeded);
+}
+
+TEST_F(CancelOnHaltTest, LateDockResultKeepsItsOwnIdentityAfterRestart)
+{
+  captureDockResults();
+  const std::string xml =
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><DockRobot/></BehaviorTree></root>";
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(xml, blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 1;
+      },
+      5.0));
+  const auto old_id = dock->goalId(0);
+  tree->haltTree();
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->isCanceling(0);
+      },
+      5.0));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 2;
+      },
+      5.0));
+  const auto new_id = dock->goalId(1);
+  ASSERT_NE(old_id, new_id);
+  dock->canceled(0, 905, "old attempt canceled");
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return hasDockResult(
+            old_id, "CANCELED", 905, "old attempt canceled", rcl_interfaces::msg::Log::INFO);
+      },
+      5.0));
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_TRUE(ctx->docking_active);
+  dock->abort(1, 907, "new attempt failed");
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return hasDockResult(
+            new_id, "ABORTED", 907, "new attempt failed", rcl_interfaces::msg::Log::WARN);
+      },
+      5.0));
+  EXPECT_FALSE(hasDockResult(
+      new_id, "CANCELED", 905, "old attempt canceled", rcl_interfaces::msg::Log::INFO));
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::FAILURE);
+}
 
 TEST_F(CancelOnHaltTest, RclcppThrowsOnAFinishedGoalButTheHelperDoesNot)
 {
@@ -462,6 +645,84 @@ TEST_F(CancelOnHaltTest, DockRobotStillWantedAfterDelayedAcceptanceIsNotCanceled
       5.0));
   EXPECT_TRUE(ctx->last_dock_succeeded);
   EXPECT_FALSE(ctx->docking_active);
+}
+
+// BoundaryGuard's GOTO dock-transit exemption, as shipped in main_tree.xml,
+// follows the real DockRobot lifecycle: it holds only while a dock goal runs
+// under COMMAND_GOTO (9), and never again once that DockRobot is halted
+// (docking_active is cleared in onHalted). Outside the area, the stand-in
+// boundary handler then engages and halts the dock, as the guard would.
+TEST_F(CancelOnHaltTest, GotoDockTransitExemptionFollowsDockRobotLifecycle)
+{
+  std::ifstream input(MOWGLI_MAIN_TREE_PATH);
+  std::ostringstream contents;
+  contents << input.rdbuf();
+  const std::string xml = std::regex_replace(contents.str(), std::regex("<!--[\\s\\S]*?-->"), "");
+  const auto begin = xml.find("<Sequence name=\"GotoDockTransitExempt\">");
+  ASSERT_NE(begin, std::string::npos);
+  const std::string close = "</Sequence>";
+  const std::string exempt = xml.substr(begin, xml.find(close, begin) + close.size() - begin);
+
+  bool inside_area = true;
+  int handler_ticks = 0;
+  factory.registerNodeType<IsCommand>("IsCommand");
+  factory.registerNodeType<IsDocking>("IsDocking");
+  factory.registerSimpleCondition("InsideArea",
+                                  [&](BT::TreeNode&)
+                                  {
+                                    return inside_area ? BT::NodeStatus::SUCCESS
+                                                       : BT::NodeStatus::FAILURE;
+                                  });
+  factory.registerSimpleAction("BoundaryHandler",
+                               [&](BT::TreeNode&)
+                               {
+                                 ++handler_ticks;
+                                 return BT::NodeStatus::FAILURE;
+                               });
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><ReactiveSequence>"
+      "<ReactiveFallback>" +
+          exempt +
+          "<InsideArea/><BoundaryHandler/></ReactiveFallback>"
+          "<DockRobot/></ReactiveSequence></BehaviorTree></root>",
+      blackboard));
+
+  ctx->current_command = 9;
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_TRUE(ctx->docking_active);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->goalCount() == 1;
+      },
+      5.0));
+
+  // The dock approach leaves the area: exempt while the dock goal runs.
+  inside_area = false;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(handler_ticks, 0);
+  EXPECT_FALSE(dock->isCanceling(0));
+
+  // Another command: the exemption fails, the handler engages, DockRobot is
+  // halted and its goal canceled.
+  ctx->current_command = 0;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(handler_ticks, 1);
+  EXPECT_FALSE(ctx->docking_active);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return dock->isCanceling(0);
+      },
+      5.0));
+  dock->canceled(0);
+
+  // Command 9 again, no dock running: no exemption is left behind.
+  ctx->current_command = 9;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(handler_ticks, 2);
+  EXPECT_FALSE(ctx->docking_active);
+  EXPECT_EQ(dock->goalCount(), 1u) << "the halted dock must not restart behind the guard";
 }
 
 template <typename Action>

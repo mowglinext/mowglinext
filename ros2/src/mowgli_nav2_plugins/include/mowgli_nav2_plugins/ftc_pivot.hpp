@@ -26,7 +26,7 @@
 //   FOLLOWING  the carrot is CAPPED at the corner's first pose, so the robot
 //              drives straight to it and never steers at a carrot beyond it;
 //   -> PIVOT   once base_link is within kPivotArrivalToleranceM of the corner
-//              along its heading: stop, rotate in place to the corner's second
+//              in planar distance: stop, rotate in place to the corner's second
 //              pose (the outgoing heading) with PRE_ROTATE's angular control and
 //              limits, no lateral offset;
 //   -> FOLLOWING from the second pose once aligned within tolerance.
@@ -35,7 +35,8 @@
 // consecutive poses at the same position, first with the incoming heading,
 // second with the outgoing one; nothing else in a coverage plan has a
 // zero-length step, so ordinary curvature (turn-around arcs, fillets, ring
-// corners) can never trigger a pivot.
+// corners) can never trigger a pivot. A twin requires a stop, not permission to
+// rotate: the actual body, raw holes and local costmap must clear the signed arc.
 //
 // Everything here is pure (no ROS), unit-tested in test_ftc_pivot.cpp.
 
@@ -66,11 +67,9 @@ struct PlanPose2D
 inline constexpr double kPivotCornerDetectTurnRad =
     0.5 * mowgli_interfaces::coverage_geometry::kPivotCornerMinTurnRad;
 
-/// How far ahead of base_link (along its heading) the corner may still be when
-/// the pivot starts. The approach runs at min_speed_mps (0.15 m/s) with the
-/// carrot pinned on the corner, i.e. 1.5 cm per 10 Hz tick: 2 cm fires on the
-/// first tick within reach, so the pivot centre lands within about one tick of
-/// the corner either side.
+/// Maximum planar distance from base_link to the planned pivot tip. The
+/// controller brakes locally before handoff and waits for measured translation
+/// to settle before rotating; longitudinal projection alone is insufficient.
 inline constexpr double kPivotArrivalToleranceM = 0.02;
 
 inline double WrapPivotAngle(double a)
@@ -127,12 +126,11 @@ inline std::size_t PivotAwareStartIndex(const std::vector<std::size_t>& corners,
   return std::binary_search(corners.begin(), corners.end(), start) ? start + 1 : start;
 }
 
-/// True once the robot has reached the corner the carrot is capped on: the
-/// corner lies no more than `tolerance_m` ahead along the robot's heading (or
-/// already behind it).
-inline bool PivotArrived(double corner_x_in_robot_frame_m, double tolerance_m)
+/// True only within the planar arrival disc, including lateral and overshoot
+/// error. Neither a passed longitudinal plane nor zero speed establishes arrival.
+inline bool PivotArrived(double corner_x_m, double corner_y_m, double tolerance_m)
 {
-  return corner_x_in_robot_frame_m <= tolerance_m;
+  return std::hypot(corner_x_m, corner_y_m) <= tolerance_m;
 }
 
 /// True once the robot faces the outgoing heading within `tolerance_rad`.
@@ -180,12 +178,13 @@ inline std::size_t ClipWindowToCorner(std::size_t start,
   return std::min(end, *corner + 1);
 }
 
-/// Headings at which to probe the footprint for the rotation from `from` to
-/// `to` (radians, shortest direction), at most `max_step` apart, both ends
-/// included. A non-positive step probes the two ends only.
-inline std::vector<double> PivotSweepYaws(double from, double to, double max_step)
+/// Probe a finite directed turn of at most one revolution without wrapping it.
+/// Both ends are included, at most max_step apart. A non-positive step probes
+/// the two ends only; invalid angles return no probes.
+inline std::vector<double> DirectedPivotSweepYaws(double from, double delta, double max_step)
 {
-  const double delta = WrapPivotAngle(to - from);
+  if (!std::isfinite(from) || !std::isfinite(delta) || std::abs(delta) > 2 * M_PI)
+    return {};
   std::size_t n = 1;
   if (max_step > 0.0)
   {
@@ -198,6 +197,12 @@ inline std::vector<double> PivotSweepYaws(double from, double to, double max_ste
     yaws.push_back(from + delta * static_cast<double>(i) / static_cast<double>(n));
   }
   return yaws;
+}
+
+/// Existing shortest-direction sweep, including across the +/-pi seam.
+inline std::vector<double> PivotSweepYaws(double from, double to, double max_step)
+{
+  return DirectedPivotSweepYaws(from, WrapPivotAngle(to - from), max_step);
 }
 
 }  // namespace mowgli_nav2_plugins

@@ -15,9 +15,14 @@
 
 #include "mowgli_behavior/docking_nodes.hpp"
 
+#include <chrono>
+#include <mutex>
+
 #include "action_msgs/msg/goal_status.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/dock_alignment.hpp"
+#include "tf2/exceptions.hpp"
+#include "tf2/time.hpp"
 
 namespace mowgli_behavior
 {
@@ -72,6 +77,51 @@ void DockRobot::log_contact_delta(const std::shared_ptr<BTContext>& ctx, uint16_
               d.range_m);
 }
 
+bool RobotIsAtDockStation(BTContext& ctx)
+{
+  if (!ctx.tf_buffer)
+  {
+    return false;
+  }
+  double dock_x, dock_y, dock_yaw;
+  DockStationZone zone;
+  {
+    std::lock_guard<std::mutex> lock(ctx.context_mutex);
+    if (!ctx.dock_pose_known)
+    {
+      return false;
+    }
+    dock_x = ctx.dock_x;
+    dock_y = ctx.dock_y;
+    dock_yaw = ctx.dock_yaw;
+    zone = ctx.dock_station_zone;
+  }
+  try
+  {
+    const auto tf = ctx.tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
+    const auto& q = tf.transform.rotation;
+    const double yaw =
+        std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+    return IsFacingStationInNoPivotZone(tf.transform.translation.x,
+                                        tf.transform.translation.y,
+                                        yaw,
+                                        dock_x,
+                                        dock_y,
+                                        dock_yaw,
+                                        zone);
+  }
+  catch (const tf2::TransformException&)
+  {
+    return false;  // no pose: the ordinary paths apply
+  }
+}
+
+BT::NodeStatus IsAtDockStation::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  return RobotIsAtDockStation(*ctx) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+}
+
 BT::NodeStatus DockRobot::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
@@ -111,9 +161,19 @@ BT::NodeStatus DockRobot::onStart()
   DockAction::Goal goal_msg;
   goal_msg.dock_id = dock_id;
   goal_msg.dock_type = dock_type;
-  goal_msg.navigate_to_staging_pose = true;
+  // Already on the approach line, too close to pivot: the transit planner would
+  // refuse the leg to the staging pose, and it is not needed. docking_server
+  // drives straight in and, if that fails, reverses to staging for its retry.
+  const bool at_station = RobotIsAtDockStation(*ctx);
+  goal_msg.navigate_to_staging_pose = !at_station;
+  if (at_station)
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "DockRobot: already at the station without charge, skipping the staging leg");
+  }
 
   last_feedback_state_ = DockAction::Feedback::NONE;
+  stall_detector_.Reset();
 
   auto send_goal_options = rclcpp_action::Client<DockAction>::SendGoalOptions{};
   goal_abandonment_ = std::make_shared<GoalAbandonment>();
@@ -139,9 +199,35 @@ BT::NodeStatus DockRobot::onStart()
   // A halted attempt can deliver its result after this attempt starts. Keep
   // its callback's slot separate so a late CANCELED cannot fail the new goal.
   outcome_ = std::make_shared<ActionOutcomeSlot>();
-  send_goal_options.result_callback = [slot = outcome_](const GoalHandle::WrappedResult& result)
+  send_goal_options.result_callback =
+      [slot = outcome_, logger = ctx->node->get_logger(), dock_id, dock_type](
+          const GoalHandle::WrappedResult& result)
   {
     slot->Record(OutcomeFromResultCode(result.code));
+    // Log from the result callback: the BT may already be halted or following
+    // another dock goal when this result arrives. Capture this request's
+    // identity and logger by value, without extending the BT node's lifetime.
+    const char* status = result.code == rclcpp_action::ResultCode::SUCCEEDED  ? "SUCCEEDED"
+                         : result.code == rclcpp_action::ResultCode::ABORTED  ? "ABORTED"
+                         : result.code == rclcpp_action::ResultCode::CANCELED ? "CANCELED"
+                                                                              : "UNKNOWN";
+    const auto error_code =
+        result.result ? std::to_string(result.result->error_code) : "unavailable";
+    const auto error_msg = result.result ? result.result->error_msg : "result payload missing";
+    const auto severity = result.code == rclcpp_action::ResultCode::SUCCEEDED ||
+                                  result.code == rclcpp_action::ResultCode::CANCELED
+                              ? RCUTILS_LOG_SEVERITY_INFO
+                              : RCUTILS_LOG_SEVERITY_WARN;
+    RCLCPP_LOG(severity,
+               logger,
+               "DockRobot: result status=%s dock_id='%s' dock_type='%s' goal_id=%s "
+               "error_code=%s error_msg='%s'",
+               status,
+               dock_id.c_str(),
+               dock_type.c_str(),
+               rclcpp_action::to_string(result.goal_id).c_str(),
+               error_code.c_str(),
+               error_msg.c_str());
   };
   goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
   goal_handle_.reset();
@@ -209,8 +295,51 @@ BT::NodeStatus DockRobot::onRunning()
       return BT::NodeStatus::FAILURE;
 
     default:
+      if (approach_stalled(ctx))
+      {
+        // The server is still driving the approach but the chassis has not moved: something
+        // physical is in the way (field 2026-10-06: the garage edge over the dock, 0.29 m
+        // short, pushed against for 30 s). Stop and report; do NOT let the server retry, a
+        // retry would drive into the same edge. FAILURE takes the tree's existing dock-failure
+        // path, which publishes NAV_TO_DOCK_FAILED and so raises the "blocked" notification.
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "DockRobot: DOCK BLOCKED — the dock approach has not moved or turned for "
+                    "%.0f s while the dock server is controlling it and the mower is not "
+                    "charging (an obstacle such as the garage edge is in the way at fused "
+                    "pose %.2f, %.2f). Cancelling the dock attempt, no retry",
+                    kDockStallWindowS,
+                    ctx->fused_x,
+                    ctx->fused_y);
+        cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "DockRobot");
+        goal_handle_.reset();
+        ctx->docking_active = false;
+        return BT::NodeStatus::FAILURE;
+      }
       return BT::NodeStatus::RUNNING;
   }
+}
+
+bool DockRobot::approach_stalled(const std::shared_ptr<BTContext>& ctx)
+{
+  // Only while the server is actually driving the final approach. NAV_TO_STAGING has its own
+  // Nav2 recovery, and WAIT_FOR_CHARGE legitimately stands still waiting for the charger.
+  if (last_feedback_state_.load() != DockAction::Feedback::CONTROLLING)
+  {
+    stall_detector_.Reset();
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  const auto now = std::chrono::steady_clock::now();
+  const double pose_age_s = std::chrono::duration<double>(now - ctx->fused_pose_time).count();
+  // Charging means the contacts are made: that is a dock, not a blockage.
+  if (ctx->latest_power.charger_enabled || !ctx->fused_pose_valid ||
+      pose_age_s > kDockStallMaxPoseAgeS)
+  {
+    stall_detector_.Reset();
+    return false;
+  }
+  const double now_s = std::chrono::duration<double>(now.time_since_epoch()).count();
+  return stall_detector_.Update(now_s, ctx->fused_x, ctx->fused_y, ctx->fused_yaw);
 }
 
 void DockRobot::onHalted()

@@ -67,7 +67,6 @@ export function GardenMap() {
           maxWidth: 1100,
         }}>
           <LiveMapMini
-            coverage={0.42}
             robot={{x: 0.58, y: 0.5, heading: 38}}
             height={vp.isAtLeastTablet ? 560 : 420}
           />

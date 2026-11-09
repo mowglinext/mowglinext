@@ -39,6 +39,7 @@ type IServiceContainerProvider interface {
 	ContainerRemove(ctx context.Context, containerID string, force bool) error
 	ContainerStart(ctx context.Context, containerID string) error
 	ContainerStop(ctx context.Context, containerID string) error
+	ContainerRestart(ctx context.Context, containerID string) error
 	ContainerInspect(ctx context.Context, containerID string) (ContainerDetails, error)
 	ContainerExec(ctx context.Context, containerID string, spec ContainerExecSpec) (ContainerExecResult, error)
 }

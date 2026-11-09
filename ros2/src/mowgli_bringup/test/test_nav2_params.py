@@ -69,6 +69,23 @@ def test_transit_authorization_and_explicit_recovery_are_separate(overlay: str) 
         assert 'planner_id="BoundaryRecovery"' in stream.read()
 
 
+def test_navigate_recovery_never_uses_the_blind_backup() -> None:
+    """Nav2's BackUp reverses along the current heading and cannot see the boundary.
+
+    Field 2026-10-26: a 0.30 m recovery BackUp took the mower from 0.21 m to 0.57 m outside the
+    recorded area, a lethal boundary violation. Every BackUp in the two navigate trees must be
+    served by retrace_server (server_name="retrace"), which only undoes the last piece driven.
+    """
+    trees = os.path.join(os.path.dirname(__file__), "..", "..", "mowgli_behavior", "trees")
+    for filename in ("navigate_to_pose.xml", "navigate_to_pose_transit.xml"):
+        with open(os.path.join(trees, filename), encoding="utf-8") as stream:
+            xml = stream.read()
+        backups = re.findall(r"<BackUp\b[^>]*>", xml)
+        assert backups, f"{filename}: the recovery lost its BackUp step"
+        for tag in backups:
+            assert 'server_name="retrace"' in tag, f"{filename}: {tag} reverses blindly"
+
+
 # The coverage goal-checker was migrated off SimpleGoalChecker/StoppedGoalChecker
 # (commit 4bae0567) to PathProgressGoalChecker. The old "xy_goal_tolerance must
 # be <= mower_width" and "stateful must be true" guards belonged to the
@@ -782,7 +799,7 @@ def test_overlays_select_disjoint_costmap_layers() -> None:
             assert not ("obstacle_layer" in params and "static_layer" in params), (
                 f"{variant}: {cm} merged config has BOTH obstacle_layer and static_layer"
             )
-            for layer in params["plugins"]:
+            for layer in params["plugins"] + params.get("filters", []):
                 assert layer in params, (
                     f"{variant}: {cm} plugins references undefined layer '{layer}'"
                 )
@@ -1499,12 +1516,12 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
         # peers layer, which must be inflated like any obstacle), then
         # inflation, and the keepout filter LAST so the mask is never inflated.
         assert plugins[0] == first, f"global costmap plugin order is {plugins}"
-        assert plugins[-1] == "keepout_filter", f"global costmap plugin order is {plugins}"
-        assert plugins.index("inflation_layer") == len(plugins) - 2, (
-            f"inflation_layer must sit right before keepout_filter: {plugins}"
-        )
+        assert plugins[-1] == "inflation_layer", f"global costmap plugin order is {plugins}"
+        assert "keepout_filter" not in plugins
+        assert gc["filters"] == ["keepout_filter"]
         lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
         assert "keepout_filter" not in lc["plugins"]  # Invariant 5
+        assert "keepout_filter" not in lc.get("filters", [])
 
 
 def test_global_grid_is_garden_sized_with_bounded_recent_sources() -> None:
@@ -1808,3 +1825,13 @@ def test_fleet_peer_node_is_respawned_and_gets_the_chassis_footprint() -> None:
     assert re.search(r"fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint\(robot_params\)", src)
     for key in ("chassis_front_m", "chassis_rear_m", "chassis_half_width_m"):
         assert key in block, f"{key} must be injected into fleet_peer_obstacles"
+
+
+@pytest.mark.parametrize("overlay", ["nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"])
+def test_ftc_pivot_coast_assumption_is_loaded_in_both_overlays(overlay: str) -> None:
+    params = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml(overlay))
+    ftc = _controller_section(params)["FollowCoveragePath"]
+    assert ftc["pivot_coast_time_bound_s"] == 0.5
+    # Private Nav2 tuning is read from the merged params file; it needs no
+    # operator template / GUI projection or launch-time physics estimate.
+    assert ftc["plugin"] == "mowgli_nav2_plugins/FTCController"

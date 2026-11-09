@@ -118,6 +118,7 @@
 #include "mowgli_interfaces/msg/recorded_area_polygon_array.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_localization/gravity_estimator.hpp"
+#include "mowgli_localization/scan_ground_filter.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/qos.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -151,6 +152,12 @@ public:
     // launch passes the real ~π value for the 180°-rotated mount.
     lidar_mount_yaw_ = declare_parameter<double>("lidar_mount_yaw", 0.0);
     min_ground_run_ = declare_parameter<int>("min_ground_run", 8);
+    // Terrain reference for the ground filter (scan_ground_filter.hpp): the up
+    // vector averaged over this window is the slope the robot stands on; a
+    // return is ground only if it is below the floor relative to BOTH gravity
+    // and that slope. 0 restores the gravity-only filter.
+    terrain_tilt_time_constant_s_ = declare_parameter<double>("terrain_tilt_time_constant_s", 3.0);
+    terrain_tilt_ = TerrainTiltTracker(terrain_tilt_time_constant_s_);
     imu_max_age_s_ = declare_parameter<double>("imu_max_age_s", 0.5);
     accel_g_tolerance_ms2_ = declare_parameter<double>("accel_g_tolerance_ms2", 3.0);
     // LiDAR-ignore corridor filter geometry — see the header comment's item 3.
@@ -254,7 +261,7 @@ public:
                 "dock_blank_range=%.2f m, post_undock_blank_sec=%.1f s, "
                 "ground_filter=%s [Z range %.2f..%.2f m, lidar_height=%.2f m, "
                 "lidar_mount_yaw=%.3f rad, imu_max_age=%.2f s, "
-                "accel_g_tol=±%.2f m/s², source %s].",
+                "accel_g_tol=±%.2f m/s², terrain_tilt_tau=%.1f s, source %s].",
                 input_topic.c_str(),
                 output_topic.c_str(),
                 chassis_blank_range_,
@@ -267,42 +274,14 @@ public:
                 lidar_mount_yaw_,
                 imu_max_age_s_,
                 accel_g_tolerance_ms2_,
+                terrain_tilt_time_constant_s_,
                 imu_topic.c_str());
   }
 
   // --- Pure logic exposed for unit tests ---------------------------------
 
-  /// Three-component vector — used for the gravity-aligned "up" direction
-  /// expressed in the IMU/base_link frame.
-  struct Vec3
-  {
-    double x{0.0};
-    double y{0.0};
-    double z{1.0};
-  };
-
-  /// Ground-filter parameters bundled together so the test can call the
-  /// pure filter without a node.
-  struct GroundFilterConfig
-  {
-    bool enabled{false};
-    double min_obstacle_z_m{0.08};
-    double max_obstacle_z_m{1.5};
-    double lidar_height_m{0.30};
-    /// Yaw of the LIDAR frame relative to base_link/IMU (rad). A beam at
-    /// LIDAR index angle α points along base bearing α + lidar_mount_yaw.
-    double lidar_mount_yaw{0.0};
-    /// SAFETY: minimum run of consecutive ground-classified beams before any of
-    /// them is stripped as ground. A 2-D LiDAR can't tell a real vertical
-    /// obstacle from sloped ground at the same bearing/range — on a downslope a
-    /// leg/trunk/child projects BELOW min_obstacle_z and would be discarded. But
-    /// ground returns form LONG contiguous angular arcs while an obstacle
-    /// subtends only a few beams, so we only strip a "ground" return when it is
-    /// part of a run >= this length. A short ground-classified cluster is kept
-    /// (treated as a possible obstacle) — the planner/CostCritic then avoids it.
-    /// 0 disables the guard (legacy per-beam stripping).
-    int min_ground_run{8};
-  };
+  // Vec3, GroundFilterConfig and apply_ground_filter live in
+  // mowgli_localization/scan_ground_filter.hpp (shared with the unit tests).
 
   /// Apply the radial blank to a copy of @p in. Returns the result.
   /// `blank_active` is the cached output of `is_blank_active()` — passed
@@ -322,84 +301,6 @@ public:
         r = inf;
     }
     return out;
-  }
-
-  /// Apply the gravity-aware ground filter to @p io in place. For each
-  /// beam at LIDAR index angle α, rotate into the base/IMU frame by the
-  /// LIDAR mount yaw (ψ = α + lidar_mount_yaw) before projecting onto the
-  /// IMU's measured "up" unit vector:
-  ///
-  ///     ψ        = α + cfg.lidar_mount_yaw
-  ///     z_dir    = up_in_imu.x · cos ψ + up_in_imu.y · sin ψ
-  ///     return_Z = lidar_height + range · z_dir
-  ///
-  /// where up_in_imu = accel / |accel| (the gravity reaction direction).
-  /// Returns whose Z is outside [min_obstacle_z_m, max_obstacle_z_m] get
-  /// pushed to +inf so obstacle_layer ignores them.
-  ///
-  /// `up_in_imu` is std::nullopt when no fresh sample exists (or the
-  /// filter is disabled). In that case the function is a no-op — better
-  /// to publish phantom obstacles than to silently strip real ones.
-  static void apply_ground_filter(sensor_msgs::msg::LaserScan& io,
-                                  const GroundFilterConfig& cfg,
-                                  const std::optional<Vec3>& up_in_imu)
-  {
-    if (!cfg.enabled || !up_in_imu.has_value())
-      return;
-    const Vec3& u = *up_in_imu;
-    const float min_z = static_cast<float>(cfg.min_obstacle_z_m);
-    const float max_z = static_cast<float>(cfg.max_obstacle_z_m);
-    const float inf = std::numeric_limits<float>::infinity();
-    const double a0 = io.angle_min;
-    const double da = io.angle_increment;
-    const size_t n = io.ranges.size();
-
-    // Pass 1: classify each finite beam. 0 = keep, 1 = ground (projects below
-    // min_z), 2 = overhead (above max_z). The overhead strip is per-beam (a
-    // canopy/overhang return is genuinely above the robot and safe to drop); the
-    // GROUND strip is gated below by a run-length test so a real obstacle that a
-    // downslope mis-projects below min_z is not silently discarded.
-    std::vector<uint8_t> klass(n, 0);
-    for (size_t i = 0; i < n; ++i)
-    {
-      const float r = io.ranges[i];
-      if (!std::isfinite(r))
-        continue;
-      const double psi = a0 + da * static_cast<double>(i) + cfg.lidar_mount_yaw;
-      const double z_dir = u.x * std::cos(psi) + u.y * std::sin(psi);
-      const float return_z = static_cast<float>(cfg.lidar_height_m + r * z_dir);
-      if (return_z > max_z)
-        klass[i] = 2;
-      else if (return_z < min_z)
-        klass[i] = 1;
-    }
-
-    // Pass 2: strip overhead returns outright; strip ground returns only where
-    // they form a contiguous run >= min_ground_run (a long sweep of ground),
-    // leaving short ground-classified clusters as possible obstacles.
-    const int min_run = std::max(1, cfg.min_ground_run);
-    for (size_t i = 0; i < n; ++i)
-    {
-      if (klass[i] == 2)
-      {
-        io.ranges[i] = inf;
-        continue;
-      }
-      if (klass[i] != 1)
-        continue;
-      // Extent of the contiguous ground run containing i.
-      size_t j = i;
-      while (j < n && klass[j] == 1)
-        ++j;
-      const size_t run_len = j - i;
-      if (static_cast<int>(run_len) >= min_run)
-      {
-        for (size_t k = i; k < j; ++k)
-          io.ranges[k] = inf;
-      }
-      // else: keep the short cluster (possible obstacle the slope mis-projected).
-      i = j - 1;  // skip past the run we just handled
-    }
   }
 
   // --- LiDAR-ignore corridor filter (pure) --------------------------------
@@ -712,6 +613,7 @@ private:
     const GravityVector up = gravity_estimator_.direction();
     last_up_in_imu_ = Vec3{up.x, up.y, up.z};
     last_imu_stamp_ = sample_time;
+    terrain_tilt_.update(*last_up_in_imu_, sample_time.seconds());
     if (action == GravityEstimatorAction::RESEEDED)
     {
       const double old_baseline = gravity_estimator_.previous_baseline_magnitude_ms2();
@@ -874,7 +776,8 @@ private:
                            lidar_height_m_,
                            lidar_mount_yaw_,
                            min_ground_run_};
-    apply_ground_filter(out, cfg, up);
+    const std::optional<Vec3> terrain_up = up ? terrain_tilt_.relative(*up) : std::nullopt;
+    apply_ground_filter(out, cfg, up, terrain_up);
 
     pub_scan_->publish(out);
   }
@@ -936,6 +839,8 @@ private:
   /// Low-pass-filtered "up" direction in IMU frame, derived from the
   /// gravity component of linear_acceleration. Empty until first sample.
   std::optional<Vec3> last_up_in_imu_;
+  double terrain_tilt_time_constant_s_{3.0};
+  TerrainTiltTracker terrain_tilt_{};
   rclcpp::Time last_imu_stamp_{0, 0, RCL_ROS_TIME};
 
   // --- Corridor filter state ----------------------------------------------

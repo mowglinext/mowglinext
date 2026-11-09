@@ -41,6 +41,7 @@
 | `CMakeLists.txt` | 91 | `rosidl_generate_interfaces` over the three lists (15 msg, 14 srv, 3 action) + INTERFACE target `mowgli_interfaces_headers` exporting `include/` |
 | `package.xml` | 30 | Deps: `builtin_interfaces`, `std_msgs`, `geometry_msgs`, `nav_msgs`; member of `rosidl_interface_packages` |
 | **`include/mowgli_interfaces/`** | | |
+| `linear_command_policy.hpp` | 35 | Shared fresh BT-autonomy predicate and soft linear deadband for STM32, OpenMower and sim actuation; firmware-mode fallback is not BT evidence |
 | `coverage_geometry.hpp` | 28 | `kSegmentTransitGapM` — FollowStrip's transit-vs-drive-through threshold for gaps between `drivable_subpaths` (the planner includes the header but no longer splits on it) |
 | `coverage_path_invariants.hpp` | 22 | Shared short-path and minimum resume-replay pose counts; prevents an interrupted near-end replay from taking the goal checker's proximity-only path |
 | `gnss_status_utils.hpp` | 153 | `HasCapability/HasValue`, `IsRtkFixed/Float`, `AbsolutePoseFlags`, `BehaviorTreeFixType`, `NormalizedQuality`, `HardwareQualityPercent`, `BehaviorTreeRtkFixed` |

@@ -54,6 +54,7 @@
  *                     estimate the wheel_pid_* set must be able to bridge)
  */
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -80,6 +81,7 @@
 #include "mowgli_hardware/dig_detector.hpp"
 #include "mowgli_hardware/dig_escalation.hpp"
 #include "mowgli_hardware/drive_gain_sanity.hpp"
+#include "mowgli_hardware/firmware_interlock.hpp"
 #include "mowgli_hardware/firmware_param_store_reset_gate.hpp"
 #include "mowgli_hardware/firmware_params.hpp"
 #include "mowgli_hardware/gnss_hardware_status.hpp"
@@ -99,6 +101,8 @@ static constexpr uint8_t HL_MODE_IDLE = 1u;  ///< Docked or between missions
 static constexpr uint8_t HL_MODE_AUTONOMOUS = 2u;  ///< Autonomous mowing
 static constexpr uint8_t HL_MODE_RECORDING = 3u;  ///< Area recording
 static constexpr uint8_t HL_MODE_MANUAL_MOWING = 4u;  ///< Manual teleop with blade
+static_assert(mowgli_hardware::kInterlockHighLevelMode == HL_MODE_IDLE,
+              "the firmware interlock must hold the board in IDLE");
 static constexpr double kMinRuntimeTicksPerMeter = 50.0;
 static constexpr double kMaxRuntimeTicksPerMeter = 5000.0;
 static constexpr double kMinRuntimePwmPerMps = 50.0;
@@ -428,10 +432,14 @@ private:
     // Helper for declaring doubles with a floating_point_range descriptor so
     // ros2 param set rejects out-of-bounds values at the framework level before
     // the set-parameters callback fires. Ranges mirror the firmware validation.
-    auto bounded_double =
-        [this](const std::string& name, double default_val, double min, double max) -> double
+    auto bounded_double = [this](const std::string& name,
+                                 double default_val,
+                                 double min,
+                                 double max,
+                                 const std::string& description = "") -> double
     {
       rcl_interfaces::msg::ParameterDescriptor desc;
+      desc.description = description;
       desc.floating_point_range.resize(1);
       desc.floating_point_range[0].from_value = min;
       desc.floating_point_range[0].to_value = max;
@@ -538,10 +546,15 @@ private:
                                          kMaxRuntimeYawTrimLimitMps);
     yaw_loop_enabled_ = declare_parameter<bool>("yaw_loop_enabled", true);
     yaw_gyro_sign_ = declare_parameter<int>("yaw_gyro_sign", 1);
-    // Sub-deadband forward-velocity clamp threshold (see min_linear_vel_).
+    // Manual/input soft-deadband threshold (see min_linear_vel_).
     // Default 0.05 (was a hardcoded 0.15) — the PX4 PID firmware can track
     // slow setpoints now. Live-tunable via the callback below.
-    min_linear_vel_ = bounded_double("min_linear_vel", 0.05, 0.0, 1.0);
+    min_linear_vel_ = bounded_double(
+        "min_linear_vel",
+        0.05,
+        0.0,
+        1.0,
+        "Linear soft deadband outside fresh BT AUTONOMOUS; precision commands retain slew limits.");
     cmd_vel_linear_accel_limit_ = startup_double(
         "cmd_vel_linear_accel_limit",
         0.30,
@@ -1074,25 +1087,7 @@ private:
         rclcpp::QoS(10),
         [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
         {
-          const uint8_t previous_mode = current_mode_;
-          const std::string previous_state_name = current_mode_state_name_;
-          current_mode_ = msg->state;
-          current_mode_state_name_ = msg->state_name;
-          have_high_level_status_ = true;
-          last_high_level_status_steady_ns_ = steadyNowNs();
-          if (previous_mode != current_mode_ || previous_state_name != current_mode_state_name_)
-          {
-            RCLCPP_INFO(get_logger(),
-                        "hardware_bridge received HighLevelStatus: state=%u (%s), state_name='%s'",
-                        current_mode_,
-                        high_level_mode_name(current_mode_),
-                        current_mode_state_name_.c_str());
-            send_high_level_state();
-          }
-          RCLCPP_DEBUG(get_logger(),
-                       "High-level mode updated to %u (%s)",
-                       msg->state,
-                       msg->state_name.c_str());
+          on_high_level_status(msg);
         });
 
     // GNSS-anchored fused pose is the dig detector's primary reference and
@@ -1105,6 +1100,17 @@ private:
         {
           on_filtered_map_odom(msg);
         });
+
+    // map_server: the robot is outside EVERY recorded area (undebounced). The dig escape's reverse
+    // refuses while it is true: backing out of a hole must not take the mower further out of the
+    // area.
+    outside_area_sub_ =
+        create_subscription<std_msgs::msg::Bool>("/map_server_node/outside_area",
+                                                 rclcpp::QoS(1),
+                                                 [this](std_msgs::msg::Bool::ConstSharedPtr msg)
+                                                 {
+                                                   outside_area_.store(msg->data);
+                                                 });
   }
 
   void create_services()
@@ -1330,6 +1336,8 @@ private:
     have_odometry_ = false;
     have_blade_status_ = false;
     have_host_velocity_target_ = false;
+    have_cmd_vel_ = false;
+    cmd_vel_pipeline_.reset();
     have_param_store_status_ = false;
   }
 
@@ -2664,18 +2672,28 @@ private:
   {
     LlHighLevelState pkt{};
     pkt.type = PACKET_ID_LL_HIGH_LEVEL_STATE;
-    pkt.current_mode = current_mode_;
+    // Firmware interlock (firmware_interlock.hpp): any mode becomes IDLE — the
+    // firmware's wheel+blade hard stop — until the board has proven it speaks
+    // this image's protocol. current_mode_ keeps the BT's real mode so it is
+    // forwarded as soon as the handshake succeeds.
+    const bool allowed = actuation_allowed();
+    pkt.current_mode = mowgli_hardware::interlock_high_level_mode(allowed, current_mode_);
+    if (mowgli_hardware::interlock_refuses_mode(allowed, current_mode_))
+    {
+      log_interlock_refusal("high-level mode", high_level_mode_name(current_mode_));
+    }
     pkt.gps_quality = GnssQualityForFirmware(gnssObservationFresh(), gps_quality_);
 
     if (last_sent_mode_ != current_mode_ || last_sent_mode_state_name_ != current_mode_state_name_)
     {
       RCLCPP_INFO(get_logger(),
                   "hardware_bridge forwarding HL state to STM32: mode=%u (%s), state_name='%s', "
-                  "gps_quality=%u",
-                  current_mode_,
-                  high_level_mode_name(current_mode_),
+                  "gps_quality=%u%s",
+                  pkt.current_mode,
+                  high_level_mode_name(pkt.current_mode),
                   current_mode_state_name_.c_str(),
-                  pkt.gps_quality);
+                  pkt.gps_quality,
+                  allowed ? "" : " [held IDLE: firmware protocol not verified]");
       last_sent_mode_ = current_mode_;
       last_sent_mode_state_name_ = current_mode_state_name_;
     }
@@ -2690,6 +2708,18 @@ private:
     {
       on = 0;
       mow_enabled_ = false;
+    }
+    // Firmware interlock: an ON becomes OFF (an OFF always passes) until the
+    // board speaks this image's protocol. The intent is dropped too, so the
+    // re-assert / lift-resume paths cannot spin the blade up later on their
+    // own — a new explicit request is needed once the board is compatible.
+    if (mowgli_hardware::interlock_refuses_blade(actuation_allowed(), on))
+    {
+      log_interlock_refusal("blade ON", "forced OFF");
+      on = mowgli_hardware::interlock_blade_on(false, on);
+      mow_enabled_ = false;
+      blade_intent_authorized_ = false;
+      cancelBladeResume();
     }
     LlCmdBlade pkt{};
     pkt.type = PACKET_ID_LL_CMD_BLADE;
@@ -3117,7 +3147,7 @@ private:
   {
     constexpr int64_t kSerialFreshNs = 1'000'000'000;
     constexpr int64_t kBoardStatusFreshNs = 1'500'000'000;
-    constexpr int64_t kHighLevelFreshNs = 2'000'000'000;
+
     constexpr int64_t kOdometryFreshNs = 500'000'000;
     constexpr int64_t kBladeFreshNs = 1'500'000'000;
     constexpr int64_t kCommandWatchdogFreshNs = 500'000'000;
@@ -3134,8 +3164,9 @@ private:
         steady_receipt_is_fresh(now_ns, last_board_status_steady_ns_, kBoardStatusFreshNs);
     state.board_initialized = board_initialized_;
     state.high_level_status_fresh =
-        have_high_level_status_ &&
-        steady_receipt_is_fresh(now_ns, last_high_level_status_steady_ns_, kHighLevelFreshNs);
+        have_high_level_status_ && steady_receipt_is_fresh(now_ns,
+                                                           last_high_level_status_steady_ns_,
+                                                           mowgli_interfaces::kHighLevelFreshNs);
     state.idle = current_mode_ == HL_MODE_IDLE;
     state.odometry_fresh =
         have_odometry_ &&
@@ -3261,6 +3292,78 @@ private:
   }
 
   // ---------------------------------------------------------------------------
+  // Firmware actuation interlock (firmware_interlock.hpp)
+  // ---------------------------------------------------------------------------
+
+  /// True once the board has completed a handshake reporting this image's
+  /// protocol. Gates every motion / blade / mode packet; never the heartbeat
+  /// (emergency stop + release), the handshake, telemetry or parameter reads.
+  [[nodiscard]] bool actuation_allowed() const
+  {
+    return mowgli_hardware::firmware_actuation_allowed(fw_handshake_done_, fw_compatible_);
+  }
+
+  void log_interlock_refusal(const char* what, const char* outcome)
+  {
+    RCLCPP_WARN_THROTTLE(get_logger(),
+                         *get_clock(),
+                         5000,
+                         "Firmware interlock: %s refused (%s) — the STM32 has not reported "
+                         "protocol v%u (handshake %s, board protocol v%u). Flash the matching "
+                         "firmware; actuation resumes automatically after the next handshake.",
+                         what,
+                         outcome,
+                         static_cast<unsigned>(kMowgliProtocolVersion),
+                         fw_handshake_done_ ? "done" : "pending",
+                         static_cast<unsigned>(fw_protocol_version_));
+  }
+
+  /// Called after every change to the handshake state. Engaging actively stops
+  /// the board (it may have been driving or mowing a moment ago); releasing
+  /// re-sends the BT's real mode so normal operation resumes without waiting
+  /// for the next high-level tick.
+  void apply_firmware_interlock_transition(bool was_allowed)
+  {
+    const auto transition = mowgli_hardware::interlock_transition(was_allowed, actuation_allowed());
+    if (transition == mowgli_hardware::InterlockTransition::kNone)
+    {
+      return;
+    }
+    if (transition == mowgli_hardware::InterlockTransition::kReleased)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Firmware interlock released: board speaks protocol v%u — actuation enabled.",
+                  static_cast<unsigned>(fw_protocol_version_));
+      send_high_level_state();
+      return;
+    }
+    RCLCPP_ERROR(get_logger(),
+                 "Firmware interlock ENGAGED: firmware protocol not verified — stopping wheels "
+                 "and blade, holding the board in IDLE.");
+    dig_escaping_ = false;
+    dig_escape_state_ = DigEscapeState{};
+    dig_invalidate_baselines();
+    cmd_vel_pipeline_.reset();
+    last_cmd_vx_ = 0.0;
+    last_cmd_wz_ = 0.0;
+    if (!serial_ || !serial_->is_open())
+    {
+      // Nothing to talk to (constructor, or the link is down); the next
+      // connect starts from the interlocked state anyway.
+      mow_enabled_ = false;
+      blade_intent_authorized_ = false;
+      cancelBladeResume();
+      return;
+    }
+    send_blade_command(0, desired_blade_direction_);
+    mow_enabled_ = false;
+    blade_intent_authorized_ = false;
+    cancelBladeResume();
+    send_cmd_vel_packet(0.0, 0.0);
+    send_high_level_state();
+  }
+
+  // ---------------------------------------------------------------------------
   // Firmware version handshake (image <-> firmware compatibility)
   // ---------------------------------------------------------------------------
 
@@ -3278,6 +3381,7 @@ private:
 
     LlConfigRsp pkt{};
     std::memcpy(&pkt, data, sizeof(LlConfigRsp));
+    const bool was_allowed = actuation_allowed();
 
     fw_protocol_version_ = pkt.protocol_version;
     firmware_debug_enabled_ = (pkt.active_flags & CONFIG_FLAG_FIRMWARE_DEBUG) != 0u;
@@ -3319,7 +3423,7 @@ private:
       RCLCPP_ERROR(get_logger(),
                    "INCOMPATIBLE FIRMWARE: firmware v%s speaks protocol v%u but this image "
                    "expects protocol v%u. Reflash the STM32 firmware (see docs/FIRST_BOOT.md). "
-                   "Mowing is blocked until the versions match.",
+                   "Wheels, blade and mode changes are held stopped until the versions match.",
                    fw_version_str_.c_str(),
                    static_cast<unsigned>(fw_protocol_version_),
                    static_cast<unsigned>(kMowgliProtocolVersion));
@@ -3340,11 +3444,13 @@ private:
     {
       RCLCPP_INFO(get_logger(), "[FW_DIAG] Firmware debug disabled.");
     }
+    apply_firmware_interlock_transition(was_allowed);
   }
 
   // Reset the handshake state on (re)connect so a reflashed board is re-checked.
   void rearm_firmware_handshake()
   {
+    const bool was_allowed = actuation_allowed();
     fw_handshake_done_ = false;
     fw_compatible_ = false;
     fw_protocol_version_ = 0u;
@@ -3352,6 +3458,7 @@ private:
     config_req_resend_count_ = 5;
     config_control_resend_count_ = 0;
     fw_handshake_start_ = now();
+    apply_firmware_interlock_transition(was_allowed);
   }
 
   // Sends PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ on the first few heartbeats after a
@@ -3373,6 +3480,7 @@ private:
     // the handshake (or is otherwise unresponsive) → incompatible.
     if ((now() - fw_handshake_start_).seconds() > fw_handshake_timeout_s_)
     {
+      const bool was_allowed = actuation_allowed();
       fw_handshake_done_ = true;
       fw_compatible_ = false;
       fw_protocol_version_ = 0u;
@@ -3380,9 +3488,11 @@ private:
       RCLCPP_ERROR(get_logger(),
                    "INCOMPATIBLE FIRMWARE: the STM32 did not answer the version handshake "
                    "(no CONFIG_RSP in %.0f s). This firmware predates the version protocol — "
-                   "reflash it (see docs/FIRST_BOOT.md). Mowing is blocked until then.",
+                   "reflash it (see docs/FIRST_BOOT.md). Wheels, blade and mode changes are "
+                   "held stopped until then.",
                    fw_handshake_timeout_s_);
       publish_firmware_params();
+      apply_firmware_interlock_transition(was_allowed);
     }
   }
 
@@ -3450,6 +3560,34 @@ private:
   // cmd_vel subscriber
   // ---------------------------------------------------------------------------
 
+  void on_high_level_status(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
+  {
+    const uint8_t previous_mode = current_mode_;
+    const std::string previous_state_name = current_mode_state_name_;
+    if (previous_mode != msg->state)
+    {
+      cmd_vel_pipeline_.restart_from_applied();
+    }
+    bt_reported_mode_ = msg->state;
+    current_mode_ = msg->state;
+    current_mode_state_name_ = msg->state_name;
+    have_high_level_status_ = true;
+    last_high_level_status_steady_ns_ = steadyNowNs();
+    if (previous_mode != current_mode_ || previous_state_name != current_mode_state_name_)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "hardware_bridge received HighLevelStatus: state=%u (%s), state_name='%s'",
+                  current_mode_,
+                  high_level_mode_name(current_mode_),
+                  current_mode_state_name_.c_str());
+      send_high_level_state();
+    }
+    RCLCPP_DEBUG(get_logger(),
+                 "High-level mode updated to %u (%s)",
+                 msg->state,
+                 msg->state_name.c_str());
+  }
+
   void on_cmd_vel(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
   {
     double vx = msg->twist.linear.x;
@@ -3470,6 +3608,17 @@ private:
           vx,
           wz);
       return;
+    }
+
+    // Firmware interlock: until the board has proven it speaks this image's
+    // protocol, every command is a stop. Zeroing it HERE (not only at the
+    // packet) keeps it from forcing a mode change below, from building slew
+    // state, and from feeding the dig detector a phantom commanded speed.
+    if (mowgli_hardware::interlock_refuses_velocity(actuation_allowed(), vx, wz))
+    {
+      log_interlock_refusal("cmd_vel", "sent as zero");
+      vx = 0.0;
+      wz = 0.0;
     }
 
     // The firmware ignores cmd_vel when mode is IDLE.  When velocity commands
@@ -3517,114 +3666,35 @@ private:
       send_high_level_state();
     }
 
-    // Sub-deadband forward-velocity guard.
-    //
-    // A previous closed-loop deadband compensator BOOSTED sub-deadband
-    // commands to ~0.85 rad/s (or 0.13 m/s) to break through the
-    // firmware's PWM static friction. The boost produced motor pulses
-    // strong enough to register on the gyro but too short to generate
-    // measurable wheel encoder ticks. The wheel between-factor in
-    // fusion_graph then saw "stationary" while the IMU integrated real
-    // rotation, and the wheel/IMU disagreement piled up as
-    // stationary_hand_push spikes and σ_yaw drift during PRE_ROTATE
-    // and headland pivots.
-    //
-    // Policy: clamp any |vx| below min_linear_vel_ to zero. This was a
-    // hardcoded 0.15 m/s written for the old hand-rolled wheel-PI, whose
-    // PWM static friction couldn't move the chassis below ~0.15 — so
-    // commanding a sub-deadband forward velocity only produced motor buzz
-    // and a wheel/IMU mismatch (the boost approach pulsed the motors enough
-    // for the gyro to see rotation but too little for encoder ticks).
-    // Now the vendored PX4 PID firmware tracks slow setpoints, so the
-    // threshold is a runtime PARAM defaulting to 0.05: MPPI's regulated
-    // slow-creep (frequently < 0.15 near goals / on alignment) reaches the
-    // wheels and drives smoothly instead of a 0↔0.15 stop-go. Set
-    // min_linear_vel:=0.0 to disable the guard entirely, or raise it back
-    // toward 0.15 if a given chassis still can't execute slow forward.
-    //
-    // wz handling — Option C (task #34): the closed-loop yaw-rate control
-    // that used to live here (Option B, task #24 — a host-side PI closing
-    // on the gyro to absorb the firmware's nonlinear PWM→rotation response)
-    // has moved INTO FIRMWARE (task #33), which now runs the same closed
-    // loop without the ~50-90 ms USB round-trip latency that limited the
-    // host-side gains. See the firmware's own yaw_kp/yaw_ki (tuned via
-    // SET_YAW_PID, send_yaw_pid()) for the loop that used to be
-    // angular_rate_controller.hpp here. The common open-loop slew cap below
-    // only limits how quickly the requested setpoint changes; it does not
-    // close another yaw feedback loop.
-    //
-    // The sub-deadband |vx| → 0 guard is unchanged (linear has no clean
-    // host-side rate feedback — encoders slip; leave it to Nav2's loops).
-    constexpr double kMinCmdToConsider = 1.0e-3;  // ignore floating-point dust
-    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_linear_vel_)
-    {
-      vx = 0.0;
-    }
-
+    // The manual soft deadband must not erase deliberate autonomous precision
+    // targets (including starts from rest). Only fresh BT status grants the
+    // exception; the unchanged NULL fallback above cannot grant it. All mux
+    // lanes still inherit this mode policy. Firmware safety is unchanged.
     // While escaping a dig, WE own the wire. Drop the incoming command
     // entirely instead of forwarding it or advancing the slew state: the
     // controller that dug the hole is still asking to drive forward into it.
     if (dig_escaping_)
     {
+      cmd_vel_pipeline_.reset();
       return;
     }
 
-    // Every motion lane has now passed through twist_mux, so this is the only
-    // host-side point that can prevent a one-cycle speed or steering reversal
-    // regardless of whether FTC, RPP, docking, or teleop produced it. A
-    // reversal decelerates through zero; explicit zero commands remain
-    // immediate for obstacle and operator stops.
-    const std::int64_t command_now_ns = steadyNowNs();
-    double slew_dt_s = kCmdVelSlewNominalDtSec;
-    if (have_shaped_cmd_vel_)
-    {
-      const double elapsed_s =
-          static_cast<double>(command_now_ns - last_shaped_cmd_vel_ns_) * 1.0e-9;
-      if (elapsed_s > 0.0 && elapsed_s <= kCmdVelSlewResetTimeoutSec)
-      {
-        slew_dt_s = std::min(elapsed_s, kCmdVelSlewMaxDtSec);
-      }
-      else
-      {
-        last_shaped_cmd_vx_ = 0.0;
-        last_shaped_cmd_wz_ = 0.0;
-      }
-    }
-    vx = mowgli_hardware::limit_motion_command_slew(vx,
-                                                    last_shaped_cmd_vx_,
-                                                    slew_dt_s,
-                                                    cmd_vel_linear_accel_limit_,
-                                                    cmd_vel_linear_decel_limit_);
-    wz = mowgli_hardware::limit_motion_command_slew(wz,
-                                                    last_shaped_cmd_wz_,
-                                                    slew_dt_s,
-                                                    cmd_vel_angular_accel_limit_,
-                                                    cmd_vel_angular_decel_limit_);
-    last_shaped_cmd_vx_ = vx;
-    last_shaped_cmd_wz_ = wz;
-    last_shaped_cmd_vel_ns_ = command_now_ns;
-    have_shaped_cmd_vel_ = true;
-
-    // Let the ramp accumulate continuously through the sub-deadband region,
-    // while still preserving the bridge's existing wire-level deadband guard.
-    // Otherwise each zeroed first step would reset the next ramp to zero and a
-    // low acceleration limit could prevent forward motion forever.
-    if (std::abs(vx) > kMinCmdToConsider && std::abs(vx) < min_linear_vel_)
-    {
-      vx = 0.0;
-    }
-
-    // Remember what we actually forward; the dig monitor compares
-    // this against real-world progress (see dig_monitor_tick). Stamped
-    // because a command that stopped ARRIVING must not keep counting as a
-    // command: when a Nav2 goal aborts, cmd_vel simply goes silent, and a
-    // stale non-zero value here would let the detector accumulate evidence
-    // against a robot that is no longer being asked to move at all.
-    last_cmd_vx_ = vx;
-    last_cmd_wz_ = wz;
-    last_cmd_vel_time_ = now();
-    have_cmd_vel_ = true;
-
+    const auto command_now_ns = steadyNowNs();
+    const bool autonomous_precision =
+        mowgli_interfaces::autonomous_precision_allowed(bt_reported_mode_ == HL_MODE_AUTONOMOUS,
+                                                        have_high_level_status_,
+                                                        command_now_ns,
+                                                        last_high_level_status_steady_ns_);
+    const auto command = cmd_vel_pipeline_.shape({vx, wz},
+                                                 autonomous_precision,
+                                                 min_linear_vel_,
+                                                 {cmd_vel_linear_accel_limit_,
+                                                  cmd_vel_linear_decel_limit_,
+                                                  cmd_vel_angular_accel_limit_,
+                                                  cmd_vel_angular_decel_limit_},
+                                                 command_now_ns);
+    vx = command.vx;
+    wz = command.wz;
     send_cmd_vel_packet(vx, wz);
   }
 
@@ -3690,7 +3760,12 @@ private:
   /// sole safety authority (Invariant 9) — this only ever declines to act.
   [[nodiscard]] bool dig_escape_allowed() const
   {
-    return !emergency_active_ && !fw_latched_emergency_ && !is_charging_;
+    // Outside every recorded area the reverse would only take the mower further out (field
+    // 2026-10-26: three dig reverses of 0.30 m next to the boundary). The hard stop stands.
+    // Lost once already in a merge (#1022 replaced this term instead of adding to it); pinned by
+    // test_hardware_bridge_parameters.cpp DigEscapeIsRefusedOutsideEveryRecordedArea.
+    return !emergency_active_ && !fw_latched_emergency_ && !is_charging_ && actuation_allowed() &&
+           !outside_area_.load();
   }
 
   /// Drop the wheel/map baselines so the next live tick starts a fresh
@@ -3724,7 +3799,8 @@ private:
       {
         // Emergency asserted (or we docked) mid-escape — abandon it. The
         // firmware is already cutting the motors; do not fight it.
-        RCLCPP_WARN(get_logger(), "Dig escape aborted: emergency or charging asserted.");
+        RCLCPP_WARN(get_logger(),
+                    "Dig escape aborted: emergency, charging or firmware interlock asserted.");
         dig_escaping_ = false;
         dig_escape_state_ = DigEscapeState{};
         dig_invalidate_baselines();
@@ -3753,7 +3829,10 @@ private:
     }
 
     // ── Detection ─────────────────────────────────────────────────────────
-    if (tick_now < dig_rearm_deadline_)
+    // Stand down while the firmware interlock holds the wheels: nothing is
+    // commanded, and odometry from a board speaking another protocol is not
+    // evidence of anything.
+    if (tick_now < dig_rearm_deadline_ || !actuation_allowed())
     {
       dig_invalidate_baselines();
       return;
@@ -3847,6 +3926,8 @@ private:
                 dig_gnss_acc_m_,
                 last_map_sigma_);
 
+    cmd_vel_pipeline_.reset();
+
     // 1. Hard stop, immediately and on the wire — not a request to whichever
     //    controller is driving, which is the one that just dug the hole.
     send_cmd_vel_packet(0.0, 0.0);
@@ -3866,8 +3947,8 @@ private:
     if (!dig_escaping_)
     {
       RCLCPP_WARN(get_logger(),
-                  "Dig escape suppressed: emergency active or robot charging. "
-                  "Stop stands; no reverse commanded.");
+                  "Dig escape suppressed: emergency active, robot charging or firmware "
+                  "protocol not verified. Stop stands; no reverse commanded.");
     }
   }
 
@@ -4015,9 +4096,21 @@ private:
   {
     if (mowgli_interfaces::updateMaintenanceActive())
     {
+      cmd_vel_pipeline_.reset();
       vx = 0.0;
       wz = 0.0;
     }
+    // Firmware interlock (firmware_interlock.hpp): every caller — on_cmd_vel,
+    // the dig escape, the blade-on freshness zero — funnels through here, so
+    // nothing non-zero reaches a board whose protocol is not verified.
+    const bool allowed = actuation_allowed();
+    if (mowgli_hardware::interlock_refuses_velocity(allowed, vx, wz))
+    {
+      log_interlock_refusal("cmd_vel", "sent as zero");
+    }
+    const auto interlocked = mowgli_hardware::interlock_velocity(allowed, vx, wz);
+    vx = interlocked.vx;
+    wz = interlocked.wz;
     // Keep this final construction boundary defensive as well: callers such
     // as the bounded dig escape pass doubles.  Check float32 representability
     // before narrowing: converting an out-of-range double is not a safe way
@@ -4055,6 +4148,17 @@ private:
       last_host_velocity_target_vx_ = wire_vx;
       last_host_velocity_target_wz_ = wire_wz;
       last_host_velocity_target_steady_ns_ = sent_ns;
+      cmd_vel_pipeline_.record_applied(wire_vx, wire_wz);
+      // Dig evidence follows the actual final packet, including direct escape
+      // and maintenance stops, never a suppressed ramp or failed write.
+      last_cmd_vx_ = wire_vx;
+      last_cmd_wz_ = wire_wz;
+      last_cmd_vel_time_ = now();
+      have_cmd_vel_ = true;
+    }
+    else
+    {
+      return;
     }
 
     // Exact host command represented by the packet above. The firmware keeps
@@ -4076,6 +4180,26 @@ private:
                         std::shared_ptr<mowgli_interfaces::srv::MowerControl::Response> res)
   {
     const bool requested_enable = (req->mow_enabled != 0u);
+    // Firmware interlock (firmware_interlock.hpp): an ENABLE is refused while
+    // the board has not proven it speaks this image's protocol. The OFF is
+    // still written, and the caller is told — FollowStrip and the GUI read
+    // `success` — so nothing waits for a blade that will never spin.
+    if (mowgli_hardware::interlock_refuses_blade(actuation_allowed(), requested_enable ? 1u : 0u))
+    {
+      // Not throttled: a service call is rare and the operator pressed something.
+      RCLCPP_WARN(get_logger(),
+                  "Firmware interlock: MowerControl blade enable REFUSED — the STM32 has not "
+                  "reported protocol v%u (handshake %s, board protocol v%u). Blade kept OFF.",
+                  static_cast<unsigned>(kMowgliProtocolVersion),
+                  fw_handshake_done_ ? "done" : "pending",
+                  static_cast<unsigned>(fw_protocol_version_));
+      mow_enabled_ = false;
+      blade_intent_authorized_ = false;
+      cancelBladeResume();
+      send_blade_command(0, desired_blade_direction_);
+      res->success = false;
+      return;
+    }
     // Dry-run inhibit (issue #195). Suppresses an ENABLE only; a DISABLE always
     // passes through in either state, so a stop can never be swallowed. The
     // firmware stays the sole blade safety authority — this is NOT an interlock.
@@ -4313,9 +4437,8 @@ private:
   double dig_escalation_x_{0.0};
   double dig_escalation_y_{0.0};
 
-  /// Latest differential-drive command, captured in on_cmd_vel, with the time
-  /// it arrived. Both components are required: a pure pivot has vx == 0 while
-  /// its tyres are still moving across the ground.
+  /// Latest successfully written differential-drive packet, with its send time. Both components are
+  /// required: a pure pivot has vx == 0 while its tyres are still moving across the ground.
   double last_cmd_vx_{0.0};
   double last_cmd_wz_{0.0};
   bool have_cmd_vel_{false};
@@ -4324,24 +4447,19 @@ private:
   /// Controllers publish at 10-20 Hz, so this is many missed cycles.
   static constexpr double dig_cmd_timeout_s_ = 0.5;
 
-  // Last command produced by the continuous slew calculation. This is kept
-  // separate from the wire value because the existing linear deadband guard
-  // can suppress an intermediate ramp step. A stale stream resets the next
-  // ramp to rest, matching the firmware watchdog's physical state.
-  double last_shaped_cmd_vx_{0.0};
-  double last_shaped_cmd_wz_{0.0};
-  std::int64_t last_shaped_cmd_vel_ns_{0};
-  bool have_shaped_cmd_vel_{false};
+  // Continuous ramp and successfully written output are distinct: manual
+  // policy may suppress a ramp step. Reset on disconnect/dig ownership.
+  mowgli_hardware::CmdVelPipeline cmd_vel_pipeline_;
   double cmd_vel_linear_accel_limit_{0.30};
   double cmd_vel_linear_decel_limit_{0.60};
   double cmd_vel_angular_accel_limit_{1.0};
   double cmd_vel_angular_decel_limit_{2.0};
-  static constexpr double kCmdVelSlewNominalDtSec = 0.1;
-  static constexpr double kCmdVelSlewMaxDtSec = 0.2;
-  static constexpr double kCmdVelSlewResetTimeoutSec = 0.6;
 
   /// Fused-pose (map-frame) tracking.
   bool have_map_pose_{false};
+  /// map_server: the robot is outside every recorded area (/map_server_node/outside_area).
+  std::atomic<bool> outside_area_{false};
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr outside_area_sub_;
   double last_map_pose_x_{0.0};
   double last_map_pose_y_{0.0};
   double last_map_sigma_{0.0};
@@ -4526,12 +4644,8 @@ private:
   bool firmware_debug_requested_{false};
   bool firmware_debug_enabled_{false};
 
-  // Host-side sub-deadband forward-velocity clamp (on_cmd_vel): any |vx| below
-  // this is zeroed before reaching the firmware. Lowered from the legacy 0.15
-  // (hand-rolled wheel-PI breakaway) to 0.05 now the vendored PX4 PID can track
-  // slow setpoints — lets MPPI's regulated slow-creep actually drive instead of
-  // a 0↔0.15 stop-go. Runtime-tunable (add_on_set_parameters_callback) for live
-  // field iteration without a rebuild.
+  // Manual/input soft deadband; AUTONOMOUS precision commands bypass both
+  // linear filters, retaining the finite slew and firmware safety envelope.
   double min_linear_vel_{0.05};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr min_lin_vel_cb_handle_;
   bool mow_enabled_{false};
@@ -4548,6 +4662,8 @@ private:
   bool board_initialized_{false};
   std::int64_t last_board_status_steady_ns_{0};
   bool have_high_level_status_{false};
+  // Written only by HighLevelStatus, never by the cmd_vel mode fallback.
+  uint8_t bt_reported_mode_{HL_MODE_NULL};
   std::int64_t last_high_level_status_steady_ns_{0};
   bool have_odometry_{false};
   std::int64_t last_odometry_steady_ns_{0};

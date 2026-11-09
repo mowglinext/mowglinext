@@ -18,8 +18,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 
 find_package(ament_cmake REQUIRED)
+find_package(Boost REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(nav2_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
@@ -47,9 +50,11 @@ add_library(${PROJECT_NAME} SHARED
   src/obstacle_deviation.cpp
   src/ftc_lattice_solver.cpp
   src/ftc_turn_fallback.cpp
+  src/ftc_corner_geometry.cpp
   src/ftc_controller.cpp
   src/ftc_controller_turn_fallback.cpp
   src/ftc_controller_plugin.cpp
+  src/coverage_entry_goal_checker.cpp
   src/path_progress_goal_checker.cpp
   src/garden_keepout_layer.cpp
   src/authorized_transit_planner.cpp
@@ -63,6 +68,7 @@ target_include_directories(${PROJECT_NAME}
 
 target_include_directories(${PROJECT_NAME}
   SYSTEM PRIVATE
+    ${Boost_INCLUDE_DIRS}
     ${EIGEN3_INCLUDE_DIRS}
 )
 
@@ -78,6 +84,7 @@ target_link_libraries(${PROJECT_NAME}
   ${nav2_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
+  ${std_msgs_TARGETS}
   ${pluginlib_TARGETS}
   ${tf2_TARGETS}
   ${tf2_ros_TARGETS}
@@ -85,6 +92,23 @@ target_link_libraries(${PROJECT_NAME}
   ${tf2_eigen_TARGETS}
   ${visualization_msgs_TARGETS}
   ${mowgli_interfaces_TARGETS}
+)
+
+# ---------------------------------------------------------------------------
+# retrace_server: a boundary-safe replacement for Nav2's BackUp recovery
+# ---------------------------------------------------------------------------
+
+add_executable(retrace_server_node src/retrace_server_node.cpp)
+target_include_directories(retrace_server_node
+  PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+target_link_libraries(retrace_server_node
+  ${rclcpp_TARGETS}
+  ${rclcpp_action_TARGETS}
+  ${nav2_msgs_TARGETS}
+  ${geometry_msgs_TARGETS}
+  ${tf2_ros_TARGETS}
 )
 
 # pluginlib needs the export macro defined.
@@ -106,6 +130,11 @@ install(
   TARGETS ${PROJECT_NAME}
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+
+install(
+  TARGETS retrace_server_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -139,6 +168,22 @@ if(BUILD_TESTING)
   ament_add_ros_isolated_gtest(test_authorized_transit test/test_authorized_transit.cpp)
   target_link_libraries(test_authorized_transit ${PROJECT_NAME})
 
+  find_package(nav2_controller REQUIRED)
+  find_package(nav2_rotation_shim_controller REQUIRED)
+  find_package(nav2_regulated_pure_pursuit_controller REQUIRED)
+  find_library(ENTRY_SIMPLE_GOAL_CHECKER simple_goal_checker
+    PATHS "${nav2_controller_DIR}/../../../lib" NO_DEFAULT_PATH REQUIRED)
+  ament_add_ros_isolated_gtest(test_coverage_entry_goal_checker
+    test/test_coverage_entry_goal_checker.cpp)
+  target_compile_definitions(test_coverage_entry_goal_checker PRIVATE
+    MOWGLI_TRANSIT_PARAMS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../mowgli_bringup/config/nav2_params_base.yaml")
+  target_link_libraries(test_coverage_entry_goal_checker
+    ${PROJECT_NAME}
+    ${nav2_controller_TARGETS}
+    ${nav2_rotation_shim_controller_TARGETS}
+    ${nav2_regulated_pure_pursuit_controller_TARGETS}
+    ${ENTRY_SIMPLE_GOAL_CHECKER})
+
   ament_add_ros_isolated_gtest(test_lyrical_goal_checker test/test_lyrical_goal_checker.cpp)
   target_link_libraries(test_lyrical_goal_checker ${PROJECT_NAME})
 
@@ -146,6 +191,12 @@ if(BUILD_TESTING)
     test/test_path_progress_end_approach.cpp
   )
   target_link_libraries(test_path_progress_end_approach ${PROJECT_NAME})
+
+  ament_add_gtest(test_retrace test/test_retrace.cpp)
+  target_include_directories(test_retrace
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
 
   ament_add_gtest(test_oscillation_detector
     test/test_oscillation_detector.cpp
@@ -335,6 +386,7 @@ endif()
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 ament_export_dependencies(
+  Boost
   rclcpp
   rclcpp_lifecycle
   nav2_core

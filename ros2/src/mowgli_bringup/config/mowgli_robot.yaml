@@ -234,6 +234,10 @@ mowgli:
     # compare; the trajectory preview republishes on its own 2 Hz clock so the
     # GUI path message does not get rebuilt at the sampling rate.
     area_record_rate_hz: 10.0
+    #
+    # goto_timeout_sec: COMMAND_GOTO (~/goto_pose) — a NavigateToPose run longer
+    # than this is cancelled and the GOTO ends on GOTO_FAILED. 0 = no limit.
+    goto_timeout_sec: 300.0
     # Localization-quality gate (LocalizationGuard): pause blade-on mowing
     # while ABSOLUTE POSITION is untrustworthy. Field incident 2026-08-02:
     # >60 s plain-GPS fallback (σ ≈ 1.5 m) drove the robot out of the area
@@ -700,13 +704,13 @@ mowgli:
     # (behavior_tree_node → main_tree.xml backup_speed) and for
     # calibrate_imu_yaw_node's dock reverse leg. The old justification, "above
     # kMinLinVel=0.15 host clamp", is DEAD: that hardcoded 0.15 host clamp was
-    # removed — hardware_bridge_node.cpp:435 now floors |vx| at the RUNTIME
-    # min_linear_vel parameter (default 0.05), as nav2_params_base.yaml:280
-    # also records. 0.16 is therefore no longer forced from below.
+    # removed. min_linear_vel (default 0.05) is now a soft clamp outside fresh
+    # BT AUTONOMOUS; autonomous precision targets bypass it without a boost.
+    # Keep the independent conservative undock setting unchanged.
     # Re-derived bounds:
-    #   FLOOR  ~0.05-0.10 m/s — below min_linear_vel (0.05) the bridge zeroes
-    #          the command outright, and near it the wheels sit in the firmware
-    #          breakaway deadband (the same reason obstacle_reverse_speed_mps
+    #   FLOOR  ~0.05-0.10 m/s — historical conservative breakaway assumption;
+    #          low-speed physical response still needs calibration, independently
+    #          of the autonomous soft-deadband exception (obstacle_reverse_speed_mps
     #          is 0.15 and start_blocked_escape_speed is 0.10).
     #   CEILING — this is a BLIND, open-loop reverse: no plan, no costmap
     #          lookahead behind the robot, and GPS is typically still Float

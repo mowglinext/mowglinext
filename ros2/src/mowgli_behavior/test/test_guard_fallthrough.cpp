@@ -454,7 +454,7 @@ TEST(GuardFallthroughTest, AllBlockingGuardsTerminateWithFailure)
 }
 
 // The guards whose halt interrupts a mowing PASS (as opposed to ending the
-// session — emergency, boundary, rain, battery, dig obstruction) must tick
+// session — emergency, dig obstruction) must tick
 // <MarkGuardHalt/> as the FIRST child of their handler Sequence, or every
 // pause is charged to GetNextUnmowedArea's per-area no-progress budget and a
 // flapping sensor fails the mow at 0 swaths (field 2026-09-07 / 2026-09-08:
@@ -462,6 +462,31 @@ TEST(GuardFallthroughTest, AllBlockingGuardsTerminateWithFailure)
 // merely before <AlwaysFailure/>: the ReactiveFallback halts the handler the
 // moment the fault clears, so a marker behind StopMoving + WaitForDuration
 // would miss every pause shorter than their combined duration.
+TEST(GuardFallthroughTest, BothBoundaryHandlersMarkTheirHalt)
+{
+  // Field 2026-10-26: the soft boundary recovery interrupted the same area's pass five times in
+  // four minutes without marking it, so GetNextUnmowedArea charged every interruption and retired
+  // two areas at 0 swaths. Both the soft and the lethal handler must mark their halt.
+  const std::string xml = ReadMainTree();
+  ASSERT_FALSE(xml.empty());
+  const std::string block = ExtractGuardBlock(xml, "BoundaryGuard");
+  ASSERT_FALSE(block.empty());
+  for (const std::string handler : {"LethalBoundaryHandler", "SoftBoundaryHandler"})
+  {
+    const std::size_t at = block.find("name=\"" + handler + "\"");
+    ASSERT_NE(at, std::string::npos) << handler << " not found";
+    const std::size_t mark = block.find("<MarkGuardHalt reason=\"boundary\"/>", at);
+    ASSERT_NE(mark, std::string::npos) << handler << " does not mark its halt";
+    const std::string between = block.substr(at, mark - at);
+    for (const std::string preceding :
+         {"<SetMowerEnabled", "<StopMoving", "<WaitForDuration", "<PublishHighLevelStatus"})
+    {
+      EXPECT_EQ(between.find(preceding), std::string::npos)
+          << handler << ": " << preceding << " runs before <MarkGuardHalt/>";
+    }
+  }
+}
+
 TEST(GuardFallthroughTest, PausingGuardsMarkTheHaltFirst)
 {
   const std::string xml = ReadMainTree();
@@ -472,7 +497,8 @@ TEST(GuardFallthroughTest, PausingGuardsMarkTheHaltFirst)
                                                         {"LocalizationGuard",
                                                          "localization_degraded"},
                                                         {"RainGuard", "rain"},
-                                                        {"BatteryGuard", "battery"}})
+                                                        {"BatteryGuard", "battery"},
+                                                        {"BoundaryGuard", "boundary"}})
   {
     const std::string block = ExtractGuardBlock(xml, guard);
     ASSERT_FALSE(block.empty()) << "Guard not found in main_tree.xml: " << guard;

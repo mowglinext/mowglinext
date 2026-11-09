@@ -584,6 +584,13 @@ cd ros2
 make sim
 ```
 
+The full simulator launch shares the datum and antenna lever arm from
+`mowgli_simulation/config_webots/mowgli_garden.yaml` with the map server,
+GNSS adapter, NavSat converter, COG and fusion graph. Navigation's internal
+`simulation_geometry` argument carries that complete snapshot and requires
+`use_sim_time=true`. Its empty default preserves the physical robot's site
+datum and antenna configuration.
+
 ### Development Workflow
 
 ```bash

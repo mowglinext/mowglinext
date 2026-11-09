@@ -18,6 +18,7 @@
 // at our graph sizes (a few thousand nodes max per session).
 
 #pragma once
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <iosfwd>
@@ -55,13 +56,23 @@ struct TickOutput
   gtsam::Pose2 pose;
   Eigen::Matrix3d covariance;  // (x, y, theta) marginal
   uint64_t node_index;  // monotonically increasing
-  double timestamp;  // ROS time, seconds
+  double timestamp;  // ROS time of the pose node, seconds
+  uint64_t estimate_revision = 0;  // changes even when node_index does not
+  uint64_t graph_epoch = 0;
+  uint64_t applied_gnss_token = 0;
+  uint64_t applied_gnss_revision = 0;
 };
 
 // Lightweight stats snapshot for diagnostics.
 struct GraphStats
 {
   uint64_t total_nodes = 0;  // # nodes created since boot
+  uint64_t successful_updates = 0;  // monotonic, including measurement-only updates
+  uint64_t updates_since_rebase = 0;
+  uint64_t successful_rebases = 0;
+  size_t factor_slots = 0;
+  size_t live_factors = 0;
+  bool rebase_in_progress = false;
 
   // Health counters (incremented by graph_manager; reset to 0 only on
   // process restart). Each counter buckets a specific rejection cause
@@ -122,7 +133,12 @@ public:
                  double y,
                  double sigma_xy,
                  bool robust = false,
-                 std::optional<uint64_t> target_node = std::nullopt);
+                 std::optional<uint64_t> target_node = std::nullopt,
+                 uint64_t ingestion_token = 0);
+
+  // Invalidate provenance without changing the numerical graph.
+  void InvalidateGnssSupport();
+  uint64_t GraphEpoch() const;
 
   // Yaw observation (COG or mag). sigma_yaw is rad. `robust` should be
   // true for magnetometer yaw (uncalibrated / heading-dependent bias),
@@ -166,7 +182,8 @@ public:
 
   // Tick: if at least node_period_s has elapsed since the last node,
   // create a new node + factors and run iSAM2. Returns the new tick
-  // output, or nullopt if no node was created this call.
+  // output, or nullopt if no node was created this call. Accepted stamped GNSS
+  // can still revise LatestSnapshot without creating a node or consuming motion.
   std::optional<TickOutput> Tick(double now_s);
 
   // Read-only accessors (snapshot of current state).
@@ -220,6 +237,10 @@ public:
   // estimates and the variable set are preserved.
   void RebaseISAM2();
 
+  // Existing node budget also bounds successful measurement updates. Markers
+  // advance only after a successful rebuild; failure remains eligible to retry.
+  bool RebaseDue(uint64_t budget) const;
+
   // Apply a map-frame correction to every live pose and rebuild their priors.
   // Used at dock arrival to align the trajectory with the calibrated dock pose.
   // The latest pose receives a tighter prior to retain that dock anchor.
@@ -254,6 +275,7 @@ public:
   void Reset();
 
 private:
+  friend struct GraphManagerTestAccess;
   // Reset() body without taking mu_ — for callers that already hold the lock
   // (e.g. the iSAM2 indeterminate-system catch inside ApplyIsamUpdateLocked).
   void ResetLocked();
@@ -295,6 +317,7 @@ private:
       double sigma;
       bool robust;
       std::optional<uint64_t> target_node;
+      uint64_t ingestion_token = 0;
     };
     struct Yaw
     {
@@ -361,6 +384,16 @@ private:
   // throttle that O(N) call without losing covariance freshness on
   // the diagnostics + odom outputs.
   int ticks_since_cov_ = 0;
+  std::atomic<uint64_t> graph_epoch_{0};
+  uint64_t applied_gnss_token_ = 0;
+  uint64_t applied_gnss_revision_ = 0;
+  void InvalidateGnssSupportLocked();
+  void AcknowledgeGnssLocked(uint64_t token);
+  uint64_t estimate_revision_ = 0;  // never reset: distinguish re-seeded node IDs
+  uint64_t successful_updates_ = 0;  // never reset
+  uint64_t rebased_updates_ = 0;
+  uint64_t rebased_nodes_ = 0;
+  uint64_t successful_rebases_ = 0;
 
   // Health counters surfaced via Stats(). All bumps go through the
   // Record*() mutators below so mu_ wraps them — Stats() makes a
@@ -415,6 +448,7 @@ private:
   // rebase_pending_factors_ / rebase_pending_values_ when
   // rebase_in_progress_ is true.
   bool rebase_in_progress_ = false;
+  uint64_t rebase_generation_ = 0;  // invalidate workers on reset / rigid transform
   gtsam::NonlinearFactorGraph rebase_pending_factors_;
   gtsam::Values rebase_pending_values_;
 
@@ -427,6 +461,13 @@ private:
   // ResetLocked() mid-node — the caller (Tick) must NOT publish a node
   // (the graph is empty; a node would carry the datum-origin pose).
   std::optional<TickOutput> CreateNodeLocked(double now_s);
+
+  bool WheelStationaryLocked() const;
+  bool TrulyStationaryLocked() const;
+  bool AddQueuedGnssFactorLocked(gtsam::NonlinearFactorGraph& factors,
+                                 std::optional<uint64_t> new_node = std::nullopt);
+  void ApplyQueuedGnssLocked();
+  void RefreshLatestLocked(uint64_t node_index, double timestamp);
 
   // Internal — wrap isam_.update so any factors/values added while an
   // async rebase is in progress are also captured in the pending

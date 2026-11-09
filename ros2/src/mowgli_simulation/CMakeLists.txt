@@ -63,6 +63,7 @@ target_include_directories(sim_actuation_node
 )
 
 target_link_libraries(sim_actuation_node
+  ${mowgli_interfaces_TARGETS}
   ${rclcpp_TARGETS}
   ${geometry_msgs_TARGETS}
 )
@@ -115,8 +116,16 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_ros REQUIRED)
+  ament_add_ros_isolated_gtest(test_sim_actuation test/test_sim_actuation.cpp)
+  target_include_directories(test_sim_actuation PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(test_sim_actuation
+    ${rclcpp_TARGETS} ${geometry_msgs_TARGETS} ${mowgli_interfaces_TARGETS})
   find_package(ament_cmake_pytest REQUIRED)
 
+  ament_add_pytest_test(test_cutting_tool_frame
+    test/test_cutting_tool_frame.py
+  )
   ament_add_pytest_test(test_sim_navsat_rtk_fix
     test/test_sim_navsat_rtk_fix.py
   )
@@ -134,6 +143,48 @@ if(BUILD_TESTING)
   )
   ament_add_pytest_test(test_webots_controller_remaps
     test/test_webots_controller_remaps.py
+  )
+  ament_add_pytest_test(test_webots_scene_assets
+    test/test_webots_scene_assets.py
+  )
+
+  ament_add_pytest_test(test_kinematic_wheel_feedback
+    test/test_kinematic_wheel_feedback.py
+    TIMEOUT 60
+  )
+  ament_add_pytest_test(test_native_truth_shutdown
+    test/test_native_truth_shutdown.py
+    ENV ROS_DOMAIN_ID=180
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_sim_imu_provenance
+    test/test_sim_imu_provenance.py
+    TIMEOUT 60
+  )
+  ament_add_pytest_test(test_sim_gnss_provenance
+    test/test_sim_gnss_provenance.py
+    TIMEOUT 60
+  )
+
+  ament_add_pytest_test(test_sim_source_transport
+    test/test_sim_source_transport.py
+    ENV ROS_DOMAIN_ID=179
+    TIMEOUT 60
+  )
+
+  find_package(diff_drive_controller REQUIRED)
+  find_package(yaml_cpp_vendor REQUIRED)
+  find_package(yaml-cpp REQUIRED)
+  ament_add_gtest(test_wheel_odom_interval test/test_wheel_odom_interval.cpp TIMEOUT 60)
+  target_link_libraries(test_wheel_odom_interval
+    diff_drive_controller::diff_drive_controller yaml-cpp
+  )
+  target_compile_definitions(test_wheel_odom_interval PRIVATE
+    WHEEL_ODOM_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config_webots/ros2_control.yaml"
+  )
+
+  ament_add_pytest_test(test_webots_supervisor_clock
+    test/test_webots_supervisor_clock.py
   )
 
   # ---- test_firmware_wheel_model ----

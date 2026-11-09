@@ -46,11 +46,26 @@
 #include <nav2_ros_common/lifecycle_node.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include <gtest/gtest.h>
 #include <rcl/time.h>
+
+namespace mowgli_nav2_plugins
+{
+struct FTCSpeedLimitTestAccess
+{
+  static void FreeMowingGeometry(FTCController& c)
+  {
+    auto g = std::make_shared<CornerGeometry>();
+    g->valid = true;
+    g->mowing.allowed = {{{-5, -5}, {15, -5}, {15, 15}, {-5, 15}}};
+    c.corner_geometry_ = std::move(g);
+  }
+};
+}  // namespace mowgli_nav2_plugins
 
 namespace
 {
@@ -168,6 +183,7 @@ public:
 
     ftc_.configure(node_, kPlugin, tf_, costmap_);
     ftc_.activate();
+    mowgli_nav2_plugins::FTCSpeedLimitTestAccess::FreeMowingGeometry(ftc_);
 
     probe_ = std::make_shared<rclcpp::Node>("progress_probe");
     probe_sub_ = probe_->create_subscription<nav_msgs::msg::Path>(
@@ -184,6 +200,7 @@ public:
   {
     ftc_.deactivate();
     ftc_.cleanup();
+    mowgli_nav2_plugins_test::WaitForTfListenerSpinning(*costmap_);
     costmap_->cleanup();
     executor_.remove_node(probe_);
   }

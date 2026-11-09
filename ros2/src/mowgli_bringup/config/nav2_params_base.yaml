@@ -101,7 +101,7 @@ controller_server:
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker",
-                           "coverage_axis_goal_checker"]
+                           "coverage_axis_goal_checker", "coverage_entry_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
     path_handler_plugins: ["PathHandler"]
     PathHandler:
@@ -149,6 +149,9 @@ controller_server:
     # the end of a path (use_rotate_to_heading: false) and the 1 Hz
     # replan-if-invalid loop made a 0.40 m transit with a ±0.10 rad yaw goal
     # spin on the spot for 164 s (field 2026-09-12).
+    coverage_entry_goal_checker:
+      plugin: "mowgli_nav2_plugins/CoverageEntryGoalChecker"
+
     transit_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.30
@@ -334,8 +337,9 @@ controller_server:
         # --- RegulatedPurePursuitController (primary) params ---
         max_linear_vel: 0.30            # transit speed cap (m/s)
         # 0.16 kept conservative. The old host clamp (kMinLinVel=0.15) is gone:
-        # hardware_bridge now floors |vx| at the RUNTIME param min_linear_vel
-        # (hardware_bridge_node.cpp, default 0.05), so this MAY be lowered.
+        # min_linear_vel (default 0.05) is a soft clamp outside fresh BT AUTONOMOUS;
+        # autonomous precision targets retain finite slew without that clamp.
+        # Keep this independent conservative RPP approach setting unchanged.
         min_approach_linear_velocity: 0.16
         approach_velocity_scaling_dist: 0.6
         # Lookahead: velocity-scaled = lookahead_time × v, clamped to
@@ -439,6 +443,10 @@ controller_server:
     # F2C route as one continuous goal — FTC tracks it; no per-swath feeding.
     FollowCoveragePath:
       plugin: "mowgli_nav2_plugins/FTCController"
+      # Private FTC approach assumption: residual forward travel / speed after
+      # STOP <= 0.5 s. Physical calibration is outstanding; no global deadband
+      # or angular-safety limits change. Only explicit pivot approaches use it.
+      pivot_coast_time_bound_s: 0.5
       # Carrot speed. BOTH are overridden at launch (navigation.launch.py):
       #   speed_fast = mowing_speed
       #   speed_slow = clamp(mowing_speed * turn_speed_ratio,
@@ -717,6 +725,10 @@ controller_server:
       # Static default kept in sync with the template (true, 2026-07-23) so a
       # raw `ros2 launch` with no robot-config injection is behaviour-preserving.
       obstacle_reverse_enabled: true
+      # Boundary-safe reverse (retrace.hpp): FTC's reverse-escape and the turn fallback's reverse only
+      # run while the robot is inside every recorded area and only over a straight forward piece it just
+      # drove. Field 2026-10-26: a 0.30 m reverse-escape took the mower from 0.00 m to 0.33 m outside.
+      reverse_boundary_safe: true
       obstacle_reverse_max_dist_m: 0.30
       obstacle_reverse_speed_mps: 0.10   # must clear the firmware deadband (~0.05)
       # TURN FALLBACK (ftc_turn_fallback.hpp). Field 2026-09-22: all 8 WEDGED
@@ -950,10 +962,9 @@ global_costmap:
       # filter-free (see local_costmap below) so coverage swaths near the edge
       # don't trip MPPI/RPP "collision ahead" and Nav2 local recoveries (spin,
       # backup) still function near edges.
-      # PLUGIN ORDER (set in the lidar / no-lidar overlays): inflation_layer is
-      # listed BEFORE keepout_filter, so the keepout mask is stamped onto an
-      # already-inflated master grid and is NOT inflated itself. Only real
-      # sensor marks (obstacle_layer) get the inflation band.
+      # The overlays inflate sensor marks in the primary grid, then apply
+      # keepout_filter to the separate final grid. This also prevents retained
+      # boundary cells from becoming inflation seeds during bounded updates.
       #
       # Why: SmacPlanner2D is a POINT check — a pose collides when its centre
       # cell cost is >= INSCRIBED. It never tests the footprint polygon, so its

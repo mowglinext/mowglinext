@@ -48,6 +48,8 @@
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include "mowgli_interfaces/linear_command_policy.hpp"
+#include "mowgli_interfaces/msg/high_level_status.hpp"
 #include "mowgli_simulation/firmware_wheel_model.hpp"
 
 namespace mowgli_simulation
@@ -56,12 +58,13 @@ namespace mowgli_simulation
 class SimActuationNode : public rclcpp::Node
 {
 public:
-  SimActuationNode() : rclcpp::Node("sim_actuation")
+  explicit SimActuationNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions())
+      : rclcpp::Node("sim_actuation", options)
   {
     // ── Per-wheel firmware motor model (see firmware_wheel_model.hpp): two
     //    independent linear-velocity PIs, each with its own PWM static/
-    //    kinetic stiction. Forward: |vx| < min_linear_vel is clamped to 0
-    //    (matches hardware_bridge min_linear_vel_).
+    //    kinetic stiction. The soft linear guard follows fresh BT autonomy;
+    //    it is distinct from the per-wheel stiction model.
     deadband_enabled_ = declare_parameter<bool>("deadband_enabled", true);
     wheel_.wheel_separation = declare_parameter<double>("wheel_separation", 0.325);
     wheel_.max_mps = declare_parameter<double>("firmware_max_mps", 0.5);
@@ -84,9 +87,14 @@ public:
         rclcpp::SystemDefaultsQoS(),
         [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr m)
         {
-          last_vx_ = m->twist.linear.x;
-          last_wz_ = m->twist.angular.z;
-          last_cmd_stamp_ = this->now();
+          on_cmd_vel(m);
+        });
+    sub_status_ = create_subscription<mowgli_interfaces::msg::HighLevelStatus>(
+        "/behavior_tree_node/high_level_status",
+        rclcpp::QoS(10),
+        [this](mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr status)
+        {
+          on_high_level_status(status);
         });
     last_tick_ = this->now();
     last_cmd_stamp_ = this->now();
@@ -107,6 +115,28 @@ public:
   }
 
 private:
+  friend struct SimActuationTestPeer;
+
+  void on_cmd_vel(geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
+  {
+    last_vx_ = msg->twist.linear.x;
+    last_wz_ = msg->twist.angular.z;
+    last_cmd_stamp_ = now();
+  }
+
+  void on_high_level_status(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr status)
+  {
+    bt_reported_mode_ = status->state;
+    bt_status_receipt_ns_ = steady_now_ns();
+  }
+
+  static std::int64_t steady_now_ns()
+  {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  }
+
   void tick()
   {
     const rclcpp::Time t = this->now();
@@ -133,7 +163,17 @@ private:
 
     // Sub-deadband forward-velocity guard (host-side, matches hardware_bridge
     // min_linear_vel_ — NOT the per-wheel motor stiction below).
-    const double cmd_vx = (std::abs(target_vx) < min_linear_vel_) ? 0.0 : target_vx;
+    // No firmware-mode fallback in this sim node: only a fresh BT status can
+    // exempt a request. Retain the sim's original non-autonomous dust clamp.
+    const bool autonomous_precision = mowgli_interfaces::autonomous_precision_allowed(
+        bt_reported_mode_ == mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS,
+        bt_status_receipt_ns_ != 0,
+        steady_now_ns(),
+        bt_status_receipt_ns_);
+    const double cmd_vx = mowgli_interfaces::apply_linear_soft_deadband(target_vx,
+                                                                        min_linear_vel_,
+                                                                        autonomous_precision,
+                                                                        0.0);
 
     // Per-wheel firmware motor model: inverse kinematics → two independent
     // PIs in PWM space → per-wheel static/kinetic stiction → forward
@@ -162,6 +202,8 @@ private:
 
   // ── State
   FirmwareWheelState wheel_state_;
+  uint8_t bt_reported_mode_{0};
+  std::int64_t bt_status_receipt_ns_{0};
   double last_vx_ = 0.0;
   double last_wz_ = 0.0;
   rclcpp::Time last_cmd_stamp_;
@@ -169,6 +211,7 @@ private:
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr pub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub_cmd_;
+  rclcpp::Subscription<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr sub_status_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

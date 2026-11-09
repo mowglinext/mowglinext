@@ -1033,3 +1033,45 @@ def test_preset_upgrade_geometry_preserves_explicit_offsets(tmp_path, model, off
     assert actual["wheel_track"] == 0.371
     assert actual["gps_z"] == 0.287
     assert path.read_bytes() == before  # No migration write on load.
+
+
+def test_dock_body_sits_on_the_station_and_follows_the_chassis():
+    # Shipped chassis: rear bumper 0.12 m behind the docked pose, nose 0.48 m ahead.
+    assert _util.dock_body_extents({}) == pytest.approx((0.12, 0.80))
+    # A longer chassis keeps the station head inside the body: never a hardcoded length.
+    rear, length = _util.dock_body_extents({"chassis_length": 0.90, "chassis_center_x": 0.30})
+    assert rear == pytest.approx(0.15)
+    assert length - rear == pytest.approx(0.75 + _util.DOCK_HEAD_DEPTH_M)
+    # A site with a longer station can lengthen it, not shorten it below the robot.
+    assert _util.dock_body_extents({"dock_body_length_m": 1.20})[1] == pytest.approx(1.20)
+    assert _util.dock_body_extents({"dock_body_length_m": 0.30})[1] == pytest.approx(0.80)
+
+
+def test_dock_no_pivot_zone_covers_the_planner_refusal():
+    # Planner: refuses x > front - 0.10 - sweep = -0.167 m (shipped). The BT must take over first.
+    assert _util.dock_no_pivot_distance({}) == pytest.approx(0.217, abs=0.002)
+    # Longer nose reach, longer sweep: it follows the chassis.
+    assert _util.dock_no_pivot_distance({"chassis_width": 0.70}) > _util.dock_no_pivot_distance({})
+
+
+def test_coverage_entry_tolerance_is_the_planners_outward_field_growth():
+    """The outermost ring is planned on a field grown outward by
+    op_width/2 - chassis_safety_inset (Invariant 7), and FTC tracks it to
+    FTC_TRACKING_SLACK_M. The entry/blade tolerance must cover exactly that."""
+    shipped = _util.coverage_entry_tolerance({})
+    assert shipped == pytest.approx((0.18 - 0.02) / 2 + _util.FTC_TRACKING_SLACK_M)
+    assert shipped == pytest.approx(0.13)
+
+
+def test_coverage_entry_tolerance_shrinks_with_the_boundary_inset():
+    # An inset of op_width/2 or more already keeps the ring inside the line:
+    # only tracking slack is left.
+    assert _util.coverage_entry_tolerance({"chassis_safety_inset": 0.2}) == pytest.approx(
+        _util.FTC_TRACKING_SLACK_M)
+    assert _util.coverage_entry_tolerance({"chassis_safety_inset": 0.04}) == pytest.approx(
+        0.04 + _util.FTC_TRACKING_SLACK_M)
+
+
+def test_coverage_entry_tolerance_follows_the_cut_width():
+    wider = _util.coverage_entry_tolerance({"tool_width": 0.30})
+    assert wider == pytest.approx((0.30 - 0.02) / 2 + _util.FTC_TRACKING_SLACK_M)

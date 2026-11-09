@@ -17,13 +17,14 @@
 | Slip veto (graph side, windowed, #516) | `graph_manager_node.cpp:222-231` + `include/fusion_graph/slip_window.hpp`; tests `test_slip_window.cpp`, `test_slip_pivot.cpp` |
 | Slip veto (dead-reckoning side, #488) | `fusion_graph_node_callbacks_a.cpp` `OnImu` (:59) + `include/fusion_graph/dr_slip_veto.hpp` (`kDrSlipWheelMinDefaultRadPerS` 0.44) |
 | Wheel σ random-walk model (#491), pivot release, adaptive inflation | `graph_manager_node.cpp:258-325`; `test_wheel_sigma_scaling.cpp`, `test_adaptive_noise.cpp` |
+| Stationary GNSS assimilation, snapshot revisions, shared motion classification | `src/graph_manager_measurements.cpp`; scheduling in `graph_manager_node.cpp`; production timer/publication regression `test/test_estimate_publication.cpp` |
 | Stationary yaw snap, hand-push gate, gyro-bias EMA | `graph_manager_node.cpp:125-190`; `graph_manager.cpp` `AddGyroDelta` (:109); `test_stationary_yaw.cpp`, `test_gyro_bias.cpp` |
 | COG yaw gating, σ floor, 180° flip recovery | `fusion_graph_node_callbacks_b.cpp` `OnCogHeading` (:44); pure rules `include/fusion_graph/yaw_gates.hpp`, `include/fusion_graph/cog_flip_recovery.hpp` |
 | Graph persistence, crash recovery, legacy `.graph/.meta` loading, datum guard | `PERSISTENCE.md`; `src/graph_manager_persistence.cpp` `Save` / `Load`; `src/checkpoint_file.cpp`; persistence tests |
 | Save / clear services, auto-checkpoints | `fusion_graph_node_setup_comms.cpp:205-270`; `DispatchAsyncSave` `callbacks_b.cpp:363`; `OnHighLevelStatus` :276; `OnPeriodicSaveTimer` `misc.cpp:126` |
 | map→odom anchor, slew limiter (unwired), odom re-base, TF thread | `src/fusion_graph_node_publish.cpp` (`PublishOutputs` :153, `SlewPublishedAnchor` :278, `TfBroadcastLoop` :320); re-base `fusion_graph_node_timer.cpp:483-500`; pure `include/fusion_graph/anchor_slew.hpp` |
 | Published covariance frame (body→map) | `fusion_graph_node_publish.cpp:183` + `include/fusion_graph/covariance_frame.hpp`; `test_covariance_frame.cpp` |
-| Sliding-window cap / iSAM2 rebase | `src/graph_manager_rebase.cpp` `RebaseISAM2`; maintenance timer `setup_comms.cpp`; `test_graph_window.cpp` |
+| Sliding-window cap / iSAM2 rebase (node and successful-update budget) | `src/graph_manager_rebase.cpp` `RebaseISAM2`; maintenance timer `setup_comms.cpp`; `test_graph_window.cpp` |
 | LiDAR map anchor (scan-to-MAP localisation for complete GNSS outages): grid, gate, particle filter, per-estimate trust, shadow mode | `src/fusion_graph_node_lidar_anchor.cpp` (RTK-only map learning, any-usable-GNSS outage age, warm-up, verdicts, `/fusion_graph/lidar_anchor_candidate`); pure pieces `include/fusion_graph/lidar_occupancy_mapper.hpp` (log-odds grid, `ScoreScan`, `ImportCells`), `lidar_map_anchor_gate.hpp` (RTK-age mapping hysteresis), `lidar_compute_gate.hpp` (outage warm-up / compute cadence), `lidar_anchor_decision.hpp` (seed/reference/application decisions), `lidar_anchor_validator.hpp` (score / spread / dead-reckoning gates); params `setup_params.cpp` (`use_lidar_map_anchor`, `lidar_anchor_*`, `lidar_map_*`); graph consumer `graph_manager_node.cpp` (`PoseTranslationPrior`, XY only) |
 | Replaying a bag through the node on a laptop (reproduce a field failure) | `ros2/src/fusion_graph/tools/replay/README.md` |
 | LiDAR anchor map persistence / reset | persisted as tiles under `<graph_save_prefix>.lidartiles`; `src/lidar_submap_store.cpp` + `include/fusion_graph/lidar_submap_store.hpp`; legacy `.lidarmap` import remains only for migration; `~/clear_lidar_map` wipes the tiles, local window and filter. Continuous filter odometry: `lidar_anchor_odom.hpp` |
@@ -57,7 +58,8 @@
 | `.../pose_extrapolator.hpp` | 112 | Header-only `PoseExtrapolator` (gyro-forward yaw for `/odometry/filtered_map_fast`) |
 | `.../lidar_anchor_decision.hpp` | | Pure filter seed, DR-reference preservation, rejection-dwell and candidate-application decisions |
 | **`ros2/src/fusion_graph/src/`** | | |
-| `.../fusion_graph_node.cpp` | 209 | Ctor: declares `GraphParams` + node-side params, builds `GraphManager`; `main()` |
+| `.../fusion_graph_node.cpp` | | Ctor: declares `GraphParams` + node-side params, builds `GraphManager` |
+| `.../fusion_graph_main.cpp` | | Executable entry point; node objects are reused by production publication tests |
 | `.../fusion_graph_node_setup_params.cpp` | | Node-side LiDAR-map-anchor, COG, persistence, dock and launch parameters |
 | `.../fusion_graph_node_setup_comms.cpp` | 538 | Publishers, subscriptions, `~/save_graph`, `~/clear_graph`, tick/maintenance/diag timers, TF thread start |
 | `.../fusion_graph_node_callbacks_a.cpp` | 501 | `OnWheelOdom`, `OnImu` (DR integration + DR slip veto), `OnGnss` (all GPS gates, dock hold, stamp association, autoload override) |
@@ -66,7 +68,8 @@
 | `.../fusion_graph_node_publish.cpp` | | Initial pose, local odometry, map output, map→odom anchor and TF thread |
 | `.../fusion_graph_node_misc.cpp` | 140 | `SeedFromDockPose` (rigid gauge reset > 5 cm), `OnPeriodicSaveTimer` |
 | `.../graph_manager.cpp` | | Accumulators, queues, initialization, statistics and pose snapshots |
-| `.../graph_manager_node.cpp` | 574 | `Tick` / `CreateNodeLocked`: all per-node gates + factor construction + iSAM2 update + throttled marginal |
+| `.../graph_manager_node.cpp` | | `Tick` / `CreateNodeLocked`: ordinary process-node gates and factor construction |
+| `.../graph_manager_measurements.cpp` | | Side-effect-free stationary classification, shared GNSS factor builder, GNSS-only updates, revised head/covariance snapshots |
 | `.../graph_manager_rebase.cpp` | | Windowed iSAM2 rebase, robust update/reset, rigid whole-graph transforms |
 | `.../graph_manager_persistence.cpp` | | Graph reset, snapshot/restore, semantic validation and datum guard |
 | `.../checkpoint_file.cpp` + `include/fusion_graph/checkpoint_file.hpp` | | Combined checkpoint publication, recovery copy, checksums and checked I/O |
@@ -76,6 +79,8 @@
 | `.../test_checkpoint_file.cpp`, `.../test_persistence_faults.cpp` | | Deterministic I/O faults, process interruption, recovery and legacy migration |
 | `.../test_save_service.py`, `.../checkpoint_test_delay.cpp` | | Real-node save result, busy failure and executor progress during held file I/O |
 | `.../test_factors.cpp` | | Graph factor residual and Jacobian tests |
+| `.../test_stationary_gnss.cpp` | | Stamped factor-only mean/covariance, untouched process state, legacy/stale targets, parked/creep controls, async replay, maintenance failure/reset and preintegration |
+| `.../test_estimate_publication.cpp` | | Actual node timer and ROS publication: same-index correction preserves SE(2) DR tail, new-node consumption and odom rebase |
 | `.../test_gnss_timestamp.cpp` | 142 | Delayed GNSS constrains the node at `header.stamp`, bounded by the window |
 | `.../test_rtk_wrongfix_gate.cpp` | 167 | Wrong-fix budget math; reject-forever regression if reset only on accept |
 | `.../test_dock_gps_consistency.cpp` | 127 | #512 field numbers; Float / no-fix never yields |
@@ -191,6 +196,7 @@ All read ONCE at construction (`declare_parameter`, no dynamic reconfigure). Pre
 - Three layers of defaults disagree: `GraphParams` struct (`graph_params.hpp`, e.g. `max_graph_nodes` 3000, `stationary_sigma_theta` 1e-3) vs declare defaults vs `fusion_graph.yaml` (6000, 0.01) vs launch (`node_period_s` 0.1 → yaml 0.02 → deployed 0.04). Unit tests construct `GraphParams` directly, so they run on struct defaults, not production values.
 - The LiDAR map anchor factor is `PoseTranslationPrior<Pose2>` (XY only, `graph_manager_node.cpp` `lidar_map_xy` consumer). No LiDAR-derived yaw ever enters the graph as an absolute factor: a LiDAR yaw prior once flipped map→odom ~180° (2026-07-22, the since-removed scan-to-keyframe anchor). Do not add one back.
 - `primary_mode=false` comments in `setup_params.cpp:134-137` and the arg description in `fusion_graph.launch.py:102-105` describe an `ekf_map_node` fallback that no longer exists; `navigation.launch.py:1088` always passes `"true"`.
+- **Motion publication is gated by `MotionInputSupport` (`motion_input_support.hpp`), and a loss is NOT permanent.** A ≥1 s wheel/IMU gap, an epoch change or a clock rewind withholds every motion output (odom→base_footprint, map→odom, `/odometry/*`, fast pose, `/imu/fg_yaw`) and publishes a negative `GnssFusionUpdate`. Publication resumes once BOTH streams have been continuous for `kMotionRecoveryNs` (2 s); a single returning sample still cannot renew it. It used to latch until a node restart: one STM32 reflash (~9 s of serial silence) left the robot with no base_footprint TF, so collision_monitor zeroed every command and it could not undock (field 2026-11-08). Do not reintroduce a permanent latch; graph and DR state are kept through a loss, so resuming is a publication decision only.
 - RTK wrong-fix gate accumulators reset on EVERY observation attempt (`callbacks_a.cpp` `OnGnss`, `rtk_wrongfix_gate.hpp`); this keeps the motion budget bounded per interval.
 - The stuck-value gate's TWO accumulators (`gps_stuck_gate.hpp`) deliberately do NOT share one reset rule. `wheel_dist_since_gps_value_changed_m_` resets ONLY when the reported lat/lon actually changes and must keep growing across repeated rejections of the same stuck value — do not "fix" this by resetting it every fix like the wrongfix gate; that makes a genuinely stuck receiver undetectable again. `abs_dtheta_since_last_gps_sample_rad_` is the opposite — it resets every GPS message like the wrongfix gate's own accumulators, because it's the "are we turning right now" stand-down signal, not "since the receiver got stuck": a version that reset it on value-change too let one field session's transit turn (past 170°) permanently disable the gate for the rest of that stuck period (2026-09-21).
 - A NavSatFix with `COVARIANCE_TYPE_UNKNOWN` or σ ≤ 0 is rejected outright (`callbacks_a.cpp:196-210`) — the old σ=-1 sentinel was clamped UP to 3 mm and fused garbage at RTK precision.
@@ -209,3 +215,53 @@ All read ONCE at construction (`declare_parameter`, no dynamic reconfigure). Pre
 ## Generated & vendored — do not hand-edit
 - GTSAM 4.3a1 lives outside the repo (`/opt/gtsam`, built by `ros2/Dockerfile` stage 0 / CI cache) — do not vendor it into `ros2/src`.
 - `ros2/build/`, `ros2/install/`, `ros2/log/` are colcon outputs; `/ros2_ws/maps/fusion_graph.{graph,scans,meta}` are runtime artefacts written by `GraphManager::Save`.
+
+## Stationary GNSS update contract
+
+`Tick` still returns an output only for a newly created process node. Before
+applying the coarse stationary throttle it also checks the same wheel/gyro
+classification used by process-factor creation, with the existing configured
+cadence scaling. A stamped queued GNSS observation can update its explicitly
+selected live target while process-node creation is throttled. This adds only
+that GNSS factor; process accumulators and yaw/LiDAR queues remain pending.
+An unstamped fix retains the next-node fallback. A removed historical target
+is dropped, never redirected to the head.
+
+`LatestSnapshot().estimate_revision` changes independently of `node_index`.
+The node captures current DR when anchoring an ordinary new node. For a revision
+of the same node it left-multiplies the existing map/odom anchor by
+`X_new * inverse(X_previous)`, retaining all DR motion since the node and the
+coordinated odom rebase. Explicit pose-seed/reset paths retain their anchor
+invalidation behavior.
+
+Successful measurement-only updates count toward the existing asynchronous
+maintenance budget, alongside the node budget. Only a successful rebase swap
+retires its snapshot's work; failure remains eligible for retry and reset
+cannot underflow the budget. Rebase still replaces historical likelihoods with
+snapshot priors, rather than performing exact marginalization. It refreshes
+the published head and covariance after the swap. Per-node preintegration bias
+variables retain their scalar type and are pruned with their corresponding
+poses.
+
+GNSS source-stamp association remains the existing newest-node-at-or-before
+approximation. This update does not create acquisition states or perform
+wheel-based temporal transport, and the one-slot GNSS queue does not promise
+lossless ingestion above the timer cadence.
+
+## Committed GNSS publication provenance
+
+`/fusion_graph/gnss_update` reports the exact raw NavSatFix whose factor most
+recently committed into the current graph lineage, plus the revision of that
+commit. A queue entry, seed prior, or received status is not an acknowledgement.
+The graph carries opaque ingestion tokens; the node retains a bounded pending
+raw-fix cache and separately pins the committed message. Missing raw data fails
+closed. No GNSS status or receiver sequence is inferred here.
+
+The report names a coherent map-odometry publication and the actual sent
+map-to-odom TF sample for the same epoch and revision. The dedicated TF thread
+records its own sent watermark; its forward TF stamp remains the existing lead,
+so consumers must wait for that support time. Reset, load, authoritative pose
+override and clock discontinuity invalidate the epoch; ordinary graph rebase
+preserves the original committed fix and its observation age. Observer mode
+cannot claim owned TF support. These facts establish provenance and output
+publication, not positional accuracy or permission to move.

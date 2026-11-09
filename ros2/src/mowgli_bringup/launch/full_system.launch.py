@@ -60,8 +60,11 @@ from robot_config_util import (  # noqa: E402
     DEFAULT_TOOL_WIDTH_M,
     chassis_circumscribed_radius,
     chassis_footprint,
+    coverage_entry_tolerance,
     dig_proposal_radius,
     dig_skip_radius,
+    dock_body_extents,
+    dock_no_pivot_distance,
     keepout_obstacle_margin,
     load_robot_params,
     resolve_lidar_enabled,
@@ -409,6 +412,15 @@ def generate_launch_description() -> LaunchDescription:
             # replaces the pending dig KEEPOUT, which blocked planning from the
             # robot's own pose (START_OCCUPIED, 2026-09-17).
             {"dig_skip_radius_m": dig_skip_radius(robot_params)},
+            # Same derived tolerance FTC and the entry goal checker use, so
+            # FollowStrip's entry/blade checks agree with them exactly.
+            {"coverage_entry_tolerance_m": coverage_entry_tolerance(robot_params)},
+            {"dock_no_pivot_distance_m": dock_no_pivot_distance(robot_params)},
+            {"dock_body_half_width_m": float(robot_params.get("dock_body_width_m", 0.55)) / 2.0},
+            {
+                "dock_body_front_m": dock_body_extents(robot_params)[1]
+                - dock_body_extents(robot_params)[0]
+            },
             # Area-recording boundary resolution. Both were hardcoded in
             # main_tree.xml (0.2 m Douglas-Peucker tolerance, 2 Hz sampling),
             # which cost a field recording all but 24 vertices of a 38 m
@@ -506,6 +518,9 @@ def generate_launch_description() -> LaunchDescription:
             {"battery_low_percent": float(robot_params.get("battery_low_percent", 20.0))},
             {"battery_critical_percent": float(robot_params.get("battery_critical_percent", 10.0))},
             {"battery_full_percent": float(robot_params.get("battery_full_percent", 95.0))},
+            # COMMAND_GOTO: a NavigateToPose run longer than this is cancelled
+            # and the GOTO ends on GOTO_FAILED (0 = no limit).
+            {"goto_timeout_sec": float(robot_params.get("goto_timeout_sec", 300.0))},
             {
                 "battery_critical_recovery_percent": float(
                     robot_params.get("battery_critical_recovery_percent", 30.0)
@@ -560,7 +575,8 @@ def generate_launch_description() -> LaunchDescription:
             {"dock_pose_x": float(robot_params.get("dock_pose_x", 0.0))},
             {"dock_pose_y": float(robot_params.get("dock_pose_y", 0.0))},
             {"dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0))},
-            {"dock_body_length_m": float(robot_params.get("dock_body_length_m", 0.80))},
+            {"dock_body_rear_m": dock_body_extents(robot_params)[0]},
+            {"dock_body_length_m": dock_body_extents(robot_params)[1]},
             {"dock_body_width_m": float(robot_params.get("dock_body_width_m", 0.55))},
             # Bypass-arc planner geometry — lifted from physical/operational
             # sections of mowgli_robot.yaml so the cleaning-robot detour

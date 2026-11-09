@@ -17,7 +17,16 @@ export interface RemoteAccessSettingsUpdate
     clearAuthKey?: boolean;
 }
 
-export type RemoteAccessPhase = "disabled" | "pulling" | "starting" | "running" | "error";
+export type RemoteAccessPhase = "disabled" | "pulling" | "starting" | "running" | "error" | "degraded";
+
+export type RemoteAccessRecoveryState =
+    | "monitoring"
+    | "suspect"
+    | "cooldown"
+    | "degraded"
+    | "paused"
+    | "operator_action"
+    | "disabled";
 
 /** tailscaled's own state machine, as reported by `tailscale status`. */
 export type RemoteAccessBackendState =
@@ -46,15 +55,26 @@ export interface RemoteAccessStatus {
     health: string[];
     version?: string;
     checkedAt: string;
+    statusUsable?: boolean;
+    selfOnline?: boolean;
+    lastSuccessAt?: string;
+    recoveryState?: RemoteAccessRecoveryState;
+    recoveryAttempts?: number;
+    nextRecoveryAt?: string;
+    hostNetworkOnline?: boolean;
+    recoveryError?: string;
 }
 
-export type RemoteAccessVerdict = "off" | "working" | "needsLogin" | "connected" | "error";
+export type RemoteAccessVerdict = "off" | "working" | "needsLogin" | "connected" | "error" | "offline";
 
 /** One place to collapse the status into what the UI shows. */
 export function remoteAccessVerdict(status: RemoteAccessStatus | null | undefined): RemoteAccessVerdict {
     if (!status || !status.enabled || status.phase === "disabled") return "off";
-    if (status.phase === "error" || status.error) return "error";
+    if (status.phase === "error" || status.phase === "degraded" || status.error || status.recoveryState === "degraded") return "error";
     if (status.backendState === "NeedsLogin" && status.loginUrl) return "needsLogin";
-    if (status.backendState === "Running") return "connected";
+    if (status.backendState === "Running") {
+        if (status.statusUsable === false || status.selfOnline === false) return "offline";
+        return "connected";
+    }
     return "working";
 }
