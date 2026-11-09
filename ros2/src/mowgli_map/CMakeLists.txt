@@ -298,6 +298,16 @@ if(BUILD_TESTING)
     ${nav_msgs_TARGETS}
   )
 
+  # Obstacle-tracker clustering stage == the original flood fill + radius filter.
+  ament_add_gtest(test_costmap_clusters
+    test/test_costmap_clusters.cpp
+  )
+  target_include_directories(test_costmap_clusters PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+  )
+  target_link_libraries(test_costmap_clusters ${nav_msgs_TARGETS})
+
   # Pure logic, no ROS deps — mirrors fusion_graph's header-only gate tests.
   ament_add_gtest(test_boundary_classifier
     test/test_boundary_classifier.cpp
