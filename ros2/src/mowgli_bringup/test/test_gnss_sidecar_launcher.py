@@ -23,10 +23,8 @@ place a default is allowed to live.
 """
 
 from pathlib import Path
-import sys
+import subprocess
 import types
-from concurrent.futures import Future
-from unittest.mock import MagicMock
 
 import pytest
 import yaml
@@ -51,71 +49,55 @@ def _template() -> dict:
     return yaml.safe_load(_TEMPLATE.read_text())["mowgli"]["ros__parameters"]
 
 
-@pytest.mark.parametrize("ntrip,failed", [
-    (False, None), (True, None),
-    (False, "/universal_gnss_receiver/get_health"),
-    (True, "/universal_gnss_ntrip/get_health"),
+_NTRIP_FLAG = "/run/universal_gnss/ntrip_enabled"
+
+
+def _run_probe(tmp_path, ntrip: bool, running: set) -> int:
+    """Run the shipped CMD-SHELL probe with a fake pgrep and NTRIP flag."""
+    _, service = _launcher()
+    kind, command = service["healthcheck"]["test"]
+    assert kind == "CMD-SHELL"
+    assert _NTRIP_FLAG in command
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    pgrep = bin_dir / "pgrep"
+    # Only `pgrep -x <name>` is allowed: an exact process-name match can never
+    # match the probe's own shell command line.
+    pgrep.write_text(
+        "#!/bin/sh\n"
+        '[ "$1" = "-x" ] || exit 2\n'
+        'case " $RUNNING " in *" $2 "*) exit 0;; esac\n'
+        "exit 1\n")
+    pgrep.chmod(0o755)
+    flag = tmp_path / "ntrip_enabled"
+    if ntrip:
+        flag.write_text("")
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "RUNNING": " ".join(sorted(running))}
+    return subprocess.run(  # noqa: S603
+        ["/bin/sh", "-c", command.replace(_NTRIP_FLAG, str(flag))],
+        env=env, check=False).returncode
+
+
+def test_healthcheck_never_joins_the_ros_graph():
+    """A periodic probe that starts a ROS node stalls the LD19 LiDAR stream
+    (field 2026-11-09: every dropout started 2.4 s after a probe)."""
+    _, service = _launcher()
+    command = " ".join(service["healthcheck"]["test"])
+    for forbidden in ("rclpy", "ros2 ", "create_node", "universal-gnss-entrypoint"):
+        assert forbidden not in command
+    assert service["healthcheck"]["interval"] == "30s"
+
+
+@pytest.mark.parametrize("ntrip,running,healthy", [
+    (False, {"receiver_node"}, True),
+    (False, set(), False),
+    (True, {"receiver_node", "ntrip_node"}, True),
+    (True, {"receiver_node"}, False),
+    (True, {"ntrip_node"}, False),
+    (False, {"ntrip_node"}, False),
 ])
-def test_healthcheck_checks_only_enabled_services(monkeypatch, ntrip, failed):
-    """Execute the shipped probe, including ROS environment and typed result contract."""
-    _, service = _launcher()
-    kind, entrypoint, interpreter, flag, source = service["healthcheck"]["test"]
-    assert (kind, entrypoint, interpreter, flag) == (
-        "CMD", "/usr/local/bin/universal-gnss-entrypoint", "python3", "-c")
-    assert service["healthcheck"]["timeout"] == "12s"
-    ros = MagicMock()
-    node = ros.create_node.return_value
-    called = []
-
-    def client_for(_, name):
-        called.append(name)
-        client = MagicMock()
-        client.wait_for_service.return_value = True
-        future = Future()
-        future.set_result(types.SimpleNamespace(success=name != failed))
-        client.call_async.return_value = future
-        return client
-
-    node.create_client.side_effect = client_for
-    monkeypatch.setitem(sys.modules, "rclpy", ros)
-    srv = types.ModuleType("std_srvs.srv")
-    srv.Trigger = MagicMock()
-    monkeypatch.setitem(sys.modules, "std_srvs", types.ModuleType("std_srvs"))
-    monkeypatch.setitem(sys.modules, "std_srvs.srv", srv)
-    module = types.ModuleType("healthcheck")
-    exec(compile(source, str(_FRAGMENT), "exec"), module.__dict__)  # noqa: S102
-    monkeypatch.setattr(module.pathlib.Path, "exists", lambda _: ntrip)
-    assert module.main() == (1 if failed else 0)
-    assert called == ["/universal_gnss_receiver/get_health"] + (
-        ["/universal_gnss_ntrip/get_health"] if ntrip else [])
-    assert node.destroy_client.call_count == len(called)
-    node.destroy_node.assert_called_once()
-    ros.shutdown.assert_called_once()
-
-
-@pytest.mark.parametrize("failure", ["unavailable", "timeout", "exception", "empty"])
-def test_healthcheck_rejects_incomplete_service_responses(monkeypatch, failure):
-    _, service = _launcher()
-    source = service["healthcheck"]["test"][-1]
-    ros = MagicMock()
-    monkeypatch.setitem(sys.modules, "rclpy", ros)
-    srv = types.ModuleType("std_srvs.srv")
-    srv.Trigger = MagicMock()
-    monkeypatch.setitem(sys.modules, "std_srvs", types.ModuleType("std_srvs"))
-    monkeypatch.setitem(sys.modules, "std_srvs.srv", srv)
-    module = types.ModuleType("healthcheck")
-    exec(compile(source, str(_FRAGMENT), "exec"), module.__dict__)  # noqa: S102
-    node = MagicMock()
-    client = node.create_client.return_value
-    client.wait_for_service.return_value = failure != "unavailable"
-    future = Future()
-    if failure == "exception":
-        future.set_exception(RuntimeError("receiver disconnected"))
-    elif failure != "timeout":
-        future.set_result(None)
-    client.call_async.return_value = future
-    assert not module.responsive(node, "/universal_gnss_receiver/get_health")
-    node.destroy_client.assert_called_once_with(client)
+def test_healthcheck_checks_only_enabled_processes(tmp_path, ntrip, running, healthy):
+    assert (_run_probe(tmp_path, ntrip, running) == 0) == healthy
 
 
 def test_launcher_defaults_mirror_the_template():
