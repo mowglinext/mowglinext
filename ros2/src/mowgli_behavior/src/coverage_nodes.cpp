@@ -4147,6 +4147,7 @@ BT::NodeStatus PlanCoverageArea::onStart()
   // Reset per-tick state.
   area_ = mowgli_interfaces::msg::MapArea{};
   goal_handle_.reset();
+  goal_future_ = {};
   phase_start_ = std::chrono::steady_clock::now();
 
   uint32_t area_index = 0;
@@ -4271,7 +4272,13 @@ BT::NodeStatus PlanCoverageArea::onRunning()
 
     auto goal = buildGoal(area_);
     goal_handle_.reset();
-    goal_future_ = action_client_->async_send_goal(goal);
+    // A halt before the planner answers must still cancel the goal once it is
+    // accepted, or the planner keeps computing for nobody (cancel_goal.hpp).
+    abandonment_ = std::make_shared<GoalAbandonment>();
+    auto send_opts = rclcpp_action::Client<PlanCoverage>::SendGoalOptions{};
+    send_opts.goal_response_callback =
+        cancelWhenAbandoned<PlanCoverage>(action_client_, abandonment_);
+    goal_future_ = action_client_->async_send_goal(goal, send_opts);
     phase_ = Phase::WaitingForGoal;
     phase_start_ = std::chrono::steady_clock::now();
   }
@@ -4284,6 +4291,13 @@ BT::NodeStatus PlanCoverageArea::onRunning()
       if (std::chrono::steady_clock::now() - phase_start_ > std::chrono::seconds(3))
       {
         RCLCPP_ERROR(ctx->node->get_logger(), "PlanCoverageArea: goal handshake timeout");
+        // Giving up must also cancel the goal if the planner accepts it later.
+        abandonGoal(action_client_,
+                    goal_handle_,
+                    goal_future_,
+                    abandonment_,
+                    ctx->node->get_logger(),
+                    "PlanCoverageArea");
         return BT::NodeStatus::FAILURE;
       }
       return BT::NodeStatus::RUNNING;
@@ -4309,6 +4323,13 @@ BT::NodeStatus PlanCoverageArea::onRunning()
       if (std::chrono::steady_clock::now() - phase_start_ > std::chrono::seconds(60))
       {
         RCLCPP_ERROR(ctx->node->get_logger(), "PlanCoverageArea: result timeout (60s)");
+        abandonGoal(action_client_,
+                    goal_handle_,
+                    goal_future_,
+                    abandonment_,
+                    ctx->node->get_logger(),
+                    "PlanCoverageArea");
+        goal_handle_.reset();
         return BT::NodeStatus::FAILURE;
       }
       return BT::NodeStatus::RUNNING;
@@ -4488,7 +4509,12 @@ BT::NodeStatus PlanCoverageArea::onRunning()
 void PlanCoverageArea::onHalted()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
-  cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "PlanCoverageArea");
+  abandonGoal(action_client_,
+              goal_handle_,
+              goal_future_,
+              abandonment_,
+              ctx->node->get_logger(),
+              "PlanCoverageArea");
   goal_handle_.reset();
   srv_future_.reset();
 }

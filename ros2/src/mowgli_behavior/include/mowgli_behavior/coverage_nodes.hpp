@@ -1009,6 +1009,9 @@ private:
   rclcpp_action::Client<PlanCoverage>::SharedPtr action_client_;
   std::shared_future<PlanGoalHandle::SharedPtr> goal_future_;
   PlanGoalHandle::SharedPtr goal_handle_;
+  /// Set by onHalted() so a goal the planner accepts afterwards is cancelled
+  /// (cancel_goal.hpp); a fresh one per goal.
+  std::shared_ptr<GoalAbandonment> abandonment_;
   std::shared_future<PlanGoalHandle::WrappedResult> result_future_;
 
   mowgli_interfaces::msg::MapArea area_;
