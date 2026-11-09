@@ -7,6 +7,7 @@
 // leastCostInScanOrder's choice. Both are checked here against their reference.
 // test/bench/ab_compare.py checks whole plans against the previous implementation.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -61,32 +62,67 @@ std::vector<std::pair<double, double>> queries(const Ring& ring, std::mt19937_64
     q.emplace_back(0.5 * (x + nx), 0.5 * (y + ny));
     q.emplace_back(x0 + 0.5 * w, y);
   }
-  for (int k = 0; k <= 4096; ++k)
+  // Band boundaries: RingIndex starts with one band per vertex, so y_min + k·h/n
+  // (and its neighbouring doubles) sit on, or next to, the edges of its bands.
+  if (std::isfinite(h))
   {
-    const double y = y0 + h * k / 4096.0;
-    q.emplace_back(x0 + w * ((k * 0.618034) - std::floor(k * 0.618034)), y);
+    const std::size_t n = std::max<std::size_t>(ring.size(), 1);
+    for (std::size_t k = 0; k <= n; ++k)
+    {
+      const double y = y0 + h * static_cast<double>(k) / static_cast<double>(n);
+      const double x = x0 + w * ((k * 0.618034) - std::floor(k * 0.618034));
+      for (double v : {std::nextafter(y, -kInf), y, std::nextafter(y, kInf)})
+        q.emplace_back(x, v);
+    }
   }
-  std::uniform_real_distribution<double> ux(x0 - 0.1 * w, x1 + 0.1 * w);
-  std::uniform_real_distribution<double> uy(y0 - 0.1 * h, y1 + 0.1 * h);
-  for (int k = 0; k < 20000; ++k)
-    q.emplace_back(ux(rng), uy(rng));
-  for (double v : {kNaN, kInf, -kInf})
+  // Random points need a representable range (uniform_real_distribution's
+  // precondition); a ring spanning +-1e308 gets the explicit values below instead.
+  if (std::isfinite(w) && std::isfinite(h))
   {
-    q.emplace_back(v, y0 + 0.5 * h);
-    q.emplace_back(x0 + 0.5 * w, v);
+    std::uniform_real_distribution<double> ux(x0 - 0.1 * w, x1 + 0.1 * w);
+    std::uniform_real_distribution<double> uy(y0 - 0.1 * h, y1 + 0.1 * h);
+    for (int k = 0; k < 20000; ++k)
+      q.emplace_back(ux(rng), uy(rng));
   }
-  q.emplace_back(x0, y0);
-  q.emplace_back(x1, y1);
+  // Explicit extremes and midpoints (0.5 * a + 0.5 * b cannot overflow).
+  const double max = std::numeric_limits<double>::max();
+  const double tiny = std::numeric_limits<double>::denorm_min();
+  for (double vx : {x0, x1, 0.5 * x0 + 0.5 * x1, 0.0, -tiny, tiny, -max, max, kNaN, kInf, -kInf})
+  {
+    for (double vy : {y0,
+                      y1,
+                      0.5 * y0 + 0.5 * y1,
+                      0.0,
+                      -tiny,
+                      tiny,
+                      -max,
+                      max,
+                      kNaN,
+                      kInf,
+                      -kInf,
+                      std::nextafter(y0, kInf),
+                      std::nextafter(y1, -kInf)})
+      q.emplace_back(vx, vy);
+  }
   return q;
 }
 
 // `has_inside`: the ring has interior the queries must hit (not a degenerate one).
-void expectSameAsPointInRing(const Ring& ring, std::uint64_t seed, bool has_inside = true)
+void expectSameAsPointInRing(const Ring& ring,
+                             std::uint64_t seed,
+                             bool has_inside = true,
+                             std::size_t max_queries = std::numeric_limits<std::size_t>::max())
 {
   std::mt19937_64 rng(seed);
   const RingIndex index(ring);
   std::size_t inside = 0;
-  for (const auto& [x, y] : queries(ring, rng))
+  auto points = queries(ring, rng);
+  if (points.size() > max_queries)
+  {
+    std::shuffle(points.begin(), points.end(), rng);
+    points.resize(max_queries);
+  }
+  for (const auto& [x, y] : points)
   {
     const bool expected = pointInRing(x, y, ring);
     ASSERT_EQ(index.contains(x, y), expected) << "x=" << x << " y=" << y;
@@ -123,6 +159,13 @@ TEST(RingIndex, SpikyRingWhoseEdgesSpanManyBandsMatches)
   // Long edges across the whole extent force the band count down.
   std::mt19937_64 rng(7);
   expectSameAsPointInRing(star(500, 0.01, 30.0, 0.0, 0.0, rng), 7);
+}
+
+TEST(RingIndex, RingWithMoreVerticesThanTheBandCapMatches)
+{
+  // 70 000 vertices: more than the 65 536-band cap, so bands hold several vertices.
+  std::mt19937_64 rng(13);
+  expectSameAsPointInRing(star(70000, 20.0, 21.0, -3.0, 4.0, rng), 13, true, 30000);
 }
 
 TEST(RingIndex, AxisAlignedClosedAndDegenerateRingsMatch)
@@ -270,6 +313,83 @@ TEST(LeastCost, NonFiniteInputsFallBackToTheScan)
   EXPECT_EQ(choose(true, nan_cost, {kNaN, kNaN}).order, std::nullopt);
   EXPECT_EQ(choose(false, nan_cost, {kNaN, kNaN}).order, std::nullopt);
   EXPECT_EQ(choose(true, {}, {}).order, std::nullopt);
+}
+
+TEST(LeastCost, AdversarialBoundariesAroundTheBestAndTheStopKeepTheChoice)
+{
+  // Gaps and costs one ulp either side of the best cost and of the stop threshold
+  // best * (1 + 1e-6), equal costs behind different gaps, and costs that are other
+  // candidates' gaps: every comparison the two choices make is exercised on its edge.
+  std::mt19937_64 rng(17);
+  std::size_t fallbacks_possible = 0;
+  for (int trial = 0; trial < 50000; ++trial)
+  {
+    const double m = 0.25 * static_cast<double>(1 + rng() % 8);
+    const double stop = m * (1.0 + 1e-6);
+    const double values[] = {m,
+                             std::nextafter(m, 0.0),
+                             std::nextafter(m, kInf),
+                             stop,
+                             std::nextafter(stop, 0.0),
+                             std::nextafter(stop, kInf),
+                             0.5 * m,
+                             2.0 * m,
+                             0.0};
+    const std::size_t n = 2 + rng() % 12;
+    std::vector<ScanCandidate> candidates;
+    std::vector<double> costs(n);
+    for (std::size_t i = 0; i < n; ++i)
+    {
+      const double gap = values[rng() % std::size(values)];
+      double cost = std::max(gap, values[rng() % std::size(values)]);
+      if (rng() % 5 == 0)
+      {
+        cost = std::nextafter(gap, 0.0);  // a summed polyline a ulp under the gap
+        ++fallbacks_possible;
+      }
+      costs[i] = cost;
+      candidates.push_back({gap, i});
+    }
+    ASSERT_EQ(choose(true, candidates, costs).order, choose(false, candidates, costs).order)
+        << "trial " << trial;
+  }
+  EXPECT_GT(fallbacks_possible, 0u);
+}
+
+TEST(LeastCost, EqualCostsBehindDifferentGapsKeepTheScanOrderFirst)
+{
+  // Order 1 comes first in the scan; order 3 is nearer. Both cost 1.0.
+  const std::vector<ScanCandidate> candidates{{0.9, 1}, {0.5, 3}};
+  const std::vector<double> costs{0.0, 1.0, 0.0, 1.0};
+  EXPECT_EQ(choose(true, candidates, costs).order, std::optional<std::size_t>(1));
+  EXPECT_EQ(choose(false, candidates, costs).order, std::optional<std::size_t>(1));
+}
+
+TEST(LeastCost, CoincidentZeroGapEntriesStillPrune)
+{
+  // Swath ends that coincide with the robot's position and a zero-cost join: the
+  // first is taken and the stop (gap >= best · (1 + slack)) holds at best == 0.
+  std::vector<ScanCandidate> candidates;
+  for (std::size_t i = 0; i < 50; ++i)
+    candidates.push_back({0.0, i});
+  const std::vector<double> costs(50, 0.0);
+  const Choice scan = choose(false, candidates, costs);
+  const Choice nearest = choose(true, candidates, costs);
+  EXPECT_EQ(nearest.order, std::optional<std::size_t>(0));
+  EXPECT_EQ(nearest.order, scan.order);
+  EXPECT_LE(nearest.evaluated, scan.evaluated);
+}
+
+TEST(LeastCost, ACostBelowItsGapOnAPrunedCandidateIsTheCallersContract)
+{
+  // Why buildContinuousSubPaths must keep every join cost >= its gap: here the
+  // FARTHER candidate (scan order 0) costs less than its own gap. The scan takes it;
+  // nearest-first stops before evaluating it, and the guard (which sees only the
+  // candidate it chose) cannot tell. Pinned so the precondition stays visible.
+  const std::vector<ScanCandidate> candidates{{2.0, 0}, {1.0, 1}};
+  const std::vector<double> costs{0.5, 1.0};
+  EXPECT_EQ(choose(false, candidates, costs).order, std::optional<std::size_t>(0));
+  EXPECT_EQ(choose(true, candidates, costs).order, std::optional<std::size_t>(1));
 }
 
 }  // namespace
