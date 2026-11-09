@@ -44,6 +44,7 @@ set(msg_files
 
 # Declare service files
 set(srv_files
+  "srv/RestoreAreas.srv"
   "srv/BladeControl.srv"
   "srv/AddMowingArea.srv"
   "srv/ClearMap.srv"

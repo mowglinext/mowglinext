@@ -515,6 +515,13 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         on_save_areas(req, res);
       });
 
+  restore_areas_srv_ = create_service<mowgli_interfaces::srv::RestoreAreas>(
+      "~/restore_areas",
+      [this](const mowgli_interfaces::srv::RestoreAreas::Request::SharedPtr req,
+             mowgli_interfaces::srv::RestoreAreas::Response::SharedPtr res)
+      {
+        on_restore_areas(req, res);
+      });
   load_areas_srv_ = create_service<std_srvs::srv::Trigger>(
       "~/load_areas",
       [this](const std_srvs::srv::Trigger::Request::SharedPtr req,
@@ -1152,6 +1159,10 @@ bool MapServerNode::is_costmap_blocked(double x, double y) const
 
 void MapServerNode::on_publish_timer()
 {
+  std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+  if (restore_publication_pending_)
+    publish_restored_areas();
+
   {
     std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
     if (corridor_publication_pending_)

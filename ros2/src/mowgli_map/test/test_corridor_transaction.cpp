@@ -9,6 +9,7 @@
 #include <future>
 #include <sstream>
 
+#include "mowgli_interfaces/wgs84_projection.hpp"
 #include "mowgli_map/map_server_node.hpp"
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -28,6 +29,7 @@ std::condition_variable gate;
 bool rename_entered = false, release_rename = false;
 std::atomic<bool> record_publications{false};
 std::vector<std::vector<std::string>> publications;
+std::atomic<int> area_publications{0}, generation_publications{0}, mask_publications{0};
 bool matches(int fd, const std::string& target)
 {
   char key[64], path[4096];
@@ -101,6 +103,15 @@ extern "C" rcl_ret_t rcl_publish(const rcl_publisher_t* publisher,
   using Call = rcl_ret_t (*)(const rcl_publisher_t*, const void*, rmw_publisher_allocation_t*);
   static auto actual = reinterpret_cast<Call>(dlsym(RTLD_NEXT, "rcl_publish"));
   const char* topic = rcl_publisher_get_topic_name(publisher);
+  if (record_publications && topic)
+  {
+    if (std::string(topic) == "/mowgli/recorded_area_polygons")
+      area_publications++;
+    if (std::string(topic) == "/map_server_node/area_list_generation")
+      generation_publications++;
+    if (std::string(topic) == "/keepout_mask")
+      mask_publications++;
+  }
   if (topic && std::string(topic) == "/mowgli/lidar_ignore_corridors")
   {
     if (fault == 6 || fault == 9)
@@ -148,7 +159,7 @@ protected:
     }
     return p;
   }
-  static Corridor corridor(std::string name = "new", uint32_t id = 0, double width = .4)
+  static Corridor corridor(const std::string& name = "new", uint32_t id = 0, double width = .4)
   {
     Corridor c;
     c.name = name;
@@ -176,7 +187,7 @@ protected:
     }
     return result;
   }
-  void add_area(std::string name, uint32_t id)
+  void add_area(const std::string& name, uint32_t id)
   {
     auto q = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
     q->area.name = name;
@@ -354,8 +365,9 @@ protected:
     publications.clear();
     rename_entered = false;
     release_rename = false;
-    char tmp[] = "/tmp/corridor-transaction-XXXXXX";
-    dir = mkdtemp(tmp);
+    auto pattern =
+        (std::filesystem::temp_directory_path() / "corridor-transaction-XXXXXX").string();
+    dir = mkdtemp(pattern.data());
     path = dir + "/areas.dat";
     temporary = path + ".tmp";
     directory = dir;
@@ -377,6 +389,9 @@ protected:
     save();
     old = read(path);
     ASSERT_NE(old.find("kept-obstacle"), std::string::npos);
+    area_publications = 0;
+    generation_publications = 0;
+    mask_publications = 0;
     record_publications = true;
   }
   void TearDown() override
@@ -1179,4 +1194,332 @@ TEST_F(CorridorTransactionTest, MalformedCorridorIdFailsTheLoadBeforeTouchingLiv
   EXPECT_EQ(node->area_obstacle_count_for_test(0), 1u);
   EXPECT_EQ(area_name(0), "kept-area");
 }
+
+// Restore uses the same link-local write/fsync/rename/publication fault seam.
+class RestoreTransactionTest : public CorridorTransactionTest
+{
+protected:
+  using Restore = mowgli_interfaces::srv::RestoreAreas;
+  grid_map::GridMap original_grid, original_progress;
+  uint32_t original_next_obstacle{0};
+  void SetUp() override
+  {
+    CorridorTransactionTest::SetUp();
+    original_grid = node->map_;
+    original_progress = node->mow_progress_map_;
+    original_next_obstacle = node->next_obstacle_id_;
+  }
+
+  Restore::Response restore(const std::string& content)
+  {
+    auto req = std::make_shared<Restore::Request>();
+    req->areas_dat = content;
+    auto res = std::make_shared<Restore::Response>();
+    node->on_restore_areas(req, res);
+    return *res;
+  }
+  static std::string replacement()
+  {
+    return "datum_lat: 48.000000000\ndatum_lon: 2.000000000\n"
+           "area_count: 2\nnext_area_id: 102\n"
+           "area_0_name: navigation\narea_0_id: 100\narea_0_is_navigation: 1\n"
+           "area_0_polygon: 4,4;8,4;8,8;4,8\narea_0_obstacle_count: 0\n"
+           "area_1_name: replacement lawn\narea_1_id: 101\n"
+           "area_1_polygon: 10,0;14,0;14,4;10,4\n"
+           "area_1_obstacle_count: 1\narea_1_obstacle_0: 11,1;12,1;12,2;11,2\n"
+           "area_1_obstacle_0_name: replacement obstacle\narea_1_obstacle_0_source: 2\n"
+           "area_1_mow_angle_deg: 35\narea_1_ring_direction: 2\n"
+           "area_1_start_x: 10.5\narea_1_start_y: 0.5\n"
+           "lidar_corridor_count: 1\nnext_lidar_corridor_id: 202\n"
+           "lidar_corridor_0_name: replacement line\nlidar_corridor_0_id: 201\n"
+           "lidar_corridor_0_polyline: 4,4;8,4\nlidar_corridor_0_width_m: 0.5\n";
+  }
+  void keep_dock()
+  {
+    node->docking_pose_set_ = true;
+    node->docking_pose_.position.x = 2;
+    node->docking_pose_.position.y = 3;
+    node->docking_pose_.orientation.w = 1;
+    node->rebuild_dock_polygons();
+  }
+  void expect_original(uint64_t generation)
+  {
+    EXPECT_EQ(read(path), old);
+    EXPECT_EQ(node->areas_.size(), 1u);
+    EXPECT_EQ(area_name(0), "kept-area");
+    EXPECT_EQ(node->areas_[0].id, 77u);
+    EXPECT_EQ(node->obstacle_polygons_.size(), 1u);
+    EXPECT_EQ(get(), std::vector<Corridor>{corridor("original", 41)});
+    EXPECT_EQ(node->area_list_generation_, generation);
+    EXPECT_EQ(node->next_area_id_, 78u);
+    EXPECT_EQ(node->next_obstacle_id_, original_next_obstacle);
+    EXPECT_EQ(node->next_lidar_corridor_id_, 42u);
+    EXPECT_TRUE((node->map_.getSize() == original_grid.getSize()).all());
+    for (const auto& layer : original_grid.getLayers())
+    {
+      EXPECT_TRUE(node->map_[layer].isApprox(original_grid[layer]));
+    }
+    EXPECT_TRUE(node->mow_progress_map_["mowed"].isApprox(original_progress["mowed"]));
+
+    EXPECT_TRUE(publications.empty());
+    EXPECT_EQ(area_publications, 0);
+    EXPECT_EQ(generation_publications, 0);
+    EXPECT_EQ(mask_publications, 0);
+  }
+  void expect_replaced(uint64_t generation)
+  {
+    ASSERT_EQ(node->areas_.size(), 2u);
+    EXPECT_EQ(area_name(0), "navigation");
+    EXPECT_TRUE(node->areas_[0].is_navigation_area);
+    EXPECT_EQ(node->areas_[1].id, 101u);
+    EXPECT_EQ(node->next_area_id_, 102u);
+    EXPECT_EQ(node->next_lidar_corridor_id_, 202u);
+    ASSERT_EQ(node->areas_[1].obstacles.size(), 1u);
+    EXPECT_EQ(node->areas_[1].obstacles[0].name, "replacement obstacle");
+    EXPECT_EQ(node->areas_[1].obstacles[0].source, 2u);
+    EXPECT_EQ(node->obstacle_polygons_.size(), 1u);
+    EXPECT_EQ(node->areas_[1].coverage_lines.mow_angle_deg, 35);
+    EXPECT_EQ(node->areas_[1].coverage_lines.ring_direction, 2);
+    EXPECT_TRUE(node->areas_[1].coverage_lines.has_start_point);
+    EXPECT_EQ(node->area_list_generation_, generation + 1);
+    EXPECT_EQ(get()[0].name, "replacement line");
+  }
+  void expect_fresh_grids()
+  {
+    EXPECT_TRUE((node->mow_progress_map_.getSize() == node->map_.getSize()).all());
+    EXPECT_TRUE(node->mow_progress_map_["mowed"].isZero());
+    EXPECT_FALSE(node->have_last_mow_tool_position_);
+    EXPECT_FALSE(node->mow_progress_cache_valid_);
+    EXPECT_FALSE(node->classification_dirty_);
+    EXPECT_EQ(node->map_.atPosition(std::string(layers::CLASSIFICATION),
+                                    grid_map::Position(.5, .5)),
+              defaults::CLASSIFICATION);
+
+    EXPECT_EQ(node->map_.atPosition(std::string(layers::CLASSIFICATION),
+                                    grid_map::Position(10.5, .5)),
+              static_cast<float>(CellType::LAWN));
+    EXPECT_EQ(node->map_.atPosition(std::string(layers::CLASSIFICATION),
+                                    grid_map::Position(11.5, 1.5)),
+              static_cast<float>(CellType::NO_GO_ZONE));
+  }
+
+  void run_AllRuntimeLoadsRefuseFreshAutonomousWithoutEffects()
+  {
+    auto generation = node->area_list_generation_for_test();
+    node->high_level_state_for_test(
+        mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS);
+    auto loaded = node->load_areas_service_for_test();
+    EXPECT_FALSE(loaded.success);
+    EXPECT_NE(loaded.message.find("mission"), std::string::npos);
+    auto binary = std::make_shared<std_srvs::srv::Trigger::Response>();
+    node->load_map_for_test(binary);
+    EXPECT_FALSE(binary->success);
+    EXPECT_NE(binary->message.find("mission"), std::string::npos);
+    auto restored = restore(replacement());
+    EXPECT_EQ(restored.outcome, "REFUSED_MISSION");
+    EXPECT_FALSE(restored.committed);
+    EXPECT_FALSE(restored.persisted);
+    EXPECT_FALSE(restored.published);
+    expect_original(generation);
+  }
+  void run_AcceptedRestoreReplacesCompleteStateOnceAndKeepsDock()
+  {
+    keep_dock();
+    auto dock = node->docking_pose_;
+    auto generation = node->area_list_generation_for_test();
+    node->stamp_mow_progress_for_test(.5, .5);
+    node->high_level_state_for_test(mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_IDLE);
+    auto r = restore(replacement());
+    ASSERT_TRUE(r.success) << r.message;
+    EXPECT_TRUE(r.committed);
+    EXPECT_TRUE(r.persisted);
+    EXPECT_TRUE(r.published);
+    EXPECT_EQ(r.outcome, "COMMITTED");
+    expect_replaced(generation);
+    expect_fresh_grids();
+    EXPECT_EQ(node->docking_pose_, dock);
+    ASSERT_EQ(publications.size(), 1u);
+    EXPECT_EQ(publications[0], std::vector<std::string>{"replacement line"});
+    EXPECT_EQ(area_publications, 1);
+    EXPECT_EQ(generation_publications, 1);
+    EXPECT_TRUE(node->masks_dirty_);
+    EXPECT_GT(node->mask_rebuild_not_before_, std::chrono::steady_clock::now());
+    EXPECT_NE(read(path).find("replacement lawn"), std::string::npos);
+  }
+  void run_InvalidContentAndResourceLimitsPreserveStateAndFile()
+  {
+    auto generation = node->area_list_generation_for_test();
+    for (auto text : {std::string("bad"),
+                      std::string("area_count: -1\n"),
+                      std::string("area_count: 2garbage\n"),
+                      std::string("area_count: 1\narea_0_polygon: 0,0;nan,0;0,1\n"),
+                      std::string("area_count: 1\narea_0_polygon: 0,0;100000,0;0,100000\n"),
+                      replacement() + "datum_lat: 48\n",
+                      std::string(4 * 1024 * 1024 + 1, 'x')})
+    {
+      auto r = restore(text);
+      EXPECT_EQ(r.outcome, "INVALID_MAP") << r.message;
+      EXPECT_FALSE(r.committed);
+      expect_original(generation);
+    }
+  }
+  void run_PreRenameFaultsPreserveStateFileAndPublications()
+  {
+    auto generation = node->area_list_generation_for_test();
+    for (int mode : {1, 2, 3, 4})
+    {
+      SCOPED_TRACE(mode);
+      hits = 0;
+      if (mode == 1)
+      {
+        ASSERT_TRUE(std::filesystem::create_directory(temporary));
+      }
+      fault = mode;
+      auto r = restore(replacement());
+      fault = 0;
+      EXPECT_EQ(r.outcome, "PERSISTENCE_FAILED_BEFORE_COMMIT") << r.message;
+      EXPECT_FALSE(r.committed);
+      if (mode != 1)
+      {
+        EXPECT_GT(hits.load(), 0);
+      }
+      expect_original(generation);
+      if (mode == 1)
+      {
+        EXPECT_TRUE(std::filesystem::remove(temporary));
+      }
+    }
+  }
+  void run_PostRenameDirectorySyncFailureStillInstallsAndPublishes()
+  {
+    auto generation = node->area_list_generation_for_test();
+    fault = 5;
+    auto r = restore(replacement());
+    fault = 0;
+    EXPECT_EQ(r.outcome, "COMMITTED_DURABILITY_UNCONFIRMED");
+    EXPECT_TRUE(r.committed);
+    EXPECT_FALSE(r.persisted);
+    EXPECT_TRUE(r.published);
+    EXPECT_FALSE(r.success);
+    expect_replaced(generation);
+    auto committed = read(path);
+    EXPECT_NE(committed, old);
+    EXPECT_EQ(publications.size(), 1u);
+    reload();
+    EXPECT_EQ(read(path), committed);
+    EXPECT_EQ(area_name(1), "replacement lawn");
+  }
+  void run_PostCommitPublicationRetriesWithoutRewriteOrGenerationBump()
+  {
+    auto generation = node->area_list_generation_for_test();
+    fault = 6;
+    auto r = restore(replacement());
+    fault = 0;
+    EXPECT_EQ(r.outcome, "COMMITTED_PUBLICATION_PENDING");
+    EXPECT_TRUE(r.committed);
+    EXPECT_TRUE(r.persisted);
+    EXPECT_FALSE(r.published);
+    EXPECT_FALSE(r.success);
+    expect_replaced(generation);
+    auto committed = read(path);
+    EXPECT_TRUE(publications.empty());
+    retry_publication();
+    EXPECT_EQ(publications.size(), 1u);
+    EXPECT_EQ(area_publications, 1);
+    EXPECT_EQ(generation_publications, 1);
+    EXPECT_EQ(node->area_list_generation_for_test(), generation + 1);
+    EXPECT_EQ(read(path), committed);
+  }
+  void run_OldDatumReprojectsAllGeometryButKeepsCurrentDock()
+  {
+    keep_dock();
+    auto dock = node->docking_pose_;
+    auto content = replacement();
+    content.replace(content.find("48.000000000"), 12, "48.000010000");
+    auto r = restore(content);
+    ASSERT_TRUE(r.success) << r.message;
+    double x = 10, y = 0;
+    mowgli_interfaces::wgs84::ReprojectEnu(48.00001, 2, 48, 2, x, y);
+    EXPECT_NEAR(node->areas_[1].polygon.points[0].x, x, 1e-5);
+    EXPECT_NEAR(node->areas_[1].polygon.points[0].y, y, 1e-5);
+    x = 11;
+    y = 1;
+    mowgli_interfaces::wgs84::ReprojectEnu(48.00001, 2, 48, 2, x, y);
+    EXPECT_NEAR(node->obstacle_polygons_[0].points[0].y, y, 1e-5);
+    x = 4;
+    y = 4;
+    mowgli_interfaces::wgs84::ReprojectEnu(48.00001, 2, 48, 2, x, y);
+    EXPECT_NEAR(get()[0].polyline.points[0].y, y, 1e-5);
+    x = 10.5;
+    y = .5;
+    mowgli_interfaces::wgs84::ReprojectEnu(48.00001, 2, 48, 2, x, y);
+    EXPECT_NEAR(node->areas_[1].coverage_lines.start_y, y, 1e-5);
+    EXPECT_EQ(node->docking_pose_, dock);
+    auto committed = read(path);
+    reload();
+    EXPECT_EQ(read(path), committed);
+    // Start points use the existing millimetre precision on disk.
+    EXPECT_DOUBLE_EQ(node->areas_[1].coverage_lines.start_y, std::round(y * 1000) / 1000);
+  }
+  void run_BootLoadReadsCommittedFileAndKeepsGenerationAtZero()
+  {
+    ASSERT_TRUE(restore(replacement()).success);
+    auto committed = read(path);
+    node.reset();
+    auto opts =
+        rclcpp::NodeOptions().parameter_overrides({rclcpp::Parameter("map_size_x", 2.),
+                                                   rclcpp::Parameter("map_size_y", 2.),
+                                                   rclcpp::Parameter("resolution", .1),
+                                                   rclcpp::Parameter("areas_file_path", path),
+                                                   rclcpp::Parameter("datum_lat", 48.),
+                                                   rclcpp::Parameter("datum_lon", 2.)});
+    node = std::make_shared<MapServerNode>(opts);
+    ASSERT_EQ(node->areas_.size(), 2u);
+    EXPECT_EQ(area_name(1), "replacement lawn");
+    EXPECT_EQ(get()[0].name, "replacement line");
+    EXPECT_EQ(node->area_list_generation_for_test(), 0u);
+    EXPECT_EQ(read(path), committed);
+  }
+};
+
+TEST_F(RestoreTransactionTest, AllRuntimeLoadsRefuseFreshAutonomousWithoutEffects)
+{
+  run_AllRuntimeLoadsRefuseFreshAutonomousWithoutEffects();
+}
+
+TEST_F(RestoreTransactionTest, AcceptedRestoreReplacesCompleteStateOnceAndKeepsDock)
+{
+  run_AcceptedRestoreReplacesCompleteStateOnceAndKeepsDock();
+}
+
+TEST_F(RestoreTransactionTest, InvalidContentAndResourceLimitsPreserveStateAndFile)
+{
+  run_InvalidContentAndResourceLimitsPreserveStateAndFile();
+}
+
+TEST_F(RestoreTransactionTest, PreRenameFaultsPreserveStateFileAndPublications)
+{
+  run_PreRenameFaultsPreserveStateFileAndPublications();
+}
+
+TEST_F(RestoreTransactionTest, PostRenameDirectorySyncFailureStillInstallsAndPublishes)
+{
+  run_PostRenameDirectorySyncFailureStillInstallsAndPublishes();
+}
+
+TEST_F(RestoreTransactionTest, PostCommitPublicationRetriesWithoutRewriteOrGenerationBump)
+{
+  run_PostCommitPublicationRetriesWithoutRewriteOrGenerationBump();
+}
+
+TEST_F(RestoreTransactionTest, OldDatumReprojectsAllGeometryButKeepsCurrentDock)
+{
+  run_OldDatumReprojectsAllGeometryButKeepsCurrentDock();
+}
+
+TEST_F(RestoreTransactionTest, BootLoadReadsCommittedFileAndKeepsGenerationAtZero)
+{
+  run_BootLoadReadsCommittedFileAndKeepsGenerationAtZero();
+}
+
 }  // namespace mowgli_map

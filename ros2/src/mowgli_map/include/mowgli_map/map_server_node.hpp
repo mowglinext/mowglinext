@@ -72,6 +72,7 @@
 #include <mowgli_interfaces/srv/get_recovery_point.hpp>
 #include <mowgli_interfaces/srv/promote_obstacle.hpp>
 #include <mowgli_interfaces/srv/replace_lidar_ignore_corridors.hpp>
+#include <mowgli_interfaces/srv/restore_areas.hpp>
 #include <mowgli_interfaces/srv/set_area_coverage_lines.hpp>
 #include <mowgli_interfaces/srv/set_docking_point.hpp>
 #include <std_srvs/srv/trigger.hpp>
@@ -99,6 +100,7 @@ inline constexpr const char* kRuntimeRobotYaml = "/ros2_ws/config/mowgli_robot.y
 class MapServerNode : public rclcpp::Node
 {
   friend class CorridorTransactionTest;
+  friend class RestoreTransactionTest;
 
 public:
   /// @brief Construct the node, declare parameters, create map, wire up all
@@ -266,8 +268,7 @@ public:
   /// a file with areas by an empty map.
   void save_areas_guarded_for_test(const std::string& path);
   void load_areas_for_test(const std::string& path);
-  /// Calls the real ~/load_areas service handler (the runtime reload the GUI's
-  /// map-backup restore uses) and returns its response.
+  /// Calls the gated runtime ~/load_areas service handler and returns its response.
   std_srvs::srv::Trigger::Response load_areas_service_for_test();
 
   /// Test-only: exercise map persistence through the real service callbacks.
@@ -496,6 +497,30 @@ private:
   static constexpr double kMinLidarIgnoreCorridorWidthM = 0.05;
   static constexpr double kMaxLidarIgnoreCorridorWidthM = 1.2;
 
+  // Fully staged before persistence; preparation never changes live state or publishes.
+  struct AreasCandidate
+  {
+    std::vector<AreaEntry> areas;
+    std::vector<geometry_msgs::msg::Polygon> obstacles;
+    std::vector<LidarIgnoreCorridorEntry> corridors;
+    uint32_t next_area_id{1};
+    uint32_t next_obstacle_id{1};
+    uint64_t next_corridor_id{1};
+    double file_datum_lat{std::numeric_limits<double>::quiet_NaN()};
+    double file_datum_lon{std::numeric_limits<double>::quiet_NaN()};
+    bool needs_resave{false};
+    grid_map::GridMap grid;
+    grid_map::GridMap progress;
+  };
+  AreasCandidate prepare_areas_candidate(const std::string& content);
+  void install_areas_candidate(AreasCandidate& candidate);
+  void on_restore_areas(const mowgli_interfaces::srv::RestoreAreas::Request::SharedPtr req,
+                        mowgli_interfaces::srv::RestoreAreas::Response::SharedPtr res);
+  void classify_areas(grid_map::GridMap& grid, const std::vector<AreaEntry>& areas) const;
+  bool restore_publication_pending_{false};
+  bool publish_restored_areas();
+  rclcpp::Service<mowgli_interfaces::srv::RestoreAreas>::SharedPtr restore_areas_srv_;
+
   // ── ROS callbacks ────────────────────────────────────────────────────────
 
   /// Convert incoming nav_msgs/OccupancyGrid to the occupancy layer.
@@ -574,9 +599,9 @@ private:
       const mowgli_interfaces::srv::SetAreaCoverageLines::Request::SharedPtr req,
       mowgli_interfaces::srv::SetAreaCoverageLines::Response::SharedPtr res);
 
-  /// Increment area_list_generation_ and publish it on
-  /// area_list_generation_pub_ (mowglinext#637 phase 2). Called once per
-  /// successful ~/add_area. Not called at startup: area_list_generation_
+  /// Increment and publish area_list_generation_ for an incremental edit.
+  /// Restore increments once during installation and uses retryable publication.
+  /// Not called at startup: area_list_generation_
   /// always starts at 0 (not persisted), matching the default a fresh
   /// subscriber already assumes, so there is nothing to announce before the
   /// first edit.
@@ -838,7 +863,8 @@ private:
   bool write_areas_candidate(const std::string& path,
                              bool allow_empty_overwrite,
                              const std::vector<LidarIgnoreCorridorEntry>& corridors,
-                             uint64_t next_corridor_id);
+                             uint64_t next_corridor_id,
+                             const AreasCandidate* candidate = nullptr);
   /// area_count recorded in an areas file, or 0 when it is missing/unreadable.
   static int count_areas_in_file(const std::string& path);
 
@@ -1230,7 +1256,7 @@ private:
   /// (load_areas_from_file / datum migration). Guarded by areas_state_mutex_.
   bool area_replace_in_progress_{false};
 
-  /// Bumped on every successful ~/add_area (mowglinext#637 phase 2) and
+  /// Bumped on every successful ~/add_area and accepted ~/restore_areas, and
   /// published on area_list_generation_pub_ (transient_local — a late
   /// subscriber gets the current value immediately). NOT persisted: a fresh
   /// boot starts at 0, which is fine — GetNextUnmowedArea's per-index
