@@ -192,9 +192,13 @@ ARG DEBIAN_FRONTEND=noninteractive
 COPY ros2/lyrical-vendor-packages.txt /tmp/vendor-packages.txt
 RUN apt-get update && xargs apt-get install -y --no-install-recommends < /tmp/vendor-packages.txt
 COPY --from=lyrical-vendor /opt/lyrical_vendor /opt/lyrical_vendor
-ENV AMENT_PREFIX_PATH=/opt/lyrical_vendor
-ENV CMAKE_PREFIX_PATH=/opt/lyrical_vendor
-ENV LD_LIBRARY_PATH=/opt/lyrical_vendor/lib
+# Do NOT preset AMENT_PREFIX_PATH / CMAKE_PREFIX_PATH / LD_LIBRARY_PATH to the
+# overlay here (issue #1121). Sourcing /opt/ros/lyrical/setup.bash afterwards
+# PREPENDS the stock paths, and the overlay's local_setup.bash will not move an
+# entry that is already present, so the stock libnav2_costmap_2d_core.so won
+# and #1058's patched copy was never loaded. Every consumer (entrypoint, build
+# stage, the workspace setup.bash chain) sources the overlay AFTER ROS instead,
+# which puts it first; check_vendor_overlay.sh in the runtime stage pins that.
 
 # LOCAL-ONLY (do not commit): this Docker host has no IPv6 route, so apt's
 # default IPv6-first to ports.ubuntu.com times out. Force IPv4 for all apt in
@@ -509,6 +513,12 @@ ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 # Entrypoint script sources both ROS and workspace setups before exec'ing CMD
 COPY ros2/scripts/ros2_entrypoint.sh /ros2_entrypoint.sh
 RUN chmod +x /ros2_entrypoint.sh
+
+# Fail the image build if, in the entrypoint's environment, a Nav2 consumer
+# resolves an overlay-overridden library to the stock /opt/ros copy (#1121).
+COPY ros2/scripts/check_vendor_overlay.sh /ros2_ws/scripts/check_vendor_overlay.sh
+RUN chmod +x /ros2_ws/scripts/check_vendor_overlay.sh \
+ && /ros2_entrypoint.sh /ros2_ws/scripts/check_vendor_overlay.sh
 
 # Mow-session monitor — runs alongside the live stack to record a full
 # state timeline per mowing test (see CLAUDE.md "Mowing Session Monitoring").
