@@ -394,6 +394,17 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
+  # ---- test_dock_approach_refinement ----
+  # Pure C++ test of gps_dock_detection's final-approach refinement
+  # (dock_approach_refinement.hpp): GPS track fit of Δ, blend + gates,
+  # approach episode, freeze radius. No ROS2 deps, link gtest.
+  ament_add_gtest(test_dock_approach_refinement
+    test/test_dock_approach_refinement.cpp
+  )
+  target_include_directories(test_dock_approach_refinement PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
   # ---- test_gravity_estimator ----
   # Pure C++ regression test for the costmap IMU gravity gate.
   ament_add_gtest(test_gravity_estimator
