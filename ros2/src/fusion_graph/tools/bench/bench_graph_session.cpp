@@ -9,7 +9,7 @@
 // cov_update_every_n 10, relinearize skip 5) with a seeded synthetic stream:
 //   * serpentine coverage (0.4 m/s straights, 0.16 m swath spacing) with
 //     pivot U-turns and periodic stops,
-//   * wheel odometry 50 Hz, gyro 91 Hz (bias + noise),
+//   * wheel odometry 50 Hz, gyro ~91 Hz (11 ms; bias + noise),
 //   * GNSS 10 Hz with an 80 ms measurement-stamp lag (QueueGnss targets
 //     FindNodeAtOrBefore(stamp), as OnGnss does), RTK-Fixed with periodic
 //     RTK-Float windows and complete outages,
@@ -19,7 +19,8 @@
 //     production runs it on a detached thread, its CPU still counts).
 //
 // Every Tick output and a 1 Hz snapshot are written to --dump so two builds
-// can be compared bit-for-bit or within a tolerance (--compare A B).
+// can be compared (--compare A B): it prints the largest pose / covariance
+// differences and exits 0 only when every record is byte-identical.
 //
 // --faults SEED adds a seeded fault stream on top (off by default, so the
 // clean stream and its dumps are unchanged). GNSS then goes through the same
@@ -180,16 +181,28 @@ long RssKb()
 
 int Compare(const char* a_path, const char* b_path)
 {
-  auto load = [](const char* p)
+  // An unreadable or truncated dump is an error, never an empty match.
+  auto load = [](const char* p, std::vector<Record>& v)
   {
-    std::vector<Record> v;
     std::ifstream f(p, std::ios::binary);
+    if (!f)
+    {
+      std::printf("CANNOT OPEN %s\n", p);
+      return false;
+    }
     Record r;
     while (f.read(reinterpret_cast<char*>(&r), sizeof(r)))
       v.push_back(r);
-    return v;
+    if (f.gcount() != 0 || !f.eof())
+    {
+      std::printf("TRUNCATED OR UNREADABLE %s\n", p);
+      return false;
+    }
+    return true;
   };
-  const auto a = load(a_path), b = load(b_path);
+  std::vector<Record> a, b;
+  if (!load(a_path, a) || !load(b_path, b))
+    return 3;
   if (a.size() != b.size())
   {
     std::printf("RECORD COUNT MISMATCH %zu vs %zu\n", a.size(), b.size());
@@ -245,7 +258,7 @@ int Compare(const char* a_path, const char* b_path)
                 a[first_diff].kind,
                 a[first_diff].t);
   std::printf("\n");
-  return int_mismatch == 0 ? 0 : 1;
+  return bitwise == a.size() ? 0 : 1;
 }
 
 // Seeded fault stream. It owns its own generator and every draw happens
@@ -392,10 +405,15 @@ int main(int argc, char** argv)
       dump_f.write(reinterpret_cast<const char*>(&r), sizeof(r));
   };
 
-  // Integer microsecond clock so event cadences are exact.
+  // Integer microsecond clock so event cadences are exact. It steps 1 ms, so
+  // every period must be a whole number of milliseconds or it never fires.
   const int64_t kEnd = static_cast<int64_t>(minutes * 60e6);
-  const int64_t kImuUs = 10989, kWheelUs = 20000, kGnssUs = 100000, kCogUs = 200000,
-                kTickUs = 40000, kVizUs = 1000000, kMaintUs = 30000000, kGnssLagUs = 80000;
+  constexpr int64_t kStepUs = 1000;
+  constexpr int64_t kImuUs = 11000, kWheelUs = 20000, kGnssUs = 100000, kCogUs = 200000,
+                    kTickUs = 40000, kVizUs = 1000000, kMaintUs = 30000000, kGnssLagUs = 80000;
+  static_assert(kImuUs % kStepUs == 0 && kWheelUs % kStepUs == 0 && kGnssUs % kStepUs == 0 &&
+                kCogUs % kStepUs == 0 && kTickUs % kStepUs == 0 && kVizUs % kStepUs == 0 &&
+                kMaintUs % kStepUs == 0 && kGnssLagUs % kStepUs == 0);
   const double kGyroBias = 0.004;
 
   // Ground-truth state.
@@ -448,7 +466,7 @@ int main(int argc, char** argv)
   };
 
   int64_t last_wheel = -1, last_imu = -1;
-  for (int64_t us = 0; us <= kEnd; us += 1000)
+  for (int64_t us = 0; us <= kEnd; us += kStepUs)
   {
     const double t = us * 1e-6;
     // Advance truth by 1 ms.
