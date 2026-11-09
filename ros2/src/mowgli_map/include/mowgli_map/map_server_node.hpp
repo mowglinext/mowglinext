@@ -57,6 +57,7 @@
 #include <grid_map_msgs/msg/grid_map.hpp>
 #include <grid_map_ros/GridMapRosConverter.hpp>
 #include <mowgli_interfaces/msg/dig_event.hpp>
+#include <mowgli_interfaces/msg/high_level_status.hpp>
 #include <mowgli_interfaces/msg/lidar_ignore_corridor_array.hpp>
 #include <mowgli_interfaces/msg/map_obstacle_info.hpp>
 #include <mowgli_interfaces/msg/obstacle_array.hpp>
@@ -290,6 +291,12 @@ public:
   void save_areas_service_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
   {
     on_save_areas(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+
+  /// Test-only: feed a HighLevelStatus state without DDS.
+  void high_level_state_for_test(uint8_t state)
+  {
+    on_high_level_status(state);
   }
 
   /// Test-only: current area-list generation (mowglinext#637 phase 2).
@@ -627,6 +634,14 @@ private:
   /// (unless the last one sent was already empty), which turns the corridor
   /// filter off, and schedule the real list for when the edit has settled.
   void begin_area_list_edit();
+
+  /// Why a whole-map replace (~/clear_map) must wait right now:
+  /// the BT's HighLevelStatus says a mission is running. See
+  /// map_replace_gate.hpp. nullopt = go ahead.
+  std::optional<std::string> map_replace_rejection() const;
+
+  /// /behavior_tree_node/high_level_status callback; only the state is kept.
+  void on_high_level_status(uint8_t state);
 
   /// ~/capture_dock_antenna: average the RAW antenna position while seated on
   /// the dock (charging + RTK gates) and hold it, unpersisted, for the
@@ -1418,6 +1433,14 @@ private:
   /// The publish timer leaves a dirty mask alone until this instant. Steady
   /// clock: a settle window must not depend on /clock or sim time.
   std::chrono::steady_clock::time_point mask_rebuild_not_before_{};
+
+  /// Latest HighLevelStatus state and when it arrived (steady clock: the
+  /// freshness window must not depend on /clock or sim time).
+  mutable std::mutex high_level_status_mutex_;
+  bool high_level_status_received_{false};
+  uint8_t last_high_level_state_{0};
+  std::chrono::steady_clock::time_point last_high_level_status_time_{};
+  rclcpp::Subscription<mowgli_interfaces::msg::HighLevelStatus>::SharedPtr high_level_status_sub_;
 
   /// True when areas_ changed but the CLASSIFICATION layer was not re-stamped
   /// yet. add_area used to rasterise the WHOLE area list inside the service
