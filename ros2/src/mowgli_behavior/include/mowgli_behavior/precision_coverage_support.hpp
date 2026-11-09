@@ -43,6 +43,37 @@ public:
   /// Newest map->base_footprint transform may be at most this old for the pose
   /// support to count as current.
   static constexpr int64_t kMaxTfLagNs = 500000000LL;
+  /// Lowest GnssStatus quality (NormalizedQuality) accepted in LiDAR-map mode:
+  /// RTK Float, or a fix reporting <= 0.5 m horizontal accuracy.
+  static constexpr float kLidarMapMinQuality = 0.7f;
+
+  /// LiDAR-map mode (lidar_enabled AND use_lidar_map_anchor): the localizer
+  /// has a georeferenced LiDAR map to hold the pose, so a degraded-but-usable
+  /// GNSS fix (RTK Float, or a fix reporting <= 0.5 m) must not pause coverage
+  /// (operator decision 2026-11-09: field bag 113449Z paused 13 times in 23 min
+  /// on 2-5 s Float episodes, each costing 5-10 s and a blade restart). Without
+  /// it only RTK-Fixed counts. No usable fix still pauses in both modes.
+  void SetLidarMapMode(bool enabled)
+  {
+    std::lock_guard<std::mutex> guard(mu_);
+    lidar_map_mode_ = enabled;
+  }
+  /// Whether a raw GnssStatus counts as precise for coverage in the current mode.
+  bool StatusPrecise(const Status& status) const
+  {
+    namespace utils = mowgli_interfaces::gnss_status_utils;
+    if (!lidar_map_mode_)
+      return utils::BehaviorTreeRtkFixed(status);
+    return utils::BehaviorTreeFixType(status) >= 2u &&
+           utils::NormalizedQuality(status) >= kLidarMapMinQuality;
+  }
+  /// Whether a NavSatFix status counts as precise for coverage in the current mode.
+  bool FixStatusPrecise(int8_t navsat_status) const
+  {
+    using sensor_msgs::msg::NavSatStatus;
+    return lidar_map_mode_ ? navsat_status >= NavSatStatus::STATUS_FIX
+                           : navsat_status == NavSatStatus::STATUS_GBAS_FIX;
+  }
   /// Whether the localizer's TF is current at @p now_ns, given the stamp of the
   /// NEWEST map->base_footprint transform (future-dated stamps are current).
   /// Never ask for the transform AT now: the newest broadcast is always a few
@@ -123,7 +154,7 @@ public:
       source_incarnation_ = status.source_incarnation;
       if (stamp > last_status_stamp_)
         last_status_steady_ = steady;
-      const bool fixed = mowgli_interfaces::gnss_status_utils::BehaviorTreeRtkFixed(status);
+      const bool fixed = StatusPrecise(status);
       if (!fixed)
       {
         raw_fixed_ = false;
@@ -180,7 +211,7 @@ public:
     }
     if (!report.applied_revision || report.applied_revision > report.estimate_revision)
       return;
-    if (report.applied_fix.status.status != sensor_msgs::msg::NavSatStatus::STATUS_GBAS_FIX)
+    if (!FixStatusPrecise(report.applied_fix.status.status))
     {
       loss_stamp_ = std::max(loss_stamp_, Stamp(report.applied_fix.header.stamp));
       raw_fixed_ = false;
@@ -214,9 +245,8 @@ public:
     {
       bool matched = false;
       for (const auto& pair : completed_)
-        if (SameFix(it->applied_fix, pair.fix) &&
-            pair.fix.status.status == sensor_msgs::msg::NavSatStatus::STATUS_GBAS_FIX &&
-            mowgli_interfaces::gnss_status_utils::BehaviorTreeRtkFixed(pair.status))
+        if (SameFix(it->applied_fix, pair.fix) && FixStatusPrecise(pair.fix.status.status) &&
+            StatusPrecise(pair.status))
         {
           const auto delivery = first_fix_delivery_.find(Stamp(pair.fix.header.stamp));
           if (delivery != first_fix_delivery_.end())
@@ -323,5 +353,6 @@ private:
           fixed_since_ = 0, loss_stamp_ = 0;
   bool raw_fixed_ = false;
   bool was_ready_ = false;
+  bool lidar_map_mode_ = false;
 };
 }  // namespace mowgli_behavior

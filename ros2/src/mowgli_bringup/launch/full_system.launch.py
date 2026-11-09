@@ -415,6 +415,17 @@ def generate_launch_description() -> LaunchDescription:
             # Same derived tolerance FTC and the entry goal checker use, so
             # FollowStrip's entry/blade checks agree with them exactly.
             {"coverage_entry_tolerance_m": coverage_entry_tolerance(robot_params)},
+            # LiDAR-map mode of the coverage precision gate: with the LiDAR
+            # AND its georeferenced map anchor, RTK Float (or a fix reporting
+            # <= 0.5 m) no longer pauses mowing; GPS-only robots keep requiring
+            # RTK Fixed (precision_coverage_support.hpp, SetLidarMapMode).
+            {
+                "precision_lidar_map_mode": (
+                    ParameterValue(use_lidar, value_type=bool)
+                    if bool(robot_params.get("use_lidar_map_anchor", False))
+                    else False
+                )
+            },
             {"dock_no_pivot_distance_m": dock_no_pivot_distance(robot_params)},
             {"dock_body_half_width_m": float(robot_params.get("dock_body_width_m", 0.55)) / 2.0},
             {

@@ -12,6 +12,7 @@
 //
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#include <functional>
 #include <limits>
 
 #include "mowgli_behavior/precision_coverage_support.hpp"
@@ -343,4 +344,130 @@ TEST(PrecisionCoverage, StaysReadyAcrossTicksBetweenTfBroadcasts)
                         }))
         << "tick " << tick;
   }
+}
+
+namespace
+{
+// Field 2026-11-09 (bag 113449Z): during a "Float" episode the receiver reported
+// fix_type 3D with 1.4 cm horizontal accuracy and /gps/fix status STATUS_FIX.
+Status Degraded(int64_t t, uint64_t seq, float horizontal_accuracy_m)
+{
+  Status s = Fixed(t, seq);
+  s.fix_type = Status::FIX_TYPE_3D_FIX;
+  s.horizontal_accuracy_m = horizontal_accuracy_m;
+  s.capability_flags |= Status::CAP_HORIZONTAL_ACCURACY;
+  s.value_flags |= Status::CAP_HORIZONTAL_ACCURACY;
+  return s;
+}
+Fix NonRtk(int64_t t)
+{
+  Fix f = Gps(t);
+  f.status.status = sensor_msgs::msg::NavSatStatus::STATUS_FIX;
+  return f;
+}
+// Feed `n` 0.2 s epochs of (status, fix, commit) starting at t0.
+void Feed(PrecisionCoverageSupport& p,
+          int64_t t0,
+          int n,
+          uint64_t first_seq,
+          const std::function<Status(int64_t, uint64_t)>& status,
+          const std::function<Fix(int64_t)>& fix)
+{
+  for (int k = 0; k < n; ++k)
+  {
+    const int64_t t = t0 + k * 200000000LL;
+    const uint64_t seq = first_seq + static_cast<uint64_t>(k);
+    p.AddStatus(status(t, seq), t, t);
+    p.AddFix(fix(t), t + 5000000, t + 5000000);
+    p.AddReport(Commit(fix(t), t + 40000000, seq), t + 30000000, t + 30000000);
+  }
+}
+const auto kTfOk = [](int64_t)
+{
+  return true;
+};
+}  // namespace
+
+TEST(PrecisionCoverage, StrictModeStillPausesOnAShortDegradedEpisode)
+{
+  PrecisionCoverageSupport p;
+  Feed(p, S, 20, 1, Fixed, Gps);
+  ASSERT_TRUE(p.Ready(S + 19 * 200000000LL + 50000000, S + 19 * 200000000LL + 50000000, kTfOk));
+  Feed(
+      p,
+      5 * S,
+      5,
+      21,
+      [](int64_t t, uint64_t seq)
+      {
+        return Degraded(t, seq, 0.014f);
+      },
+      NonRtk);
+  EXPECT_FALSE(p.Ready(5 * S + 900000000, 5 * S + 900000000, kTfOk));
+}
+
+TEST(PrecisionCoverage, LidarMapModeRidesThroughAFloatEpisode)
+{
+  PrecisionCoverageSupport p;
+  p.SetLidarMapMode(true);
+  Feed(p, S, 20, 1, Fixed, Gps);
+  ASSERT_TRUE(p.Ready(S + 19 * 200000000LL + 50000000, S + 19 * 200000000LL + 50000000, kTfOk));
+  // The field episode: 3D fix reporting 1.4 cm, NavSatFix STATUS_FIX.
+  for (int64_t k = 0; k < 10; ++k)
+  {
+    const int64_t t = 5 * S + k * 200000000LL;
+    Feed(
+        p,
+        t,
+        1,
+        21 + static_cast<uint64_t>(k),
+        [](int64_t at, uint64_t seq)
+        {
+          return Degraded(at, seq, 0.014f);
+        },
+        NonRtk);
+    EXPECT_TRUE(p.Ready(t + 50000000, t + 50000000, kTfOk)) << "epoch " << k;
+  }
+  // Genuine RTK Float (no accuracy reported) is accepted too.
+  Feed(
+      p,
+      8 * S,
+      5,
+      31,
+      [](int64_t t, uint64_t seq)
+      {
+        Status s = Fixed(t, seq);
+        s.fix_type = Status::FIX_TYPE_RTK_FLOAT;
+        return s;
+      },
+      NonRtk);
+  EXPECT_TRUE(p.Ready(8 * S + 850000000, 8 * S + 850000000, kTfOk));
+}
+
+TEST(PrecisionCoverage, LidarMapModeStillPausesOnAPoorOrMissingFix)
+{
+  PrecisionCoverageSupport p;
+  p.SetLidarMapMode(true);
+  Feed(p, S, 20, 1, Fixed, Gps);
+  // A plain 3D fix reporting 2 m is not usable.
+  Feed(
+      p,
+      5 * S,
+      5,
+      21,
+      [](int64_t t, uint64_t seq)
+      {
+        return Degraded(t, seq, 2.0f);
+      },
+      NonRtk);
+  EXPECT_FALSE(p.Ready(5 * S + 900000000, 5 * S + 900000000, kTfOk));
+  // No fix at all.
+  PrecisionCoverageSupport q;
+  q.SetLidarMapMode(true);
+  Feed(q, S, 20, 1, Fixed, Gps);
+  Status lost = Fixed(5 * S, 21);
+  lost.fix_valid = false;
+  lost.fix_type = Status::FIX_TYPE_NO_FIX;
+  q.AddStatus(lost, 5 * S, 5 * S);
+  EXPECT_FALSE(q.Ready(5 * S + 100000000, 5 * S + 100000000, kTfOk));
 }
