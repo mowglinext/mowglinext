@@ -49,6 +49,7 @@
 
 #include <geometry_msgs/msg/point32.hpp>
 #include <geometry_msgs/msg/polygon.hpp>
+#include <geometry_msgs/msg/pose_array.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <rclcpp/rclcpp.hpp>
 
@@ -57,8 +58,10 @@
 #include "mowgli_map/polygon_raster.hpp"
 #include <grid_map_core/grid_map_core.hpp>
 #include <gtest/gtest.h>
+#include <mowgli_interfaces/msg/recorded_area_polygon_array.hpp>
 #include <mowgli_interfaces/srv/add_mowing_area.hpp>
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
+#include <std_srvs/srv/trigger.hpp>
 
 namespace
 {
@@ -548,6 +551,175 @@ TEST_F(MapReplaceTest, MaskIsRebuiltOnceAfterABurstOfEditsNotBetweenThem)
   EXPECT_GT(invalidations, 0u) << "planning must close throughout the edit burst";
   ASSERT_EQ(received.size(), 1u) << "exactly one rebuild after the burst";
   expect_mask_matches_definition(received.front(), areas);
+}
+
+// Stands in for costmap_scan_filter_node: records every area list it receives
+// (latched topic) with the time it arrived.
+class AreaListProbe
+{
+public:
+  explicit AreaListProbe(const std::shared_ptr<mowgli_map::MapServerNode>& server)
+      : node_(std::make_shared<rclcpp::Node>("area_list_probe"))
+  {
+    sub_ = node_->create_subscription<mowgli_interfaces::msg::RecordedAreaPolygonArray>(
+        "/mowgli/recorded_area_polygons",
+        rclcpp::QoS(1).transient_local(),
+        [this](mowgli_interfaces::msg::RecordedAreaPolygonArray::ConstSharedPtr msg)
+        {
+          received.push_back({Clock::now(), *msg});
+        });
+    exec_.add_node(server);
+    exec_.add_node(node_);
+  }
+
+  void spin_for(std::chrono::milliseconds duration)
+  {
+    const auto until = Clock::now() + duration;
+    while (Clock::now() < until)
+    {
+      exec_.spin_some(std::chrono::milliseconds(20));
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  }
+
+  struct Sample
+  {
+    Clock::time_point at;
+    mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
+  };
+  std::vector<Sample> received;
+
+private:
+  rclcpp::Node::SharedPtr node_;
+  rclcpp::executors::SingleThreadedExecutor exec_;
+  rclcpp::Subscription<mowgli_interfaces::msg::RecordedAreaPolygonArray>::SharedPtr sub_;
+};
+
+TEST_F(MapReplaceTest, AreaListIsEmptyDuringAReplaceNeverPartialThenComplete)
+{
+  // Arrange: a fast publish timer and a complete map before the replace.
+  make_node(0.1, /*persist=*/true, /*publish_rate=*/20.0);
+  AreaListProbe probe(node_);
+  const auto areas = overlapping_scene();
+  for (const auto& area : areas)
+    ASSERT_TRUE(add_area(area));
+  probe.spin_for(std::chrono::milliseconds(2200));
+  ASSERT_FALSE(probe.received.empty());
+  ASSERT_EQ(probe.received.back().msg.areas.size(), areas.size());
+  probe.received.clear();
+
+  // Act: the GUI's map save — clear_map, add_area per area, save_areas. One
+  // gap between two adds is LONGER than the settle window (a slow link): a
+  // quiet spell must not be taken for the end of the replace.
+  auto cleared = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->clear_map_for_test(cleared);
+  ASSERT_TRUE(cleared->success);
+  const std::vector<std::chrono::milliseconds> gaps{std::chrono::milliseconds(300),
+                                                    std::chrono::milliseconds(2500),
+                                                    std::chrono::milliseconds(300)};
+  for (std::size_t i = 0; i < areas.size(); ++i)
+  {
+    probe.spin_for(gaps[i]);
+    ASSERT_TRUE(add_area(areas[i]));
+  }
+  probe.spin_for(std::chrono::milliseconds(2200));
+  const std::size_t before_commit = probe.received.size();
+  auto saved = std::make_shared<std_srvs::srv::Trigger::Response>();
+  const auto committed_at = Clock::now();
+  node_->save_areas_service_for_test(saved);
+  ASSERT_TRUE(saved->success) << saved->message;
+  probe.spin_for(std::chrono::milliseconds(300));
+
+  // Assert: the filter is switched off at once (an empty list), never handed
+  // a partial one, and gets the complete list as soon as the replace is
+  // committed.
+  ASSERT_GE(before_commit, 1u) << "the filter must be switched off while the map is replaced";
+  for (std::size_t i = 0; i < before_commit; ++i)
+    EXPECT_TRUE(probe.received[i].msg.areas.empty()) << "a partial area list was published";
+  ASSERT_EQ(probe.received.size(), before_commit + 1);
+  EXPECT_EQ(probe.received.back().msg.areas.size(), areas.size());
+  EXPECT_LT(probe.received.back().at - committed_at, std::chrono::milliseconds(300));
+}
+
+TEST_F(MapReplaceTest, AnUncommittedReplaceKeepsTheFilterOff)
+{
+  // clear_map + add_area without save_areas (a replace that died half-way):
+  // the list map_server holds may be partial, so it must not reach the filter.
+  make_node(0.1, /*persist=*/false, /*publish_rate=*/20.0);
+  AreaListProbe probe(node_);
+  const auto areas = overlapping_scene();
+  auto cleared = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->clear_map_for_test(cleared);
+  ASSERT_TRUE(cleared->success);
+  ASSERT_TRUE(add_area(areas[0]));
+  probe.spin_for(std::chrono::milliseconds(4000));
+  for (const auto& sample : probe.received)
+    EXPECT_TRUE(sample.msg.areas.empty()) << "an uncommitted replace reached the filter";
+}
+
+TEST_F(MapReplaceTest, AddingAnAreaNeverLeavesTheFilterOnTheOldList)
+{
+  // An area that grows (here: a second area added) covers ground the previous
+  // list calls "outside every recorded area". The filter must not keep using
+  // that list once the add has succeeded.
+  make_node(0.1, /*persist=*/false, /*publish_rate=*/20.0);
+  AreaListProbe probe(node_);
+  const auto areas = overlapping_scene();
+  ASSERT_TRUE(add_area(areas[0]));
+  probe.spin_for(std::chrono::milliseconds(2200));
+  ASSERT_EQ(probe.received.back().msg.areas.size(), 1u);
+  probe.received.clear();
+
+  const auto added_at = Clock::now();
+  ASSERT_TRUE(add_area(areas[1]));
+  probe.spin_for(std::chrono::milliseconds(200));
+
+  ASSERT_FALSE(probe.received.empty()) << "the old list stayed in force after the add";
+  EXPECT_TRUE(probe.received.front().msg.areas.empty());
+  EXPECT_LT(probe.received.front().at - added_at, std::chrono::milliseconds(200));
+  probe.spin_for(std::chrono::milliseconds(2200));
+  EXPECT_EQ(probe.received.back().msg.areas.size(), 2u);
+}
+
+TEST_F(MapReplaceTest, ClearingEveryAreaSwitchesTheFilterOffAtOnce)
+{
+  make_node(0.1, /*persist=*/false, /*publish_rate=*/20.0);
+  AreaListProbe probe(node_);
+  ASSERT_TRUE(add_area(overlapping_scene().front()));
+  probe.spin_for(std::chrono::milliseconds(2200));
+  probe.received.clear();
+
+  auto cleared = std::make_shared<std_srvs::srv::Trigger::Response>();
+  node_->clear_map_for_test(cleared);
+  ASSERT_TRUE(cleared->success);
+  probe.spin_for(std::chrono::milliseconds(200));
+  ASSERT_EQ(probe.received.size(), 1u) << "the empty list must not wait for the settle window";
+  EXPECT_TRUE(probe.received.front().msg.areas.empty());
+
+  probe.spin_for(std::chrono::milliseconds(2200));
+  for (const auto& sample : probe.received)
+    EXPECT_TRUE(sample.msg.areas.empty());
+}
+
+TEST_F(MapReplaceTest, PeerDockUpdatesDoNotHoldTheAreaListBack)
+{
+  // Peer-dock updates push the keepout-mask settle window out. They must not
+  // keep the corridor filter switched off as well.
+  make_node(0.1, /*persist=*/false, /*publish_rate=*/20.0);
+  AreaListProbe probe(node_);
+  ASSERT_TRUE(add_area(overlapping_scene().front()));
+  for (int i = 0; i < 14; ++i)  // 14 x 250 ms = 3.5 s, well past the 1.5 s settle
+  {
+    auto docks = std::make_shared<geometry_msgs::msg::PoseArray>();
+    geometry_msgs::msg::Pose pose;
+    pose.position.x = 3.0 + 0.5 * i;  // moves every time, so it is never deduplicated
+    pose.orientation.w = 1.0;
+    docks->poses.push_back(pose);
+    node_->on_peer_docks_for_test(docks);
+    probe.spin_for(std::chrono::milliseconds(250));
+  }
+  ASSERT_FALSE(probe.received.empty());
+  EXPECT_EQ(probe.received.back().msg.areas.size(), 1u);
 }
 
 TEST_F(MapReplaceTest, AreasFileIsReplacedAtomically)
