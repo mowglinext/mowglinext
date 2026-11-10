@@ -217,19 +217,41 @@ E2E_SIZES=1 ros2/src/mowgli_coverage/test/bench/e2e/run_e2e.sh EXE EXE .ws/e2e/e
   5 3 5 fixtures/blob2000_o0_r5.json ...   # EXE = .ws/install/mowgli_coverage/lib/mowgli_coverage/mowgli_coverage
 ```
 
-## Pi-scale estimate (not measured)
+## Measured on the robot (Raspberry Pi 5, 2026-11-10)
 
-These loops stream memory: about 38 MB is touched per cycle at 400k poses. I therefore assume a
-Pi 4 is at least ~3–5× slower than this core, and a Pi 5 ~2×. On that assumption, a Pi 4 at the
-start of a 223k–400k-pose sub-path:
+Raspberry Pi 5 (4 cores, 8 GB, 2.4 GHz, `ondemand`), aarch64, the production stack running. The
+benchmark was built and run in a separate throw-away container made from the robot's own
+`mowgli-ros2` image (Nav2 and headers from the image, `mowgli_nav2_plugins` rebuilt from this
+branch): no network, `nice -n 19`, pinned to core 3, build in a tmpfs. No running container, volume
+or file of the robot was touched. Same `cycle_bench` as on x86; 3 interleaved repetitions of 200
+cycles, median of the three shown.
 
-| | upstream | lazy |
-|---|---|---|
-| controller_server bookkeeping per cycle | ~11–36 ms | ~5–15 ms |
-| at 50k poses | ~2–4 ms | ~1 ms |
+`server` mode, µs per control cycle (`controller_server` path bookkeeping):
 
-Against the 100 ms cycle budget, upstream's share is ~10–35 %, next to FTC's own ~25–40 ms.
-**HARDWARE_PENDING**: measure `cycle_bench server` on a Pi 4/5.
+| poses ahead | upstream handler | upstream total | lazy handler | lazy total | total, x faster |
+|---|---|---|---|---|---|
+| 50k | 1247 | 2111 | 16 | 619 | 3.4 |
+| 100k | 2952 | 5035 | 18 | 1334 | 3.8 |
+| 200k | 6232 | 10052 | 20 | 2755 | 3.6 |
+| 400k | 12984 | 19911 | 20 | 5492 | 3.6 |
+
+- Against the 100 ms cycle: upstream is ~2 % at 50k and ~20 % at 400k; lazy is ~0.6 % and ~5.5 %.
+  At 400k that is ~14 ms of every cycle saved, i.e. about 14 % of one core for as long as the
+  sub-path is that long.
+- Versus the x86 core: the handler is ~3.3× slower (13.0 vs 3.95 ms), `calculate_path_length`
+  ~2.2× (6.7 vs 3.1 ms). That matches the memory-bandwidth argument, and a Pi 5 is slower than I
+  had assumed for the erase. The lazy handler stays flat (10–20 µs).
+- Flat in path length: FTC ~9.9 ms per cycle (x86 8.2 ms); the goal checker 0.13–0.32 µs.
+- One-off at 400k: FTC `newPathReceived` 248 ms (x86 242 ms), `setplan` 45–79 ms, CDR serialize
+  138 ms, deserialize 89 ms, deep copy 16 ms.
+
+**Caveat on the noise.** `mowgli-ros2` was restarted (an explicit `docker restart`, not by me) 20 s
+before the benchmark started, so the stack was booting on the other cores and the load average was
+~9 (part of it my own build). The three repetitions agree (lazy 5.49 / 5.50 / 5.49 ms at 400k;
+upstream 20.7 / 19.4 / 19.9 ms), but the absolute numbers may be pessimistic. The 10k upstream rep
+1 was 468 µs against 205 µs in rep 3, which is the only visible outlier. A rerun on an idle robot
+would tighten them; it was not done. Throttling flags show undervoltage has occurred since boot
+(`throttled=0x50000`), none at the time.
 
 ## Dead ends and what was not done
 
@@ -320,5 +342,6 @@ I expect acceptance with discussion, because it is exact, test-pinned and a conf
 maintainer may reasonably prefer to fix this in Nav2 itself and avoid carrying a subclass. The
 differential test then still serves as the check before switching back.
 
-Physical acceptance (per-cycle CPU on a Pi under a real long sub-path) is **HARDWARE_PENDING**.
-No motion or field test is needed beyond that, because the controller's inputs are unchanged.
+The per-cycle CPU is now measured on a Pi 5 (above). A mow under the real stack with the new handler
+is **HARDWARE_PENDING**; no motion test is needed beyond that, because the controller's inputs are
+unchanged.
