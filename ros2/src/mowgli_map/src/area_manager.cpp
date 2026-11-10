@@ -392,6 +392,14 @@ void MapServerNode::on_save_map(const std_srvs::srv::Trigger::Request::SharedPtr
 void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
                                 std_srvs::srv::Trigger::Response::SharedPtr res)
 {
+  std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+  if (const auto why = map_replace_rejection())
+  {
+    res->success = false;
+    res->message = *why;
+    return;
+  }
+
   if (map_file_path_.empty())
   {
     res->success = false;
@@ -755,6 +763,11 @@ void MapServerNode::begin_area_list_edit()
 {
   area_list_publish_not_before_ = std::chrono::steady_clock::now() + kMapEditSettle;
   recorded_areas_publication_pending_ = true;
+  publish_empty_area_list();
+}
+
+void MapServerNode::publish_empty_area_list()
+{
   if (area_list_published_empty_)
     return;
   mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
@@ -766,7 +779,6 @@ void MapServerNode::begin_area_list_edit()
 
 void MapServerNode::publish_recorded_area_list()
 {
-  recorded_areas_publication_pending_ = false;
   mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
   msg.header.stamp = get_clock()->now();
   msg.header.frame_id = "map";
@@ -780,8 +792,10 @@ void MapServerNode::publish_recorded_area_list()
       msg.areas.push_back(std::move(entry));
     }
   }
-  area_list_published_empty_ = msg.areas.empty();
+  // The flags change only once the list is out, so a failed publication stays pending.
   recorded_area_polygons_pub_->publish(msg);
+  area_list_published_empty_ = msg.areas.empty();
+  recorded_areas_publication_pending_ = false;
 }
 
 void MapServerNode::on_set_area_coverage_lines(
@@ -1556,7 +1570,8 @@ void MapServerNode::on_save_areas(const std_srvs::srv::Trigger::Request::SharedP
   // The caller's commit: whatever the file write does below, the area list it
   // just built is complete, so the corridor filter may have it now.
   area_replace_in_progress_ = false;
-  if (recorded_areas_publication_pending_)
+  // A pending restore holds the list until its corridors are out too.
+  if (recorded_areas_publication_pending_ && !restore_publication_pending_)
     publish_recorded_area_list();
   if (areas_file_path_.empty())
   {
@@ -1585,6 +1600,13 @@ void MapServerNode::on_load_areas(const std_srvs::srv::Trigger::Request::SharedP
                                   std_srvs::srv::Trigger::Response::SharedPtr res)
 {
   std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+  if (const auto why = map_replace_rejection())
+  {
+    res->success = false;
+    res->message = *why;
+    return;
+  }
+
   if (areas_file_path_.empty())
   {
     res->success = false;
@@ -1607,6 +1629,116 @@ void MapServerNode::on_load_areas(const std_srvs::srv::Trigger::Request::SharedP
     res->success = false;
     res->message = std::string("Load failed: ") + ex.what();
     RCLCPP_ERROR(get_logger(), "%s", res->message.c_str());
+  }
+}
+
+// Publication failures cannot undo the file Rename or live-state installation. Retry
+// from the canonical live state on the timer, without another write or generation bump.
+// The corridor filter consumes the area list and the corridors as two topics, so
+// a restore switches it off (empty list) before the corridors go out and sends
+// the real list last. That is the send order only: DDS does not order callbacks
+// across topics, so a subscriber can still briefly pair them (see the PR #1130
+// risk note). A retry
+// only republishes: the mask was invalidated once by on_restore_areas (a retry
+// after the settled rebuild must not empty it again), and the list is sent only
+// while no later clear_map or add_area owns it (that edit sends it once it has
+// settled or been committed; save_areas and the timer wait for this retry).
+bool MapServerNode::publish_restored_areas()
+{
+  // Blanking the list below makes the real one owed, whatever was sent before.
+  recorded_areas_publication_pending_ = true;
+  try
+  {
+    publish_empty_area_list();
+    publish_lidar_ignore_corridors();
+    std_msgs::msg::UInt64 generation;
+    generation.data = area_list_generation_;
+    area_list_generation_pub_->publish(generation);
+    if (!area_replace_in_progress_ &&
+        std::chrono::steady_clock::now() >= area_list_publish_not_before_)
+      publish_recorded_area_list();
+    restore_publication_pending_ = false;
+    return true;
+  }
+  catch (const std::exception& ex)
+  {
+    RCLCPP_ERROR(get_logger(), "Restore committed; publication pending: %s", ex.what());
+    return false;
+  }
+}
+
+void MapServerNode::on_restore_areas(
+    const mowgli_interfaces::srv::RestoreAreas::Request::SharedPtr req,
+    mowgli_interfaces::srv::RestoreAreas::Response::SharedPtr res)
+{
+  std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+  if (const auto why = map_replace_rejection())
+  {
+    res->outcome = "REFUSED_MISSION";
+    res->message = *why;
+    return;
+  }
+  AreasCandidate candidate;
+  try
+  {
+    candidate = prepare_areas_candidate(req->areas_dat);
+  }
+  catch (const std::exception& ex)
+  {
+    res->outcome = "INVALID_MAP";
+    res->message = ex.what();
+    return;
+  }
+  try
+  {
+    if (areas_file_path_.empty())
+      throw std::runtime_error("areas_file_path is empty");
+    res->persisted = write_areas_candidate(
+        areas_file_path_, true, candidate.corridors, candidate.next_corridor_id, &candidate);
+  }
+  catch (const std::exception& ex)
+  {
+    res->outcome = "PERSISTENCE_FAILED_BEFORE_COMMIT";
+    res->message = ex.what();
+    return;
+  }
+  // Rename committed. Install even when directory fsync was not confirmed.
+  install_areas_candidate(candidate);
+  ++area_list_generation_;
+  ++corridor_revision_;
+  res->committed = true;
+  // A restore is a complete list, so it ends a replace left in progress.
+  area_replace_in_progress_ = false;
+  area_list_publish_not_before_ = std::chrono::steady_clock::now();
+  restore_publication_pending_ = true;
+  // Once per restore. If this publication fails, the rebuild that
+  // install_areas_candidate scheduled still publishes the new mask.
+  try
+  {
+    invalidate_keepout_mask();
+  }
+  catch (const std::exception& ex)
+  {
+    RCLCPP_ERROR(get_logger(), "Restore committed; mask invalidation not published: %s", ex.what());
+  }
+  res->published = publish_restored_areas();
+  if (!res->persisted)
+  {
+    res->outcome = "COMMITTED_DURABILITY_UNCONFIRMED";
+    res->message = "Restore committed; directory sync failed, durability unconfirmed";
+    if (!res->published)
+      res->message += "; publication pending";
+  }
+  else if (!res->published)
+  {
+    res->outcome = "COMMITTED_PUBLICATION_PENDING";
+    res->message = "Restore committed and persisted; publication pending";
+  }
+  else
+  {
+    res->success = true;
+    res->outcome = "COMMITTED";
+    res->message = "Map backup restored and persisted";
   }
 }
 
@@ -2156,9 +2288,12 @@ void MapServerNode::save_areas_to_file(const std::string& path, bool allow_empty
 bool MapServerNode::write_areas_candidate(const std::string& path,
                                           bool allow_empty_overwrite,
                                           const std::vector<LidarIgnoreCorridorEntry>& corridors,
-                                          uint64_t next_corridor_id)
+                                          uint64_t next_corridor_id,
+                                          const AreasCandidate* candidate)
 {
   std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+  const auto& areas = candidate ? candidate->areas : areas_;
+  const auto next_area_id = candidate ? candidate->next_area_id : next_area_id_;
   // Write a sibling temp file, flush it to the medium, then rename it over the
   // target. Opening `path` directly truncates the ONLY copy of the operator's
   // map first: a power cut (or a full SD card) between that truncate and the
@@ -2180,23 +2315,28 @@ bool MapServerNode::write_areas_candidate(const std::string& path,
   // the launch datum triggers migrate_areas_datum, which re-projects every
   // polygon + the dock pose into the new datum frame instead of letting the
   // whole map silently shift across the garden.
-  if (is_datum_set(datum_lat_, datum_lon_))
+  const double output_lat =
+      candidate && !is_datum_set(datum_lat_, datum_lon_) ? candidate->file_datum_lat : datum_lat_;
+  const double output_lon =
+      candidate && !is_datum_set(datum_lat_, datum_lon_) ? candidate->file_datum_lon : datum_lon_;
+  if (std::isfinite(output_lat) && std::isfinite(output_lon) &&
+      is_datum_set(output_lat, output_lon))
   {
-    out << std::fixed << std::setprecision(9) << "datum_lat: " << datum_lat_ << "\n"
-        << "datum_lon: " << datum_lon_ << "\n\n";
+    out << std::fixed << std::setprecision(9) << "datum_lat: " << output_lat << "\n"
+        << "datum_lon: " << output_lon << "\n\n";
     out.unsetf(std::ios_base::floatfield);
     out << std::setprecision(6);
   }
 
-  out << "area_count: " << areas_.size() << "\n";
+  out << "area_count: " << areas.size() << "\n";
   // mowglinext#637: next_area_id_ is written unconditionally (never
   // optional-on-read like the per-area id line below) so a reader always
   // knows where to resume minting, even for a file with zero areas.
-  out << "next_area_id: " << next_area_id_ << "\n\n";
+  out << "next_area_id: " << next_area_id << "\n\n";
 
-  for (std::size_t i = 0; i < areas_.size(); ++i)
+  for (std::size_t i = 0; i < areas.size(); ++i)
   {
-    const auto& area = areas_[i];
+    const auto& area = areas[i];
     out << "area_" << i << "_name: " << area.name << "\n";
     out << "area_" << i << "_polygon: " << polygon_to_string(area.polygon) << "\n";
     out << "area_" << i << "_is_navigation: " << (area.is_navigation_area ? 1 : 0) << "\n";
@@ -2300,7 +2440,7 @@ bool MapServerNode::write_areas_candidate(const std::string& path,
   }
 
   const int on_disk = count_areas_in_file(path);
-  if (areas_.empty() && on_disk > 0 && !allow_empty_overwrite)
+  if (areas.empty() && on_disk > 0 && !allow_empty_overwrite)
   {
     std::remove(tmp_path.c_str());
     throw std::runtime_error("refusing to replace " + path + " (" + std::to_string(on_disk) +
@@ -2320,6 +2460,423 @@ bool MapServerNode::write_areas_candidate(const std::string& path,
     }
   }
   return commit_file_atomically(tmp_path, path);
+}
+
+MapServerNode::AreasCandidate MapServerNode::prepare_areas_candidate(const std::string& content)
+{
+  // Bound parser allocations and work before examining caller-controlled counts.
+  if (content.size() > 4 * 1024 * 1024 || content.find('\0') != std::string::npos)
+    throw std::runtime_error("Map exceeds 4 MiB or contains NUL bytes");
+  AreasCandidate candidate;
+  candidate.next_obstacle_id = next_obstacle_id_;
+  std::istringstream in(content);
+  // Parse all key-value pairs into a map.
+  std::map<std::string, std::string> kv;
+  std::string line;
+  while (std::getline(in, line))
+  {
+    // A CRLF (hand-edited on Windows) file leaves a '\r' on every line; it is
+    // never content — the writer forbids it in every free-text value.
+    if (!line.empty() && line.back() == '\r')
+    {
+      line.pop_back();
+    }
+    if (line.empty() || line[0] == '#')
+    {
+      continue;
+    }
+    auto colon_pos = line.find(':');
+    if (colon_pos == std::string::npos)
+    {
+      continue;
+    }
+    std::string key = line.substr(0, colon_pos);
+    std::string val = line.substr(colon_pos + 1);
+    // Trim leading whitespace from value.
+    auto start = val.find_first_not_of(" \t");
+    if (start != std::string::npos)
+    {
+      val = val.substr(start);
+    }
+    else
+    {
+      val.clear();
+    }
+    if (!kv.emplace(key, val).second)
+      throw std::runtime_error("Duplicate map key: " + key);
+  }
+
+  auto get_unsigned = [&](const std::string& key, uint64_t def, uint64_t maximum) -> uint64_t
+  {
+    auto it = kv.find(key);
+    if (it == kv.end())
+      return def;
+    const auto text = trim_ascii_whitespace(it->second);
+    uint64_t value = 0;
+    auto [last, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || error != std::errc{} || last != text.data() + text.size() ||
+        value > maximum)
+      throw std::runtime_error("Invalid unsigned value for " + key);
+    return value;
+  };
+  auto get_int = [&](const std::string& key, int def) -> int
+  {
+    return static_cast<int>(get_unsigned(key, def, 100000));
+  };
+  auto get_double = [&](const std::string& key, double def) -> double
+  {
+    auto it = kv.find(key);
+    if (it == kv.end())
+      return def;
+    const auto text = trim_ascii_whitespace(it->second);
+    size_t used = 0;
+    double value = std::stod(text, &used);
+    if (used != text.size() || !std::isfinite(value))
+      throw std::runtime_error("Invalid finite number for " + key);
+    return value;
+  };
+  auto parse_polygon = [](const std::string& text)
+  {
+    geometry_msgs::msg::Polygon polygon;
+    std::istringstream points(text);
+    std::string point;
+    while (std::getline(points, point, ';'))
+    {
+      const auto comma = point.find(',');
+      if (comma == std::string::npos || point.find(',', comma + 1) != std::string::npos)
+        throw std::runtime_error("Invalid polygon coordinate");
+      geometry_msgs::msg::Point32 p;
+      auto number = [](std::string value)
+      {
+        value = trim_ascii_whitespace(value);
+        size_t used = 0;
+        float result = std::stof(value, &used);
+        if (used != value.size() || !std::isfinite(result))
+          throw std::runtime_error("Invalid finite polygon coordinate");
+        return result;
+      };
+      p.x = number(point.substr(0, comma));
+      p.y = number(point.substr(comma + 1));
+      polygon.points.push_back(p);
+    }
+    return polygon;
+  };
+  if (!kv.count("area_count"))
+    throw std::runtime_error("Missing area_count");
+  auto get_str = [&](const std::string& key) -> std::string
+  {
+    auto it = kv.find(key);
+    auto value = (it != kv.end()) ? it->second : std::string{};
+    if (value.find('\r') != std::string::npos)
+      throw std::runtime_error("Map value contains an embedded carriage return: " + key);
+    return value;
+  };
+
+  // Corridors are parsed into locals BEFORE any live state is touched: their
+  // strict unsigned fields are the ones that can throw, and a throw after
+  // candidate.areas was refilled would leave a half-loaded map with the datum
+  // migration below skipped.
+  std::vector<LidarIgnoreCorridorEntry> loaded_corridors;
+  const int lidar_corridor_count = get_int("lidar_corridor_count", 0);
+  for (int i = 0; i < lidar_corridor_count; ++i)
+  {
+    const std::string prefix = "lidar_corridor_" + std::to_string(i);
+    auto polyline = parse_polygon(get_str(prefix + "_polyline"));
+    if (polyline.points.size() < 2)
+    {
+      throw std::runtime_error("Invalid corridor polyline");
+    }
+    LidarIgnoreCorridorEntry entry;
+    // Same normalisation as the add/replace services, so a legacy name with
+    // trailing blanks cannot make every later GUI replace fail validation.
+    entry.name = trim_ascii_whitespace(get_str(prefix + "_name"));
+    entry.polyline = std::move(polyline);
+    entry.width_m = std::clamp(get_double(prefix + "_width_m", 0.40),
+                               kMinLidarIgnoreCorridorWidthM,
+                               kMaxLidarIgnoreCorridorWidthM);
+    entry.id = static_cast<uint32_t>(get_unsigned(prefix + "_id", 0, UINT32_MAX));
+    loaded_corridors.push_back(std::move(entry));
+  }
+  uint64_t loaded_next_corridor_id =
+      std::max(uint64_t{1}, get_unsigned("next_lidar_corridor_id", 1, uint64_t{UINT32_MAX} + 1));
+  for (const auto& corridor : loaded_corridors)
+  {
+    loaded_next_corridor_id = std::max(loaded_next_corridor_id, uint64_t{corridor.id} + 1);
+  }
+
+  const int area_count = get_int("area_count", 0);
+  for (int i = 0; i < area_count; ++i)
+  {
+    const std::string prefix = "area_" + std::to_string(i);
+    AreaEntry entry;
+    entry.name = get_str(prefix + "_name");
+    entry.polygon = parse_polygon(get_str(prefix + "_polygon"));
+    entry.is_navigation_area = (get_int(prefix + "_is_navigation", 0) != 0);
+    // Optional on read (mowglinext#637): absent in any file saved before
+    // this field existed. Left at 0 here; the migration block below mints
+    // real ids for every area still at 0 once the whole file is loaded, so
+    // it can recover next_area_id_ from the highest id ACTUALLY present
+    // first, rather than one area at a time.
+    entry.id = static_cast<uint32_t>(get_unsigned(prefix + "_id", 0, UINT32_MAX - 1));
+    // Optional on read: absent in every file saved before per-area coverage
+    // lines existed, and for any area that follows the robot-wide settings.
+    // Presence of the key IS the has_* flag. Re-validated rather than trusted:
+    // a hand-edited file must not smuggle a winding the planner does not know.
+    {
+      const bool has_angle = kv.count(prefix + "_mow_angle_deg") != 0;
+      const bool has_dir = kv.count(prefix + "_ring_direction") != 0;
+      // A start point needs BOTH coordinates; one without the other is ignored.
+      const bool has_start =
+          kv.count(prefix + "_start_x") != 0 && kv.count(prefix + "_start_y") != 0;
+      const auto check =
+          CheckCoverageLines(has_angle,
+                             has_angle ? get_double(prefix + "_mow_angle_deg", 0.0) : 0.0,
+                             has_dir,
+                             static_cast<uint8_t>(
+                                 std::clamp(get_int(prefix + "_ring_direction", 0), 0, 255)),
+                             has_start,
+                             has_start ? get_double(prefix + "_start_x", 0.0) : 0.0,
+                             has_start ? get_double(prefix + "_start_y", 0.0) : 0.0);
+      if (check.ok)
+      {
+        entry.coverage_lines = check.lines;
+        if (entry.coverage_lines.has_start_point &&
+            !StartPointNearPolygon(polygon_pairs(entry.polygon),
+                                   entry.coverage_lines.start_x,
+                                   entry.coverage_lines.start_y))
+        {
+          RCLCPP_WARN(get_logger(),
+                      "Area '%s': ignoring a start point that is not near the area in %s.",
+                      entry.name.c_str(),
+                      "restore candidate");
+          entry.coverage_lines.has_start_point = false;
+          entry.coverage_lines.start_x = 0.0;
+          entry.coverage_lines.start_y = 0.0;
+        }
+      }
+      else
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Area '%s': ignoring invalid coverage-line overrides in %s: %s",
+                    entry.name.c_str(),
+                    "restore candidate",
+                    check.message.c_str());
+      }
+    }
+
+    const int obs_count = get_int(prefix + "_obstacle_count", 0);
+    for (int j = 0; j < obs_count; ++j)
+    {
+      const std::string obs_prefix = prefix + "_obstacle_" + std::to_string(j);
+      auto obs_poly = parse_polygon(get_str(obs_prefix));
+      if (obs_poly.points.size() < 3)
+        throw std::runtime_error("Invalid obstacle polygon");
+      // Identity is optional: a file written before #502 has no _name/_source
+      // lines, and every obstacle in it is by definition an operator-drawn
+      // keepout. Never pending — nothing pending is ever written.
+      const std::string obs_name = get_str(obs_prefix + "_name");
+      const auto obs_source = static_cast<uint8_t>(
+          get_int(obs_prefix + "_source", mowgli_interfaces::msg::MapObstacleInfo::SOURCE_USER));
+      // Dedup on load so pre-existing stacked duplicates collapse to one.
+      if (obs_poly.points.size() >= 3 &&
+          !has_duplicate_obstacle_entry(entry.obstacles, obs_poly, kObstacleDedupEpsilonM))
+      {
+        if (candidate.next_obstacle_id == UINT32_MAX)
+          throw std::runtime_error("Obstacle IDs exhausted");
+        entry.obstacles.push_back(
+            ObstacleEntry{obs_poly, obs_name, obs_source, false, candidate.next_obstacle_id++});
+      }
+    }
+
+    if (entry.polygon.points.size() < 3)
+      throw std::runtime_error("Invalid area polygon");
+    if (entry.polygon.points.size() >= 3)
+    {
+      RCLCPP_INFO(get_logger(),
+                  "Loaded area '%s': %zu vertices, %s, %zu obstacles",
+                  entry.name.c_str(),
+                  entry.polygon.points.size(),
+                  entry.is_navigation_area ? "navigation" : "mowing",
+                  entry.obstacles.size());
+      candidate.areas.push_back(std::move(entry));
+    }
+  }
+
+  candidate.corridors = std::move(loaded_corridors);
+  candidate.next_corridor_id = loaded_next_corridor_id;
+  RCLCPP_INFO(get_logger(), "Loaded %zu LiDAR-ignore corridor(s).", candidate.corridors.size());
+
+  // Dock pose is loaded from mowgli_robot.yaml at construction, never
+  // from areas.dat. Old areas.dat files may still contain dock_x/dock_qw
+  // keys — they are ignored on purpose.
+
+  std::set<uint32_t> area_ids, corridor_ids;
+  uint64_t next_area = std::max(uint64_t{1}, get_unsigned("next_area_id", 1, UINT32_MAX));
+  for (const auto& area : candidate.areas)
+  {
+    if (area.id && !area_ids.insert(area.id).second)
+      throw std::runtime_error("Duplicate area ID");
+    next_area = std::max(next_area, uint64_t{area.id} + 1);
+  }
+  for (auto& area : candidate.areas)
+  {
+    if (!area.id)
+    {
+      if (next_area >= UINT32_MAX)
+        throw std::runtime_error("Area IDs exhausted");
+      area.id = static_cast<uint32_t>(next_area++);
+      candidate.needs_resave = true;
+    }
+  }
+  candidate.next_area_id = static_cast<uint32_t>(next_area);
+  for (const auto& corridor : candidate.corridors)
+    if (corridor.id && !corridor_ids.insert(corridor.id).second)
+      throw std::runtime_error("Duplicate corridor ID");
+  for (auto& corridor : candidate.corridors)
+  {
+    if (!corridor.id)
+    {
+      if (candidate.next_corridor_id > UINT32_MAX)
+        throw std::runtime_error("Corridor IDs exhausted");
+      corridor.id = static_cast<uint32_t>(candidate.next_corridor_id++);
+      candidate.needs_resave = true;
+    }
+    bool distinct = false;
+    for (const auto& p : corridor.polyline.points)
+      distinct = distinct || std::hypot(double(p.x) - corridor.polyline.points[0].x,
+                                        double(p.y) - corridor.polyline.points[0].y) > 1e-6;
+    if (!distinct)
+      throw std::runtime_error("Corridor needs distinct points");
+  }
+  candidate.file_datum_lat = get_double("datum_lat", std::numeric_limits<double>::quiet_NaN());
+  candidate.file_datum_lon = get_double("datum_lon", std::numeric_limits<double>::quiet_NaN());
+  const bool stamped = std::isfinite(candidate.file_datum_lat) &&
+                       std::isfinite(candidate.file_datum_lon) &&
+                       is_datum_set(candidate.file_datum_lat, candidate.file_datum_lon);
+  if (kv.count("datum_lat") != kv.count("datum_lon") ||
+      (stamped &&
+       (std::abs(candidate.file_datum_lat) > 90 || std::abs(candidate.file_datum_lon) > 180)))
+    throw std::runtime_error("Invalid datum stamp");
+  if (is_datum_set(datum_lat_, datum_lon_))
+  {
+    candidate.needs_resave = candidate.needs_resave || !stamped;
+    if (stamped && (std::abs(datum_lat_ - candidate.file_datum_lat) >= kDatumMatchEpsilonDeg ||
+                    std::abs(datum_lon_ - candidate.file_datum_lon) >= kDatumMatchEpsilonDeg))
+    {
+      auto project = [&](double& x, double& y)
+      {
+        mowgli_interfaces::wgs84::ReprojectEnu(
+            candidate.file_datum_lat, candidate.file_datum_lon, datum_lat_, datum_lon_, x, y);
+      };
+      auto polygon = [&](geometry_msgs::msg::Polygon& poly)
+      {
+        for (auto& p : poly.points)
+        {
+          double x = p.x, y = p.y;
+          project(x, y);
+          p.x = static_cast<float>(x);
+          p.y = static_cast<float>(y);
+        }
+      };
+      for (auto& area : candidate.areas)
+      {
+        polygon(area.polygon);
+        for (auto& obstacle : area.obstacles)
+          polygon(obstacle.polygon);
+        if (area.coverage_lines.has_start_point)
+          project(area.coverage_lines.start_x, area.coverage_lines.start_y);
+      }
+      for (auto& corridor : candidate.corridors)
+        polygon(corridor.polyline);
+      candidate.needs_resave = true;
+    }
+  }
+  const auto finite_geometry = [](const geometry_msgs::msg::Polygon& poly)
+  {
+    for (const auto& p : poly.points)
+      if (!std::isfinite(p.x) || !std::isfinite(p.y))
+        throw std::runtime_error("Re-projected geometry is not finite");
+  };
+  for (const auto& area : candidate.areas)
+    for (const auto& obs : area.obstacles)
+      finite_geometry(obs.polygon);
+  for (const auto& corridor : candidate.corridors)
+    finite_geometry(corridor.polyline);
+  for (const auto& area : candidate.areas)
+    for (const auto& obs : area.obstacles)
+      candidate.obstacles.push_back(obs.polygon);
+
+  // Stage the entire grid, including fresh classification and progress, before Rename.
+  double min_x = std::numeric_limits<double>::max(), min_y = min_x;
+  double max_x = std::numeric_limits<double>::lowest(), max_y = max_x;
+  auto bounds = [&](const geometry_msgs::msg::Polygon& poly)
+  {
+    for (const auto& p : poly.points)
+    {
+      if (!std::isfinite(p.x) || !std::isfinite(p.y))
+        throw std::runtime_error("Non-finite geometry");
+      min_x = std::min(min_x, double(p.x));
+      max_x = std::max(max_x, double(p.x));
+      min_y = std::min(min_y, double(p.y));
+      max_y = std::max(max_y, double(p.y));
+    }
+  };
+  for (const auto& area : candidate.areas)
+    bounds(area.polygon);
+  if (!candidate.areas.empty() && has_dock_exclusion_)
+  {
+    bounds(dock_body_polygon_);
+    bounds(dock_corridor_polygon_);
+  }
+  const bool empty = candidate.areas.empty();
+  double sx = empty ? map_size_x_ : max_x - min_x + 10;
+  double sy = empty ? map_size_y_ : max_y - min_y + 10;
+  double nx = std::ceil(sx / resolution_), ny = std::ceil(sy / resolution_);
+  if (!std::isfinite(nx * ny) || nx <= 0 || ny <= 0 || nx * ny > max_grid_cells_)
+    throw std::runtime_error("Garden geometry exceeds max_grid_cells resource budget");
+  candidate.grid =
+      grid_map::GridMap({std::string(layers::OCCUPANCY), std::string(layers::CLASSIFICATION)});
+  candidate.grid.setFrameId(map_frame_);
+  candidate.grid.setGeometry(grid_map::Length(sx, sy),
+                             resolution_,
+                             empty
+                                 ? grid_map::Position(0, 0)
+                                 : grid_map::Position((min_x + max_x) * .5, (min_y + max_y) * .5));
+  candidate.grid[std::string(layers::OCCUPANCY)].setConstant(defaults::OCCUPANCY);
+  candidate.grid[std::string(layers::CLASSIFICATION)].setConstant(defaults::CLASSIFICATION);
+  classify_areas(candidate.grid, candidate.areas);
+  candidate.progress = grid_map::GridMap({"mowed"});
+  candidate.progress.setFrameId(map_frame_);
+  candidate.progress.setGeometry(candidate.grid.getLength(),
+                                 resolution_,
+                                 candidate.grid.getPosition());
+  candidate.progress["mowed"].setConstant(0);
+  return candidate;
+}
+
+void MapServerNode::install_areas_candidate(AreasCandidate& candidate)
+{
+  // Caller holds areas_state_mutex_; no allocation or publication after Rename here.
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  areas_.swap(candidate.areas);
+  obstacle_polygons_.swap(candidate.obstacles);
+  lidar_ignore_corridors_.swap(candidate.corridors);
+  next_area_id_ = candidate.next_area_id;
+  next_obstacle_id_ = candidate.next_obstacle_id;
+  next_lidar_corridor_id_ = candidate.next_corridor_id;
+  static_assert(std::is_nothrow_swappable_v<grid_map::GridMap>);
+  std::swap(map_, candidate.grid);
+  reset_mow_progress();
+  std::swap(mow_progress_map_, candidate.progress);
+  map_size_x_ = map_.getLength().x();
+  map_size_y_ = map_.getLength().y();
+  planning_grid_error_.clear();
+  classification_dirty_ = false;
+  mow_progress_dirty_ = true;
+  masks_dirty_ = true;
+  keepout_filter_info_sent_ = false;
+  speed_filter_info_sent_ = false;
+  mask_rebuild_not_before_ = std::chrono::steady_clock::now() + kMapEditSettle;
 }
 
 void MapServerNode::load_areas_from_file(const std::string& path, DockPoseFrame dock_frame)
@@ -2810,14 +3367,21 @@ void MapServerNode::ensure_classification_current_locked()
 
 void MapServerNode::apply_area_classifications_locked()
 {
+  classify_areas(map_, areas_);
+  classification_dirty_ = false;
+}
+
+void MapServerNode::classify_areas(grid_map::GridMap& grid,
+                                   const std::vector<AreaEntry>& areas) const
+{
   // Polygon fills go through polygon_raster.hpp (one ray cast per grid line)
   // instead of grid_map::PolygonIterator (one per cell): same even-odd test in
   // the same double arithmetic, so the same cells, at a fraction of the cost
   // for a boundary recorded with hundreds of points.
-  const raster::CellAxes axes = make_cell_axes(map_, /*through_float=*/false);
-  const raster::CellWindow whole_grid{{0, static_cast<int>(map_.getSize()(0)) - 1},
-                                      {0, static_cast<int>(map_.getSize()(1)) - 1}};
-  auto& cls = map_[std::string(layers::CLASSIFICATION)];
+  const raster::CellAxes axes = make_cell_axes(grid, /*through_float=*/false);
+  const raster::CellWindow whole_grid{{0, static_cast<int>(grid.getSize()(0)) - 1},
+                                      {0, static_cast<int>(grid.getSize()(1)) - 1}};
+  auto& cls = grid[std::string(layers::CLASSIFICATION)];
   const auto fill = [&](const geometry_msgs::msg::Polygon& polygon, CellType type)
   {
     const float value = static_cast<float>(type);
@@ -2830,7 +3394,7 @@ void MapServerNode::apply_area_classifications_locked()
                                          });
   };
 
-  for (const auto& area : areas_)
+  for (const auto& area : areas)
   {
     // Mowing areas are LAWN, not NO_GO_ZONE.
     fill(area.polygon, CellType::LAWN);
@@ -2872,8 +3436,6 @@ void MapServerNode::apply_area_classifications_locked()
                                            }
                                          });
   }
-
-  classification_dirty_ = false;
 }
 
 void MapServerNode::add_area_for_test(

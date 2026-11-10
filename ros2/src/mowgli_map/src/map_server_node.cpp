@@ -515,6 +515,13 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
         on_save_areas(req, res);
       });
 
+  restore_areas_srv_ = create_service<mowgli_interfaces::srv::RestoreAreas>(
+      "~/restore_areas",
+      [this](const mowgli_interfaces::srv::RestoreAreas::Request::SharedPtr req,
+             mowgli_interfaces::srv::RestoreAreas::Response::SharedPtr res)
+      {
+        on_restore_areas(req, res);
+      });
   load_areas_srv_ = create_service<std_srvs::srv::Trigger>(
       "~/load_areas",
       [this](const std_srvs::srv::Trigger::Request::SharedPtr req,
@@ -1153,8 +1160,18 @@ bool MapServerNode::is_costmap_blocked(double x, double y) const
 void MapServerNode::on_publish_timer()
 {
   {
+    // A committed restore whose broadcast failed retries here (publish_restored_areas).
     std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
-    if (corridor_publication_pending_)
+    if (restore_publication_pending_)
+      publish_restored_areas();
+  }
+
+  {
+    std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+    // A pending restore owns the corridors (see publish_restored_areas), except
+    // an empty list, which suppresses nothing whatever areas it meets.
+    if (corridor_publication_pending_ &&
+        (!restore_publication_pending_ || corridor_snapshot().empty()))
     {
       try
       {
@@ -1180,10 +1197,19 @@ void MapServerNode::on_publish_timer()
                            "LiDAR-ignore corridors are OFF: a map replace (clear_map) was "
                            "never committed with ~/save_areas or ~/load_areas");
     }
+    // A pending restore holds the list until its corridors are out too.
     if (recorded_areas_publication_pending_ && !area_replace_in_progress_ &&
+        !restore_publication_pending_ &&
         std::chrono::steady_clock::now() >= area_list_publish_not_before_)
     {
-      publish_recorded_area_list();
+      try
+      {
+        publish_recorded_area_list();
+      }
+      catch (const std::exception& e)
+      {
+        RCLCPP_WARN(get_logger(), "Recorded-area list publication still pending: %s", e.what());
+      }
     }
   }
 
@@ -1206,8 +1232,17 @@ void MapServerNode::on_publish_timer()
     // add_area sat in the queue — the "context deadline exceeded" on save.
     if (masks_dirty_ && std::chrono::steady_clock::now() >= mask_rebuild_not_before_)
     {
-      publish_keepout_mask();
-      masks_dirty_ = false;
+      // A failed publication stays dirty and is rebuilt on the next tick.
+      try
+      {
+        publish_keepout_mask();
+        masks_dirty_ = false;
+      }
+      catch (const std::exception& e)
+      {
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 30000, "Keepout mask publication failed: %s", e.what());
+      }
     }
 
     // Rebuild the full-extent OccupancyGrid only after coverage changed, then

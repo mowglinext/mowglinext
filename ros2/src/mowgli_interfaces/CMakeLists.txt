@@ -71,6 +71,7 @@ set(srv_files
   "srv/ClearLidarIgnoreCorridors.srv"
   "srv/ReplaceLidarIgnoreCorridors.srv"
   "srv/GotoPose.srv"
+  "srv/RestoreAreas.srv"
 )
 
 # Declare action files

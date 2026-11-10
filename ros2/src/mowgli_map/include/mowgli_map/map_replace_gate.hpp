@@ -34,10 +34,11 @@
  * on a bench, in a map-only bring-up or after a BT crash. The gate protects a
  * running mission from an edit; it is not a safety interlock for motion.
  * Incremental edits (add_area on its own, obstacle accept/discard, corridor
- * edits) are NOT gated: they do not drop the map. ~/load_areas (the GUI's
- * backup restore) is NOT gated YET either: that flow overwrites areas.dat
- * BEFORE calling it, so a refusal would leave the disk and the running map
- * disagreeing; it needs a pre-check or a rollback in the GUI first.
+ * edits) are NOT gated: they do not drop the map. Runtime ~/load_areas,
+ * ~/load_map and ~/restore_areas share this gate; constructor loading stays
+ * ungated. GUI backup restore sends raw areas.dat to ~/restore_areas, which
+ * checks this gate before preparing or persisting a replacement. Rename is
+ * the commit point; an unconfirmed response must never trigger a GUI rollback.
  */
 
 #pragma once

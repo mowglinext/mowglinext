@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
 	"github.com/mowglinext/mowglinext/pkg/types"
 )
 
@@ -29,7 +30,7 @@ import (
 //
 // The copy is the raw areas.dat, not the Map message: it carries everything the file
 // does (areas and their stable ids, obstacles with name/source, ignore lines, datum
-// stamp). Restoring writes it back and asks map_server to reload it.
+// stamp). Restoring passes it to map_server for a gated atomic replacement.
 const (
 	mapBackupAreasFile = "/ros2_ws/maps/areas.dat"
 	mapBackupDir       = "/ros2_ws/maps/backups"
@@ -39,7 +40,7 @@ const (
 	mapBackupPrefix = "areas-"
 	mapBackupSuffix = ".dat"
 
-	mapServiceLoadAreas = "/map_server_node/load_areas"
+	mapServiceRestoreAreas = "/map_server_node/restore_areas"
 )
 
 // mapBackupIDPattern is the only shape of id the API accepts, so an id can never
@@ -219,9 +220,18 @@ func (s *mapBackupStore) List() ([]MapBackup, error) {
 	return out, nil
 }
 
-// Restore puts a backup back as areas.dat and asks map_server to load it. The map
-// being replaced is backed up first, so a restore can itself be undone.
-func (s *mapBackupStore) Restore(ctx context.Context, id string, reload func(context.Context) error) error {
+type restoreAreasCall func(context.Context, []byte) (mowgli.RestoreAreasRes, error)
+
+type restoreBackupError struct {
+	status  int
+	message string
+}
+
+func (e *restoreBackupError) Error() string { return e.message }
+
+// Restore keeps an undo backup, then lets map_server own validation, persistence
+// and commit. The GUI never writes the live areas.dat, including on errors.
+func (s *mapBackupStore) Restore(ctx context.Context, id string, restore restoreAreasCall) error {
 	if !mapBackupIDPattern.MatchString(id) {
 		return fmt.Errorf("invalid backup id %q", id)
 	}
@@ -230,18 +240,38 @@ func (s *mapBackupStore) Restore(ctx context.Context, id string, reload func(con
 		return fmt.Errorf("backup %s: %w", id, err)
 	}
 	if areas, _, _, _ := summariseAreasFile(content); areas == 0 {
-		return fmt.Errorf("backup %s contains no areas; refusing to restore it", id)
+		return &restoreBackupError{http.StatusUnprocessableEntity, fmt.Sprintf("backup %s contains no areas; refusing to restore it", id)}
 	}
 	if _, _, err := s.Create(); err != nil {
 		return fmt.Errorf("could not keep the current map before restoring: %w", err)
 	}
-	if err := writePreservingPerms(s.areasFile, content); err != nil {
-		return fmt.Errorf("writing %s: %w", s.areasFile, err)
+	res, err := restore(ctx, content)
+	if err != nil {
+		return &restoreBackupError{http.StatusServiceUnavailable, "Restore outcome could not be confirmed: " + err.Error()}
 	}
-	if err := reload(ctx); err != nil {
-		return fmt.Errorf("the backup was written to %s but map_server did not reload it (restart the ROS2 container to load it): %w", s.areasFile, err)
+	switch res.Outcome {
+	case "REFUSED_MISSION":
+		if !res.Committed {
+			return &restoreBackupError{http.StatusConflict, "Map backup not restored: a mission is running. Press Stop, restore the backup, then start or resume. Nothing was changed."}
+		}
+	case "INVALID_MAP":
+		if !res.Committed {
+			return &restoreBackupError{http.StatusUnprocessableEntity, "Map backup not restored: invalid content. " + res.Message}
+		}
+	case "PERSISTENCE_FAILED_BEFORE_COMMIT":
+		if !res.Committed {
+			return &restoreBackupError{http.StatusInternalServerError, "Map backup not restored; it did not commit. " + res.Message}
+		}
+	case "COMMITTED_DURABILITY_UNCONFIRMED", "COMMITTED_PUBLICATION_PENDING":
+		if res.Committed {
+			return &restoreBackupError{http.StatusInternalServerError, "Map backup restore committed, but persistence or publication could not be confirmed. " + res.Message}
+		}
+	case "COMMITTED":
+		if res.Success && res.Committed && res.Persisted && res.Published {
+			return nil
+		}
 	}
-	return nil
+	return &restoreBackupError{http.StatusServiceUnavailable, "Restore outcome could not be confirmed: inconsistent or unknown map_server response"}
 }
 
 // writeFileAtomically writes next to the target and renames, so a reader (or a power
@@ -276,19 +306,19 @@ func writeFileAtomically(path string, content []byte) error {
 //	POST /map-backups              take a backup now (the editor does this before it opens)
 //	POST /map-backups/:id/restore  put a backup back and reload it in map_server
 func MapBackupRoutes(r *gin.RouterGroup, provider types.IRosProvider) {
-	registerMapBackupRoutes(r, defaultMapBackupStore(), func(ctx context.Context) error {
-		var res triggerRes
-		if err := callMapService(ctx, provider, mapServiceLoadAreas, &struct{}{}, &res, "std_srvs/srv/Trigger"); err != nil {
-			return err
-		}
-		if !res.Success {
-			return errors.New(res.Message)
-		}
-		return nil
-	})
+	registerMapBackupRoutes(r, defaultMapBackupStore(), restoreAreasViaProvider(provider))
 }
 
-func registerMapBackupRoutes(r *gin.RouterGroup, store *mapBackupStore, reload func(context.Context) error) {
+func restoreAreasViaProvider(provider types.IRosProvider) restoreAreasCall {
+	return func(ctx context.Context, content []byte) (mowgli.RestoreAreasRes, error) {
+		var res mowgli.RestoreAreasRes
+		req := mowgli.RestoreAreasReq{AreasDat: string(content)}
+		err := callMapService(ctx, provider, mapServiceRestoreAreas, &req, &res, "mowgli_interfaces/srv/RestoreAreas")
+		return res, err
+	}
+}
+
+func registerMapBackupRoutes(r *gin.RouterGroup, store *mapBackupStore, restore restoreAreasCall) {
 	r.GET("/map-backups", func(c *gin.Context) {
 		list, err := store.List()
 		if err != nil {
@@ -319,8 +349,12 @@ func registerMapBackupRoutes(r *gin.RouterGroup, store *mapBackupStore, reload f
 			return
 		}
 		defer unlockMapReplacement()
-		if err := store.Restore(c.Request.Context(), c.Param("id"), reload); err != nil {
+		if err := store.Restore(c.Request.Context(), c.Param("id"), restore); err != nil {
 			status := http.StatusInternalServerError
+			var restoreErr *restoreBackupError
+			if errors.As(err, &restoreErr) {
+				status = restoreErr.status
+			}
 			if !mapBackupIDPattern.MatchString(c.Param("id")) {
 				status = http.StatusBadRequest
 			}

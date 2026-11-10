@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mowglinext/mowglinext/pkg/msgs/mowgli"
+	"github.com/mowglinext/mowglinext/pkg/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -137,7 +139,7 @@ func TestMapBackupSameMillisecondStillGetsADistinctSortedID(t *testing.T) {
 	assert.Equal(t, b.ID, list[0].ID, "the later backup lists first")
 }
 
-func TestMapBackupRestoreWritesTheFileKeepsTheCurrentMapAndReloads(t *testing.T) {
+func TestMapBackupRestoreForwardsBytesKeepsUndoAndNeverWritesLiveFile(t *testing.T) {
 	store, _ := newBackupStore(t)
 	require.NoError(t, os.WriteFile(store.areasFile, areasFile("good"), 0o644))
 	good, _, err := store.Create()
@@ -145,13 +147,17 @@ func TestMapBackupRestoreWritesTheFileKeepsTheCurrentMapAndReloads(t *testing.T)
 
 	require.NoError(t, os.WriteFile(store.areasFile, areasFile("newer"), 0o644))
 	reloaded := 0
-	require.NoError(t, store.Restore(context.Background(), good.ID, func(context.Context) error {
+	require.NoError(t, store.Restore(context.Background(), good.ID, func(_ context.Context, content []byte) (mowgli.RestoreAreasRes, error) {
+		assert.Equal(t, areasFile("good"), content)
+		live, err := os.ReadFile(store.areasFile)
+		require.NoError(t, err)
+		assert.Equal(t, areasFile("newer"), live)
 		reloaded++
-		return nil
+		return restoredOK(), nil
 	}))
 
 	now, _ := os.ReadFile(store.areasFile)
-	assert.Equal(t, areasFile("good"), now)
+	assert.Equal(t, areasFile("newer"), now)
 	assert.Equal(t, 1, reloaded, "map_server is told to reload")
 	list, _ := store.List()
 	var names [][]string
@@ -164,7 +170,10 @@ func TestMapBackupRestoreWritesTheFileKeepsTheCurrentMapAndReloads(t *testing.T)
 func TestMapBackupRestoreRefusesBadIDsAndEmptyBackups(t *testing.T) {
 	store, _ := newBackupStore(t)
 	require.NoError(t, os.WriteFile(store.areasFile, areasFile("keep"), 0o644))
-	noReload := func(context.Context) error { t.Fatal("must not reload"); return nil }
+	noReload := func(context.Context, []byte) (mowgli.RestoreAreasRes, error) {
+		t.Fatal("must not call restore")
+		return mowgli.RestoreAreasRes{}, nil
+	}
 
 	for _, id := range []string{"../areas.dat", "areas-1.dat", "", "areas-20261004T120000.000Z.dat/../x"} {
 		assert.Error(t, store.Restore(context.Background(), id, noReload), "id %q", id)
@@ -185,9 +194,12 @@ func TestMapBackupRestoreReportsAFailedReload(t *testing.T) {
 	good, _, err := store.Create()
 	require.NoError(t, err)
 
-	err = store.Restore(context.Background(), good.ID, func(context.Context) error { return errors.New("service not available") })
+	err = store.Restore(context.Background(), good.ID, func(context.Context, []byte) (mowgli.RestoreAreasRes, error) {
+		return mowgli.RestoreAreasRes{}, errors.New("service not available")
+	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "did not reload")
+	assert.Contains(t, err.Error(), "Restore outcome could not be confirmed")
+	assert.NotContains(t, err.Error(), "unchanged")
 	assert.Contains(t, err.Error(), "service not available")
 }
 
@@ -195,7 +207,7 @@ func TestMapBackupRoutes(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store, _ := newBackupStore(t)
 	router := gin.New()
-	registerMapBackupRoutes(router.Group("/api"), store, func(context.Context) error { return nil })
+	registerMapBackupRoutes(router.Group("/api"), store, func(context.Context, []byte) (mowgli.RestoreAreasRes, error) { return restoredOK(), nil })
 	do := func(method, path string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, httptest.NewRequest(method, path, nil))
@@ -255,12 +267,95 @@ func TestMapBackupRestoreBringsTheMowingLinesBack(t *testing.T) {
 
 	// The lines are removed from the live map afterwards (a map save that dropped them).
 	require.NoError(t, os.WriteFile(store.areasFile, areasFile("Voor", "Achter"), 0o644))
-	require.NoError(t, store.Restore(context.Background(), good.ID, func(context.Context) error { return nil }))
-
-	now, err := os.ReadFile(store.areasFile)
+	var forwarded []byte
+	require.NoError(t, store.Restore(context.Background(), good.ID, func(_ context.Context, content []byte) (mowgli.RestoreAreasRes, error) {
+		forwarded = content
+		return restoredOK(), nil
+	}))
+	assert.Equal(t, areasFileWithLines(), forwarded)
+	live, err := os.ReadFile(store.areasFile)
 	require.NoError(t, err)
-	assert.Contains(t, string(now), "area_0_mow_angle_deg: 35")
-	assert.Contains(t, string(now), "area_0_ring_direction: 2")
-	assert.Contains(t, string(now), "area_0_start_x: 9.500")
-	assert.Contains(t, string(now), "area_0_start_y: 4.000")
+	assert.Equal(t, areasFile("Voor", "Achter"), live)
+}
+
+func restoredOK() mowgli.RestoreAreasRes {
+	return mowgli.RestoreAreasRes{Success: true, Committed: true, Persisted: true, Published: true, Outcome: "COMMITTED"}
+}
+
+func TestMapBackupRestoreHTTPOutcomesHaveNoLegacyFallbackOrRollback(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		response  mowgli.RestoreAreasRes
+		transport error
+		status    int
+		message   string
+	}{
+		{"success", restoredOK(), nil, 200, ""},
+		{"mission", mowgli.RestoreAreasRes{Outcome: "REFUSED_MISSION"}, nil, 409, "Map backup not restored: a mission is running. Press Stop, restore the backup, then start or resume. Nothing was changed."},
+		{"invalid", mowgli.RestoreAreasRes{Outcome: "INVALID_MAP"}, nil, 422, "invalid content"},
+		{"write failure", mowgli.RestoreAreasRes{Outcome: "PERSISTENCE_FAILED_BEFORE_COMMIT"}, nil, 500, "did not commit"},
+		{"directory sync", mowgli.RestoreAreasRes{Committed: true, Published: true, Outcome: "COMMITTED_DURABILITY_UNCONFIRMED"}, nil, 500, "restore committed"},
+		{"publication", mowgli.RestoreAreasRes{Committed: true, Persisted: true, Outcome: "COMMITTED_PUBLICATION_PENDING"}, nil, 500, "restore committed"},
+		{"unavailable", mowgli.RestoreAreasRes{}, errors.New("service not advertised"), 503, "Restore outcome could not be confirmed"},
+		{"timeout after commit", mowgli.RestoreAreasRes{}, context.DeadlineExceeded, 503, "Restore outcome could not be confirmed"},
+		{"unknown", mowgli.RestoreAreasRes{Outcome: "NEW_OUTCOME"}, nil, 503, "Restore outcome could not be confirmed"},
+		{"inconsistent", mowgli.RestoreAreasRes{Outcome: "COMMITTED", Success: true}, nil, 503, "Restore outcome could not be confirmed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := newBackupStore(t)
+			backup := append([]byte("# exact bytes and backup datum\r\ndatum_lat: 48.123456789\r\ndatum_lon: 2.0\r\n"), areasFileWithLines()...)
+			require.NoError(t, os.WriteFile(store.areasFile, backup, 0644))
+			info, _, err := store.Create()
+			require.NoError(t, err)
+			live := areasFile("keep-current")
+			require.NoError(t, os.WriteFile(store.areasFile, live, 0444))
+			provider := types.NewMockRosProvider()
+			provider.ServiceErr = tc.transport
+			provider.ServiceResponder = func(service string, req any, res any) {
+				assert.Equal(t, mapServiceRestoreAreas, service)
+				assert.Equal(t, string(backup), req.(*mowgli.RestoreAreasReq).AreasDat)
+				*res.(*mowgli.RestoreAreasRes) = tc.response
+			}
+			router := gin.New()
+			registerMapBackupRoutes(router.Group("/api"), store, restoreAreasViaProvider(provider))
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest("POST", "/api/map-backups/"+info.ID+"/restore", nil))
+			assert.Equal(t, tc.status, w.Code, w.Body.String())
+			assert.Contains(t, w.Body.String(), tc.message)
+			if tc.status != 409 {
+				assert.NotContains(t, w.Body.String(), "Nothing was changed")
+				assert.NotContains(t, w.Body.String(), "unchanged")
+			}
+			require.Len(t, provider.ServiceCalls, 1)
+			assert.Equal(t, mapServiceRestoreAreas, provider.ServiceCalls[0].Service)
+			after, err := os.ReadFile(store.areasFile)
+			require.NoError(t, err)
+			assert.Equal(t, live, after, "GUI never writes live areas.dat or rolls it back")
+		})
+	}
+}
+
+func TestMapBackupLostResponseAfterCommitNeverRollsTheFileBack(t *testing.T) {
+	store, _ := newBackupStore(t)
+	backup := areasFileWithLines()
+	require.NoError(t, os.WriteFile(store.areasFile, backup, 0o644))
+	info, _, err := store.Create()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(store.areasFile, areasFile("current"), 0o644))
+	router := gin.New()
+	registerMapBackupRoutes(router.Group("/api"), store, func(_ context.Context, content []byte) (mowgli.RestoreAreasRes, error) {
+		// Stand in for the server committing successfully before the response is lost.
+		require.Equal(t, backup, content)
+		require.NoError(t, os.WriteFile(store.areasFile, content, 0o644))
+		return mowgli.RestoreAreasRes{}, context.DeadlineExceeded
+	})
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest("POST", "/api/map-backups/"+info.ID+"/restore", nil))
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), "Restore outcome could not be confirmed")
+	assert.NotContains(t, w.Body.String(), "unchanged")
+	assert.NotContains(t, w.Body.String(), "Nothing was changed")
+	after, err := os.ReadFile(store.areasFile)
+	require.NoError(t, err)
+	assert.Equal(t, backup, after, "GUI must leave the server's commit intact")
 }

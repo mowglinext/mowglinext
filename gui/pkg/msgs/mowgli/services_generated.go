@@ -305,6 +305,21 @@ type ReplaceLidarIgnoreCorridorsRes struct {
 	Corridors                 []LidarIgnoreCorridor          `json:"corridors"`
 }
 
+// RestoreAreasReq for mowgli_interfaces/srv/RestoreAreas request.
+type RestoreAreasReq struct {
+	AreasDat                  string                         `json:"areas_dat"`
+}
+
+// RestoreAreasRes for mowgli_interfaces/srv/RestoreAreas response.
+type RestoreAreasRes struct {
+	Success                   bool                           `json:"success"`
+	Committed                 bool                           `json:"committed"`
+	Persisted                 bool                           `json:"persisted"`
+	Published                 bool                           `json:"published"`
+	Outcome                   string                         `json:"outcome"`
+	Message                   string                         `json:"message"`
+}
+
 // SetAreaCoverageLinesReq for mowgli_interfaces/srv/SetAreaCoverageLines request.
 type SetAreaCoverageLinesReq struct {
 	Id                        uint32                         `json:"id"`

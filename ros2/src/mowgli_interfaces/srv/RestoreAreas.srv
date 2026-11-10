@@ -1,0 +1,12 @@
+# Raw areas.dat, including the backup's datum stamp. Runtime dock pose is preserved.
+string areas_dat
+---
+# Rename is the commit point. Never retry/roll back an unconfirmed call blindly.
+bool success
+bool committed
+bool persisted
+bool published
+# REFUSED_MISSION, INVALID_MAP, PERSISTENCE_FAILED_BEFORE_COMMIT, COMMITTED,
+# COMMITTED_DURABILITY_UNCONFIRMED, COMMITTED_PUBLICATION_PENDING
+string outcome
+string message
