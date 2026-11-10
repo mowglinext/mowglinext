@@ -4,7 +4,7 @@
 
 Evidence kinds, kept apart:
 - **Software:** x86-64 benchmarks (i7-10700K, one pinned core) and unit tests.
-- **Hardware benchmark:** the same per-cycle benchmark run once on the robot's Raspberry Pi 5
+- **Hardware benchmark:** the same per-cycle benchmark run on the robot's Raspberry Pi 5
   (below). It is a benchmark, not a mow.
 - **Not done:** no mow, no motion and no field test with the new handler under the real stack.
 
@@ -41,7 +41,7 @@ cost, not the compaction events (below).
 **Compaction.** The lazy handler erases the passed prefix in bulk once it is more than half of the
 vector. Over a whole sub-path that moves each pose at most once per halving (amortized O(1)), but
 a single compaction costs one erase: at most about half of the upstream per-cycle erase at that
-size, so at 400k poses roughly 2 ms on x86 and 6.5 ms on the Pi 5 (derived from the measured
+size, so at 400k poses roughly 2 ms on x86 and 6 ms on the Pi 5 (derived from the measured
 upstream erase, not measured separately), once per halving of the remaining plan. With
 `enforce_path_inversion` or `enforce_path_rotation` enabled the handler compacts every cycle, so
 those modes keep upstream's cost; the shipped configuration enables neither.
@@ -242,43 +242,38 @@ python3 -m pytest -q ros2/src/mowgli_bringup/test/test_nav2_params.py
 
 ## Measured on the robot (Raspberry Pi 5, 2026-11-10)
 
-Raspberry Pi 5 (4 cores, 8 GB, 2.4 GHz, `ondemand`), aarch64, the production stack running. The
-benchmark was built and run in a separate throw-away container made from the robot's own image
-`mowgli-ros2:pr991-58dcfca9-protocol7` (Nav2 and headers from the image, `mowgli_nav2_plugins`
-rebuilt from the source of this change as it stood before rebasing onto `dev`: commit `5841a0488`
-of the local branch, same plugin code): no network, `nice -n 19`, pinned to core 3, build in a
-tmpfs. No running container, volume or file of the robot was touched. Same `cycle_bench` as on
-x86; 3 interleaved repetitions of 200 cycles, median of the three shown. The raw output was not
-kept; the table is transcribed from it.
+Raspberry Pi 5 (4 cores, 8 GB, 2.4 GHz, `ondemand`), aarch64, the production stack up but idle
+(robot stationary). The benchmark was built and run in a separate throw-away container made from
+the robot's own image `mowgli-ros2:pr991-58dcfca9-protocol7` (Nav2 and headers from the image,
+`mowgli_nav2_plugins` rebuilt from the source of this change at commit `0f0c5581c`): no network,
+`nice -n 19`, pinned to core 3, build in a tmpfs. No running container, volume or file of the robot
+was touched. Same `cycle_bench` as on x86; 5 interleaved repetitions of 200 cycles, median shown.
 
 `server` mode, µs per control cycle (`controller_server` path bookkeeping):
 
-| poses ahead | upstream handler | upstream total | lazy handler | lazy total | total, x faster |
+| poses ahead | upstream handler | upstream total (min–max) | lazy handler | lazy total (min–max) | total, x faster |
 |---|---|---|---|---|---|
-| 50k | 1247 | 2111 | 16 | 619 | 3.4 |
-| 100k | 2952 | 5035 | 18 | 1334 | 3.8 |
-| 200k | 6232 | 10052 | 20 | 2755 | 3.6 |
-| 400k | 12984 | 19911 | 20 | 5492 | 3.6 |
+| 50k | 1416 | 2498 (2426–2580) | 20 | 818 (635–1263) | 3.1 |
+| 100k | 2916 | 4965 (4631–5057) | 19 | 1454 (1404–1996) | 3.4 |
+| 200k | 6107 | 9942 (8969–10177) | 21 | 2843 (2779–2880) | 3.5 |
+| 400k | 12630 | 20525 (19938–22814) | 22 | 5748 (5483–5835) | 3.6 |
 
-- Against the 100 ms cycle: upstream is ~2 % at 50k and ~20 % at 400k; lazy is ~0.6 % and ~5.5 %.
-  At 400k that is ~14 ms of every cycle saved, i.e. about 14 % of one core for as long as the
+- Against the 100 ms cycle: upstream is ~2.5 % at 50k and ~20 % at 400k; lazy is ~0.8 % and ~5.7 %.
+  At 400k that is ~15 ms of every cycle saved, i.e. about 15 % of one core for as long as the
   sub-path is that long.
-- Versus the x86 core: the handler is ~3.3× slower (13.0 vs 3.95 ms), `calculate_path_length`
-  ~2.2× (6.7 vs 3.1 ms). That matches the memory-bandwidth argument. The lazy handler stays flat (10–20 µs).
-- Flat in path length: FTC ~9.9 ms per cycle (x86 8.2 ms); the goal checker 0.13–0.32 µs.
-- One-off at 400k: FTC `newPathReceived` 248 ms (x86 242 ms), `setplan` 45–79 ms, CDR serialize
-  138 ms, deserialize 89 ms, deep copy 16 ms.
+- Versus the x86 core: the handler is ~3.2× slower (12.6 vs 3.95 ms), `calculate_path_length`
+  ~2.3×. That matches the memory-bandwidth argument. The lazy handler stays flat (20 µs).
+- Flat in path length: FTC ~9.9–10.1 ms per cycle (x86 8.2 ms); the goal checker 0.13 µs.
+- One-off at 400k: FTC `newPathReceived` 244 ms (x86 242 ms), CDR serialize 166 ms, deserialize
+  98 ms, deep copy 14 ms.
+- The load average during the run was 4–6; most of that is the benchmark's own build in the same
+  container, the robot's stack alone was at ~1. Throttling: the flag cannot be read inside the
+  container; the host reading just before the run was `0x50000`, i.e. undervoltage and
+  throttling have occurred since boot, none at that moment.
 
-**Caveat on the noise.** `mowgli-ros2` was restarted (an explicit `docker restart`, not issued by
-the benchmark) 20 s before the benchmark started, so the stack was booting on the other cores and the load average was
-~9 (part of it a concurrent benchmark build). The three repetitions agree (lazy 5.49 / 5.50 / 5.49 ms at 400k;
-upstream 20.7 / 19.4 / 19.9 ms), but the absolute numbers may be pessimistic. The 10k upstream rep
-1 was 468 µs against 205 µs in rep 3, which is the only visible outlier. A rerun on an idle robot
-would tighten them; it was not done. Throttling flags show undervoltage has occurred since boot
-(`throttled=0x50000`), none at the time.
-
-Upstream per-repetition totals at 400k (µs): 20653, 19386, 19911; lazy: 5490, 5502, 5492. At 50k:
-upstream 3015, 2102, 2111; lazy 843, 619, 615.
+An earlier run (3 repetitions, 5 s after an unrelated restart of the stack, load ~9) gave the same
+picture (400k: 19.9 ms upstream, 5.5 ms lazy). The raw output of the runs was not kept; the tables
+are transcribed from it.
 
 ## Dead ends and what was not done
 
