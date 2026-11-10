@@ -175,6 +175,28 @@ TEST(OccupancyGridExport, MatchesUpstreamForOutOfRangeStartIndices)
   }
 }
 
+TEST(OccupancyGridExport, MatchesUpstreamForALayerLargerThanTheGeometry)
+{
+  // GridMap::operator[] hands out the matrix, so a layer can be resized past
+  // the geometry; upstream indexes the matrix, so the column stride is its own.
+  for (int shift : {0, 1})
+  {
+    SCOPED_TRACE("shift " + std::to_string(shift));
+    auto map = make_map(0.2, 0.2, 0.1, shift);  // 2 x 2 cells
+    map[kLayer].setZero(3, 2);
+    map[kLayer](2, 0) = 100.0F;
+    map[kLayer](0, 1) = 100.0F;
+    expect_same_as_upstream(map, 0.0F, 100.0F);
+
+    auto big = make_map(0.5, 0.4, 0.1, shift);  // 5 x 4 cells
+    fill_random(big, 13);
+    grid_map::Matrix wider = grid_map::Matrix::Constant(7, 5, 42.0F);
+    wider.topLeftCorner(5, 4) = big[kLayer];
+    big[kLayer] = wider;
+    expect_same_as_upstream(big, 0.0F, 100.0F);
+  }
+}
+
 TEST(OccupancyGridExport, CellLandsAtItsMapPosition)
 {
   for (int shift : {0, 23})

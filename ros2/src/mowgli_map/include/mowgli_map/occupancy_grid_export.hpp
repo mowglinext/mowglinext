@@ -100,6 +100,9 @@ inline void layer_to_occupancy_grid(const grid_map::GridMap& grid_map,
   };
   const int start_x = wrap(start(0), size_x);
   const int start_y = wrap(start(1), size_y);
+  // The layer's own column stride: a layer may be resized past the geometry
+  // through the mutable accessor, and upstream indexes the matrix itself.
+  const std::ptrdiff_t stride = data.outerStride();
   int8_t* const out = occupancy_grid.data.data();
   // Unwrapped columns [0, tail_y) are buffer columns [start_y, size_y).
   const int tail_y = size_y - start_y;
@@ -109,7 +112,7 @@ inline void layer_to_occupancy_grid(const grid_map::GridMap& grid_map,
     // without the sum (which can overflow int); inside it, unwrapped row i is
     // buffer row (start_x + i) mod size_x.
     const int buffer_col = j < tail_y ? start_y + j : j - tail_y;
-    const float* const column = data.data() + static_cast<std::size_t>(buffer_col) * size_x;
+    const float* const column = data.data() + static_cast<std::ptrdiff_t>(buffer_col) * stride;
     int8_t* const last = out + (n_cells - 1U - static_cast<std::size_t>(j) * size_x);
     const int head =
         size_x - start_x;  // unwrapped rows [0, head) are buffer rows [start_x, size_x)
