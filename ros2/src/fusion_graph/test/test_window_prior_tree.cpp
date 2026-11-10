@@ -436,12 +436,13 @@ namespace
 {
 
 // Distance in units in the last place between two finite doubles; 0 only
-// when they are bit-identical (so -0.0 vs +0.0 is not a match).
+// when they are bit-identical. Opposite sign bits (including -0.0 vs +0.0)
+// count as maximally apart, which also keeps the subtraction below in range.
 int64_t Ulps(double a, double b)
 {
   if (std::memcmp(&a, &b, sizeof(a)) == 0)
     return 0;
-  if ((a < 0) != (b < 0))
+  if (std::signbit(a) != std::signbit(b))
     return std::numeric_limits<int64_t>::max();
   int64_t ia, ib;
   std::memcpy(&ia, &a, sizeof(a));
