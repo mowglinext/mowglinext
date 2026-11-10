@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -209,6 +211,25 @@ func TestHTTPMissingPolicyCreatesNoRegister(t *testing.T) {
 	}
 	if _, err := (Store{Root: state}).Load(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHTTPConstructorRejectsTemporaryAndUncleanRegisterRoots(t *testing.T) {
+	policy := filepath.Join(t.TempDir(), "host.json")
+	host := schemaTestHost()
+	host.Platform = runtime.GOOS + "/" + runtime.GOARCH
+	raw, err := json.Marshal(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(policy, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, root := range []string{"/tmp/extensions", "/var/tmp/extensions", "/var/lib/../tmp/extensions", "relative/state"} {
+		service := NewHTTPHandler(policy, root, nil).(*HTTPService)
+		if _, err := service.load(); err == nil || !strings.Contains(err.Error(), "persistent absolute path") {
+			t.Fatalf("unsafe register root accepted: %s (%v)", root, err)
+		}
 	}
 }
 

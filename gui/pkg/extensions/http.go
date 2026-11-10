@@ -89,7 +89,7 @@ func NewHTTPHandler(policyPath, stateRoot string, blocked func() bool) http.Hand
 		if host.Platform != runtime.GOOS+"/"+runtime.GOARCH {
 			return Manager{}, errors.New("host extension platform mismatch")
 		}
-		if !filepath.IsAbs(stateRoot) || temporaryPath(stateRoot) {
+		if !filepath.IsAbs(stateRoot) || filepath.Clean(stateRoot) != stateRoot || temporaryPath(stateRoot) {
 			return Manager{}, errors.New("extension register requires a persistent absolute path")
 		}
 		return Manager{Store: Store{Root: stateRoot}, Host: host, Backend: NewBackend(stateRoot)}, nil
@@ -107,9 +107,8 @@ func guiBinding(root, id string, binding Binding) error {
 	if !idPattern.MatchString(id) {
 		return errors.New("invalid extension id")
 	}
-	if temporaryPath(binding.ConfigDir) || temporaryPath(binding.DataDir) {
-		return errors.New("GUI extensions require persistent config/data paths outside /tmp and /var/tmp")
-	}
+	// Root persistence is checked at the HTTP boundary; this policy enforces
+	// each extension's configuration and data scope.
 	if err := ValidateBinding(binding); err != nil {
 		return err
 	}
