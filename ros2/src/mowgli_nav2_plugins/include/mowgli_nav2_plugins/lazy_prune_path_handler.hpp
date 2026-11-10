@@ -1,6 +1,27 @@
 // Copyright (C) 2026 Mowgli Project
 //
-// SPDX-License-Identifier: GPL-3.0
+// SPDX-License-Identifier: GPL-3.0 AND Apache-2.0
+//
+// Portions of this file are derived from Nav2
+// (nav2_controller/plugins/feasible_path_handler.{hpp,cpp}, Nav2 1.5.2) and keep its notices:
+//
+//   Copyright (c) 2022 Samsung Research America, @artofnothingness Alexey Budyakov
+//   Copyright (c) 2023 Dexory
+//   Copyright (c) 2023 Open Navigation LLC
+//
+//   Licensed under the Apache License, Version 2.0 (the "License");
+//   you may not use this file except in compliance with the License.
+//   You may obtain a copy of the License at
+//
+//       http://www.apache.org/licenses/LICENSE-2.0
+//
+//   Unless required by applicable law or agreed to in writing, software
+//   distributed under the License is distributed on an "AS IS" BASIS,
+//   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//   See the License for the specific language governing permissions and
+//   limitations under the License.
+//
+// Modified for MowgliNext: pruning keeps the passed poses behind an offset (see below).
 //
 // LazyPrunePathHandler — Nav2's FeasiblePathHandler with O(1) amortized pruning.
 //
@@ -21,9 +42,10 @@
 // test against the real upstream plugin (test/test_lazy_prune_path_handler.cpp).
 //
 // The findPlanSegment / transformLocalPlan bodies follow
-// nav2_controller/plugins/feasible_path_handler.cpp (Nav2 1.5.2, Apache-2.0,
-// Copyright (c) 2025 Maurice Alexander Purnawan); parameters, setPlan's
-// constraint handling and getTransformedGoal are inherited unchanged.
+// nav2_controller/plugins/feasible_path_handler.cpp (Nav2 1.5.2); parameters and
+// getTransformedGoal are inherited unchanged. With enforce_path_inversion or
+// enforce_path_rotation the plan is compacted every cycle, so those modes keep
+// upstream's per-cycle cost.
 
 #pragma once
 

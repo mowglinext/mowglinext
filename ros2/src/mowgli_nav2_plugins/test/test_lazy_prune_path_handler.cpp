@@ -10,6 +10,7 @@
 // twins, cusps; robot on, off, behind, ahead of and far from the plan).
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <iterator>
@@ -17,6 +18,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <thread>
 #include <typeinfo>
 #include <vector>
 
@@ -76,6 +78,21 @@ nav_msgs::msg::Path Serpentine(std::size_t n, double len)
     y += 2.0 * r;
     dir = -dir;
   }
+  return PathOf(std::move(poses));
+}
+
+// Straight, an in-place rotation (a pivot corner: several poses at one position), straight on.
+// enforce_path_rotation cuts the plan at the rotation.
+nav_msgs::msg::Path LineRotateLine(std::size_t leg, double turn)
+{
+  std::vector<Pose> poses;
+  for (std::size_t i = 0; i < leg; ++i)
+    poses.push_back(MakePose(0.03 * static_cast<double>(i), 0.0, 0.0));
+  const double x = poses.back().pose.position.x;
+  for (int k = 1; k <= 12; ++k)
+    poses.push_back(MakePose(x, 0.0, turn * static_cast<double>(k) / 12.0));
+  for (std::size_t i = 1; i <= leg; ++i)
+    poses.push_back(MakePose(x, 0.03 * static_cast<double>(i), turn));
   return PathOf(std::move(poses));
 }
 
@@ -163,6 +180,10 @@ protected:
         costmap_->declare_parameter(p.get_name(), p.get_parameter_value());
     }
     costmap_->configure();
+    // configure() starts the costmap's executor thread; cleanup() cancels it and joins. If that
+    // happens before the thread has begun to spin (likely on a single core, for a test that
+    // finishes in a few ms) the cancel is lost and the join never returns. Let it start first.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     tf_ = costmap_->getTfBuffer();
     // A non-identity map -> odom, so every pose really goes through TF.
     geometry_msgs::msg::TransformStamped t;
@@ -192,7 +213,9 @@ protected:
 
   // One controller_server cycle on both; every observable must match.
   // Returns the (shared) exception text, if the cycle threw.
-  std::optional<std::string> ExpectSameCycle(const Pose& robot, const std::string& where)
+  std::optional<std::string> ExpectSameCycle(const Pose& robot,
+                                             const std::string& where,
+                                             bool compare_goal = true)
   {
     const auto a = Cycle(upstream_, robot);
     const auto b = Cycle(lazy_, robot);
@@ -205,6 +228,8 @@ protected:
       EXPECT_EQ(a.segment, b.segment) << where;
       EXPECT_EQ(a.local, b.local) << where;
     }
+    if (!compare_goal)
+      return a.error;
     const auto stamp = robot.header.stamp;
     std::optional<std::string> ga, gb;
     Pose goal_a, goal_b;
@@ -249,7 +274,11 @@ protected:
 
   // Drive a robot along the plan with noise, stalls, small reversals and the
   // occasional jump (a localisation correction), as controller_server would see.
-  void Drive(const nav_msgs::msg::Path& path, unsigned seed, int cycles, double jump_m)
+  void Drive(const nav_msgs::msg::Path& path,
+             unsigned seed,
+             int cycles,
+             double jump_m,
+             bool follow_yaw = false)
   {
     std::mt19937 rng(seed);
     std::normal_distribution<double> noise(0.0, 0.02);
@@ -271,7 +300,9 @@ protected:
         s += (u(rng) - 0.3) * jump_m / 0.03;  // jump
       s = std::clamp(s, 0.0, n - 1.0);
       const auto& p = path.poses[static_cast<std::size_t>(s)].pose;
-      Pose robot = MakePose(p.position.x + noise(rng), p.position.y + noise(rng), 0.0);
+      const double yaw =
+          follow_yaw ? 2.0 * std::atan2(p.orientation.z, p.orientation.w) + noise(rng) : 0.0;
+      Pose robot = MakePose(p.position.x + noise(rng), p.position.y + noise(rng), yaw);
       robot.header.frame_id = "map";
       robot.header.stamp = rclcpp::Time(static_cast<int64_t>(c) * 100000000LL, RCL_ROS_TIME);
       ExpectSameCycle(robot, "seed " + std::to_string(seed) + " cycle " + std::to_string(c));
@@ -373,6 +404,65 @@ TEST_F(Fixture, ConstraintBranchMatchesWithInversionEnforced)
     ASSERT_FALSE(HasFailure());
   }
   EXPECT_GE(inversions_, 4);
+}
+
+TEST_F(Fixture, ConstraintBranchMatchesWithRotationEnforced)
+{
+  // enforce_path_rotation cuts the plan at the pivot and refills it past it once the robot is
+  // within the inversion tolerances, with the robot's yaw following the plan (not a fixed 0).
+  ASSERT_TRUE(
+      node_
+          ->set_parameters({rclcpp::Parameter("PathHandler.enforce_path_rotation", true),
+                            rclcpp::Parameter("PathHandler.minimum_rotation_angle", 0.785)})[0]
+          .successful);
+  const auto path = LineRotateLine(120, 1.5);
+  for (unsigned seed = 51; seed <= 56; ++seed)
+  {
+    SetPlan(path);
+    Drive(path, seed, 500, 0.5, /*follow_yaw=*/true);
+    ASSERT_FALSE(HasFailure());
+  }
+  EXPECT_GE(inversions_, 6);
+}
+
+TEST_F(Fixture, EmptyPlanAndUnreachableRobotFrameMatchIncludingExceptions)
+{
+  // No plan at all.
+  // (getTransformedGoal is not compared: upstream takes .back() of the empty plan, and
+  // controller_server never calls it after findPlanSegment threw.)
+  SetPlan(PathOf({}));
+  EXPECT_TRUE(ExpectSameCycle(MakePose(0.0, 0.0, 0.0), "empty plan", false).has_value());
+  // A robot pose in a frame TF does not know, then a normal cycle: both must have thrown the same
+  // thing and still agree afterwards.
+  const auto path = Serpentine(600, 3.0);
+  SetPlan(path);
+  Pose lost = MakePose(0.1, 0.0, 0.0);
+  lost.header.frame_id = "nowhere";
+  EXPECT_TRUE(ExpectSameCycle(lost, "unknown frame").has_value());
+  Pose ok = MakePose(0.2, 0.0, 0.0);
+  ok.header.frame_id = "map";
+  ExpectSameCycle(ok, "after the TF failure");
+  Drive(path, 61, 200, 1.0);
+}
+
+TEST_F(Fixture, RejectUnitPathThrowsLikeUpstream)
+{
+  // reject_unit_path is read at initialize(), so a second pair is initialised under another
+  // plugin name on the same node, costmap and TF buffer.
+  node_->declare_parameter("PathHandlerUnit.reject_unit_path", true);
+  Probe<nav2_controller::FeasiblePathHandler> upstream;
+  Probe<mowgli_nav2_plugins::LazyPrunePathHandler> lazy;
+  upstream.initialize(node_, node_->get_logger(), "PathHandlerUnit", costmap_, tf_);
+  lazy.initialize(node_, node_->get_logger(), "PathHandlerUnit", costmap_, tf_);
+  const auto one = PathOf({MakePose(0.0, 0.0, 0.0)});
+  upstream.setPlan(one);
+  lazy.setPlan(one);
+  const Pose robot = MakePose(0.0, 0.0, 0.0);
+  const auto a = Cycle(upstream, robot);
+  const auto b = Cycle(lazy, robot);
+  ASSERT_TRUE(a.error.has_value());
+  EXPECT_EQ(a.error, b.error);
+  EXPECT_NE(a.error->find("length of one"), std::string::npos);
 }
 
 }  // namespace

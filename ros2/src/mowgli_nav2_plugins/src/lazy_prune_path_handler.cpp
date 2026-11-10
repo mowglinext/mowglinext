@@ -1,6 +1,27 @@
 // Copyright (C) 2026 Mowgli Project
 //
-// SPDX-License-Identifier: GPL-3.0
+// SPDX-License-Identifier: GPL-3.0 AND Apache-2.0
+//
+// Portions of this file are derived from Nav2
+// (nav2_controller/plugins/feasible_path_handler.{hpp,cpp}, Nav2 1.5.2) and keep its notices:
+//
+//   Copyright (c) 2022 Samsung Research America, @artofnothingness Alexey Budyakov
+//   Copyright (c) 2023 Dexory
+//   Copyright (c) 2023 Open Navigation LLC
+//
+//   Licensed under the Apache License, Version 2.0 (the "License");
+//   you may not use this file except in compliance with the License.
+//   You may obtain a copy of the License at
+//
+//       http://www.apache.org/licenses/LICENSE-2.0
+//
+//   Unless required by applicable law or agreed to in writing, software
+//   distributed under the License is distributed on an "AS IS" BASIS,
+//   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+//   See the License for the specific language governing permissions and
+//   limitations under the License.
+//
+// Modified for MowgliNext: pruning keeps the passed poses behind an offset (see below).
 //
 // LazyPrunePathHandler — implementation. See the header for the why.
 

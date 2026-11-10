@@ -41,7 +41,8 @@ with the stack's plan QoS (`sub` in one shell, then `pub 5`; use the production
 
 ## Results (x86 i7-10700K, one core, machine load 20–40, 2026-11-09)
 
-See `PERF_REPORT_PATH.md` at the repository root for the interleaved A/B and the
+See `docs/COVERAGE_PATH_TRANSPORT_PERFORMANCE.md` for the interleaved A/B and the
 interpretation. In short: FTC (~8.2 ms) and the goal checker (~0.1 µs) do not
-depend on the path length; controller_server's bookkeeping grows ~22 ns per
-remaining pose with upstream's `FeasiblePathHandler` (8.9 ms at 400k poses).
+depend on the path length; controller_server's bookkeeping grows ~18 ns per
+remaining pose with upstream's `FeasiblePathHandler` (7.2 ms at 400k poses, A/B median; 19.9 ms on a
+Raspberry Pi 5), and 3.1 / 5.5 ms with `LazyPrunePathHandler`.

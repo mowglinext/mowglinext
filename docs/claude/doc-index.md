@@ -16,6 +16,9 @@
   perf/authorized-transit-planning
 - [Transit planner performance](../TRANSIT_PLANNER_PERFORMANCE.md) — **current**, contributor:
   optimization evidence, reproducible benchmarks and required Pi 4 validation.
+- [Coverage path transport performance](../COVERAGE_PATH_TRANSPORT_PERFORMANCE.md) — **current**,
+  contributor: per-cycle cost of following a long coverage sub-path, `LazyPrunePathHandler`,
+  benchmarks, Pi 5 numbers and what was not tested.
 - [Automatic blackbox](../BLACKBOX.md) — **current**, operator/contributor:
   passive RAM recorder, triggers, Diagnostics controls, resource/storage limits
   and target-system validation procedure.
