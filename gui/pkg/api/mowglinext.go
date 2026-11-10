@@ -34,6 +34,22 @@ const wsWriteTimeout = 5 * time.Second
 // are not worth the CPU. 4 KiB is well below any grid and above every status message.
 const wsCompressMinBytes = 4 * 1024
 
+// Diagnostics frames are compressed from a much lower size: after the per-status
+// limit (diagnostics_rate.go) there are only a few per second, and they are text
+// that repeats in every status (names, messages, value keys). The 0.5-3 kB
+// arrays of the mowgli/* and Nav2 updaters were otherwise sent at full size and
+// were half of what a client still received (#1097).
+const wsDiagnosticsCompressMinBytes = 512
+
+// compressFrame reports whether a multiplex frame of size bytes on topic is sent
+// with permessage-deflate (when the browser negotiated it).
+func compressFrame(topic string, size int) bool {
+	if topic == "diagnostics" {
+		return size >= wsDiagnosticsCompressMinBytes
+	}
+	return size >= wsCompressMinBytes
+}
+
 // wsCompressionLevel favours speed: the mower's CPU is small and the win comes from
 // the redundancy of the data, not from squeezing the last byte.
 const wsCompressionLevel = 1
@@ -487,7 +503,7 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			// timeout/error, close the conn so the read loop unblocks and the
 			// deferred cleanup releases all subscriptions.
 			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-			conn.EnableWriteCompression(payload.Len() >= wsCompressMinBytes)
+			conn.EnableWriteCompression(compressFrame(topic, payload.Len()))
 			if err := conn.WriteMessage(websocket.BinaryMessage, payload.Bytes()); err != nil {
 				_ = conn.Close()
 			}

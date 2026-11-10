@@ -116,3 +116,65 @@ func TestMultiplexDoesNotCompressSmallFrames(t *testing.T) {
 	require.Equal(t, small, r.cells)
 	require.Less(t, r.wireBytes, int64(wsCompressMinBytes))
 }
+
+// Diagnostics frames are compressed well below wsCompressMinBytes; every other
+// topic keeps the 4 KiB threshold.
+func TestCompressFrameThresholds(t *testing.T) {
+	require.False(t, compressFrame("diagnostics", wsDiagnosticsCompressMinBytes-1))
+	require.True(t, compressFrame("diagnostics", wsDiagnosticsCompressMinBytes))
+	require.False(t, compressFrame("pose", wsDiagnosticsCompressMinBytes))
+	require.False(t, compressFrame("status", wsCompressMinBytes-1))
+	require.True(t, compressFrame("mowProgress", wsCompressMinBytes))
+}
+
+// A 1-2 kB array like the robot's mowgli/* updater sends travels compressed and
+// arrives intact.
+func TestMultiplexCompressesSmallDiagnosticsFrames(t *testing.T) {
+	p := compactFrameProvider{subscribed: make(chan func([]byte), 1)}
+	server := httptest.NewServer(setupMowgliNextRouter(p))
+	defer server.Close()
+	var wire int64
+	dialer := websocket.Dialer{EnableCompression: true, NetDial: func(network, addr string) (net.Conn, error) {
+		conn, err := net.Dial(network, addr)
+		return countingConn{Conn: conn, read: &wire}, err
+	}}
+	conn, _, err := dialer.Dial("ws"+strings.TrimPrefix(server.URL, "http")+"/api/mowglinext/multiplex", nil)
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.WriteJSON(map[string]string{"op": "subscribe", "topic": "diagnostics"}))
+	var cb func([]byte)
+	select {
+	case cb = <-p.subscribed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscription was not registered")
+	}
+	var statuses []map[string]any
+	for _, name := range []string{"Hardware Bridge", "IMU", "Odometry", "GPS", "Battery", "Motors", "Emergency System", "LiDAR"} {
+		statuses = append(statuses, map[string]any{"level": 0, "name": name, "message": "OK", "hardware_id": "mowgli/" + strings.ToLower(name),
+			"values": []map[string]string{{"key": "age_s", "value": "0.021"}, {"key": "rate_hz", "value": "10.0"}}})
+	}
+	data, err := json.Marshal(map[string]any{"header": map[string]any{"stamp": map[string]any{"sec": 1, "nanosec": 0}}, "status": statuses})
+	require.NoError(t, err)
+
+	before := atomic.LoadInt64(&wire)
+	go cb(data)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(3*time.Second)))
+	_, raw, err := conn.ReadMessage()
+	require.NoError(t, err)
+	got := atomic.LoadInt64(&wire) - before
+
+	var frame struct {
+		Topic string `msgpack:"topic"`
+		Data  struct {
+			Status []struct {
+				Name string `msgpack:"name"`
+			} `msgpack:"status"`
+		} `msgpack:"data"`
+	}
+	require.NoError(t, msgpack.Unmarshal(raw, &frame))
+	require.Equal(t, "diagnostics", frame.Topic)
+	require.Len(t, frame.Data.Status, len(statuses))
+	require.GreaterOrEqual(t, len(raw), wsDiagnosticsCompressMinBytes)
+	require.Less(t, len(raw), wsCompressMinBytes, "the frame must be below the general threshold")
+	require.Less(t, got, int64(len(raw))*2/3, "a %d B diagnostics frame should be compressed, got %d B on the wire", len(raw), got)
+}
