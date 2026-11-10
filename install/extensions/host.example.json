@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "installation": "mowgli",
+  "platform": "linux/arm64",
+  "contracts": ["reviewed:connect-gui-b5e46ed"],
+  "trusted_repositories": ["liltaket/mowgli-connect", "liltaket/mowgli-lora-link"],
+  "approved_grants": ["network:gui-api", "network:relay-egress", "sandbox:connect-nft-bootstrap", "storage:extension-data", "serial:lora-modem", "network:loopback-rtcm"],
+  "external_units": ["mowgli-lora-robot.service"]
+}

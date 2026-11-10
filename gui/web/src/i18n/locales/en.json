@@ -37,7 +37,14 @@
     "cancel": "Cancel",
     "interrupted": "Capture interrupted",
     "dropped": "{{count}} capture observations dropped",
-    "phase": {"ready": "Ready", "disabled": "Disabled", "capturing": "Collecting post-event history", "writing": "Saving snapshot", "pruning": "Applying storage limits", "stopped": "Stopped"}
+    "phase": {
+      "ready": "Ready",
+      "disabled": "Disabled",
+      "capturing": "Collecting post-event history",
+      "writing": "Saving snapshot",
+      "pruning": "Applying storage limits",
+      "stopped": "Stopped"
+    }
   },
   "bladeDirection": {
     "title": "Requested blade direction",
@@ -319,7 +326,9 @@
     "onboarding": "Onboarding",
     "more": "More",
     "close": "Close",
-    "setupShort": "Setup"
+    "setupShort": "Setup",
+    "extensions": "Extensions",
+    "extensionsShort": "Add-ons"
   },
   "pageMeta": {
     "home": {
@@ -349,6 +358,9 @@
     },
     "logs": {
       "subtitle": "Container output"
+    },
+    "extensions": {
+      "subtitle": "Optional integrations, explicit permissions"
     }
   },
   "parametersPage": {
@@ -3332,7 +3344,11 @@
     "newKey": "New parameter name",
     "newValue": "New parameter value",
     "valueType": "Value type",
-    "types": {"string": "String", "number": "Number", "boolean": "Boolean"},
+    "types": {
+      "string": "String",
+      "number": "Number",
+      "boolean": "Boolean"
+    },
     "invalidName": "Use an exact flat parameter name: letters, digits and underscores; start with a letter or underscore. No automatic renaming.",
     "duplicateKey": "This parameter already exists, including pending deletions.",
     "protectedKey": "This parameter belongs to another section or is hidden/retired.",
@@ -5432,5 +5448,113 @@
     "body": "The wheels dug in repeatedly here and the mower is still {{distance}} m from the spot. Check that nothing is stuck under or in front of it. If it digs in once more at this spot, it will stop again.",
     "ok": "Resume mowing",
     "cancel": "Cancel"
+  },
+  "extensions": {
+    "title": "Extensions",
+    "intro": "Manage optional integrations separately from the mower. Import a bundle to review its source, permissions and compatibility before changing anything.",
+    "customImport": "Custom import",
+    "refresh": "Refresh",
+    "loading": "Loading extensions",
+    "unavailable": "Extension Manager unavailable",
+    "setupTitle": "Host setup required",
+    "setupHelp": "The host extension helper and its registry must be configured by an administrator. On an older installation, update the host tooling first. Refresh after setup; this page cannot change repository trust or host permissions.",
+    "source": "Repository",
+    "revision": "Source commit",
+    "runtime": "Runtime / profile",
+    "units": "Services",
+    "permissions": "Permissions",
+    "noPermissions": "No permissions requested",
+    "digest": "Bundle identity",
+    "healthLimits": "Health has separate layers",
+    "processOnlyHelp": "This integration reports process status only. A running process does not verify application readiness or stored data.",
+    "applicationHelp": "Application and data health remain unknown unless the integration provides evidence. A running process alone is not a health check.",
+    "process": "Process",
+    "application": "Application",
+    "data": "Data",
+    "sourceUnknown": "Source unavailable",
+    "managed": "Managed",
+    "observeOnly": "Observe only",
+    "compatible": "Compatible",
+    "incompatible": "Blocked",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "externalHelp": "This service is managed outside MowgliNext. You can observe it or forget its registration; its process and data stay untouched.",
+    "recoveryRequired": "An interrupted operation needs recovery",
+    "blocked": "Cannot apply this bundle",
+    "update": "Import update",
+    "details": "Source and permissions",
+    "empty": "No extensions registered. Start with a custom import.",
+    "repositoriesHelp": "Integrations live in their own repositories. Official, community and private integrations use the same bundle format. Importing does not automatically trust a repository.",
+    "cancel": "Cancel",
+    "review": "Review bundle",
+    "applyImport": "Apply reviewed import",
+    "confirm": "Confirm",
+    "confirmTitle": "{{action}} {{id}}?",
+    "importHelp": "Choose a local JSON bundle (up to 2 MiB). Review it before applying. Managed extensions are installed disabled; enabling is a separate step. External services stay under their existing manager.",
+    "bundleFile": "Bundle file",
+    "fileLimit": "Choose a .json file no larger than 2 MiB.",
+    "invalidFile": "Could not read this JSON bundle. Choose a valid local JSON object and retry.",
+    "importAction": "Import action",
+    "advancedBinding": "Advanced: existing project and storage",
+    "bindingHelp": "Leave fields blank to use host defaults. Adoption requires the existing project name. Paths must identify separate configuration and data directories.",
+    "adoptProject": "Enter the existing project name to adopt this extension.",
+    "trustHelp": "An administrator must approve the repository and requested permissions in the host configuration. Community or private sources are supported when explicitly trusted.",
+    "binding": {
+      "project": "Project",
+      "config_dir": "Configuration directory",
+      "data_dir": "Data directory"
+    },
+    "importActions": {
+      "install": "Install disabled",
+      "adopt": "Adopt existing installation",
+      "upgrade": "Upgrade registered extension"
+    },
+    "importRetention": {
+      "install": "This registers the bundle without starting it. Existing retained data is preserved. Enable it separately after installation.",
+      "adopt": "This takes ownership of the named existing project. Review the project and storage paths carefully; existing data is retained.",
+      "upgrade": "This replaces the registered version and may restart an enabled extension. Configuration and data are retained; review any data compatibility blockers.",
+      "external": "This registers an external service for observation only. Its existing manager, processes, configuration and data remain untouched."
+    },
+    "actions": {
+      "enable": "Enable",
+      "disable": "Disable",
+      "rollback": "Roll back",
+      "remove": "Remove",
+      "forget": "Forget registration",
+      "recover": "Recover",
+      "install": "Install",
+      "adopt": "Adopt",
+      "upgrade": "Upgrade"
+    },
+    "actionHelp": {
+      "enable": "Start this extension with its reviewed permissions and retained data. This does not change mower software.",
+      "disable": "Stop this extension. Its registration, configuration and data are retained.",
+      "rollback": "Restore the previous registered bundle. Configuration and data are retained; rollback is allowed only when data remains compatible.",
+      "remove": "Remove this disabled extension’s managed services and registration. Configuration, data and storage volumes are retained.",
+      "forget": "Forget this external service’s registration. The service keeps running under its existing manager; configuration and data are untouched.",
+      "recover": "Reconcile the interrupted extension operation from the host journal. Configuration and data are retained. Review the resulting state before retrying another action."
+    },
+    "operation": {
+      "running": "{{action}} {{id}} in progress",
+      "succeeded": "{{action}} {{id}} completed",
+      "failed": "{{action}} {{id}} failed"
+    },
+    "health": {
+      "unknown": "Unknown",
+      "running": "Running",
+      "stopped": "Stopped",
+      "healthy": "Healthy",
+      "unhealthy": "Unhealthy",
+      "ready": "Ready",
+      "verified": "Verified",
+      "failed": "Failed",
+      "error": "Error",
+      "not-checked": "Not checked",
+      "not-observed": "Not observed",
+      "not-applicable": "Not applicable",
+      "unverified": "Unverified"
+    },
+    "previousVersion": "Previous version",
+    "reviewIdentity": "Review identity"
   }
 }

@@ -1,0 +1,21 @@
+{
+  "manifest": {
+    "schema": 1,
+    "id": "mowgli-lora-link",
+    "version": "0.2.0",
+    "source": {
+      "repository": "liltaket/mowgli-lora-link",
+      "revision": "f1c5fd7ebea9469a218d580a0fdb8dafda672bba"
+    },
+    "runtime": { "kind": "external-systemd", "units": ["mowgli-lora-robot.service"] },
+    "requires": {
+      "manager_api": 1,
+      "platforms": ["linux/arm64", "linux/amd64"],
+      "contracts": []
+    },
+    "grants": ["serial:lora-modem", "network:loopback-rtcm"],
+    "data_schema": 1,
+    "health": "application",
+    "profile": "external"
+  }
+}

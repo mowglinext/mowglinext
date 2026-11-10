@@ -1,0 +1,33 @@
+.extensions-page { max-width: 1060px; margin: 0 auto; display: grid; gap: 20px; }
+.extensions-intro { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }
+.extensions-intro p { max-width: 66ch; margin: 0; color: var(--ink-2); line-height: 1.65; }
+.extensions-toolbar { display: flex; flex-wrap: wrap; gap: 10px; flex-shrink: 0; }
+.extensions-list { border: 1px solid var(--border-soft); border-radius: 16px; background: var(--bg-card-solid); overflow: hidden; }
+.extension-row { padding: 24px; display: grid; gap: 16px; }
+.extension-row + .extension-row { border-top: 1px solid var(--border-soft); }
+.extension-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.extension-name { font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+.extension-source { color: var(--ink-2); overflow-wrap: anywhere; margin-top: 6px; }
+.extension-health { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+.extension-health span { display: flex; align-items: center; gap: 8px; }
+.extension-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.extension-preview { display: grid; gap: 16px; margin-top: 20px; }
+.extension-preview dl { margin: 0; display: grid; grid-template-columns: 125px minmax(0, 1fr); gap: 10px 16px; }
+.extension-preview dt { color: var(--ink-2); }
+.extension-preview dd { margin: 0; overflow-wrap: anywhere; }
+.extension-import-form { display: grid; gap: 18px; }
+.extension-import-form label { display: grid; gap: 8px; }
+.extension-import-form > .ant-typography, .extension-preview h4 { overflow-wrap: anywhere; }
+.extension-file { width: 100%; border: 1px dashed var(--border-sharp); padding: 16px; border-radius: 10px; color: inherit; }
+.extension-file::file-selector-button { font: inherit; padding: 7px 12px; margin-right: 12px; border-radius: 7px; border: 1px solid var(--border-soft); background: var(--bg-elevated); color: inherit; cursor: pointer; }
+.extension-file:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+.extension-binding { display: grid; gap: 14px; }
+.extension-helper { color: var(--ink-2); font-size: 13px; line-height: 1.6; }
+@media (max-width: 700px) {
+    .extensions-intro, .extension-heading { flex-direction: column; }
+    .extensions-toolbar { width: 100%; }
+    .extensions-toolbar > .ant-btn-primary { flex: 1; }
+    .extension-row { padding: 18px; }
+    .extension-preview dl { grid-template-columns: 1fr; gap: 5px; }
+    .extension-preview dd { margin-bottom: 8px; }
+}

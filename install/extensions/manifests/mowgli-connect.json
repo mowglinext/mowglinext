@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "id": "mowgli-connect",
+  "version": "0.1.0",
+  "source": {
+    "repository": "liltaket/mowgli-connect",
+    "revision": "c70c97122b97c5d482ba4d56258f798b88403983"
+  },
+  "runtime": { "kind": "compose" },
+  "requires": {
+    "manager_api": 1,
+    "platforms": ["linux/arm64", "linux/amd64"],
+    "contracts": ["reviewed:connect-gui-b5e46ed"]
+  },
+  "grants": ["network:gui-api", "network:relay-egress", "sandbox:connect-nft-bootstrap", "storage:extension-data"],
+  "data_schema": 1,
+  "health": "process-only",
+  "profile": "connect"
+}

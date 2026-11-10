@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/mowglinext/mowglinext/pkg/extensions"
 )
 
 // absentMeansTrue reads a tri-state request flag whose omission comes from a
@@ -24,6 +26,15 @@ func Client(socket string) *http.Client {
 }
 func (m *Manager) Handler(config HostConfig) http.Handler {
 	mux := http.NewServeMux()
+	policy := os.Getenv("MOWGLI_EXTENSIONS_CONFIG")
+	if policy == "" {
+		policy = "/etc/mowgli-extensions/host.json"
+	}
+	root := os.Getenv("MOWGLI_EXTENSIONS_STATE_DIR")
+	if root == "" {
+		root = "/var/lib/mowgli-extensions"
+	}
+	mux.Handle("/v1/extensions/", http.StripPrefix("/v1/extensions", extensions.NewHTTPHandler(policy, root, func() bool { return m.Snapshot().Job.Pending() })))
 	respond := func(w http.ResponseWriter, value any, err error) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
