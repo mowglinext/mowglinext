@@ -31,6 +31,7 @@ std::atomic<bool> record_publications{false};
 std::vector<std::vector<std::string>> publications;
 std::atomic<int> area_publications{0}, generation_publications{0}, mask_publications{0};
 std::vector<size_t> area_sizes;  // sizes of the recorded-area lists that went out
+std::vector<std::string> sent;  // order of area-list / corridor / generation sends
 bool matches(int fd, const std::string& target)
 {
   char key[64], path[4096];
@@ -116,9 +117,13 @@ extern "C" rcl_ret_t rcl_publish(const rcl_publisher_t* publisher,
         return RCL_RET_ERROR;
       }
       area_sizes.push_back(data.areas.size());
+      sent.push_back("areas:" + std::to_string(data.areas.size()));
     }
     if (std::string(topic) == "/map_server_node/area_list_generation")
+    {
       generation_publications++;
+      sent.push_back("generation");
+    }
     if (std::string(topic) == "/keepout_mask")
     {
       if (fault == 10)
@@ -146,6 +151,7 @@ extern "C" rcl_ret_t rcl_publish(const rcl_publisher_t* publisher,
         names.push_back(c.name);
       std::lock_guard<std::mutex> lock(publication_mutex);
       publications.push_back(std::move(names));
+      sent.push_back("corridors");
     }
   }
   return actual(publisher, msg, allocation);
@@ -408,6 +414,7 @@ protected:
     ASSERT_NE(old.find("kept-obstacle"), std::string::npos);
     area_publications = 0;
     area_sizes.clear();
+    sent.clear();
     generation_publications = 0;
     mask_publications = 0;
     record_publications = true;
@@ -1579,6 +1586,48 @@ protected:
     EXPECT_EQ(area_publications.load(), count);
   }
 
+  void run_RestoreNeverPairsGeometryFromTwoMaps()
+  {
+    node->publish_recorded_area_list();  // the filter knows the old map
+    sent.clear();
+    ASSERT_TRUE(restore(replacement()).success);
+    // Filter off, restored corridors, then the restored list.
+    EXPECT_EQ(sent, (std::vector<std::string>{"areas:0", "corridors", "generation", "areas:2"}));
+  }
+
+  void run_MaskFailureOnTheScheduledRebuildIsContained()
+  {
+    fault = 10;
+    ASSERT_TRUE(restore(replacement()).committed);
+    node->mask_rebuild_not_before_ = {};
+    EXPECT_NO_THROW(retry_publication());
+    EXPECT_TRUE(node->masks_dirty_);
+    fault = 0;
+    retry_publication();
+    EXPECT_FALSE(node->masks_dirty_);
+    EXPECT_GT(node->cached_keepout_mask_.info.width, 0u);
+  }
+
+  void run_ReloadDuringAPendingRestoreKeepsTheList()
+  {
+    fault = 6;
+    ASSERT_EQ(restore(replacement()).outcome, "COMMITTED_PUBLICATION_PENDING");
+    fault = 0;
+    auto loaded = node->load_areas_service_for_test();
+    ASSERT_TRUE(loaded.success) << loaded.message;
+    ASSERT_FALSE(node->recorded_areas_publication_pending_);
+    ASSERT_TRUE(node->restore_publication_pending_);
+    fault = 6;
+    retry_publication();  // blanks the list, corridors fail again
+    EXPECT_TRUE(node->recorded_areas_publication_pending_);
+    fault = 0;
+    retry_publication();
+    EXPECT_FALSE(node->restore_publication_pending_);
+    EXPECT_FALSE(node->area_list_published_empty_);
+    ASSERT_FALSE(area_sizes.empty());
+    EXPECT_EQ(area_sizes.back(), 2u);
+  }
+
   void run_BootLoadReadsCommittedFileAndKeepsGenerationAtZero()
   {
     ASSERT_TRUE(restore(replacement()).success);
@@ -1663,6 +1712,21 @@ TEST_F(RestoreTransactionTest, MaskPublicationFailureAfterCommitStaysInside)
 TEST_F(RestoreTransactionTest, AreaListFailureDuringRetryStaysPending)
 {
   run_AreaListFailureDuringRetryStaysPending();
+}
+
+TEST_F(RestoreTransactionTest, RestoreNeverPairsGeometryFromTwoMaps)
+{
+  run_RestoreNeverPairsGeometryFromTwoMaps();
+}
+
+TEST_F(RestoreTransactionTest, MaskFailureOnTheScheduledRebuildIsContained)
+{
+  run_MaskFailureOnTheScheduledRebuildIsContained();
+}
+
+TEST_F(RestoreTransactionTest, ReloadDuringAPendingRestoreKeepsTheList)
+{
+  run_ReloadDuringAPendingRestoreKeepsTheList();
 }
 
 }  // namespace mowgli_map

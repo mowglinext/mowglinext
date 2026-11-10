@@ -1229,8 +1229,17 @@ void MapServerNode::on_publish_timer()
     // add_area sat in the queue — the "context deadline exceeded" on save.
     if (masks_dirty_ && std::chrono::steady_clock::now() >= mask_rebuild_not_before_)
     {
-      publish_keepout_mask();
-      masks_dirty_ = false;
+      // A failed publication stays dirty and is rebuilt on the next tick.
+      try
+      {
+        publish_keepout_mask();
+        masks_dirty_ = false;
+      }
+      catch (const std::exception& e)
+      {
+        RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 30000, "Keepout mask publication failed: %s", e.what());
+      }
     }
 
     // Rebuild the full-extent OccupancyGrid only after coverage changed, then
