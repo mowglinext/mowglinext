@@ -186,15 +186,21 @@ void MapServerNode::commit_corridors(std::vector<LidarIgnoreCorridorEntry> candi
   result.persisted = durable;
   result.revision = ++corridor_revision_;
   corridor_publication_pending_ = true;
-  try
+  // A pending restore publishes the corridors itself, after switching the
+  // filter off (publish_restored_areas); sending them now could pair them with
+  // the area list from before the restore.
+  if (!restore_publication_pending_)
   {
-    lidar_ignore_corridors_pub_->publish(message);
-    corridor_publication_pending_ = false;
-    result.published = true;
-  }
-  catch (const std::exception& e)
-  {
-    RCLCPP_ERROR(get_logger(), "Corridor commit completed; publication pending: %s", e.what());
+    try
+    {
+      lidar_ignore_corridors_pub_->publish(message);
+      corridor_publication_pending_ = false;
+      result.published = true;
+    }
+    catch (const std::exception& e)
+    {
+      RCLCPP_ERROR(get_logger(), "Corridor commit completed; publication pending: %s", e.what());
+    }
   }
   if (!write_error.empty())
   {

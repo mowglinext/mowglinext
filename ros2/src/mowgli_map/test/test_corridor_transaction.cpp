@@ -111,7 +111,7 @@ extern "C" rcl_ret_t rcl_publish(const rcl_publisher_t* publisher,
     {
       area_publications++;
       const auto& data = *static_cast<const mowgli_interfaces::msg::RecordedAreaPolygonArray*>(msg);
-      if (fault == 11 && !data.areas.empty())
+      if (fault == 12 || (fault == 11 && !data.areas.empty()))
       {
         RCL_SET_ERROR_MSG("injected area list publication failure");
         return RCL_RET_ERROR;
@@ -1628,6 +1628,29 @@ protected:
     EXPECT_EQ(area_sizes.back(), 2u);
   }
 
+  void run_PendingRestoreHoldsEveryCorridorPublication()
+  {
+    node->publish_recorded_area_list();  // the filter knows the old map
+    sent.clear();
+    fault = 6;
+    ASSERT_EQ(replace({corridor("original", 41)}).outcome, "COMMITTED_PUBLICATION_PENDING");
+    fault = 12;  // the restore cannot switch the filter off
+    ASSERT_EQ(restore(replacement()).outcome, "COMMITTED_PUBLICATION_PENDING");
+    ASSERT_FALSE(node->area_list_published_empty_);
+    // Neither the older corridor retry nor a new corridor edit may send the
+    // restored corridors while the old areas are live.
+    EXPECT_NO_THROW(retry_publication());
+    ASSERT_TRUE(replace({corridor("latest", 301)}).committed);
+    EXPECT_TRUE(publications.empty());
+    fault = 0;
+    retry_publication();
+    EXPECT_FALSE(node->restore_publication_pending_);
+    EXPECT_FALSE(node->corridor_publication_pending_);
+    ASSERT_EQ(publications.size(), 1u);
+    EXPECT_EQ(publications.back(), (std::vector<std::string>{"latest"}));
+    EXPECT_EQ(sent, (std::vector<std::string>{"areas:0", "corridors", "generation", "areas:2"}));
+  }
+
   void run_BootLoadReadsCommittedFileAndKeepsGenerationAtZero()
   {
     ASSERT_TRUE(restore(replacement()).success);
@@ -1727,6 +1750,11 @@ TEST_F(RestoreTransactionTest, MaskFailureOnTheScheduledRebuildIsContained)
 TEST_F(RestoreTransactionTest, ReloadDuringAPendingRestoreKeepsTheList)
 {
   run_ReloadDuringAPendingRestoreKeepsTheList();
+}
+
+TEST_F(RestoreTransactionTest, PendingRestoreHoldsEveryCorridorPublication)
+{
+  run_PendingRestoreHoldsEveryCorridorPublication();
 }
 
 }  // namespace mowgli_map

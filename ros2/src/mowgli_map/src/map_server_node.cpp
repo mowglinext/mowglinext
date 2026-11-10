@@ -1168,7 +1168,8 @@ void MapServerNode::on_publish_timer()
 
   {
     std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
-    if (corridor_publication_pending_)
+    // A pending restore owns the corridors (see publish_restored_areas).
+    if (corridor_publication_pending_ && !restore_publication_pending_)
     {
       try
       {
