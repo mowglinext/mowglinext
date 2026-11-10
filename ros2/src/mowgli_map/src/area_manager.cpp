@@ -1636,7 +1636,9 @@ void MapServerNode::on_load_areas(const std_srvs::srv::Trigger::Request::SharedP
 // from the canonical live state on the timer, without another write or generation bump.
 // The corridor filter consumes the area list and the corridors as two topics, so
 // a restore switches it off (empty list) before the corridors go out and sends
-// the real list last: it never pairs geometry from two different maps. A retry
+// the real list last. That is the send order only: DDS does not order callbacks
+// across topics, so a subscriber can still briefly pair them (see the PR #1130
+// risk note). A retry
 // only republishes: the mask was invalidated once by on_restore_areas (a retry
 // after the settled rebuild must not empty it again), and the list is sent only
 // while no later clear_map or add_area owns it (that edit sends it once it has

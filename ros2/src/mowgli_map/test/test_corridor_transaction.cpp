@@ -1651,6 +1651,21 @@ protected:
     EXPECT_EQ(sent, (std::vector<std::string>{"areas:0", "corridors", "generation", "areas:2"}));
   }
 
+  void run_CorridorClearStillGoesOutDuringAPendingRestore()
+  {
+    node->publish_recorded_area_list();  // the filter knows the old map
+    fault = 12;  // the restore cannot switch the filter off
+    ASSERT_EQ(restore(replacement()).outcome, "COMMITTED_PUBLICATION_PENDING");
+    ASSERT_TRUE(publications.empty());
+    // Removing every line suppresses nothing, whatever areas it meets.
+    auto r = replace({});
+    EXPECT_EQ(r.outcome, "COMMITTED");
+    ASSERT_EQ(publications.size(), 1u);
+    EXPECT_TRUE(publications.back().empty());
+    EXPECT_FALSE(node->corridor_publication_pending_);
+    EXPECT_TRUE(node->restore_publication_pending_);
+  }
+
   void run_BootLoadReadsCommittedFileAndKeepsGenerationAtZero()
   {
     ASSERT_TRUE(restore(replacement()).success);
@@ -1755,6 +1770,11 @@ TEST_F(RestoreTransactionTest, ReloadDuringAPendingRestoreKeepsTheList)
 TEST_F(RestoreTransactionTest, PendingRestoreHoldsEveryCorridorPublication)
 {
   run_PendingRestoreHoldsEveryCorridorPublication();
+}
+
+TEST_F(RestoreTransactionTest, CorridorClearStillGoesOutDuringAPendingRestore)
+{
+  run_CorridorClearStillGoesOutDuringAPendingRestore();
 }
 
 }  // namespace mowgli_map

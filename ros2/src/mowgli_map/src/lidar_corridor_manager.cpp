@@ -188,8 +188,9 @@ void MapServerNode::commit_corridors(std::vector<LidarIgnoreCorridorEntry> candi
   corridor_publication_pending_ = true;
   // A pending restore publishes the corridors itself, after switching the
   // filter off (publish_restored_areas); sending them now could pair them with
-  // the area list from before the restore.
-  if (!restore_publication_pending_)
+  // the area list from before the restore. An empty list suppresses nothing
+  // whatever areas it meets, so a clear still goes out at once.
+  if (!restore_publication_pending_ || message.corridors.empty())
   {
     try
     {
