@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -42,12 +43,30 @@ type httpRequest struct {
 	Acknowledged   bool            `json:"acknowledged,omitempty"`
 }
 type httpReview struct {
-	Manifest Manifest `json:"manifest"`
-	Digest   string   `json:"digest"`
-	Binding  Binding  `json:"binding"`
-	Action   string   `json:"action"`
-	Blockers []string `json:"blockers"`
+	Manifest Manifest        `json:"manifest"`
+	Digest   string          `json:"digest"`
+	Binding  Binding         `json:"binding"`
+	Action   string          `json:"action"`
+	Blockers []string        `json:"blockers"`
+	Services []reviewService `json:"services"`
 	current  string
+}
+type reviewMount struct {
+	Type     string `json:"type"`
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only"`
+}
+type reviewNetwork struct {
+	Name     string `json:"name"`
+	Internal bool   `json:"internal"`
+}
+type reviewService struct {
+	Name            string          `json:"name"`
+	Image           string          `json:"image"`
+	Mounts          []reviewMount   `json:"mounts"`
+	Networks        []reviewNetwork `json:"networks"`
+	EnvironmentKeys []string        `json:"environment_keys"`
 }
 
 // NewHTTPHandler uses host-admin paths only. Missing policy leaves GUI setup
@@ -84,11 +103,21 @@ func temporaryPath(path string) bool {
 	}
 	return false
 }
-func persistentBinding(binding Binding) error {
+func guiBinding(root, id string, binding Binding) error {
+	if !idPattern.MatchString(id) {
+		return errors.New("invalid extension id")
+	}
 	if temporaryPath(binding.ConfigDir) || temporaryPath(binding.DataDir) {
 		return errors.New("GUI extensions require persistent config/data paths outside /tmp and /var/tmp")
 	}
-	return ValidateBinding(binding)
+	if err := ValidateBinding(binding); err != nil {
+		return err
+	}
+	within := func(path, base string) bool { return path == base || strings.HasPrefix(path, base+"/") }
+	if !within(binding.ConfigDir, filepath.Join("/etc/mowgli-extensions", id)) || !within(binding.DataDir, filepath.Join(root, id)) {
+		return errors.New("GUI storage must stay inside this extension's config and register directories; use the local CLI for other paths")
+	}
+	return nil
 }
 func extensionJSON(w http.ResponseWriter, code int, value any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -120,6 +149,9 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	root := m.Store.Root
+	m.bindingPolicy = func(id string, binding Binding) error { return guiBinding(root, id, binding) }
+	m.phaseTimeout = 2 * time.Minute
 	if r.Method == http.MethodGet {
 		// Polling an active job must not contend with its durable transaction lock.
 		if s.operation == nil || s.operation.Phase != "running" {
@@ -183,7 +215,7 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				extensionError(w, 409, errors.New("the reviewed release changed; refresh and review again"))
 				return
 			}
-			if e = persistentBinding(entry.Active.Binding); e != nil {
+			if e = m.approveBinding(request.ID, entry.Active.Binding); e != nil {
 				extensionError(w, 409, e)
 				return
 			}
@@ -215,13 +247,15 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		// Browser disconnects do not cancel a confirmed operation halfway through.
 		// A host restart still leaves the manager's explicit recovery journal.
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
 		var e error
 		if request.Action == "recover" {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
 			e = m.Recover(ctx)
 		} else {
-			e = m.apply(ctx, request.Action, request.ID, bundle, request.Binding, expected, request.PreviousDigest)
+			// Prepare and activation each have their own bounded budget. A slow
+			// image pull cannot consume the time needed to replace the service.
+			e = m.apply(context.Background(), request.Action, request.ID, bundle, request.Binding, expected, request.PreviousDigest)
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -235,7 +269,7 @@ func (s *HTTPService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPService) review(m Manager, req httpRequest) (httpReview, Bundle, error) {
-	result := httpReview{Action: req.Action, Blockers: []string{}}
+	result := httpReview{Action: req.Action, Blockers: []string{}, Services: []reviewService{}}
 	raw := req.Bundle
 	// Preserve uploaded text until the strict parser sees the original keys.
 	// Direct objects remain supported for local Unix clients.
@@ -284,13 +318,15 @@ func (s *HTTPService) review(m Manager, req httpRequest) (httpReview, Bundle, er
 	default:
 		return result, bundle, errors.New("review supports install, adopt or upgrade only")
 	}
-	if err = persistentBinding(binding); err != nil {
+	if err = guiBinding(m.Store.Root, bundle.Manifest.ID, binding); err != nil {
 		return result, bundle, err
 	}
 	if bundle.Manifest.Runtime.Kind == "compose" {
-		if err = ValidateCompose(bundle, binding); err != nil {
+		var spec composeSpec
+		if spec, err = validatedCompose(bundle, binding); err != nil {
 			return result, bundle, err
 		}
+		result.Services = summarizeServices(spec)
 	} else if req.Action != "adopt" {
 		result.Blockers = append(result.Blockers, "external services support observation/adoption only")
 	}
@@ -308,4 +344,37 @@ func (s *HTTPService) review(m Manager, req httpRequest) (httpReview, Bundle, er
 	sum := sha256.Sum256(fingerprint)
 	result.Digest = "sha256:" + hex.EncodeToString(sum[:])
 	return result, bundle, nil
+}
+
+// Only deployment identities and environment key names leave the host. Neither
+// resolved values nor command/entrypoint arguments belong in the review DTO.
+func summarizeServices(spec composeSpec) []reviewService {
+	names := make([]string, 0, len(spec.Services))
+	for name := range spec.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]reviewService, 0, len(names))
+	for _, name := range names {
+		service := spec.Services[name]
+		view := reviewService{Name: name, Image: service.Image, Mounts: []reviewMount{}, Networks: []reviewNetwork{}, EnvironmentKeys: []string{}}
+		for _, mount := range service.Volumes {
+			source := mount.Source
+			if mount.Type == "volume" {
+				source = spec.Volumes[source].Name
+			}
+			view.Mounts = append(view.Mounts, reviewMount{mount.Type, source, mount.Target, mount.ReadOnly})
+		}
+		for network := range service.Networks {
+			value := spec.Networks[network]
+			view.Networks = append(view.Networks, reviewNetwork{value.Name, value.Internal})
+		}
+		sort.Slice(view.Networks, func(i, j int) bool { return view.Networks[i].Name < view.Networks[j].Name })
+		for key := range service.Environment {
+			view.EnvironmentKeys = append(view.EnvironmentKeys, key)
+		}
+		sort.Strings(view.EnvironmentKeys)
+		result = append(result, view)
+	}
+	return result
 }

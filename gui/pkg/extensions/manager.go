@@ -16,6 +16,17 @@ type Manager struct {
 	Store   Store
 	Host    HostConfig
 	Backend Backend
+	// HTTP administration uses separate preparation/activation budgets and a
+	// narrower storage policy. The standalone CLI retains its caller's policy.
+	phaseTimeout  time.Duration
+	bindingPolicy func(string, Binding) error
+}
+
+func (m Manager) approveBinding(id string, binding Binding) error {
+	if m.bindingPolicy != nil {
+		return m.bindingPolicy(id, binding)
+	}
+	return nil
 }
 
 func (m Manager) compatible(manifest Manifest) error {
@@ -121,6 +132,12 @@ func (m Manager) Apply(ctx context.Context, action, id string, bundle *Bundle, b
 
 // apply checks the reviewed active release under the same lock as mutation.
 func (m Manager) apply(ctx context.Context, action, id string, bundle *Bundle, binding Binding, expected, expectedPrevious string) error {
+	parent := ctx
+	if m.phaseTimeout > 0 {
+		prepared, cancel := context.WithTimeout(parent, m.phaseTimeout)
+		defer cancel()
+		ctx = prepared
+	}
 	unlock, err := m.Store.Lock()
 	if err != nil {
 		return err
@@ -143,6 +160,9 @@ func (m Manager) apply(ctx context.Context, action, id string, bundle *Bundle, b
 	if action == "install" || action == "adopt" {
 		if exists || bundle == nil || bundle.Manifest.ID != id {
 			return errors.New("extension already registered or bundle/id missing")
+		}
+		if e := m.approveBinding(id, binding); e != nil {
+			return e
 		}
 		release, e := m.release(*bundle, binding)
 		if e != nil {
@@ -178,6 +198,9 @@ func (m Manager) apply(ctx context.Context, action, id string, bundle *Bundle, b
 	}
 	if !exists {
 		return errors.New("extension is not registered")
+	}
+	if err = m.approveBinding(id, entry.Active.Binding); err != nil {
+		return err
 	}
 	if entry.Active.Bundle.Manifest.Runtime.Kind == "external-systemd" {
 		if action != "forget" {
@@ -273,6 +296,15 @@ func (m Manager) apply(ctx context.Context, action, id string, bundle *Bundle, b
 		entry.Active, entry.Previous = target, &previous
 	default:
 		return errors.New("unknown lifecycle action")
+	}
+	// Never stop an existing release after preparation has exhausted its budget.
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if m.phaseTimeout > 0 {
+		activation, cancel := context.WithTimeout(parent, m.phaseTimeout)
+		defer cancel()
+		ctx = activation
 	}
 	entry.Error = ""
 	state.Journal = &Journal{Action: action, ID: id, Phase: "applying", Before: &before, Target: &entry}
@@ -375,6 +407,13 @@ func (m Manager) recoverLocked(ctx context.Context, state *State) error {
 	j := state.Journal
 	if j == nil {
 		return nil
+	}
+	for _, entry := range []*Entry{j.Before, j.Target} {
+		if entry != nil {
+			if err := m.approveBinding(j.ID, entry.Active.Binding); err != nil {
+				return err
+			}
+		}
 	}
 	j.Phase = "recovering"
 	if err := m.Store.Save(*state); err != nil {

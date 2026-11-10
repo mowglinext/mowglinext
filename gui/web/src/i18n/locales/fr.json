@@ -5496,7 +5496,7 @@
     "invalidFile": "Impossible de lire ce bundle JSON. Choisissez un objet JSON local valide et réessayez.",
     "importAction": "Action d’import",
     "advancedBinding": "Avancé : projet et stockage existants",
-    "bindingHelp": "Laissez les champs vides pour utiliser les valeurs de l’hôte. L’adoption nécessite le nom du projet existant. Les chemins doivent désigner des répertoires distincts pour la configuration et les données.",
+    "bindingHelp": "Laissez les champs vides pour utiliser les valeurs de l’hôte. L’adoption nécessite le nom du projet existant. L’interface autorise la configuration sous /etc/mowgli-extensions/<id> et les données sous le répertoire <id> du registre de l’hôte (habituellement /var/lib/mowgli-extensions/<id>). Utilisez la CLI locale pour les autres chemins.",
     "adoptProject": "Saisissez le nom du projet existant pour adopter cette extension.",
     "trustHelp": "Un administrateur doit approuver le dépôt et les autorisations demandées dans la configuration de l’hôte. Les sources communautaires ou privées sont prises en charge lorsqu’elles sont explicitement approuvées.",
     "binding": {
@@ -5555,6 +5555,22 @@
       "unverified": "Non vérifié"
     },
     "previousVersion": "Version précédente",
-    "reviewIdentity": "Identité de la validation"
+    "reviewIdentity": "Identité de la validation",
+    "serviceSummary": "Services de ce bundle",
+    "serviceSummaryHelp": "Détails d’exécution validés par l’hôte. Seuls les noms des variables d’environnement sont affichés, jamais leurs valeurs.",
+    "serviceSummaryMissing": "L’hôte n’a fourni aucun résumé des services pour ce bundle Compose. Mettez à jour l’outil d’extensions de l’hôte et vérifiez à nouveau le bundle avant de l’appliquer.",
+    "service": {
+      "image": "Image figée",
+      "mounts": "Stockage monté",
+      "networks": "Réseaux",
+      "environment": "Variables d’environnement",
+      "bind": "Répertoire de l’hôte",
+      "volume": "Volume nommé",
+      "readOnly": "Lecture seule",
+      "readWrite": "Lecture et écriture",
+      "internal": "Interne uniquement",
+      "egress": "Sortie réseau activée",
+      "none": "Aucun"
+    }
   }
 }

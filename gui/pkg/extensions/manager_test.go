@@ -3,9 +3,11 @@ package extensions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type lifecycleRuntime struct {
@@ -467,5 +469,56 @@ func TestServiceTopologyCannotBypassRollbackMigrationGate(t *testing.T) {
 	}
 	if len(r.events) != before || r.running.Digest != BundleDigest(bundle) {
 		t.Fatal("migration rejection mutated runtime")
+	}
+}
+
+type preparationBudgetRuntime struct {
+	Backend
+	prepared context.Context
+	deadline time.Time
+	expire   bool
+	fresh    bool
+}
+
+func (r *preparationBudgetRuntime) Prepare(ctx context.Context, release Release) error {
+	r.prepared = ctx
+	r.deadline, _ = ctx.Deadline()
+	if r.expire {
+		<-ctx.Done()
+		return nil
+	}
+	return r.Backend.Prepare(ctx, release)
+}
+func (r *preparationBudgetRuntime) Stop(ctx context.Context, release Release) error {
+	deadline, ok := ctx.Deadline()
+	r.fresh = ok && ctx != r.prepared && deadline.After(r.deadline)
+	if !r.fresh {
+		return errors.New("preparation consumed activation budget")
+	}
+	return r.Backend.Stop(ctx, release)
+}
+func TestSeparatePreparationAndActivationBudgets(t *testing.T) {
+	for _, expire := range []bool{false, true} {
+		t.Run(fmt.Sprint(expire), func(t *testing.T) {
+			m, runtime, bundle, binding := lifecycleFixture(t)
+			applyOK(t, m, "install", &bundle, binding)
+			applyOK(t, m, "enable", nil, Binding{})
+			phase := &preparationBudgetRuntime{Backend: runtime, expire: expire}
+			m.Backend = phase
+			m.phaseTimeout = 50 * time.Millisecond
+			target := candidateBundle(bundle)
+			err := m.Apply(context.Background(), "upgrade", "example", &target, Binding{})
+			if expire {
+				if !errors.Is(err, context.DeadlineExceeded) || runtime.running == nil || runtime.running.Digest != BundleDigest(bundle) {
+					t.Fatal("expired preparation stopped the original", err)
+				}
+				state, _ := m.Store.Load()
+				if state.Journal != nil {
+					t.Fatal("expired preparation created a mutation journal")
+				}
+			} else if err != nil || !phase.fresh || runtime.running.Digest != BundleDigest(target) {
+				t.Fatal("activation did not get a fresh budget", err)
+			}
+		})
 	}
 }

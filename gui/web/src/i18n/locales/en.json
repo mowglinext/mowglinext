@@ -5496,7 +5496,7 @@
     "invalidFile": "Could not read this JSON bundle. Choose a valid local JSON object and retry.",
     "importAction": "Import action",
     "advancedBinding": "Advanced: existing project and storage",
-    "bindingHelp": "Leave fields blank to use host defaults. Adoption requires the existing project name. Paths must identify separate configuration and data directories.",
+    "bindingHelp": "Leave fields blank to use host defaults. Adoption requires the existing project name. The GUI allows configuration under /etc/mowgli-extensions/<id> and data under the host registry’s <id> directory (normally /var/lib/mowgli-extensions/<id>). Use the local CLI for other paths.",
     "adoptProject": "Enter the existing project name to adopt this extension.",
     "trustHelp": "An administrator must approve the repository and requested permissions in the host configuration. Community or private sources are supported when explicitly trusted.",
     "binding": {
@@ -5555,6 +5555,22 @@
       "unverified": "Unverified"
     },
     "previousVersion": "Previous version",
-    "reviewIdentity": "Review identity"
+    "reviewIdentity": "Review identity",
+    "serviceSummary": "Services in this bundle",
+    "serviceSummaryHelp": "Host-validated runtime details. Environment variable names are shown; their values are never displayed.",
+    "serviceSummaryMissing": "The host did not provide a service summary for this Compose bundle. Update the host extension helper and review the bundle again before applying.",
+    "service": {
+      "image": "Pinned image",
+      "mounts": "Storage mounts",
+      "networks": "Networks",
+      "environment": "Environment keys",
+      "bind": "Host directory",
+      "volume": "Named volume",
+      "readOnly": "Read only",
+      "readWrite": "Read and write",
+      "internal": "Internal only",
+      "egress": "Egress enabled",
+      "none": "None"
+    }
   }
 }

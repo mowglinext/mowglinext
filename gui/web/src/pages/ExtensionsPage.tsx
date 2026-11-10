@@ -6,7 +6,7 @@ import {errorMessage} from '../utils/errors';
 import {useExtensions} from './extensions/useExtensions';
 import {
     extensionRequest, readBundle, type ExtensionAction, type ExtensionManifest,
-    type ExtensionOperation, type ExtensionReview, type ExtensionStatus, type ImportAction, type ImportRequest,
+    type ExtensionOperation, type ExtensionReview, type ExtensionServiceSummary, type ExtensionStatus, type ImportAction, type ImportRequest,
 } from './extensions/api';
 import './extensions/extensions.css';
 
@@ -37,6 +37,25 @@ function Health({name, value}: {name: string; value: string}) {
     return <span><Text type="secondary">{name}</Text><Tag color={good ? 'green' : bad ? 'red' : undefined}>{t(`extensions.health.${value}`, {defaultValue: value || t('extensions.health.unknown')})}</Tag></span>;
 }
 
+function ServicePreview({services}: {services: ExtensionServiceSummary[]}) {
+    const {t} = useTranslation();
+    return <section className="extension-service-preview" aria-label={t('extensions.serviceSummary')}>
+        <Title level={4} style={{margin: 0}}>{t('extensions.serviceSummary')}</Title>
+        <p className="extension-helper">{t('extensions.serviceSummaryHelp')}</p>
+        {services.map(service => <section className="extension-service" key={service.name} aria-label={service.name}>
+            <Title level={5} style={{margin: 0}}>{service.name}</Title>
+            <dl>
+                <dt>{t('extensions.service.image')}</dt><dd>{service.image}</dd>
+                <dt>{t('extensions.service.mounts')}</dt><dd>{service.mounts.length ? <ul>{service.mounts.map(mount => <li key={`${mount.type}:${mount.target}`}>
+                    <span>{mount.source} → {mount.target}</span><br/><Text type="secondary">{t(`extensions.service.${mount.type}`)} · {t(mount.read_only ? 'extensions.service.readOnly' : 'extensions.service.readWrite')}</Text>
+                </li>)}</ul> : t('extensions.service.none')}</dd>
+                <dt>{t('extensions.service.networks')}</dt><dd>{service.networks.length ? <ul>{service.networks.map(network => <li key={network.name}>{network.name} <Text type="secondary">({t(network.internal ? 'extensions.service.internal' : 'extensions.service.egress')})</Text></li>)}</ul> : t('extensions.service.none')}</dd>
+                <dt>{t('extensions.service.environment')}</dt><dd>{service.environment_keys.length ? service.environment_keys.join(', ') : t('extensions.service.none')}</dd>
+            </dl>
+        </section>)}
+    </section>;
+}
+
 export default function ExtensionsPage() {
     const {t} = useTranslation();
     const {state, error, loading, refresh, acceptOperation, running} = useExtensions();
@@ -61,6 +80,7 @@ export default function ExtensionsPage() {
     const invalidate = () => { version.current++; reviewRequest.current?.abort(); setReview(undefined); setImportError(''); };
     const blocked = busy || running || !state?.configured || Boolean(error);
     const recovery = state?.entries.some(entry => entry.recovery_required) || state?.operation?.phase === 'failed';
+    const missingServices = review?.result.manifest.runtime.kind === 'compose' && !review.result.services?.length;
 
     async function loadFile(file?: File) {
         invalidate();
@@ -99,7 +119,7 @@ export default function ExtensionsPage() {
         }
     }
     async function applyImport() {
-        if (!review || review.result.blockers.length || busyRef.current || blocked) return;
+        if (!review || review.result.blockers.length || missingServices || busyRef.current || blocked) return;
         busyRef.current = true; setBusy(true); setImportError('');
         try {
             const operation = await extensionRequest<ExtensionOperation>('apply', {...review.request, id: review.result.manifest.id, digest: review.result.digest, acknowledged: true});
@@ -160,8 +180,8 @@ export default function ExtensionsPage() {
         <Modal open={importOpen} title={t('extensions.customImport')} width={720} destroyOnHidden maskClosable={!busy} closable={!busy}
             onCancel={() => { if (!busy) { invalidate(); setImportOpen(false); } }}
             footer={<Space wrap><Button disabled={busy} onClick={() => { invalidate(); setImportOpen(false); }}>{t('extensions.cancel')}</Button>
-                {review ? <Button type="primary" disabled={blocked || review.result.blockers.length > 0} loading={busy} onClick={() => { void applyImport(); }}>{t('extensions.applyImport')}</Button>
-                    : <Button type="primary" disabled={blocked || !bundle || (action === 'adopt' && !binding.project.trim())} loading={busy} onClick={() => { void reviewImport(); }}>{t('extensions.review')}</Button>}</Space>}>
+                {review ? <Button aria-label={t('extensions.applyImport')} type="primary" disabled={blocked || review.result.blockers.length > 0 || missingServices} loading={busy} onClick={() => { void applyImport(); }}>{t('extensions.applyImport')}</Button>
+                    : <Button aria-label={t('extensions.review')} type="primary" disabled={blocked || !bundle || (action === 'adopt' && !binding.project.trim())} loading={busy} onClick={() => { void reviewImport(); }}>{t('extensions.review')}</Button>}</Space>}>
             <div className="extension-import-form">
                 <p className="extension-helper">{t('extensions.importHelp')}</p>
                 <label>{t('extensions.bundleFile')}<input className="extension-file" type="file" accept=".json,application/json" disabled={busy} onChange={event => { void loadFile(event.target.files?.[0]); }}/></label>
@@ -172,6 +192,7 @@ export default function ExtensionsPage() {
                 {importError && <Alert type="error" showIcon message={importError}/>}
                 {review && <>
                     <ManifestPreview manifest={review.result.manifest} digest={review.result.digest} reviewIdentity/>
+                    {missingServices ? <Alert type="error" showIcon message={t('extensions.serviceSummaryMissing')}/> : Boolean(review.result.services?.length) && <ServicePreview services={review.result.services!}/>}
                     <div className="extension-preview"><dl>{(['project', 'config_dir', 'data_dir'] as const).map(key => <div key={key} style={{display: 'contents'}}><dt>{t(`extensions.binding.${key}`)}</dt><dd>{review.result.binding[key]}</dd></div>)}</dl></div>
                     {review.result.blockers.length > 0 && <Alert type="warning" showIcon message={t('extensions.blocked')} description={<><ul>{review.result.blockers.map(reason => <li key={reason}>{reason}</li>)}</ul><p>{t('extensions.trustHelp')}</p></>}/>}
                     <Alert type="info" showIcon message={t(`extensions.importRetention.${review.result.manifest.runtime.kind === 'external-systemd' ? 'external' : action}`)}/>

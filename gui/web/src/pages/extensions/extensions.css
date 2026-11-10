@@ -15,6 +15,13 @@
 .extension-preview dl { margin: 0; display: grid; grid-template-columns: 125px minmax(0, 1fr); gap: 10px 16px; }
 .extension-preview dt { color: var(--ink-2); }
 .extension-preview dd { margin: 0; overflow-wrap: anywhere; }
+.extension-service-preview { display: grid; gap: 12px; }
+.extension-service-preview p { margin: 0; }
+.extension-service { display: grid; gap: 12px; padding: 16px 0; border-top: 1px solid var(--border-soft); }
+.extension-service dl { margin: 0; display: grid; grid-template-columns: 125px minmax(0, 1fr); gap: 10px 16px; }
+.extension-service dt { color: var(--ink-2); }
+.extension-service dd { margin: 0; overflow-wrap: anywhere; }
+.extension-service ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
 .extension-import-form { display: grid; gap: 18px; }
 .extension-import-form label { display: grid; gap: 8px; }
 .extension-import-form > .ant-typography, .extension-preview h4 { overflow-wrap: anywhere; }
@@ -30,4 +37,6 @@
     .extension-row { padding: 18px; }
     .extension-preview dl { grid-template-columns: 1fr; gap: 5px; }
     .extension-preview dd { margin-bottom: 8px; }
+    .extension-service dl { grid-template-columns: 1fr; gap: 5px; }
+    .extension-service dd { margin-bottom: 8px; }
 }

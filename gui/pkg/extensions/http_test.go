@@ -16,8 +16,9 @@ func httpFixture(t *testing.T) (*HTTPService, Manager, *lifecycleRuntime, Bundle
 	t.Helper()
 	release := adapterRelease(t)
 	old := release.Binding
-	release.Binding.ConfigDir = "/etc/mowgli-extensions/http-test/config"
-	release.Binding.DataDir = "/var/lib/mowgli-extensions/http-test/data"
+	store := Store{Root: filepath.Join(t.TempDir(), "state")}
+	release.Binding.ConfigDir = filepath.Join("/etc/mowgli-extensions", release.Bundle.Manifest.ID, "config")
+	release.Binding.DataDir = filepath.Join(store.Root, release.Bundle.Manifest.ID, "data")
 	release.Bundle.Compose = bytes.ReplaceAll(release.Bundle.Compose, []byte(old.ConfigDir), []byte(release.Binding.ConfigDir))
 	release.Bundle.Compose = bytes.ReplaceAll(release.Bundle.Compose, []byte(old.DataDir), []byte(release.Binding.DataDir))
 	var spec composeSpec
@@ -28,7 +29,6 @@ func httpFixture(t *testing.T) (*HTTPService, Manager, *lifecycleRuntime, Bundle
 	configured.Environment = map[string]string{"TOKEN": "SECRET_NOT_PUBLIC"}
 	spec.Services["agent"] = configured
 	release.Bundle.Compose, _ = json.Marshal(spec)
-	store := Store{Root: filepath.Join(t.TempDir(), "state")}
 	backend := &lifecycleRuntime{t: t, store: store, failures: map[string]int{}, readiness: "healthy"}
 	host := schemaTestHost()
 	host.ApprovedGrants = append(host.ApprovedGrants, "network:egress")
@@ -67,6 +67,9 @@ func reviewed(t *testing.T, s *HTTPService, b Bundle, binding Binding, action st
 	var review httpReview
 	if err := json.Unmarshal(response.Body.Bytes(), &review); err != nil {
 		t.Fatal(err)
+	}
+	if len(review.Services) != 1 || len(review.Services[0].Mounts) != 2 || len(review.Services[0].Networks) != 1 || len(review.Services[0].EnvironmentKeys) != 1 || review.Services[0].EnvironmentKeys[0] != "TOKEN" || !strings.Contains(review.Services[0].Image, "@sha256:") {
+		t.Fatal("missing concrete service review", review.Services)
 	}
 	request.Digest = review.Digest
 	request.Acknowledged = true
@@ -290,5 +293,77 @@ func TestHTTPOriginalBundleTextRejectsDuplicateKeys(t *testing.T) {
 	wrapped, _ = json.Marshal(string(raw))
 	if w := httpCall(t, s, "POST", "/review", httpRequest{Action: "install", Bundle: wrapped, Binding: binding}); w.Code != 200 {
 		t.Fatal("raw uploaded bundle rejected", w.Code, w.Body.String())
+	}
+}
+
+func TestGUIStoragePolicyKeepsBrowserWithinExtensionRoots(t *testing.T) {
+	root := "/var/lib/mowgli-extensions"
+	id := "example"
+	good := Binding{Project: "example", ConfigDir: "/etc/mowgli-extensions/example/config", DataDir: root + "/example/data"}
+	if err := guiBinding(root, id, good); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/root/private", "/home/mower/private", "/var/lib/mowgli-updater/jobs", "/home/mower/mowglinext/docker/config", "/var/lib/mowgli-extensions/example-other/data", "/tmp/example/data"} {
+		bad := good
+		bad.DataDir = path
+		if guiBinding(root, id, bad) == nil {
+			t.Fatalf("browser data escaped policy: %s", path)
+		}
+		bad = good
+		bad.ConfigDir = path
+		if guiBinding(root, id, bad) == nil {
+			t.Fatalf("browser config escaped policy: %s", path)
+		}
+	}
+	for _, path := range []string{"/etc/mowgli-extensions/example-other", "/etc/mowgli-extensions/example/../other"} {
+		bad := good
+		bad.ConfigDir = path
+		if guiBinding(root, id, bad) == nil {
+			t.Fatal("config sibling/traversal accepted")
+		}
+	}
+}
+
+func TestGUIStoragePolicyAlsoGuardsLockedMutationAndRecovery(t *testing.T) {
+	m, backend, bundle, binding := lifecycleFixture(t)
+	applyOK(t, m, "install", &bundle, binding) // Local CLI policy intentionally allows this layout.
+	gui := m
+	gui.bindingPolicy = func(id string, b Binding) error { return guiBinding(m.Store.Root, id, b) }
+	if gui.Apply(context.Background(), "enable", "example", nil, Binding{}) == nil {
+		t.Fatal("GUI mutation accepted CLI-only storage")
+	}
+	backend.crashAfter = "start"
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("crash injection missing")
+			}
+		}()
+		_ = m.Apply(context.Background(), "enable", "example", nil, Binding{})
+	}()
+	backend.crashAfter = ""
+	count := len(backend.events)
+	if gui.Recover(context.Background()) == nil {
+		t.Fatal("GUI recovery bypassed storage policy")
+	}
+	if len(backend.events) != count {
+		t.Fatal("denied recovery touched runtime")
+	}
+	if err := m.Recover(context.Background()); err != nil {
+		t.Fatal("local CLI could not recover its registration", err)
+	}
+}
+
+func TestServiceSummaryUsesPhysicalVolumeIdentityAndNoEnvironmentValues(t *testing.T) {
+	spec := composeSpec{Services: map[string]composeService{"agent": {
+		Image:       "example/image@sha256:" + strings.Repeat("a", 64),
+		Environment: map[string]string{"Z_KEY": "PRIVATE_SECRET", "A_KEY": "OTHER_SECRET"},
+		Volumes:     []composeMount{{Type: "volume", Source: "data", Target: "/data"}},
+		Networks:    map[string]json.RawMessage{"private": json.RawMessage(`{}`)},
+	}}, Volumes: map[string]composeVolume{"data": {Name: "existing-identity-volume", External: true}}, Networks: map[string]composeNetwork{"private": {Name: "private-network", Internal: true}}}
+	view := summarizeServices(spec)
+	raw, _ := json.Marshal(view)
+	if len(view) != 1 || view[0].Mounts[0].Source != "existing-identity-volume" || !view[0].Networks[0].Internal || strings.Contains(string(raw), "SECRET") || strings.Join(view[0].EnvironmentKeys, ",") != "A_KEY,Z_KEY" {
+		t.Fatal(string(raw))
 	}
 }

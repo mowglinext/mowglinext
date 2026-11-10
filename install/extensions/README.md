@@ -38,44 +38,10 @@ go test ./pkg/extensions ./cmd/mowgli-extensions
 go test -race ./pkg/extensions
 ```
 
-Validation on Kuffe (normal `bruno` user):
-
-| Check | Result |
-|---|---|
-| Focused Go package + CLI, with race detector | 78 top-level tests passed, including subtests |
-| Complete `gui/` Go suite | All packages passed; final run used package-specific temporary roots |
-| `go vet` for package + CLI; `gofmt` | Passed |
-| Static Linux AMD64 and ARM64 builds | Passed; ARM64 executed in isolated robot-host Engine tests |
-| Connect installer tests with fake Docker/crontab | 7 tests passed |
-| LoRa reconnect/health/import/producer-identity tests | 23 tests passed |
-| LoRa changed-file Ruff 0.16.8 | Passed |
-| New GUI/API validation | TypeScript, focused ESLint, 16 focused frontend cases; 56 with shared navigation/i18n checks; 2 Chromium desktop/mobile import cases passed |
-| Isolated ARM64 robot-host Engine lifecycle | Passed on Engine 29.7.2 / Compose 5.5.0; [exact baseline and limits](ROBOT_ACCEPTANCE.md) |
-
-The shorter temporary root avoids an existing Unix-socket pathname limit in
-three unrelated provider tests. The original default temporary path was too long.
-The last run also exhausted the host's shared `/tmp` tmpfs. Other packages then
-passed using a short alias into task-cache storage; the extension package/CLI
-passed using that storage's real path, since they deliberately reject symlink
-ancestors. All packages are covered by these two final runs. No provider test,
-production path validation or runtime policy was changed for these environments.
-An independent review
-identified rollback topology, HTTP producer identity, Compose interpolation and
-legacy relative-directory cron issues; these were fixed with regression coverage.
-The lead also checked partial-runtime status, disable persistence, local Docker
-selection and image platform validation. A subsequent independent GPT-6.1 Sol
-review found stopped-container identity loss after disabled upgrades and a
-partially running external registration skipped by preflight. Both were fixed
-with adapter-backed regressions; disabled-removal failure/process-death recovery
-and manually started runtime drift are also covered. Small review fixes were not
-independently re-reviewed. CI includes the new package automatically and now watches CLI paths
-and runs the extension race tests. The focused Chromium import cases are included
-in the existing GUI CI browser step.
-
 The opt-in [real Engine runner](tests/docker_lifecycle.py) uses only Python's
 standard library and a preloaded, approved Linux image containing `/bin/sleep`.
-It was executed successfully on the robot host with the baseline in
-[ROBOT_ACCEPTANCE.md](ROBOT_ACCEPTANCE.md). Run it as the normal Docker user;
+See [ROBOT_ACCEPTANCE.md](ROBOT_ACCEPTANCE.md) for recorded baselines and scope.
+Run it as the normal Docker user;
 always use `--robot-readiness` when testing on a mower:
 
 ```sh
@@ -135,7 +101,8 @@ creates or rewrites robot runtime configuration.
 Open **Extensions** from the desktop rail or mobile More menu. The page lists
 installed versions, source, compatibility, process/application/data status and
 recovery. Import a local JSON bundle, review its source commit, permissions and
-storage, then explicitly apply. Installation leaves managed services disabled;
+per-service image digest, storage mounts, networks and environment key names,
+then explicitly apply. Environment values and command arguments are never shown. Installation leaves managed services disabled;
 Enable is a separate confirmed action. External registrations offer observation
 and Forget only. Updates use the same import/review flow, and rollback confirms
 both the active and previous release identities.
@@ -172,10 +139,13 @@ a second register for the same Docker project or silently change ownership;
 review an explicit migration before connecting an existing CLI-managed install.
 The optional extension register remains separate from core updater state/jobs.
 
-The host service has `PrivateTmp=true`. GUI-managed bindings and register roots
-must use persistent paths outside `/tmp` and `/var/tmp`, since the Docker daemon
-cannot see the helper's private temporary namespace. Existing configurations/data
-and physical volume names must be provisioned and reviewed before adoption.
+GUI configuration bindings are restricted to `/etc/mowgli-extensions/<id>` or
+its descendants; data bindings must stay within `<state-root>/<id>`. The same
+policy is checked under the mutation/recovery lock. Use the local CLI for
+administrator-reviewed layouts outside those roots. The host service has
+`PrivateTmp=true`, so temporary paths are also excluded from GUI administration.
+Existing configuration/data and physical volume names must be provisioned and
+reviewed before adoption.
 The GUI container never reads host bind paths or owns the extension register.
 
 ### Requests, recovery and performance
@@ -185,10 +155,15 @@ Only state, review, apply and closed lifecycle actions are proxied. Original fil
 text reaches the strict host parser intact, including duplicate-key rejection.
 A review digest binds action, bundle, storage binding and current release; rollback
 also checks the exact previous digest under the mutation lock. Responses include
-sanitized manifests/status, never resolved Compose or environment secrets.
+sanitized manifests/status and concrete image, physical mount and network
+identities, with environment key names only; never environment values, arguments
+or resolved Compose.
 
-Confirmed changes run as one bounded host job (two-minute deadline) and survive
-browser disconnects. Host restart recovery uses the existing durable extension
+Confirmed changes survive browser disconnects. Preparation, including image
+pull, has a two-minute budget. Activation gets a new two-minute budget after
+preparation succeeds, so download time cannot consume the replacement window.
+An expired preparation leaves the running version untouched. Explicit recovery
+has its own two-minute budget. Host restart recovery uses the existing durable extension
 journal, surfaced explicitly through Recover. Only the latest transient GUI job
 is kept in memory; there is no second durable queue or growing job history.
 
@@ -197,10 +172,7 @@ polling; an active job is polled only while visible. During that job, the respon
 explicitly shows it running and returns the last status snapshot instead of
 contending with the transaction lock. Each fresh Compose observation uses one
 Docker inventory and one image verification per service, with no persistent
-health cache. Regression tests pin this work count; latency/CPU benchmarks are
-not claimed. The production build emits a separate lazy page chunk of 14.64 kB
-(about 4.6 kB gzip), plus 2.18 kB CSS (0.75 kB gzip); shared UI dependencies are
-not included in those page-specific figures. No new frontend dependency was added.
+health cache. There is no background restart loop or unbounded job history.
 
 New extension jobs are refused while a core job is pending, and GUI maintenance
 also blocks mutations. This is not a bidirectional core/extension transaction lock;
@@ -212,9 +184,9 @@ Use the standalone Connect installation. A legacy service embedded in core
 `stack-overrides.yaml` needs a separately reviewed migration; this CLI will not
 move it or guess its volume identity.
 
-1. Disable the installation's own updater first. The locally revised Connect
-   installer supports `--auto-update no` while preserving existing settings;
-   its `--uninstall` removes its own cron without purging identity. Do not use
+1. Disable the installation's own updater first. Use a Connect installer version
+   that supports `--auto-update no` while preserving existing settings and
+   per-install cron removal. Its `--uninstall` must retain identity by default. Do not use
    uninstall when transferring a running instance. Inspect the actual owning
    user's crontab too; this CLI does not remove or discover every user's cron.
 2. Confirm the existing project, service and physical identity volume using
@@ -299,7 +271,7 @@ the host's external-unit allowlist.
 Status distinguishes process state, application health and data freshness.
 LoRa modem health is accepted only from its fixed loopback endpoint when the
 response reports the same systemd `invocation_id` as the primary modem unit,
-unchanged across the request. The local LoRa change adds this optional field.
+unchanged across the request. The LoRa service must support this optional field.
 Legacy responses remain usable for legacy consumers but the manager reports
 application health `unknown`. RTCM progress and downstream receiver use remain
 `unknown`; an HTTP response or callback timestamp never proves new correction data.

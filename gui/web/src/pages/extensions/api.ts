@@ -50,6 +50,14 @@ export interface ExtensionReview {
     binding: {project: string; config_dir: string; data_dir: string};
     action: ImportAction;
     blockers: string[];
+    services?: ExtensionServiceSummary[];
+}
+export interface ExtensionServiceSummary {
+    name: string;
+    image: string;
+    mounts: {type: 'bind' | 'volume'; source: string; target: string; read_only: boolean}[];
+    networks: {name: string; internal: boolean}[];
+    environment_keys: string[];
 }
 
 export async function extensionRequest<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {

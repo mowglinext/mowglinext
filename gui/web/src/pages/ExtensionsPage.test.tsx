@@ -2,7 +2,7 @@ import {fireEvent, render, screen, waitFor, within} from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import ExtensionsPage from './ExtensionsPage';
-import type {ExtensionManifest, ExtensionState, ExtensionStatus} from './extensions/api';
+import type {ExtensionManifest, ExtensionReview, ExtensionServiceSummary, ExtensionState, ExtensionStatus} from './extensions/api';
 
 const manifest: ExtensionManifest = {
     id: 'private-link', version: '1.0.0', source: {repository: 'my-team/private-link', revision: 'a'.repeat(40)},
@@ -13,22 +13,31 @@ const entry: ExtensionStatus = {
     compatible: true, blockers: [], recovery_required: false, observation: {process: 'stopped', application: 'unknown', data: 'unknown'},
 };
 const state: ExtensionState = {api: 1, configured: true, entries: []};
-const reviewed = {manifest, digest: 'reviewed-digest', binding: {project: 'extension-private-link', config_dir: '/srv/ext/config', data_dir: '/srv/ext/data'}, action: 'install', blockers: []};
+const serviceSummary: ExtensionServiceSummary[] = [{
+    name: 'link', image: `ghcr.io/my-team/link@sha256:${'c'.repeat(64)}`,
+    mounts: [
+        {type: 'bind', source: '/etc/mowgli-extensions/private-link', target: '/app/config', read_only: true},
+        {type: 'volume', source: 'private-link-data', target: '/app/data', read_only: false},
+    ],
+    networks: [{name: 'private-link-internal', internal: true}, {name: 'private-link-egress', internal: false}],
+    environment_keys: ['ACCESS_TOKEN', 'SERVER_URL'],
+}];
+const reviewed: ExtensionReview = {manifest, digest: 'reviewed-digest', binding: {project: 'extension-private-link', config_dir: '/etc/mowgli-extensions/private-link', data_dir: '/var/lib/mowgli-extensions/private-link/data'}, action: 'install', blockers: [], services: serviceSummary};
 const fetchMock = vi.fn<typeof fetch>();
 function urlPath(url: RequestInfo | URL) { return typeof url === 'string' ? url : url instanceof URL ? url.href : url.url; }
 function bodyJSON(body: BodyInit | null | undefined): unknown { return JSON.parse(typeof body === 'string' ? body : 'null') as unknown; }
 function response(value: unknown, status = 200) { return Promise.resolve(new Response(JSON.stringify(value), {status})); }
-function setup(initial = state, blockers: string[] = []) {
+function setup(initial = state, blockers: string[] = [], reviewOverride: Partial<ExtensionReview> = {}) {
     fetchMock.mockImplementation((url) => {
         if (urlPath(url).endsWith('/state')) return response(initial);
-        if (urlPath(url).endsWith('/review')) return response({...reviewed, blockers});
+        if (urlPath(url).endsWith('/review')) return response({...reviewed, blockers, ...reviewOverride});
         return response({action: 'install', id: manifest.id, phase: 'running'}, 202);
     });
 }
-async function importAndReview() {
+async function importAndReview(uploadedBundle: Record<string, unknown> = {manifest}) {
     const user = userEvent.setup();
     await user.click(await screen.findByRole('button', {name: 'Custom import'}));
-    await user.upload(screen.getByLabelText('Bundle file'), new File([JSON.stringify({manifest})], 'private.json', {type: 'application/json'}));
+    await user.upload(screen.getByLabelText('Bundle file'), new File([JSON.stringify(uploadedBundle)], 'private.json', {type: 'application/json'}));
     await waitFor(() => expect(screen.getByRole('button', {name: 'Review bundle'})).toBeEnabled());
     await user.click(screen.getByRole('button', {name: 'Review bundle'}));
     await screen.findByText('a'.repeat(40));
@@ -43,16 +52,48 @@ describe('ExtensionsPage', () => {
 
     it('reviews a local private bundle before applying its exact reviewed identity, without enabling it', async () => {
         render(<ExtensionsPage/>);
-        const user = await importAndReview();
+        const uploadedBundle = {manifest, compose: {services: {link: {environment: {ACCESS_TOKEN: 'never-render-this-secret'}}}}};
+        const user = await importAndReview(uploadedBundle);
         expect(posts('/apply')).toHaveLength(0);
         expect(screen.getByText('network:egress')).toBeInTheDocument();
         expect(screen.getByText(/without starting it/)).toBeInTheDocument();
+        const summary = screen.getByRole('region', {name: 'Services in this bundle'});
+        expect(within(summary).getByText(serviceSummary[0].image)).toBeInTheDocument();
+        expect(within(summary).getByText('/etc/mowgli-extensions/private-link → /app/config')).toBeInTheDocument();
+        expect(within(summary).getByText('private-link-data → /app/data')).toBeInTheDocument();
+        expect(within(summary).getByText('Host directory · Read only')).toBeInTheDocument();
+        expect(within(summary).getByText('Named volume · Read and write')).toBeInTheDocument();
+        expect(within(summary).getByText('(Internal only)')).toBeInTheDocument();
+        expect(within(summary).getByText('(Egress enabled)')).toBeInTheDocument();
+        expect(within(summary).getByText('ACCESS_TOKEN, SERVER_URL')).toBeInTheDocument();
+        expect(screen.queryByText(/never-render-this-secret/)).toBeNull();
         await user.click(screen.getByRole('button', {name: /Apply reviewed import/}));
         await waitFor(() => expect(posts('/apply')).toHaveLength(1));
         const options = posts('/apply')[0][1]!;
-        expect(bodyJSON(options.body)).toEqual({action: 'install', bundle: JSON.stringify({manifest}), id: manifest.id, digest: 'reviewed-digest', acknowledged: true});
+        expect(bodyJSON(options.body)).toEqual({action: 'install', bundle: JSON.stringify(uploadedBundle), id: manifest.id, digest: 'reviewed-digest', acknowledged: true});
         expect(options.headers).toEqual({'Content-Type': 'application/json', 'X-Mowgli-Update': '1'});
         expect(posts('/action')).toHaveLength(0);
+    });
+
+    it.each([{label: 'missing', services: undefined}, {label: 'empty', services: []}])('blocks Compose apply when the host service summary is $label', async ({services}) => {
+        setup(state, [], {services});
+        render(<ExtensionsPage/>);
+        const user = await importAndReview();
+        expect(screen.getByText(/host did not provide a service summary/)).toBeInTheDocument();
+        const apply = screen.getByRole('button', {name: /Apply reviewed import/});
+        expect(apply).toBeDisabled();
+        await user.click(apply);
+        expect(posts('/apply')).toHaveLength(0);
+    });
+
+    it('permits observe-only external registration with an empty Compose service summary', async () => {
+        setup(state, [], {manifest: {...manifest, runtime: {kind: 'external-systemd', units: ['link.service']}, profile: 'external'}, services: []});
+        render(<ExtensionsPage/>);
+        const user = await importAndReview();
+        expect(screen.queryByText(/host did not provide a service summary/)).toBeNull();
+        expect(screen.getByText(/registers an external service for observation only/)).toBeInTheDocument();
+        await user.click(screen.getByRole('button', {name: /Apply reviewed import/}));
+        await waitFor(() => expect(posts('/apply')).toHaveLength(1));
     });
 
     it('shows host trust blockers and prevents applying without silently trusting a custom repository', async () => {
