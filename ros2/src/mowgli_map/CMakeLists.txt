@@ -319,6 +319,13 @@ if(BUILD_TESTING)
   target_include_directories(test_dock_set_gates PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
+
+  ament_add_gtest(test_map_replace_gate
+    test/test_map_replace_gate.cpp
+  )
+  target_include_directories(test_map_replace_gate PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
 endif()
 
 # ---------------------------------------------------------------------------

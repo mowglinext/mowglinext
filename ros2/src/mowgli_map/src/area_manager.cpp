@@ -45,6 +45,7 @@
 #include "mowgli_map/dock_antenna_capture.hpp"
 #include "mowgli_map/dock_set_gates.hpp"
 #include "mowgli_map/internal_helpers.hpp"
+#include "mowgli_map/map_replace_gate.hpp"
 #include "mowgli_map/map_server_node.hpp"
 #include <fcntl.h>
 #include <grid_map_ros/GridMapRosConverter.hpp>
@@ -507,10 +508,41 @@ void MapServerNode::on_load_map(const std_srvs::srv::Trigger::Request::SharedPtr
   }
 }
 
+static_assert(kHighLevelStateAutonomous ==
+              mowgli_interfaces::msg::HighLevelStatus::HIGH_LEVEL_STATE_AUTONOMOUS);
+
+void MapServerNode::on_high_level_status(uint8_t state)
+{
+  std::lock_guard<std::mutex> lock(high_level_status_mutex_);
+  high_level_status_received_ = true;
+  last_high_level_state_ = state;
+  last_high_level_status_time_ = std::chrono::steady_clock::now();
+}
+
+std::optional<std::string> MapServerNode::map_replace_rejection() const
+{
+  std::lock_guard<std::mutex> lock(high_level_status_mutex_);
+  const double age_s = high_level_status_received_
+                           ? std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                                           last_high_level_status_time_)
+                                 .count()
+                           : 0.0;
+  return MapReplaceRejection(high_level_status_received_, age_s, last_high_level_state_);
+}
+
 void MapServerNode::on_clear_map(const std_srvs::srv::Trigger::Request::SharedPtr /*req*/,
                                  std_srvs::srv::Trigger::Response::SharedPtr res)
 {
   std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+  // Nothing has been touched yet, so a refusal leaves the map exactly as it
+  // was (map_replace_gate.hpp). Callers must not "restore" after it.
+  if (const auto why = map_replace_rejection())
+  {
+    res->success = false;
+    res->message = "Map not cleared: " + *why;
+    RCLCPP_WARN(get_logger(), "%s", res->message.c_str());
+    return;
+  }
   invalidate_keepout_mask();
   planning_grid_error_.clear();
   {
