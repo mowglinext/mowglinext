@@ -498,6 +498,8 @@ private:
   static constexpr double kMaxLidarIgnoreCorridorWidthM = 1.2;
 
   // Fully staged before persistence; preparation never changes live state or publishes.
+  // Restore-only and deliberately stricter than load_areas_from_file, which boot keeps
+  // using so a legacy file the old parser accepted never loses the map on reboot.
   struct AreasCandidate
   {
     std::vector<AreaEntry> areas;

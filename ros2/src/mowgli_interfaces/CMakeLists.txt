@@ -44,7 +44,6 @@ set(msg_files
 
 # Declare service files
 set(srv_files
-  "srv/RestoreAreas.srv"
   "srv/BladeControl.srv"
   "srv/AddMowingArea.srv"
   "srv/ClearMap.srv"
@@ -72,6 +71,7 @@ set(srv_files
   "srv/ClearLidarIgnoreCorridors.srv"
   "srv/ReplaceLidarIgnoreCorridors.srv"
   "srv/GotoPose.srv"
+  "srv/RestoreAreas.srv"
 )
 
 # Declare action files

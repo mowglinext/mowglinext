@@ -1159,9 +1159,12 @@ bool MapServerNode::is_costmap_blocked(double x, double y) const
 
 void MapServerNode::on_publish_timer()
 {
-  std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
-  if (restore_publication_pending_)
-    publish_restored_areas();
+  {
+    // A committed restore whose broadcast failed retries here (publish_restored_areas).
+    std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
+    if (restore_publication_pending_)
+      publish_restored_areas();
+  }
 
   {
     std::lock_guard<std::recursive_mutex> state_lock(areas_state_mutex_);
