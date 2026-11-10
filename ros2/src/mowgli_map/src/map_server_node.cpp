@@ -1194,7 +1194,9 @@ void MapServerNode::on_publish_timer()
                            "LiDAR-ignore corridors are OFF: a map replace (clear_map) was "
                            "never committed with ~/save_areas or ~/load_areas");
     }
+    // A pending restore holds the list until its corridors are out too.
     if (recorded_areas_publication_pending_ && !area_replace_in_progress_ &&
+        !restore_publication_pending_ &&
         std::chrono::steady_clock::now() >= area_list_publish_not_before_)
     {
       publish_recorded_area_list();

@@ -662,6 +662,10 @@ private:
   /// filter off, and schedule the real list for when the edit has settled.
   void begin_area_list_edit();
 
+  /// Publish an EMPTY area list unless the last one sent was already empty.
+  /// An empty list turns the corridor filter off.
+  void publish_empty_area_list();
+
   /// Why a whole-map replace (~/clear_map) must wait right now:
   /// the BT's HighLevelStatus says a mission is running. See
   /// map_replace_gate.hpp. nullopt = go ahead.

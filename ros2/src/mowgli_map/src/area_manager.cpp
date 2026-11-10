@@ -763,6 +763,11 @@ void MapServerNode::begin_area_list_edit()
 {
   area_list_publish_not_before_ = std::chrono::steady_clock::now() + kMapEditSettle;
   recorded_areas_publication_pending_ = true;
+  publish_empty_area_list();
+}
+
+void MapServerNode::publish_empty_area_list()
+{
   if (area_list_published_empty_)
     return;
   mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
@@ -1627,25 +1632,42 @@ void MapServerNode::on_load_areas(const std_srvs::srv::Trigger::Request::SharedP
 
 // Publication failures cannot undo the file Rename or live-state installation. Retry
 // from the canonical live state on the timer, without another write or generation bump.
+// A retry only republishes: the mask was invalidated once by on_restore_areas (a
+// retry after the settled rebuild must not empty it again), and the area list is
+// published only while it is still the restore's to publish (a later clear_map or
+// add_area owns it until that edit settles or is committed).
 bool MapServerNode::publish_restored_areas()
 {
+  const bool list_owed = recorded_areas_publication_pending_ && !area_replace_in_progress_ &&
+                         std::chrono::steady_clock::now() >= area_list_publish_not_before_;
   try
   {
-    invalidate_keepout_mask();
-    transit_geometry_pub_->publish(visualization_msgs::msg::MarkerArray{});
     publish_lidar_ignore_corridors();
-    publish_recorded_area_polygons();
     std_msgs::msg::UInt64 generation;
     generation.data = area_list_generation_;
     area_list_generation_pub_->publish(generation);
     restore_publication_pending_ = false;
+    if (list_owed)
+      publish_recorded_area_list();
     return true;
   }
   catch (const std::exception& ex)
   {
     RCLCPP_ERROR(get_logger(), "Restore committed; publication pending: %s", ex.what());
-    return false;
+    if (list_owed)
+      recorded_areas_publication_pending_ = true;
   }
+  // The restored areas must not be filtered with the corridors published before
+  // the restore: the filter stays off until both are out.
+  try
+  {
+    publish_empty_area_list();
+  }
+  catch (const std::exception& ex)
+  {
+    RCLCPP_ERROR(get_logger(), "Could not switch the corridor filter off: %s", ex.what());
+  }
+  return false;
 }
 
 void MapServerNode::on_restore_areas(
@@ -1688,6 +1710,12 @@ void MapServerNode::on_restore_areas(
   ++area_list_generation_;
   ++corridor_revision_;
   res->committed = true;
+  // Once per restore; install_areas_candidate scheduled the rebuild.
+  invalidate_keepout_mask();
+  // A restore is a complete list, so it ends a replace left in progress.
+  area_replace_in_progress_ = false;
+  recorded_areas_publication_pending_ = true;
+  area_list_publish_not_before_ = std::chrono::steady_clock::now();
   restore_publication_pending_ = true;
   res->published = publish_restored_areas();
   if (!res->persisted)

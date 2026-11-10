@@ -1412,6 +1412,8 @@ protected:
   void run_PostCommitPublicationRetriesWithoutRewriteOrGenerationBump()
   {
     auto generation = node->area_list_generation_for_test();
+    node->publish_recorded_area_list();  // the filter knows the old areas
+    area_publications = 0;
     fault = 6;
     auto r = restore(replacement());
     fault = 0;
@@ -1423,9 +1425,13 @@ protected:
     expect_replaced(generation);
     auto committed = read(path);
     EXPECT_TRUE(publications.empty());
+    // The restored areas are not filtered with the old corridors: empty list.
+    EXPECT_EQ(area_publications, 1);
+    EXPECT_TRUE(node->area_list_published_empty_);
     retry_publication();
     EXPECT_EQ(publications.size(), 1u);
-    EXPECT_EQ(area_publications, 1);
+    EXPECT_EQ(area_publications, 2);
+    EXPECT_FALSE(node->area_list_published_empty_);
     EXPECT_EQ(generation_publications, 1);
     EXPECT_EQ(node->area_list_generation_for_test(), generation + 1);
     EXPECT_EQ(read(path), committed);
@@ -1461,6 +1467,44 @@ protected:
     // Start points use the existing millimetre precision on disk.
     EXPECT_DOUBLE_EQ(node->areas_[1].coverage_lines.start_y, std::round(y * 1000) / 1000);
   }
+  void run_LatePublicationRetryKeepsTheRebuiltMask()
+  {
+    fault = 6;
+    auto r = restore(replacement());
+    ASSERT_EQ(r.outcome, "COMMITTED_PUBLICATION_PENDING");
+    node->mask_rebuild_not_before_ = {};
+    retry_publication();  // still failing; the settled mask rebuild runs
+    ASSERT_GT(node->cached_keepout_mask_.info.width, 0u);
+    ASSERT_FALSE(node->masks_dirty_);
+    fault = 0;
+    retry_publication();
+    EXPECT_FALSE(node->restore_publication_pending_);
+    EXPECT_GT(node->cached_keepout_mask_.info.width, 0u);
+    retry_publication();
+    EXPECT_GT(node->cached_keepout_mask_.info.width, 0u);
+  }
+
+  void run_PendingRestoreLeavesALaterAreaEditOpen()
+  {
+    fault = 6;
+    auto r = restore(replacement());
+    ASSERT_EQ(r.outcome, "COMMITTED_PUBLICATION_PENDING");
+    fault = 0;
+    auto cleared = std::make_shared<std_srvs::srv::Trigger::Response>();
+    node->clear_map_for_test(cleared);
+    ASSERT_TRUE(cleared->success);
+    add_area("first area of an unfinished edit", 400);
+    ASSERT_TRUE(node->area_replace_in_progress_);
+    ASSERT_TRUE(node->area_list_published_empty_);
+    const auto before = area_publications.load();
+    retry_publication();
+    EXPECT_FALSE(node->restore_publication_pending_);
+    // The edit is not committed yet, so the corridor filter stays off.
+    EXPECT_TRUE(node->area_replace_in_progress_);
+    EXPECT_TRUE(node->area_list_published_empty_);
+    EXPECT_EQ(area_publications.load(), before);
+  }
+
   void run_BootLoadReadsCommittedFileAndKeepsGenerationAtZero()
   {
     ASSERT_TRUE(restore(replacement()).success);
@@ -1520,6 +1564,16 @@ TEST_F(RestoreTransactionTest, OldDatumReprojectsAllGeometryButKeepsCurrentDock)
 TEST_F(RestoreTransactionTest, BootLoadReadsCommittedFileAndKeepsGenerationAtZero)
 {
   run_BootLoadReadsCommittedFileAndKeepsGenerationAtZero();
+}
+
+TEST_F(RestoreTransactionTest, LatePublicationRetryKeepsTheRebuiltMask)
+{
+  run_LatePublicationRetryKeepsTheRebuiltMask();
+}
+
+TEST_F(RestoreTransactionTest, PendingRestoreLeavesALaterAreaEditOpen)
+{
+  run_PendingRestoreLeavesALaterAreaEditOpen();
 }
 
 }  // namespace mowgli_map
