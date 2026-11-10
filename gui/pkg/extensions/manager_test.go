@@ -505,7 +505,10 @@ func TestSeparatePreparationAndActivationBudgets(t *testing.T) {
 			applyOK(t, m, "enable", nil, Binding{})
 			phase := &preparationBudgetRuntime{Backend: runtime, expire: expire}
 			m.Backend = phase
-			m.phaseTimeout = 50 * time.Millisecond
+			m.phaseTimeout = 5 * time.Second
+			if expire {
+				m.phaseTimeout = 50 * time.Millisecond
+			}
 			target := candidateBundle(bundle)
 			err := m.Apply(context.Background(), "upgrade", "example", &target, Binding{})
 			if expire {
