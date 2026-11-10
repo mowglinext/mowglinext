@@ -30,6 +30,7 @@ bool rename_entered = false, release_rename = false;
 std::atomic<bool> record_publications{false};
 std::vector<std::vector<std::string>> publications;
 std::atomic<int> area_publications{0}, generation_publications{0}, mask_publications{0};
+std::vector<size_t> area_sizes;  // sizes of the recorded-area lists that went out
 bool matches(int fd, const std::string& target)
 {
   char key[64], path[4096];
@@ -106,11 +107,27 @@ extern "C" rcl_ret_t rcl_publish(const rcl_publisher_t* publisher,
   if (record_publications && topic)
   {
     if (std::string(topic) == "/mowgli/recorded_area_polygons")
+    {
       area_publications++;
+      const auto& data = *static_cast<const mowgli_interfaces::msg::RecordedAreaPolygonArray*>(msg);
+      if (fault == 11 && !data.areas.empty())
+      {
+        RCL_SET_ERROR_MSG("injected area list publication failure");
+        return RCL_RET_ERROR;
+      }
+      area_sizes.push_back(data.areas.size());
+    }
     if (std::string(topic) == "/map_server_node/area_list_generation")
       generation_publications++;
     if (std::string(topic) == "/keepout_mask")
+    {
+      if (fault == 10)
+      {
+        RCL_SET_ERROR_MSG("injected mask publication failure");
+        return RCL_RET_ERROR;
+      }
       mask_publications++;
+    }
   }
   if (topic && std::string(topic) == "/mowgli/lidar_ignore_corridors")
   {
@@ -390,6 +407,7 @@ protected:
     old = read(path);
     ASSERT_NE(old.find("kept-obstacle"), std::string::npos);
     area_publications = 0;
+    area_sizes.clear();
     generation_publications = 0;
     mask_publications = 0;
     record_publications = true;
@@ -1505,6 +1523,62 @@ protected:
     EXPECT_EQ(area_publications.load(), before);
   }
 
+  void run_SaveWhileRestorePendingKeepsTheFilterOff()
+  {
+    fault = 6;
+    ASSERT_EQ(restore(replacement()).outcome, "COMMITTED_PUBLICATION_PENDING");
+    ASSERT_TRUE(node->area_list_published_empty_);
+    auto saved = std::make_shared<std_srvs::srv::Trigger::Response>();
+    node->save_areas_service_for_test(saved);
+    ASSERT_TRUE(saved->success);
+    // The restored areas must not meet the pre-restore corridors.
+    EXPECT_TRUE(node->area_list_published_empty_);
+    EXPECT_TRUE(area_sizes.empty() || area_sizes.back() == 0u);
+    EXPECT_TRUE(node->restore_publication_pending_);
+    fault = 0;
+    retry_publication();
+    EXPECT_FALSE(node->restore_publication_pending_);
+    ASSERT_FALSE(area_sizes.empty());
+    EXPECT_EQ(area_sizes.back(), 2u);
+  }
+
+  void run_MaskPublicationFailureAfterCommitStaysInside()
+  {
+    fault = 10;
+    Restore::Response r;
+    EXPECT_NO_THROW(r = restore(replacement()));
+    fault = 0;
+    EXPECT_TRUE(r.committed);
+    EXPECT_EQ(node->areas_.size(), 2u);
+    EXPECT_EQ(publications.size(), 1u);
+    ASSERT_FALSE(area_sizes.empty());
+    EXPECT_EQ(area_sizes.back(), 2u);
+    // The rebuild scheduled at install publishes the new mask.
+    node->mask_rebuild_not_before_ = {};
+    retry_publication();
+    EXPECT_GT(node->cached_keepout_mask_.info.width, 0u);
+  }
+
+  void run_AreaListFailureDuringRetryStaysPending()
+  {
+    fault = 6;
+    ASSERT_EQ(restore(replacement()).outcome, "COMMITTED_PUBLICATION_PENDING");
+    fault = 11;
+    EXPECT_NO_THROW(retry_publication());
+    EXPECT_TRUE(node->restore_publication_pending_);
+    EXPECT_TRUE(node->recorded_areas_publication_pending_);
+    EXPECT_TRUE(node->area_list_published_empty_);
+    fault = 0;
+    retry_publication();
+    EXPECT_FALSE(node->restore_publication_pending_);
+    EXPECT_FALSE(node->recorded_areas_publication_pending_);
+    ASSERT_FALSE(area_sizes.empty());
+    EXPECT_EQ(area_sizes.back(), 2u);
+    const auto count = area_publications.load();
+    retry_publication();
+    EXPECT_EQ(area_publications.load(), count);
+  }
+
   void run_BootLoadReadsCommittedFileAndKeepsGenerationAtZero()
   {
     ASSERT_TRUE(restore(replacement()).success);
@@ -1574,6 +1648,21 @@ TEST_F(RestoreTransactionTest, LatePublicationRetryKeepsTheRebuiltMask)
 TEST_F(RestoreTransactionTest, PendingRestoreLeavesALaterAreaEditOpen)
 {
   run_PendingRestoreLeavesALaterAreaEditOpen();
+}
+
+TEST_F(RestoreTransactionTest, SaveWhileRestorePendingKeepsTheFilterOff)
+{
+  run_SaveWhileRestorePendingKeepsTheFilterOff();
+}
+
+TEST_F(RestoreTransactionTest, MaskPublicationFailureAfterCommitStaysInside)
+{
+  run_MaskPublicationFailureAfterCommitStaysInside();
+}
+
+TEST_F(RestoreTransactionTest, AreaListFailureDuringRetryStaysPending)
+{
+  run_AreaListFailureDuringRetryStaysPending();
 }
 
 }  // namespace mowgli_map

@@ -1199,7 +1199,14 @@ void MapServerNode::on_publish_timer()
         !restore_publication_pending_ &&
         std::chrono::steady_clock::now() >= area_list_publish_not_before_)
     {
-      publish_recorded_area_list();
+      try
+      {
+        publish_recorded_area_list();
+      }
+      catch (const std::exception& e)
+      {
+        RCLCPP_WARN(get_logger(), "Recorded-area list publication still pending: %s", e.what());
+      }
     }
   }
 

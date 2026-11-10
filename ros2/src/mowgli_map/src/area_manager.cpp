@@ -779,7 +779,6 @@ void MapServerNode::publish_empty_area_list()
 
 void MapServerNode::publish_recorded_area_list()
 {
-  recorded_areas_publication_pending_ = false;
   mowgli_interfaces::msg::RecordedAreaPolygonArray msg;
   msg.header.stamp = get_clock()->now();
   msg.header.frame_id = "map";
@@ -793,8 +792,10 @@ void MapServerNode::publish_recorded_area_list()
       msg.areas.push_back(std::move(entry));
     }
   }
-  area_list_published_empty_ = msg.areas.empty();
+  // The flags change only once the list is out, so a failed publication stays pending.
   recorded_area_polygons_pub_->publish(msg);
+  area_list_published_empty_ = msg.areas.empty();
+  recorded_areas_publication_pending_ = false;
 }
 
 void MapServerNode::on_set_area_coverage_lines(
@@ -1569,7 +1570,8 @@ void MapServerNode::on_save_areas(const std_srvs::srv::Trigger::Request::SharedP
   // The caller's commit: whatever the file write does below, the area list it
   // just built is complete, so the corridor filter may have it now.
   area_replace_in_progress_ = false;
-  if (recorded_areas_publication_pending_)
+  // A pending restore holds the list until its corridors are out too.
+  if (recorded_areas_publication_pending_ && !restore_publication_pending_)
     publish_recorded_area_list();
   if (areas_file_path_.empty())
   {
@@ -1646,16 +1648,14 @@ bool MapServerNode::publish_restored_areas()
     std_msgs::msg::UInt64 generation;
     generation.data = area_list_generation_;
     area_list_generation_pub_->publish(generation);
-    restore_publication_pending_ = false;
     if (list_owed)
       publish_recorded_area_list();
+    restore_publication_pending_ = false;
     return true;
   }
   catch (const std::exception& ex)
   {
     RCLCPP_ERROR(get_logger(), "Restore committed; publication pending: %s", ex.what());
-    if (list_owed)
-      recorded_areas_publication_pending_ = true;
   }
   // The restored areas must not be filtered with the corridors published before
   // the restore: the filter stays off until both are out.
@@ -1710,13 +1710,21 @@ void MapServerNode::on_restore_areas(
   ++area_list_generation_;
   ++corridor_revision_;
   res->committed = true;
-  // Once per restore; install_areas_candidate scheduled the rebuild.
-  invalidate_keepout_mask();
   // A restore is a complete list, so it ends a replace left in progress.
   area_replace_in_progress_ = false;
   recorded_areas_publication_pending_ = true;
   area_list_publish_not_before_ = std::chrono::steady_clock::now();
   restore_publication_pending_ = true;
+  // Once per restore. If this publication fails, the rebuild that
+  // install_areas_candidate scheduled still publishes the new mask.
+  try
+  {
+    invalidate_keepout_mask();
+  }
+  catch (const std::exception& ex)
+  {
+    RCLCPP_ERROR(get_logger(), "Restore committed; mask invalidation not published: %s", ex.what());
+  }
   res->published = publish_restored_areas();
   if (!res->persisted)
   {
