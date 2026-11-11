@@ -1864,3 +1864,36 @@ def test_ftc_pivot_coast_assumption_is_loaded_in_both_overlays(overlay: str) -> 
     # Private Nav2 tuning is read from the merged params file; it needs no
     # operator template / GUI projection or launch-time physics estimate.
     assert ftc["plugin"] == "mowgli_nav2_plugins/FTCController"
+
+
+# FTC keys whose compiled declare_parameter default (ftc_controller.cpp) is far
+# looser than the shipped value: dropping one from the yaml would silently run
+# the robot on that default (2 m/s and 2 rad/s caps, 5x the acceleration, the
+# 0.12 m line body model, no lattice, a 0.25 m look-ahead, an undamped lateral
+# loop). Pin that the shipped value is stated, and bounded, in BOTH overlays.
+_FTC_SAFETY_CRITICAL = {
+    "max_cmd_vel_speed": (0.0, 0.5),
+    "max_cmd_vel_ang": (0.0, 1.5),
+    "acceleration": (0.0, 0.5),
+    "speed_fast": (0.0, 0.5),
+    "use_footprint_clearance": (True, True),
+    "use_offset_lattice": (True, True),
+    "obstacle_lookahead": (10, 200),
+    "obstacle_clearance_margin": (0.0, 0.5),
+    "kd_lat": (0.0, 5.0),
+    "derivative_filter_tau": (0.0, 1.0),
+    "max_goal_distance_error": (0.0, 0.5),
+    "goal_timeout": (5.0, 60.0),
+}
+
+
+@pytest.mark.parametrize("overlay", ["nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"])
+def test_ftc_safety_critical_keys_are_stated_explicitly(overlay: str) -> None:
+    params = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml(overlay))
+    ftc = _controller_section(params)["FollowCoveragePath"]
+    for key, (low, high) in _FTC_SAFETY_CRITICAL.items():
+        assert key in ftc, (
+            f"FollowCoveragePath.{key} must be set explicitly: FTC's compiled default "
+            "is not a safe value for this robot"
+        )
+        assert low <= ftc[key] <= high, f"FollowCoveragePath.{key}={ftc[key]} outside [{low}, {high}]"
