@@ -311,12 +311,22 @@ Publishes none. `ctx->tf_buffer` (`behavior_tree_node.cpp` :82) is used to look 
 `mowgli_localization::NavSatStatusAssociation` before comparing the immutable
 raw fix with `/fusion_graph/gnss_update`. Its 50 ms association window is not a
 commit deadline: completed pairs and graph reports are retained separately.
-Coverage requires fresh stable Fixed quality, a matching committed Fixed fix,
-and a published TF support epoch that is already available in the TF buffer.
-Fix age uses both the original observation stamp and the first raw fix delivery
-in the monotonic clock. Report repetition, duplicates and graph revision
-changes do not renew either age. A non-Fixed status immediately revokes the
-coverage prerequisite even when the position sequence has not changed.
+Coverage requires fresh stable PRECISE quality, a matching committed fix of the
+same quality, and a published TF support epoch that is already available in
+the TF buffer. By default PRECISE means RTK Fixed only. With
+`precision_lidar_map_mode` (`lidar_enabled AND use_lidar_map_anchor`, injected
+by `full_system.launch.py`) RTK Float, or any fix reporting <= 0.5 m horizontal
+accuracy (`NormalizedQuality >= kLidarMapMinQuality` 0.7), also counts as
+PRECISE, because the LiDAR map anchor can hold the pose — operator decision
+2026-11-09 (field bag 113449Z: strict Fixed-only paused coverage 13 times in
+23 min on 2-5 s Float episodes, each costing 5-10 s and a blade restart).
+GPS-only robots (no LiDAR, or no map anchor) keep the strict RTK-Fixed
+requirement. Fix age uses both the original observation stamp and the first
+raw fix delivery in the monotonic clock. Report repetition, duplicates and
+graph revision changes do not renew either age. A status below the mode's
+PRECISE floor immediately revokes the coverage prerequisite even when the
+position sequence has not changed; no usable fix at all pauses coverage in
+both modes.
 
 FollowStrip applies this prerequisite only to coverage ownership and dispatch.
 It stops the blade and continuously sends emergency-lane zeros, abandons a
