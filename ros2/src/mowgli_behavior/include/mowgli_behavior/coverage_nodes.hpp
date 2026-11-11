@@ -40,6 +40,7 @@
 #include "mowgli_behavior/cancel_goal.hpp"
 #include "mowgli_behavior/detour_resume.hpp"
 #include "mowgli_behavior/dig_skip.hpp"
+#include "mowgli_behavior/navigator_refusal.hpp"
 #include "mowgli_behavior/scan_pause.hpp"
 #include "mowgli_behavior/strip_progress.hpp"
 #include "mowgli_behavior/transit_failure.hpp"
@@ -561,6 +562,10 @@ private:
   // the swath is skipped rather than mowed cross-country.
   bool transit_pending_ = false;
   std::chrono::steady_clock::time_point transit_wait_start_;
+  // The navigator REFUSED the transit (busy, issue #943): the stale goal was cancelled and the
+  // dispatch is re-sent after a pause (transit_pending_ is held meanwhile), a bounded number of
+  // times, before the unit is skipped. Reset whenever the pass moves to another unit.
+  NavigatorRefusalRetry transit_refusal_;
   // Result slot for the in-flight transit + the bounded wait that lets it
   // arrive after the status topic reports the abort (issue #487).
   std::shared_ptr<TransitResultSlot> transit_result_;
@@ -809,8 +814,13 @@ private:
   BT::NodeStatus onFailed(const std::shared_ptr<BTContext>& ctx);
   /// Cancels a transit still running past its bound, once.
   void enforceDeadline(const std::shared_ptr<BTContext>& ctx);
+  /// Sends goal_ (fresh result slots per attempt) and restarts the bound.
+  void sendGoal(const std::shared_ptr<BTContext>& ctx);
 
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
+  Nav2Navigate::Goal goal_;
+  /// A refused goal is re-sent after a pause, a bounded number of times (issue #943).
+  NavigatorRefusalRetry refusal_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;
   std::shared_ptr<GoalAbandonment> nav_abandonment_ = std::make_shared<GoalAbandonment>();

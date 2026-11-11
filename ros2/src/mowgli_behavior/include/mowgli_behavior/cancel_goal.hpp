@@ -166,4 +166,32 @@ void cancelAllGoalsQuietly(const std::shared_ptr<rclcpp_action::Client<ActionT>>
   }
 }
 
+/// Cancel every goal an action server accepted at or before `stamp`, WITHOUT ever throwing.
+///
+/// Unlike cancelAllGoalsQuietly() this cannot reach a goal accepted after `stamp`, so it is safe
+/// to send just before handing the server's work to someone else: DockRobot clears a stale
+/// navigate_to_pose goal this way and docking_server's own staging goal, sent afterwards, is
+/// left alone. Returns true when the request was sent.
+template <typename ActionT>
+bool cancelGoalsBeforeQuietly(const std::shared_ptr<rclcpp_action::Client<ActionT>>& client,
+                              const rclcpp::Time& stamp,
+                              const rclcpp::Logger& logger,
+                              const char* who) noexcept
+{
+  if (!client)
+  {
+    return false;
+  }
+  try
+  {
+    client->async_cancel_goals_before(stamp);
+    return true;
+  }
+  catch (const std::exception& ex)
+  {
+    RCLCPP_WARN(logger, "%s: could not cancel stale goals: %s", who, ex.what());
+  }
+  return false;
+}
+
 }  // namespace mowgli_behavior

@@ -812,6 +812,18 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  # ---- test_navigator_refusal ----
+  # Pure: a goal a busy navigator refused is re-sent after a pause, a bounded
+  # number of times (issue #943), instead of failing the attempt at once.
+  ament_add_gtest(test_navigator_refusal
+    test/test_navigator_refusal.cpp
+  )
+
+  target_include_directories(test_navigator_refusal PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
   # ---- test_blocked_stretch ----
   # Pure: where a unit resumes once an obstacle stretch beat every detour
   # (issue #607) instead of dropping the rest of the unit.

@@ -521,6 +521,7 @@ BT::NodeStatus FollowStrip::onStart()
   skipped_tally_ = SkippedPathTally{};
   transit_active_ = false;
   transit_pending_ = false;
+  transit_refusal_.reset();
   transit_abort_seen_ = false;
   transit_result_.reset();
   transit_outcome_.reset();
@@ -1322,6 +1323,7 @@ BT::NodeStatus FollowStrip::onRunning()
     // Whatever way the current unit ended — mowed, booked, skipped — its blade-off transit goal
     // must not outlive it (field 2026-10-09: the orphan kept the navigator busy for 7 minutes).
     cancelTransit(ctx, "leaving the unit");
+    transit_refusal_.reset();
     ++swath_idx_;
     // Moving to a fresh unit: its progress starts at 0 and it is untrimmed (only
     // the one resumed unit carries a trim offset). Without this reset the stale
@@ -1543,6 +1545,14 @@ BT::NodeStatus FollowStrip::onRunning()
   // handlers because neither is in flight while a dispatch is pending.
   if (transit_pending_)
   {
+    // A refused transit waits out its pause before the re-send (navigator_refusal.hpp).
+    if (transit_refusal_.pending())
+    {
+      if (!transit_refusal_.due(std::chrono::steady_clock::now()))
+        return BT::NodeStatus::RUNNING;
+      transit_refusal_.consume();
+      transit_wait_start_ = std::chrono::steady_clock::now();
+    }
     if (std::chrono::steady_clock::now() - transit_wait_start_ >
         std::chrono::duration<double>(kTransitServerWaitSec))
     {
@@ -1578,9 +1588,32 @@ BT::NodeStatus FollowStrip::onRunning()
                     swath_idx_ + 1,
                     swaths_.size());
         // A busy navigator refuses with no error code. If it is busy with a goal that has no
-        // owner any more, this frees it for the next attempt (see cancel_goal.hpp).
+        // owner any more, this frees it for the next attempt (see cancel_goal.hpp). Give it time
+        // to wind that goal down and send the transit again, a bounded number of times, before
+        // skipping the unit (issue #943). The blade stays OFF: transit_pending_ holds it.
         cancelAllGoalsQuietly(nav_client_, ctx->node->get_logger(), "FollowStrip");
         transit_active_ = false;
+        const auto now = std::chrono::steady_clock::now();
+        if (transit_refusal_.onRefused(now))
+        {
+          RCLCPP_WARN(ctx->node->get_logger(),
+                      "FollowStrip: navigator busy — re-sending the segment %zu/%zu transit in "
+                      "%.0f s (%d/%d)",
+                      swath_idx_ + 1,
+                      swaths_.size(),
+                      NavigatorRefusalRetry::kRetryDelaySec,
+                      transit_refusal_.retries(),
+                      NavigatorRefusalRetry::kMaxRetries);
+          transit_pending_ = true;
+          transit_wait_start_ = now;
+          return BT::NodeStatus::RUNNING;
+        }
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "FollowStrip: navigator still refusing the segment %zu/%zu transit after %d "
+                    "retries — skipping",
+                    swath_idx_ + 1,
+                    swaths_.size(),
+                    NavigatorRefusalRetry::kMaxRetries);
         ++swaths_skipped_;
         return advance();
       }
@@ -2151,6 +2184,7 @@ void FollowStrip::abortActiveGoals(const std::shared_ptr<BTContext>& ctx)
   nav_handle_.reset();
   transit_active_ = false;
   transit_pending_ = false;
+  transit_refusal_.reset();
   transit_abort_seen_ = false;
   transit_result_.reset();
   ctx->transiting = false;
@@ -2169,7 +2203,8 @@ void FollowStrip::abortActiveGoals(const std::shared_ptr<BTContext>& ctx)
 
 void FollowStrip::cancelTransit(const std::shared_ptr<BTContext>& ctx, const char* why)
 {
-  if (!transit_active_ && !nav_handle_)
+  // A transit waiting for its re-send after a refusal (transit_pending_) belongs to the unit too.
+  if (!transit_active_ && !nav_handle_ && !transit_pending_)
   {
     return;
   }
@@ -2187,6 +2222,7 @@ void FollowStrip::cancelTransit(const std::shared_ptr<BTContext>& ctx, const cha
   nav_handle_.reset();
   transit_active_ = false;
   transit_pending_ = false;
+  transit_refusal_.reset();
   transit_abort_seen_ = false;
   transit_result_.reset();
   ctx->transiting = false;
@@ -2918,9 +2954,9 @@ BT::NodeStatus TransitToStrip::onStart()
     return BT::NodeStatus::FAILURE;
   }
 
-  Nav2Navigate::Goal goal;
-  goal.pose = ctx->current_transit_goal;
-  goal.behavior_tree = ctx->transit_tree_xml;
+  goal_ = Nav2Navigate::Goal{};
+  goal_.pose = ctx->current_transit_goal;
+  goal_.behavior_tree = ctx->transit_tree_xml;
 
   // Bound this attempt — the same bound FollowStrip gives its own transits
   // (transitDeadlineSec).
@@ -2930,8 +2966,8 @@ BT::NodeStatus TransitToStrip::onStart()
     if (ctx->tf_buffer)
     {
       const auto tf = ctx->tf_buffer->lookupTransform("map", "base_footprint", tf2::TimePointZero);
-      gap_m = std::hypot(goal.pose.pose.position.x - tf.transform.translation.x,
-                         goal.pose.pose.position.y - tf.transform.translation.y);
+      gap_m = std::hypot(goal_.pose.pose.position.x - tf.transform.translation.x,
+                         goal_.pose.pose.position.y - tf.transform.translation.y);
     }
   }
   catch (const tf2::TransformException&)
@@ -2943,6 +2979,22 @@ BT::NodeStatus TransitToStrip::onStart()
   deadline_follows_route_ = timeout_s <= 0.0;
   gap_m_ = gap_m;
   deadline_s_ = deadline_follows_route_ ? transitDeadlineSec(gap_m) : timeout_s;
+  refusal_.reset();
+  sendGoal(ctx);
+
+  RCLCPP_INFO(ctx->node->get_logger(),
+              "TransitToStrip: navigating to (%.2f, %.2f), %.1fm away, bound %.0fs",
+              goal_.pose.pose.position.x,
+              goal_.pose.pose.position.y,
+              gap_m,
+              deadline_s_);
+
+  return BT::NodeStatus::RUNNING;
+}
+
+void TransitToStrip::sendGoal(const std::shared_ptr<BTContext>& ctx)
+{
+  // The bound covers the goal the navigator actually runs, not the pauses after a refusal.
   start_time_ = std::chrono::steady_clock::now();
   timeout_requested_ = false;
   failure_seen_ = false;
@@ -2980,21 +3032,26 @@ BT::NodeStatus TransitToStrip::onStart()
     if (feedback)
       route->Record(feedback->distance_remaining);
   };
-  nav_future_ = nav_client_->async_send_goal(goal, send_opts);
-
-  RCLCPP_INFO(ctx->node->get_logger(),
-              "TransitToStrip: navigating to (%.2f, %.2f), %.1fm away, bound %.0fs",
-              goal.pose.pose.position.x,
-              goal.pose.pose.position.y,
-              gap_m,
-              deadline_s_);
-
-  return BT::NodeStatus::RUNNING;
+  nav_future_ = nav_client_->async_send_goal(goal_, send_opts);
 }
 
 BT::NodeStatus TransitToStrip::onRunning()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+
+  // A refused goal waits for its re-send (no goal of ours is in flight meanwhile).
+  if (refusal_.pending())
+  {
+    if (!refusal_.due(std::chrono::steady_clock::now()))
+      return BT::NodeStatus::RUNNING;
+    refusal_.consume();
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "TransitToStrip: re-sending the refused goal (%d/%d)",
+                refusal_.retries(),
+                NavigatorRefusalRetry::kMaxRetries);
+    sendGoal(ctx);
+    return BT::NodeStatus::RUNNING;
+  }
 
   if (!nav_handle_)
   {
@@ -3021,8 +3078,22 @@ BT::NodeStatus TransitToStrip::onRunning()
     {
       RCLCPP_WARN(ctx->node->get_logger(), "TransitToStrip: goal rejected");
       // A busy navigator refuses with no error code; free it if it is busy with a goal that
-      // has no owner any more (see cancel_goal.hpp).
+      // has no owner any more (see cancel_goal.hpp), and give it time to wind that goal down
+      // before trying again: an instant failure here is what spent the area's whole dispatch
+      // budget in one second (issue #943).
       cancelAllGoalsQuietly(nav_client_, ctx->node->get_logger(), "TransitToStrip");
+      if (refusal_.onRefused(std::chrono::steady_clock::now()))
+      {
+        RCLCPP_WARN(ctx->node->get_logger(),
+                    "TransitToStrip: navigator busy — retrying in %.0f s (%d/%d)",
+                    NavigatorRefusalRetry::kRetryDelaySec,
+                    refusal_.retries(),
+                    NavigatorRefusalRetry::kMaxRetries);
+        return BT::NodeStatus::RUNNING;
+      }
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "TransitToStrip: navigator still refusing after %d retries — giving up",
+                  NavigatorRefusalRetry::kMaxRetries);
       return BT::NodeStatus::FAILURE;
     }
   }
@@ -3147,6 +3218,7 @@ void TransitToStrip::onHalted()
               ctx->node->get_logger(),
               "TransitToStrip");
   nav_handle_.reset();
+  refusal_.reset();
 }
 
 // ===========================================================================

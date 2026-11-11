@@ -122,6 +122,40 @@ BT::NodeStatus IsAtDockStation::tick()
   return RobotIsAtDockStation(*ctx) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
 }
 
+void DockRobot::clearStaleNavigation(const std::shared_ptr<BTContext>& ctx)
+{
+  // Field 2026-10-09 (issue #943): a transit goal nobody owned any more kept bt_navigator busy,
+  // docking_server's staging leg was refused ("Goal handle is not known to this client", error
+  // 999) and the mower stayed on the lawn. Nothing else may be navigating once the tree asks to
+  // dock: the node that sent such a goal has been halted or has moved on. Only goals accepted
+  // BEFORE this instant are cancelled, so the staging goal docking_server sends for this request
+  // is never touched, however late the navigator handles the cancel.
+  bool ready = false;
+  if (!nav_client_)
+  {
+    nav_client_ =
+        rclcpp_action::create_client<nav2_msgs::action::NavigateToPose>(ctx->node,
+                                                                        "/navigate_to_pose");
+    // A client created this instant has not discovered the server yet: the session's first
+    // dock is exactly when a stale goal matters. Later docks reuse the discovered client.
+    ready = nav_client_->wait_for_action_server(kStaleNavigationDiscoveryWait);
+  }
+  else
+  {
+    ready = nav_client_->action_server_is_ready();
+  }
+  if (!ready)
+  {
+    return;  // no navigator, nothing that could be stale
+  }
+  if (cancelGoalsBeforeQuietly(nav_client_, ctx->node->now(), ctx->node->get_logger(), "DockRobot"))
+  {
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "DockRobot: cancelled any navigate_to_pose goal still running before the dock "
+                "request");
+  }
+}
+
 BT::NodeStatus DockRobot::onStart()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
@@ -229,6 +263,7 @@ BT::NodeStatus DockRobot::onStart()
                error_code.c_str(),
                error_msg.c_str());
   };
+  clearStaleNavigation(ctx);
   goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
   goal_handle_.reset();
 
