@@ -260,7 +260,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | Key (L) | Default | Becomes | GUI | Life |
 |---|---|---|---|---|
 | `dock_approach_distance` (L440) | 1.5 | staging distance | Docking | launch |
-| `dock_approach_overshoot` (L449) | 0.05 | forward shift of `home_dock.pose` L682–686 | Docking | launch |
+| `dock_approach_overshoot` (L449) | 0.05 | forward shift of `home_dock.pose` L682–686 AND of the `gps_dock_detection` target (`approach_overshoot_m`, clamped to [0, 0.30] m — before 2026-11 the detection path ignored it, so the robot stopped short of the contacts) | Docking | launch |
 | `dock_max_retries` (L450) | 3 | `docking_server.max_retries` L669 | Docking | launch |
 | `dock_use_charger_detection` (L451) | `true` | `simple_charging_dock.use_battery_status` L697 | Docking | launch |
 | `dock_charging_threshold` (L455) | 0.3 | `simple_charging_dock.charging_threshold` L693 | Docking | launch |

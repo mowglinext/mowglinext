@@ -1510,6 +1510,11 @@ def generate_launch_description() -> LaunchDescription:
              "dock_pose_x": dock_pose_x,
              "dock_pose_y": dock_pose_y,
              "dock_pose_yaw": dock_pose_yaw,
+             # The same forward shift _inject_dock_pose_and_speeds adds to
+             # home_dock.pose: SimpleChargingDock stops docking_threshold short
+             # of the DETECTED pose, so without it the robot stopped short of
+             # the contacts (field 2026-11-11, issues #515/#661).
+             "approach_overshoot_m": float(dock_approach_overshoot),
              # MUST match docking_server.fixed_frame / .base_frame so the
              # detection lands in the frame getRefinedPose() expects (and skips
              # its internal TF) and isDocked() compares the right frames.

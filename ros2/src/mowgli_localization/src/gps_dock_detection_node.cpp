@@ -147,6 +147,12 @@ namespace mowgli_localization
 
 namespace
 {
+/// Upper bound on approach_overshoot_m. The target sits this far INSIDE the
+/// cradle; beyond a few decimetres a mistyped value would have the controller
+/// push the chassis into the station (charge detection then stops it, but only
+/// after wait_charge_timeout of pushing when the charger is dead).
+constexpr double kMaxApproachOvershootM = 0.30;
+
 /// Convert an (x, y, yaw) pose to a planar tf2::Transform.
 tf2::Transform make_planar_transform(double x, double y, double yaw)
 {
@@ -170,6 +176,26 @@ public:
     dock_pose_x_ = declare_parameter<double>("dock_pose_x", 0.0);
     dock_pose_y_ = declare_parameter<double>("dock_pose_y", 0.0);
     dock_pose_yaw_ = declare_parameter<double>("dock_pose_yaw", 0.0);
+    // Forward shift of the published target along the dock heading
+    // (dock_approach_overshoot, injected by navigation.launch.py — the same
+    // value the legacy path adds to home_dock.pose). SimpleChargingDock stops
+    // docking_threshold short of the TARGET, so without it the robot stops short
+    // of the contacts (approach_target(), issues #515/#661).
+    approach_overshoot_m_ = declare_parameter<double>("approach_overshoot_m", 0.0);
+    if (!std::isfinite(approach_overshoot_m_) || approach_overshoot_m_ < 0.0 ||
+        approach_overshoot_m_ > kMaxApproachOvershootM)
+    {
+      const double requested = approach_overshoot_m_;
+      approach_overshoot_m_ =
+          std::isfinite(requested) ? std::clamp(requested, 0.0, kMaxApproachOvershootM) : 0.0;
+      RCLCPP_WARN(get_logger(),
+                  "approach_overshoot_m=%.3f is outside [0, %.2f] m — using %.3f.",
+                  requested,
+                  kMaxApproachOvershootM,
+                  approach_overshoot_m_);
+    }
+    dock_target_map_ =
+        approach_target({dock_pose_x_, dock_pose_y_, dock_pose_yaw_}, approach_overshoot_m_);
 
     // Frames. fixed_frame MUST match docking_server.fixed_frame (odom) so the
     // detection lands in the frame getRefinedPose() expects and skips its
@@ -280,12 +306,13 @@ public:
                                });
 
     RCLCPP_INFO(get_logger(),
-                "gps_dock_detection started — dock_map=[%.3f, %.3f, %.3f] fixed=%s base=%s "
-                "require_rtk_fixed=%s rate=%.1f Hz. Publishing detected_dock_pose "
-                "(→ /detected_dock_pose).",
+                "gps_dock_detection started — dock_map=[%.3f, %.3f, %.3f] overshoot=%.3f m "
+                "fixed=%s base=%s require_rtk_fixed=%s rate=%.1f Hz. Publishing "
+                "detected_dock_pose (→ /detected_dock_pose).",
                 dock_pose_x_,
                 dock_pose_y_,
                 dock_pose_yaw_,
+                approach_overshoot_m_,
                 fixed_frame_.c_str(),
                 base_frame_.c_str(),
                 require_rtk_fixed_ ? "true" : "false",
@@ -371,10 +398,7 @@ private:
     // the antenna's odom position, rotated by −Δ (map→odom is NOT rotation-free:
     // odom is zeroed at the robot's start heading). The dock heading in odom is
     // dock_pose_yaw − Δ. Both use the same Δ so they stay consistent.
-    const PlanarPose dock_odom = dock_in_odom(antenna_odom,
-                                              antenna_map,
-                                              {dock_pose_x_, dock_pose_y_, dock_pose_yaw_},
-                                              delta);
+    const PlanarPose dock_odom = dock_in_odom(antenna_odom, antenna_map, dock_target_map_, delta);
     last_dock_odom_ = make_planar_transform(dock_odom.x, dock_odom.y, dock_odom.yaw);
     have_detection_ = true;
 
@@ -614,6 +638,8 @@ private:
   double dock_pose_x_{0.0};
   double dock_pose_y_{0.0};
   double dock_pose_yaw_{0.0};
+  double approach_overshoot_m_{0.0};
+  PlanarPose dock_target_map_{};
   std::string fixed_frame_{"odom"};
   std::string base_frame_{"base_footprint"};
   std::string map_frame_{"map"};

@@ -737,6 +737,9 @@ mowgli:
     # contacts seat firmly even when fusion's pose has 1-3 cm of
     # residual RTK / lever-arm noise. 5 cm matches docking_threshold
     # so a perfect-fusion robot stops exactly at the calibrated pose.
+    # Applied to BOTH dock targets: home_dock.pose (legacy graph-TF path)
+    # and gps_dock_detection's detected pose (use_gps_dock_detection,
+    # default), clamped there to [0, 0.30] m.
     dock_approach_overshoot: 0.05
     dock_max_retries: 3
     dock_use_charger_detection: true
