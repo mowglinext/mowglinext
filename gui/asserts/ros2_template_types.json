@@ -66,6 +66,7 @@
     "dock_visual_y_offset": "number",
     "external_rain_max_age_minutes": "number",
     "gnss_serial_baud": "integer",
+    "goto_deadline_sec": "number",
     "goto_timeout_sec": "number",
     "gps_timeout_sec": "number",
     "gps_wait_after_undock_sec": "number",

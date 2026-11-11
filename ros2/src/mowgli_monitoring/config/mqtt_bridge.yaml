@@ -15,10 +15,12 @@
     # With the default "mowgli" prefix the topics include (full list and
     # payloads in docs/MQTT_CONTROL.md):
     #   out: mowgli/status, mowgli/power, mowgli/emergency, mowgli/high_level_status,
-    #        mowgli/rtk_status, mowgli/position, mowgli/pose, mowgli/gps,
+    #        mowgli/rtk_status, mowgli/position, mowgli/pose, mowgli/pose_wgs84, mowgli/gps,
     #        mowgli/diagnostics, mowgli/areas, mowgli/area_boundary,
-    #        mowgli/coverage_path, mowgli/host, mowgli/available
-    #   in:  mowgli/command, mowgli/start_area, mowgli/external_rain
+    #        mowgli/coverage_path, mowgli/host, mowgli/available,
+    #        mowgli/goto/event, mowgli/goto/state, mowgli/goto/cancel/result
+    #   in:  mowgli/command, mowgli/start_area, mowgli/external_rain,
+    #        mowgli/goto, mowgli/goto/cancel
     mqtt_topic_prefix: "mowgli"
     # Publish a retained Home Assistant device definition under
     # homeassistant/device/<id>/config and refresh it on Home Assistant birth.
@@ -44,6 +46,30 @@
     # /diagnostics publisher, merged, this often — and within 1 s when any
     # status's level changes (or one appears or disappears).
     diagnostics_publish_period_s: 10.0  # s, clamped to [1, 3600]
+
+    # mowgli/goto: a request is refused unless its issued_at lies in
+    # [now - goto_max_age_s, now + goto_max_future_s], the kernel reports the
+    # clock synchronized with an estimated error of at most goto_clock_max_error_s
+    # (goto_require_clock_sync; the kernel adds 0.5 ms/s to that estimate between
+    # NTP updates), and the target is within goto_max_distance_m of the datum.
+    # goto/cancel is never refused for age, clock or store.
+    goto_max_age_s: 30.0  # s, clamped to [1, 600]
+    goto_max_future_s: 5.0  # s, clamped to [0, 60]
+    goto_require_clock_sync: true
+    goto_clock_max_error_s: 2.0  # s, clamped to [0.001, 60]
+    goto_max_distance_m: 2000.0  # m, clamped to [1, 100000]
+    # Requests seen on mowgli/goto, kept across restarts so a duplicate
+    # request_id is answered with its state instead of starting a second
+    # mission. Finished requests are dropped after goto_store_ttl_s, oldest
+    # first beyond goto_store_max_entries, but never while they could still be
+    # re-sent as fresh. An empty path refuses every GOTO.
+    goto_store_path: "/ros2_ws/maps/mqtt_goto_requests.txt"
+    goto_store_ttl_s: 86400.0  # s, clamped to [60, 2592000]
+    goto_store_max_entries: 200  # clamped to [10, 10000]
+    # After a restart, a goal the previous run had sent is canceled by its ID
+    # and watched this long: an "unknown goal" answer does not prove the goal
+    # will not arrive, so the cancel only ends "not_seen" after this window.
+    goto_cancel_window_s: 30.0  # s, clamped to [1, 600]
 
     # Enable TLS/SSL for the broker connection.
     # Requires the broker to be configured with a valid certificate.

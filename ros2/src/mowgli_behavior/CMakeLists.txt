@@ -980,6 +980,33 @@ if(BUILD_TESTING)
     ${tf2_geometry_msgs_TARGETS}
   )
 
+  # ---- test_goto_action ----
+  # The ~/goto action server: the end-of-goal decision, and a real action
+  # client against GotoActionServer (refusal, settled success, busy, cancel,
+  # interruption, critical-battery takeover, pause, deadline, one result).
+  ament_add_ros_isolated_gtest(test_goto_action
+    test/test_goto_action.cpp
+    TIMEOUT 120
+  )
+
+  target_include_directories(test_goto_action PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_goto_action
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
   # ---- test_goto_navigate_to_pose ----
   # NavigateToPose as used by GOTO, against a fake /navigate_to_pose server:
   # the GOTO target goes through bt_navigator's default tree, and a goal halted

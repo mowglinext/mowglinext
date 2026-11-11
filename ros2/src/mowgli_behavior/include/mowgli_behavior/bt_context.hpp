@@ -1052,6 +1052,10 @@ struct BTContext
   /// `goal` port is absent. Map frame. Left unset (nullopt) outside an
   /// active GOTO. Dropped once current_command is no longer COMMAND_GOTO.
   std::optional<geometry_msgs::msg::PoseStamped> goto_target_pose;
+  /// How the current GOTO ended, as recorded by SetGotoOutcome right before its
+  /// terminal status (goto_outcome.hpp). Cleared when a GOTO is accepted, so it
+  /// always belongs to the latest GOTO. Read by the ~/goto action server.
+  std::string goto_outcome;
   /// True when the last tick ended with the tree parked in a rest branch;
   /// required by ~/goto_pose. Computed after each tick (see GotoRestObserver).
   bool tree_at_rest{false};

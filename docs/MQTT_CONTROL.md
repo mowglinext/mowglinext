@@ -71,6 +71,16 @@ high-level command from anyone who can reach the broker — treat it exactly lik
 unauthenticated `:4006` API (`gui/CLAUDE.md`): fine on a trusted LAN, never expose it to the
 internet. Set `mqtt_username`/`mqtt_password`/`mqtt_use_ssl` if your own broker enforces auth/TLS.
 
+`<prefix>/goto` moves the robot, so it adds protections against mistakes rather than against an
+attacker: retained messages are rejected, a request_id is executed at most once (even across a
+restart), requests are only valid for a short time on a synchronized clock, and
+`<prefix>/goto/cancel` is never refused for its age, the clock or the store. It does not
+authenticate the sender and has no switch of its own: whenever the bridge runs, anyone who can
+publish on the broker can send a GOTO, exactly as they can already send `<prefix>/command`. Every
+GOTO still goes through the behavior tree's admission and root guards. To restrict who may move
+the robot, use the broker's own access control (per-user ACL on `<prefix>/command`,
+`<prefix>/goto` and `<prefix>/goto/cancel`).
+
 ## Topics
 
 All topics are `<mqtt_topic_prefix>/<name>` (default prefix `mowgli`). Every payload is UTF-8 JSON
@@ -85,6 +95,7 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/position` | out | no | `/wheel_odom` (**odom frame**, not GPS) | on movement > `position_deadband_m` (0.2 m) or a turn > 5°, at most `publish_rate` Hz, plus a `position_heartbeat_period_s` (30 s) heartbeat |
 | `<prefix>/gps` | out | no | `/gps/fix` (raw `NavSatFix`) | on movement > 0.2 m (lat/lon distance), at most `publish_rate` Hz, plus a 30 s heartbeat |
 | `<prefix>/pose` | out | no | `/odometry/filtered_map` (fused localizer pose, **map frame**) | on movement > 0.2 m or a turn > 5°, at most `publish_rate` Hz, plus a 30 s heartbeat |
+| `<prefix>/pose_wgs84` | out | no | `/odometry/filtered_map` converted to WGS84 with the datum | same as `<prefix>/pose` |
 | `<prefix>/rtk_status` | out | yes | `/gps/status` (`GnssStatus`) | on change, at most `publish_rate` Hz, plus a 10 s heartbeat |
 | `<prefix>/area_boundary` | out | yes | `/map_server_node/get_mowing_area` (polled) | on change, polled every 10 s |
 | `<prefix>/coverage_path` | out | yes | `/coverage/full_plan` (latched) | on change |
@@ -94,6 +105,11 @@ unless noted otherwise. QoS 1 throughout.
 | `<prefix>/areas` | out | yes | `/map_server_node/get_mowing_area` (polled) | ~every 10s |
 | `<prefix>/command` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/high_level_control` | — |
 | `<prefix>/start_area` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/start_in_area` | — |
+| `<prefix>/goto` | **in** | no (retained deliveries rejected) | → `/behavior_tree_node/goto` action | — |
+| `<prefix>/goto/cancel` | **in** | no (retained deliveries rejected) | cancels that request's `/behavior_tree_node/goto` goal | — |
+| `<prefix>/goto/cancel/result` | out | no | the outcome of each `<prefix>/goto/cancel` | on every cancel |
+| `<prefix>/goto/event` | out | no | the GOTO requests' progress and results | on every change, progress at most once per second |
+| `<prefix>/goto/state` | out | yes | the latest `<prefix>/goto/event` | with every event |
 | `<prefix>/external_rain_state` | out | yes | `/behavior_tree_node/external_rain_state` (JSON from `behavior_tree_node`) | on change, plus a 30 s heartbeat |
 | `<prefix>/external_rain` | **in** | **yes — retained is accepted** (it is state, not intent) | → `/external_rain` → `behavior_tree_node` | — |
 | `<prefix>/schedules` | out | yes | the GUI's schedule database (not ROS2 — see above) | on any create/update/delete |
@@ -295,6 +311,21 @@ at the dock) and it carries a heading, which `<prefix>/gps` does not. It needs n
 placed on the `area_boundary` geometry. Not retained; a localizer that has not converged yet (non-
 finite values) publishes nothing.
 
+### `<prefix>/pose_wgs84`
+
+```json
+{"lat": 52.12345678, "lon": -6.98765432, "yaw": 1.5708, "valid": true,
+ "stamp": "2026-11-05T17:40:12.345Z", "age_s": 0.12, "datum": {"lat": 52.1, "lon": -7.0}}
+```
+
+`<prefix>/pose` converted to WGS84 with the datum (`mowgli_interfaces/wgs84_projection.hpp`, the
+same projection as the localizer), so a consumer needs no datum of its own. `yaw` keeps the
+`<prefix>/pose` convention (radians counter-clockwise from east); a compass heading is
+`(90° − yaw in degrees) mod 360`. `valid` is false while the datum is unset or when the pose is more
+than 2 s old at publication. `stamp` is the pose's own time and `age_s` its age when the message
+was built. The datum is included so a pose can always be tied to the projection it was computed
+with; it identifies that projection, not a generation of the localizer's estimate.
+
 ### `<prefix>/host`
 
 ```json
@@ -392,6 +423,109 @@ confirm it took effect.
 emergency via the separate `/hardware_bridge/emergency_stop` service and clears maps via
 `/map_server_node/clear_map`, not through `HighLevelControl`. Don't rely on sending 254/255 over
 MQTT to do either.
+
+### `<prefix>/goto` (inbound — drive to a WGS84 pose)
+
+```json
+{"request_id": "6f1c2d3e-…", "issued_at": "2026-11-05T17:40:12Z",
+ "lat": 52.12345678, "lon": -6.98765432, "yaw": 1.5708}
+```
+
+Sends the robot to a point through the `/behavior_tree_node/goto` action (`docs/claude/high-level-api.md`
+§ GOTO action), with all of its admission checks: the robot must be undocked and at rest, the
+target inside a recorded area, and so on. The bridge converts `lat`/`lon` with its datum, so the
+client never handles the map frame. All fields are required; `yaw` is the final heading in radians
+counter-clockwise from east, within ±2π.
+
+- `request_id` (1–64 characters, `[A-Za-z0-9_-]`, a UUID fits) is chosen by the client. A request_id
+  the bridge has already seen is **never** sent again: the bridge answers with its last
+  `<prefix>/goto/event`, whatever the message's age. This is also how a client asks how a mission
+  ended. Requests are kept in `goto_store_path` across restarts, for `goto_store_ttl_s` after they
+  end and at most `goto_store_max_entries` of them; a request is never dropped while it could still
+  arrive fresh, so a forgotten one sent again is refused `stale` instead of being run. A request
+  that could not be saved is answered with its refusal.
+- `issued_at` is ISO 8601 UTC (`Z`). A new request is refused if it is older than `goto_max_age_s`
+  or more than `goto_max_future_s` ahead, and while the kernel does not report the clock
+  synchronized (`goto_require_clock_sync`).
+- Refusal reasons, in `error_msg` of a `REFUSED` event: `invalid_payload`, `state_unavailable`
+  (the request store could not be read or written), `clock_unsynced`, `stale`, `future`,
+  `datum_unset`, `out_of_range` (more than `goto_max_distance_m` from the datum), `busy` (a GOTO
+  from this bridge is active), `action_unavailable`, `goal_rejected` (the action server rejected
+  the goal), and every `~/goto` admission reason (`docked`, `heading_not_calibrated`, …).
+- The request is saved (`SUBMITTED`) before its goal is sent; if the save fails it is refused
+  `state_unavailable`, so a restart can never send it twice.
+- Every later phase change is saved too. If a save fails, the event is still published with
+  `"durable": false`, and every new request is refused `state_unavailable` until the bridge
+  restarts with a writable store. After such a restart the request reads `ABORTED`/`LOST`
+  (`bridge_restarted`) rather than its unsaved outcome.
+- `LOST` (`ABORTED` phase) means the **bridge** no longer follows the request — it says nothing
+  about the robot's motion, which `<prefix>/high_level_status` and `<prefix>/pose_wgs84` report:
+  - `bridge_restarted`: the bridge restarted while the request was active, so its outcome is
+    unknown. The event is published once the broker is reachable. The bridge chooses each goal's
+    ID and saves it with `SUBMITTED`, before the goal leaves, so it can cancel that goal by its ID
+    — never another client's goal — even if the previous run died before the goal response. Its
+    progress is reported on `<prefix>/goto/cancel/result`:
+    - `canceling`: the server accepted the cancel; the goal is not stopped yet;
+    - `stopped`, with `status` `CANCELED`, `SUCCEEDED` or `ABORTED`: the action reported the goal
+      ended (it is no longer active; whether the robot is still moving is for
+      `<prefix>/high_level_status` and `<prefix>/pose_wgs84` to say);
+    - `ended`: the server answered that the goal had already finished;
+    - `not_seen`: the server never showed the goal during `goto_cancel_window_s`. An "unknown goal"
+      answer alone proves nothing, since a goal request still in transit can be accepted after the
+      cancel: until the window ends the cancel is resent every 2 s and the action status is
+      watched, and a goal that shows up is canceled.
+
+    New requests are not blocked meanwhile. Choosing the goal ID relies on
+    `rclcpp_action::ClientBase::generate_goal_id()`, documented as internal to rclcpp_action;
+    `test_mqtt_goto` checks the server sees the chosen ID.
+  - `action_lost`: the action server went away, and its goals with it.
+  - `no_result`: the goal ended unsuccessfully without an error code (e.g. the action server shut
+    down).
+
+### `<prefix>/goto/cancel` (inbound — stop a GOTO)
+
+`{"request_id": "6f1c2d3e-…"}`. Cancels that request's goal and nothing else, also when it arrives
+before the goal response. It is never refused for its age, the clock or the store. A retained
+message is ignored, like every operator command: replayed at each reconnection it would stop
+whatever runs then. To stop everything, use `<prefix>/command` `8`, which does not depend on the
+GOTO state at all.
+
+The outcome is published on `<prefix>/goto/cancel/result` (not retained):
+`{"request_id": "6f1c2d3e-…", "result": "canceling", "stamp": "2026-11-05T17:40:41.000Z"}`, where
+`result` is `canceling`, `already_ended` (a known request that is no longer active), `not_found`
+(an unknown request_id) or `invalid_payload` (with an empty `request_id`); for a goal left by a
+previous run, also `stopped` (with `status`), `ended` or `not_seen` (see `bridge_restarted` above). `canceling` means the
+cancel was accepted, not that the robot stopped: the request's own `CANCELED` event, or `stopped`,
+says that.
+
+### `<prefix>/goto/event` and `<prefix>/goto/state` (outbound — GOTO progress and result)
+
+```json
+{"request_id": "6f1c2d3e-…", "seq": 4, "phase": "ACTIVE", "error_code": "NONE", "error_msg": "",
+ "state_name": "GOTO_ACTIVE",
+ "current": {"lat": 52.12345, "lon": -6.98765, "yaw": 0.31, "valid": true, "age_s": 0.4},
+ "distance_remaining_m": 3.20, "final": null,
+ "datum": {"lat": 52.1, "lon": -7.0}, "stamp": "2026-11-05T17:40:40.123Z", "durable": true}
+```
+
+- `phase`, in order:
+  - `SUBMITTED`: the bridge saved the request and sent the goal;
+  - `ACCEPTED`: the action server accepted the goal — its admission checks still follow, so
+    `REFUSED` (with the admission reason) can come next;
+  - `ACTIVE` or `PAUSED`: admitted and running, or held by a root guard or the battery logic;
+  - then one of `SUCCEEDED`, `ABORTED`, `CANCELED` or `REFUSED`.
+
+  `seq` increases per request. `durable` is false when the bridge could not save the event.
+- `error_code` is the action's (`NONE`, `REFUSED`, `FAILED`, `LOW_BATTERY_DOCKED`,
+  `LOW_BATTERY_DOCK_FAILED`, `CRITICAL_BATTERY`, `INTERRUPTED`, `DEADLINE`, `CANCELED`,
+  `SHUTDOWN`, `UNKNOWN` for a code the bridge does not know), or the bridge's `LOST` (see above).
+- `current` is the robot's pose when the event was built, with its validity and age; a pose older
+  than 2 s is reported invalid. `distance_remaining_m` is the straight-line distance to the target,
+  not the path length, and `null` without a valid pose.
+- `final` is set only in a terminal phase: `{"lat", "lon", "yaw", "valid", "settled"}`, where
+  `settled` means the wheels reported standstill after arrival.
+- `<prefix>/goto/state` repeats the latest event, retained: it describes the **last** request
+  only. To query a given request, send it again with the same `request_id`.
 
 ### `<prefix>/areas` (recorded mow areas)
 
@@ -603,6 +737,12 @@ Read once at startup (`ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt
 | `position_deadband_m` | `0.2` m (clamped to 0–100) | package-share `mqtt_bridge.yaml` only — movement that publishes position/pose/gps (gps: lat/lon distance, equirectangular); position/pose also publish on a turn > 5° |
 | `position_heartbeat_period_s` | `30.0` s (clamped to 1–3600) | package-share `mqtt_bridge.yaml` only — resend of an unmoved position/pose/gps |
 | `diagnostics_publish_period_s` | `10.0` s (clamped to 1–3600) | package-share `mqtt_bridge.yaml` only — merged diagnostics cadence; a level change goes out within 1 s |
+| `goto_max_age_s` / `goto_max_future_s` | `30.0` / `5.0` s (clamped to 1–600 / 0–60) | package-share `mqtt_bridge.yaml` only — accepted `issued_at` window of `<prefix>/goto` |
+| `goto_require_clock_sync` / `goto_clock_max_error_s` | `true` / `2.0` s (clamped to 0.001–60) | package-share `mqtt_bridge.yaml` only — refuse `<prefix>/goto` unless `adjtimex()` reports the clock synchronized with at most this estimated error (the kernel adds 0.5 ms/s to it between NTP updates) |
+| `goto_max_distance_m` | `2000.0` m (clamped to 1–100000) | package-share `mqtt_bridge.yaml` only — farthest accepted target from the datum |
+| `goto_store_path` | `/ros2_ws/maps/mqtt_goto_requests.txt` | package-share `mqtt_bridge.yaml` only — request store kept across restarts; empty refuses every GOTO |
+| `goto_cancel_window_s` | `30.0` s (clamped to 1–600) | package-share `mqtt_bridge.yaml` only — how long a goal left by a previous run is watched before its cancel ends `not_seen` |
+| `goto_store_ttl_s` / `goto_store_max_entries` | `86400.0` s (clamped to 60–2592000) / `200` (clamped to 10–10000) | package-share `mqtt_bridge.yaml` only — how long finished requests are remembered, and how many; a request changed less than `goto_max_age_s + goto_max_future_s` ago is always kept |
 
 An out-of-range value is clamped with a WARN in the bridge's log.
 

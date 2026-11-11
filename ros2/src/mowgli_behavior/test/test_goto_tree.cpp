@@ -41,6 +41,7 @@
  *     (IsDocking), exactly like mowing.
  */
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -81,6 +82,7 @@ using mowgli_behavior::IsResumeUndockAllowed;
 using mowgli_behavior::kCommandGoto;
 using mowgli_behavior::NeedsDocking;
 using mowgli_behavior::recordStopReason;
+using mowgli_behavior::SetGotoOutcome;
 using mowgli_behavior::SetStopReason;
 namespace stop_reason = mowgli_behavior::stop_reason;
 
@@ -985,6 +987,7 @@ protected:
     factory.registerNodeType<IsBatteryLow>("IsBatteryLow");
     factory.registerNodeType<IsLastDockSucceeded>("IsLastDockSucceeded");
     factory.registerNodeType<SetStopReason>("SetStopReason");
+    factory.registerNodeType<SetGotoOutcome>("SetGotoOutcome");
     factory.registerNodeType<IsResumeUndockAllowed>("IsResumeUndockAllowed");
     factory.registerNodeType<StubNavigateToPose>("NavigateToPose");
     factory.registerNodeType<StubDockRobot>("DockRobot");
@@ -1041,6 +1044,7 @@ TEST_F(GotoTreeTest, ReachedTargetEndsMissionWithGotoReached)
 
   EXPECT_TRUE(rec.published("GOTO_ACTIVE"));
   EXPECT_EQ(rec.statuses.back(), "GOTO_REACHED");
+  EXPECT_EQ(ctx->goto_outcome, "REACHED");
   EXPECT_EQ(ctx->current_command, 0);
   EXPECT_EQ(rec.nav_starts, 1);
   EXPECT_FALSE(bladeEverEnabled());
@@ -1064,6 +1068,7 @@ TEST_F(GotoTreeTest, FailedNavigationEndsMissionWithoutRetry)
 
   EXPECT_TRUE(rec.published("GOTO_FAILED"));
   EXPECT_FALSE(rec.published("GOTO_REACHED"));
+  EXPECT_EQ(ctx->goto_outcome, "FAILED");
   EXPECT_EQ(ctx->current_command, 0);
   EXPECT_EQ(rec.nav_starts, 1);
 }
@@ -1089,6 +1094,7 @@ TEST_F(GotoTreeTest, LowBatteryHaltsTransitDocksAndEndsMission)
   EXPECT_EQ(rec.dock_starts, 1);
   EXPECT_TRUE(rec.published("GOTO_LOW_BATTERY_DOCKING"));
   EXPECT_EQ(rec.statuses.back(), "GOTO_LOW_BATTERY_DOCKED");
+  EXPECT_EQ(ctx->goto_outcome, "LOW_BATTERY_DOCKED");
   EXPECT_FALSE(rec.published("GOTO_LOW_BATTERY_DOCK_FAILED"));
   EXPECT_FALSE(rec.published("GOTO_REACHED"));
   EXPECT_EQ(ctx->current_command, 0);
@@ -1112,6 +1118,7 @@ TEST_F(GotoTreeTest, LowBatteryDockFailureSignalsAndDoesNotLoop)
 
   EXPECT_EQ(rec.dock_starts, 1) << "docking must be tried once, not looped";
   EXPECT_EQ(rec.statuses.back(), "GOTO_LOW_BATTERY_DOCK_FAILED");
+  EXPECT_EQ(ctx->goto_outcome, "LOW_BATTERY_DOCK_FAILED");
   EXPECT_EQ(ctx->stop_reason, stop_reason::kDockNavFailed);
   EXPECT_FALSE(rec.published("GOTO_LOW_BATTERY_DOCKED"));
   EXPECT_EQ(ctx->current_command, 0);
@@ -1312,6 +1319,7 @@ TEST_F(GotoTreeTest, CriticalChargeEndsGotoDockedWithoutBackUp)
 
   EXPECT_EQ(rec.backups, 0) << "a GOTO must stay docked after a critical charge";
   EXPECT_EQ(rec.statuses.back(), "GOTO_CRITICAL_BATTERY_DOCKED");
+  EXPECT_EQ(ctx->goto_outcome, "CRITICAL_BATTERY_DOCKED");
   EXPECT_FALSE(rec.published("MOWING"));
   EXPECT_EQ(ctx->current_command, 0);
 }
@@ -1403,6 +1411,50 @@ TEST(GotoTreeStructureTest, GotoBranchNeverEnablesTheBlade)
   ASSERT_FALSE(goto_seq.empty());
   EXPECT_EQ(goto_seq.find("enabled=\"true\""), std::string::npos);
   EXPECT_NE(goto_seq.find("<SetMowerEnabled enabled=\"false\"/>"), std::string::npos);
+}
+
+// The ~/goto action reads how a GOTO ended from SetGotoOutcome, so every
+// terminal GOTO status must be preceded by the matching outcome.
+TEST(GotoTreeStructureTest, EveryTerminalGotoStatusRecordsItsOutcome)
+{
+  const std::string xml = stripComments(readMainTree());
+  const std::regex pair_re(
+      "<SetGotoOutcome outcome=\"([A-Z_]+)\"/>\\s*"
+      "<PublishHighLevelStatus state=\"\\d\" state_name=\"GOTO_([A-Z_]+)\"/>");
+  std::vector<std::string> paired;
+  for (auto it = std::sregex_iterator(xml.begin(), xml.end(), pair_re);
+       it != std::sregex_iterator();
+       ++it)
+  {
+    EXPECT_EQ((*it)[1].str(), (*it)[2].str());
+    paired.push_back((*it)[1].str());
+  }
+  std::sort(paired.begin(), paired.end());
+  const std::vector<std::string> expected = {"CRITICAL_BATTERY_DOCKED",
+                                             "FAILED",
+                                             "LOW_BATTERY_DOCKED",
+                                             "LOW_BATTERY_DOCK_FAILED",
+                                             "REACHED"};
+  EXPECT_EQ(paired, expected);
+  // Every GOTO status other than the two in-progress ones is terminal.
+  const std::regex status_re("state_name=\"GOTO_([A-Z_]+)\"");
+  std::vector<std::string> terminal;
+  for (auto it = std::sregex_iterator(xml.begin(), xml.end(), status_re);
+       it != std::sregex_iterator();
+       ++it)
+  {
+    const std::string name = (*it)[1].str();
+    if (name != "ACTIVE" && name != "LOW_BATTERY_DOCKING")
+    {
+      terminal.push_back(name);
+    }
+  }
+  std::sort(terminal.begin(), terminal.end());
+  EXPECT_EQ(terminal, expected) << "a terminal GOTO status without SetGotoOutcome";
+  const std::regex any_re("<SetGotoOutcome ");
+  EXPECT_EQ(std::distance(std::sregex_iterator(xml.begin(), xml.end(), any_re),
+                          std::sregex_iterator()),
+            5);
 }
 
 // GotoRestObserver (and so ~/goto_pose) relies on these three branch names.
