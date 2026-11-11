@@ -8,6 +8,7 @@
 #include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/authorized_transit_planner.hpp"
 #include "mowgli_nav2_plugins/transit_raster.hpp"
+#include "mowgli_nav2_plugins/transit_seams.hpp"
 #include <gtest/gtest.h>
 
 namespace mowgli_nav2_plugins
@@ -29,6 +30,56 @@ TEST(TransitGeometry, ClosedUnionAcceptsSeamsButRejectsThinGapsAndDiagonalCuts)
   EXPECT_FALSE(geometry.segmentAuthorized({-0.8, 0}, {0.8, 0}));
   geometry.allowed = {rectangle(0, 0, 1, 0.4), rectangle(0.6, 0, 1, 1)};
   EXPECT_FALSE(geometry.segmentAuthorized({0.5, 0.35}, {0.65, 0.5}));
+}
+TEST(TransitGeometry, SeamRingsBridgeOnlyGapsWithinTolerance)
+{
+  const std::vector<Ring> drawn_twice{rectangle(-4, 0, -0.02, 10), rectangle(0.03, 0, 4, 10)};
+  Geometry geometry;
+  geometry.allowed = drawn_twice;
+  EXPECT_FALSE(geometry.segmentAuthorized({-0.8, 1}, {0.8, 1}));
+  const auto seams = transit::seamRings(drawn_twice, 0.10);
+  ASSERT_FALSE(seams.empty());
+  geometry.allowed.insert(geometry.allowed.end(), seams.begin(), seams.end());
+  EXPECT_TRUE(geometry.segmentAuthorized({-0.8, 1}, {0.8, 1}));
+  EXPECT_TRUE(geometry.segmentAuthorized({-0.8, 0.001}, {0.8, 9.99}));
+  // The seam does not grow past the ends of the shared border, on either side of the gap.
+  for (const double x : {-0.05, 0.0, 0.05})
+  {
+    EXPECT_FALSE(geometry.authorized({x, -0.01}));
+    EXPECT_FALSE(geometry.authorized({x, 10.01}));
+  }
+  // Never further than the tolerance from recorded ground.
+  for (const auto& seam : seams)
+    for (const auto& p : seam)
+      EXPECT_LE(std::min(transit::ringDistance(p, drawn_twice[0]),
+                         transit::ringDistance(p, drawn_twice[1])),
+                0.10 + 1e-12);
+  // One strip per border edge of ONE area, however densely the other one was recorded.
+  Ring dense;
+  for (int i = 0; i <= 100; ++i)
+    dense.push_back({0.03 + 0.01 * (i % 2), 0.1 * i});
+  dense.push_back({4, 10});
+  dense.push_back({4, 0});
+  EXPECT_EQ(transit::seamRings({drawn_twice[0], dense}, 0.10).size(), 1U);
+  // Overlapping areas need no seam at all.
+  EXPECT_TRUE(
+      transit::seamRings({rectangle(-4, 0, 0.5, 10), rectangle(-0.5, 0, 4, 10)}, 0.10).empty());
+
+  // A wider gap stays a wall; a true shared border and a zero tolerance add nothing.
+  EXPECT_TRUE(
+      transit::seamRings({rectangle(-4, 0, -0.1, 10), rectangle(0.1, 0, 4, 10)}, 0.10).empty());
+  EXPECT_TRUE(transit::seamRings({rectangle(-4, 0, 0, 10), rectangle(0, 0, 4, 10)}, 0.10).empty());
+  EXPECT_TRUE(transit::seamRings(drawn_twice, 0).empty());
+}
+TEST(TransitGeometry, SeamRingsStopWhereAnOpeningGapExceedsTolerance)
+{
+  // The borders meet at (0, 0) and open to 0.5 m over 10 m.
+  Geometry geometry;
+  geometry.allowed = {rectangle(-4, 0, 0, 10), {{0, 0}, {4, 0}, {4, 10}, {0.5, 10}}};
+  const auto seams = transit::seamRings(geometry.allowed, 0.10);
+  geometry.allowed.insert(geometry.allowed.end(), seams.begin(), seams.end());
+  EXPECT_TRUE(geometry.segmentAuthorized({-0.5, 1}, {0.5, 1}));
+  EXPECT_FALSE(geometry.segmentAuthorized({-0.5, 5}, {0.9, 5}));
 }
 TEST(TransitGeometry, TerminalExceptionsAreBoundedAndTiedToOneArea)
 {
@@ -338,6 +389,7 @@ protected:
     node_ = std::make_shared<nav2::LifecycleNode>("authorized_transit_test");
     node_->declare_parameter("GridBased.tolerance", 0.0);
     node_->declare_parameter("GridBased.max_planning_time", 2.0);
+    node_->declare_parameter("GridBased.seam_tolerance", seamTolerance());
     auto options = rclcpp::NodeOptions().parameter_overrides(
         {rclcpp::Parameter("plugins", std::vector<std::string>{}),
          rclcpp::Parameter("filters", std::vector<std::string>{}),
@@ -358,6 +410,11 @@ protected:
     planner_.cleanup();
     mowgli_nav2_plugins_test::WaitForTfListenerSpinning(*map_);
     map_->on_cleanup(rclcpp_lifecycle::State());
+  }
+  // 0: the exact union, as compiled.
+  virtual double seamTolerance() const
+  {
+    return 0.0;
   }
   // Empty: the costmap's default radius footprint.
   virtual std::string footprint() const
@@ -895,6 +952,59 @@ TEST_F(AuthorizedTransitPlannerTest, BothRingBoundaryTolerancesRemainCrossable)
   geometry({rectangle(0, 0, 1, 1), rectangle(1 + 1.5 * transit::kEpsilon, 0, 2, 1)});
   EXPECT_TRUE(authorized(plan(0.52, 0.52, 1.48, 0.52)));
   EXPECT_TRUE(authorized(plan(1.48, 0.52, 0.52, 0.52)));
+}
+
+TEST_F(AuthorizedTransitPlannerTest, BorderDrawnTwiceIsAWallWithoutSeamTolerance)
+{
+  geometry({rectangle(-4, 0, -0.02, 10), rectangle(0.03, 0, 4, 10)});
+  EXPECT_THROW(plan(-1.2, 1, 1.2, 1), nav2_core::NoValidPathCouldBeFound);
+}
+
+class SeamTransitPlannerTest : public AuthorizedTransitPlannerTest
+{
+protected:
+  double seamTolerance() const override
+  {
+    return 0.10;
+  }
+  static double length(const nav_msgs::msg::Path& path)
+  {
+    double result = 0;
+    for (std::size_t i = 1; i < path.poses.size(); ++i)
+      result += std::hypot(path.poses[i].pose.position.x - path.poses[i - 1].pose.position.x,
+                           path.poses[i].pose.position.y - path.poses[i - 1].pose.position.y);
+    return result;
+  }
+};
+
+// Operator report 2026-11-10: neighbouring areas whose borders were drawn a few centimetres apart
+// only communicated through the one corner where the rings touched, so a 2.4 m hop became a tour
+// of the garden.
+TEST_F(SeamTransitPlannerTest, BorderDrawnTwiceIsCrossedDirectly)
+{
+  geometry({rectangle(-4, 0, -0.02, 10), rectangle(0.03, 0, 4, 10)});
+  for (const auto& path : {plan(-1.2, 1, 1.2, 1), plan(1.2, 1, -1.2, 1)})
+  {
+    EXPECT_TRUE(authorized(path));
+    EXPECT_LT(length(path), 3.0);
+  }
+}
+TEST_F(SeamTransitPlannerTest, GapWiderThanTheToleranceStaysAWall)
+{
+  geometry({rectangle(-4, 0, -0.1, 10), rectangle(0.1, 0, 4, 10)});
+  EXPECT_THROW(plan(-1.2, 1, 1.2, 1), nav2_core::NoValidPathCouldBeFound);
+  // Joined elsewhere: the route takes the real junction, never the wide gap.
+  geometry({rectangle(-4, 0, -0.1, 10), rectangle(0.1, 0, 4, 10), rectangle(-1, 8, 1, 9)});
+  const auto path = plan(-1.2, 1, 1.2, 1);
+  EXPECT_TRUE(authorized(path));
+  EXPECT_GT(length(path), 14);
+}
+TEST_F(SeamTransitPlannerTest, ObstacleOnTheSeamStillBlocksIt)
+{
+  geometry({rectangle(-4, 0, -0.02, 4), rectangle(0.03, 0, 4, 4)},
+           {rectangle(-0.3, -0.5, 0.3, 4.5)},
+           0.1);
+  EXPECT_THROW(plan(-1.2, 1, 1.2, 1), nav2_core::NoValidPathCouldBeFound);
 }
 
 // Opt-in real-planner benchmark, excluded from ordinary test runs. Run with

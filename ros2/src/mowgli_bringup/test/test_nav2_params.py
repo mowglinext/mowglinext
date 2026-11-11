@@ -60,6 +60,9 @@ def test_transit_authorization_and_explicit_recovery_are_separate(overlay: str) 
     assert planner["GridBased"]["plugin"] == "mowgli_nav2_plugins/AuthorizedTransitPlanner"
     assert planner["GridBased"]["downsample_costmap"] is False
     assert planner["GridBased"]["tolerance"] == 0.0
+    # Bridges borders drawn twice a few centimetres apart; the planner refuses
+    # anything above the 0.15 m a terminal leg may already leave the union by.
+    assert 0.0 < planner["GridBased"]["seam_tolerance"] <= 0.15
     assert planner["BoundaryRecovery"]["plugin"] == "nav2_smac_planner::SmacPlanner2D"
     trees = os.path.join(os.path.dirname(__file__), "..", "..", "mowgli_behavior", "trees")
     for filename in ("navigate_to_pose.xml", "navigate_to_pose_transit.xml"):

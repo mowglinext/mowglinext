@@ -99,6 +99,7 @@ private:
   std::mutex geometry_mutex_, planning_mutex_;
   transit::Geometry geometry_;
   bool geometry_valid_{false};
+  double seam_tolerance_{0};
   uint64_t geometry_revision_{0};
   nav2::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr geometry_sub_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr config_guard_;

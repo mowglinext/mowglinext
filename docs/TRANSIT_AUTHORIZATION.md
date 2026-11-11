@@ -29,6 +29,24 @@ Adjoining or overlapping rings with the same closest boundary point represent
 one intended boundary. Distinct equally near boundary points are ambiguous,
 even when their rings connect elsewhere, and reject the terminal connection.
 Terminal legs never create search cells.
+
+**Seams between neighbouring areas** (`GridBased.seam_tolerance`, 0.10 m shipped,
+0 = exact union, accepted range 0..0.15 m, read at configure). Two areas drawn
+side by side rarely share their border exactly: a gap of a few centimetres runs
+along it, the exact union treats it as a wall, and the transit leaves through the
+one corner where the rings do touch, which can be the far end of the garden
+(operator report 2026-11-10: a route several times the straight-line hop).
+When the geometry snapshot arrives the planner adds seam strips to the allowed
+rings (`transit_seams.hpp`): for a pair of rings, the stretch of an edge of one
+ring lying within the tolerance of the other ring, pushed outward by the
+tolerance, kept only if it lands on the other ring. Every point of a strip is
+within the tolerance of a recorded area, only one ring of a pair grows strips
+(so their own pair never joins two rings further apart than the tolerance), and
+obstacles, the dock body and live costs still block a seam. A gap wider than
+the tolerance stays a wall: overlap the areas or add a navigation area. The
+planner logs `Transit geometry: N seam stretch(es) bridge gaps …` when it
+bridges anything. Seams are transit-only; coverage entry, the mow union and the
+boundary monitor keep the recorded polygons.
 Starts/goals on polygon edges connect to an interior grid anchor even when
 grid alignment puts the endpoint cell centre outside. Obstacles still block
 these legs. A missing connection fails planning without unrestricted fallback.
