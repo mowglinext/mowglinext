@@ -47,6 +47,44 @@ TEST(DockInOdom, MatchesTheTrueTransformWhenDeltaIsRight)
   EXPECT_NEAR(got.yaw, ml::wrap_to_pi(dock_map.yaw - delta), 1e-9);
 }
 
+TEST(ApproachTarget, ShiftsTheDockForwardAlongItsHeading)
+{
+  const ml::PlanarPose dock{6.106, 2.657, -50.79 * kDeg};
+  const ml::PlanarPose target = ml::approach_target(dock, 0.10);
+  EXPECT_NEAR(std::hypot(target.x - dock.x, target.y - dock.y), 0.10, 1e-12);
+  // Forward = along the dock heading (the robot docks nose-first).
+  const double along =
+      (target.x - dock.x) * std::cos(dock.yaw) + (target.y - dock.y) * std::sin(dock.yaw);
+  EXPECT_NEAR(along, 0.10, 1e-12);
+  EXPECT_DOUBLE_EQ(target.yaw, dock.yaw);
+}
+
+TEST(ApproachTarget, ZeroOvershootIsTheDockPose)
+{
+  const ml::PlanarPose dock{1.0, -2.0, 2.5};
+  const ml::PlanarPose target = ml::approach_target(dock, 0.0);
+  EXPECT_DOUBLE_EQ(target.x, dock.x);
+  EXPECT_DOUBLE_EQ(target.y, dock.y);
+  EXPECT_DOUBLE_EQ(target.yaw, dock.yaw);
+}
+
+// The shift survives the map→odom re-anchoring: the odom target is the odom dock
+// pose moved by the same distance along the odom dock heading.
+TEST(ApproachTarget, ShiftIsPreservedInOdom)
+{
+  const double delta = 0.7;
+  const ml::Vec2 t{3.0, -2.0};
+  const ml::PlanarPose dock_map{6.1, 2.6, -0.886};
+  const ml::Vec2 anchor_odom{1.0, 0.5};
+  const ml::Vec2 anchor_map = odom_to_map(anchor_odom, delta, t);
+  const ml::PlanarPose dock_odom = ml::dock_in_odom(anchor_odom, anchor_map, dock_map, delta);
+  const ml::PlanarPose target_odom =
+      ml::dock_in_odom(anchor_odom, anchor_map, ml::approach_target(dock_map, 0.10), delta);
+  EXPECT_NEAR(target_odom.x, dock_odom.x + 0.10 * std::cos(dock_odom.yaw), 1e-9);
+  EXPECT_NEAR(target_odom.y, dock_odom.y + 0.10 * std::sin(dock_odom.yaw), 1e-9);
+  EXPECT_NEAR(target_odom.yaw, dock_odom.yaw, 1e-12);
+}
+
 TEST(TrackRotationFit, NeedsThreePairs)
 {
   ml::TrackRotationFit fit;

@@ -64,6 +64,23 @@ struct PlanarPose
   double yaw{0.0};
 };
 
+/// The docking TARGET: the calibrated dock pose pushed `overshoot_m` further
+/// along its own heading (`dock_approach_overshoot`, mowgli_robot.yaml).
+///
+/// SimpleChargingDock stops on `isDocked()` as soon as base_footprint is within
+/// `docking_threshold` (0.05 m) of the target, then waits for charge without
+/// moving. Aimed at the dock pose itself, the robot therefore stops short of the
+/// contacts. The legacy graph-TF path already shifted `home_dock.pose` by the
+/// overshoot (navigation.launch.py); this detection path did not, so on
+/// 2026-11-11 four "contact" stops landed 0.09–0.15 m short of the dock pose and
+/// never charged (issues #515, #661).
+inline PlanarPose approach_target(const PlanarPose& dock_map, double overshoot_m)
+{
+  return {dock_map.x + overshoot_m * std::cos(dock_map.yaw),
+          dock_map.y + overshoot_m * std::sin(dock_map.yaw),
+          dock_map.yaw};
+}
+
 /// Dock contact pose in odom, anchored at one point seen in both frames.
 ///
 /// `anchor_odom` and `anchor_map` are the SAME physical point (the GPS antenna)

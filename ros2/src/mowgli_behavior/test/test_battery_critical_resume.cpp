@@ -549,6 +549,11 @@ class ProductionBatteryRecoveryTest : public CriticalBatteryResumeTest
 {
 protected:
   bool dock_pending = false;
+  // >0: the Nth DockRobot goal of the test (and every later one) seats the
+  // robot even while docking_ok is false — a second attempt that succeeds.
+  int dock_succeeds_from = 0;
+  // >0: the Nth DockRobot goal (and every later one) keeps driving (RUNNING).
+  int dock_pending_from = 0;
   bool wait_complete = false;
   int dock_halts = 0;
   int heading_seed_count = 0;
@@ -604,30 +609,30 @@ protected:
                                    {BT::InputPort<bool>("enabled"),
                                     BT::InputPort<std::string>("reason")});
     }
-    factory.registerBuilder<BatteryProbeAction>("DockRobot",
-                                                [this](const std::string& name,
-                                                       const BT::NodeConfig& config)
-                                                {
-                                                  return std::make_unique<BatteryProbeAction>(
-                                                      name,
-                                                      config,
-                                                      [this](bool start)
-                                                      {
-                                                        if (start)
-                                                          ++dock_count;
-                                                        if (dock_pending)
-                                                          return BT::NodeStatus::RUNNING;
-                                                        ctx->last_dock_succeeded = docking_ok;
-                                                        ctx->latest_power.charger_enabled =
-                                                            docking_ok;
-                                                        return docking_ok ? BT::NodeStatus::SUCCESS
-                                                                          : BT::NodeStatus::FAILURE;
-                                                      },
-                                                      [this]()
-                                                      {
-                                                        ++dock_halts;
-                                                      });
-                                                });
+    factory.registerBuilder<BatteryProbeAction>(
+        "DockRobot",
+        [this](const std::string& name, const BT::NodeConfig& config)
+        {
+          return std::make_unique<BatteryProbeAction>(
+              name,
+              config,
+              [this](bool start)
+              {
+                if (start)
+                  ++dock_count;
+                if (dock_pending || (dock_pending_from > 0 && dock_count >= dock_pending_from))
+                  return BT::NodeStatus::RUNNING;
+                const bool seated =
+                    docking_ok || (dock_succeeds_from > 0 && dock_count >= dock_succeeds_from);
+                ctx->last_dock_succeeded = seated;
+                ctx->latest_power.charger_enabled = seated;
+                return seated ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+              },
+              [this]()
+              {
+                ++dock_halts;
+              });
+        });
     factory.registerBuilder<BatteryProbeAction>("BackUp",
                                                 [this](const std::string& name,
                                                        const BT::NodeConfig& config)
@@ -884,6 +889,52 @@ TEST_F(ProductionBatteryRecoveryTest, LowBatteryContactSkipsDockAndResumesActive
   wait_complete = true;
   EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
   EXPECT_EQ(undock_count, 1);
+}
+
+// Issue #866 (field 2026-11-11): the low-battery dock failed four "contact, no
+// charge" retries, then FailedCoverageDock's second goal seated the robot — but
+// the session had already been ended as COVERAGE_FAILED_DOCKING, so the mow
+// never resumed after the charge. The second goal now runs inside BatteryGuard
+// and a success enters the normal charge hold and resumes the mow.
+TEST_F(ProductionBatteryRecoveryTest, LowBatteryDockSecondTrySeatsAndResumesMow)
+{
+  ctx->current_command = 1;
+  ctx->battery_percent = 15.0f;
+  docking_ok = false;
+  dock_succeeds_from = 2;
+  auto tree = productionBranch("BatteryGuard", "Fallback");
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(dock_count, 2);
+  EXPECT_EQ(last_state, "CHARGING");
+  EXPECT_TRUE(ctx->battery_charge_pending);
+  EXPECT_EQ(ctx->current_command, 1);
+  EXPECT_TRUE(ctx->stop_reason.empty());
+  ctx->battery_percent = 100.0f;
+  wait_complete = true;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(undock_count, 1);
+  EXPECT_EQ(dock_count, 2);
+}
+
+// A charge that appears while the second goal is still driving ends it at once
+// (ConfirmChargingDock), exactly like the first one.
+TEST_F(ProductionBatteryRecoveryTest, LowBatteryContactHaltsRunningSecondDock)
+{
+  ctx->current_command = 1;
+  ctx->battery_percent = 15.0f;
+  docking_ok = false;
+  dock_pending_from = 2;
+  auto tree = productionBranch("BatteryGuard", "Fallback");
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(dock_count, 2);
+  EXPECT_EQ(dock_halts, 0);
+  ctx->latest_power.charger_enabled = true;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(dock_count, 2);
+  EXPECT_EQ(dock_halts, 1);
+  EXPECT_EQ(last_state, "CHARGING");
+  EXPECT_TRUE(ctx->battery_charge_pending);
+  EXPECT_TRUE(ctx->stop_reason.empty());
 }
 
 TEST_F(ProductionBatteryRecoveryTest, RealDockActionAlreadyChargingSucceedsWithoutServer)
@@ -1386,23 +1437,26 @@ TEST_F(OperatorControlRecoveryTest, EndSessionClearsPendingChargeOnDisk)
 // One failed low-battery dock used to cost three DockRobot goals with no
 // operator action: BatteryGuard, FailedCoverageDock, then the pending-driven
 // critical branch. EndSession now closes the pending charge, so the critical
-// branch only comes back once the pack is genuinely critical.
+// branch only comes back once the pack is genuinely critical. Since #866 both
+// automatic goals run inside BatteryGuard, which reports the docking failure
+// itself and holds RUNNING until MowingCommandGuard sees the cleared command,
+// instead of failing into FailedCoverageDock (COVERAGE_FAILED_DOCKING).
 TEST_F(OperatorControlRecoveryTest, FailedLowBatteryDockIsNotRetriedByPendingBranch)
 {
   ctx->current_command = 1;
   ctx->battery_percent = 15.0f;
   docking_ok = false;
   auto guard = productionBranch("BatteryGuard", "Fallback");
-  EXPECT_EQ(guard.tickOnce(), BT::NodeStatus::FAILURE);
-  EXPECT_EQ(dock_count, 1);
-  EXPECT_TRUE(ctx->battery_charge_pending);
-
-  auto failed = productionBranch("FailedCoverageDock");
-  EXPECT_EQ(failed.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(guard.tickOnce(), BT::NodeStatus::RUNNING);
   EXPECT_EQ(dock_count, 2);
+  EXPECT_EQ(last_state, "NAV_TO_DOCK_FAILED");
   EXPECT_EQ(ctx->stop_reason, "DOCK_NAV_FAILED");  // #1016 reporting intact.
   EXPECT_EQ(ctx->current_command, 0);
   EXPECT_FALSE(ctx->battery_charge_pending);
+  // Still holding: no further dock goal while the cleared command propagates.
+  EXPECT_EQ(guard.tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(dock_count, 2);
+  guard.haltTree();
 
   auto critical = productionBranch("CriticalBatteryDock");
   for (int i = 0; i < 20; ++i)
