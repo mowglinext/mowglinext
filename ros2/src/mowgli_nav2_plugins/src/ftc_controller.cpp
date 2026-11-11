@@ -39,6 +39,7 @@
 #include "mowgli_nav2_plugins/ftc_resync.hpp"
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include "mowgli_nav2_plugins/ftc_start_index.hpp"
+#include "mowgli_nav2_plugins/ftc_zone_grid.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 
 namespace mowgli_nav2_plugins
@@ -46,7 +47,9 @@ namespace mowgli_nav2_plugins
 
 namespace
 {
-constexpr double kIntendedCommandHorizonSec = 0.1;  // shipped controller_frequency: 10 Hz
+// Command horizon when controller_server's controller_frequency cannot be
+// read (unit tests that configure FTC on a bare node): the shipped 10 Hz.
+constexpr double kDefaultCommandHorizonSec = 0.1;
 constexpr double kMaxControlIntervalSec = 0.5;  // existing supported PID interval
 constexpr double kStoppedTranslationMps = 0.01;
 // Once a PRE_ROTATE/PIVOT episode has seen the translation settled, only motion
@@ -81,6 +84,23 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
   clock_ = node->get_clock();
 
   declareParameters(node);
+  // The pivot stopping budgets reserve whole command intervals: derive them
+  // from the rate controller_server actually ticks at, not a literal 10 Hz.
+  command_horizon_s_ = kDefaultCommandHorizonSec;
+  if (node->has_parameter("controller_frequency"))
+  {
+    const rclcpp::Parameter frequency = node->get_parameter("controller_frequency");
+    const double hz = frequency.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER
+                          ? static_cast<double>(frequency.as_int())
+                          : (frequency.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE
+                                 ? frequency.as_double()
+                                 : 0.0);
+    if (std::isfinite(hz) && hz > 0.0)
+    {
+      command_horizon_s_ = 1.0 / hz;
+    }
+  }
+  RCLCPP_INFO(logger_, "FTCController: command horizon %.3f s.", command_horizon_s_);
   corner_geometry_sub_ = node->create_subscription<visualization_msgs::msg::MarkerArray>(
       "/map_server_node/transit_geometry",
       [this](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
@@ -110,31 +130,35 @@ void FTCController::configure(const nav2::LifecycleNode::WeakPtr& parent,
 
   // Subscribe to the GLOBAL costmap (map frame, latched). It carries the
   // mowing-zone boundary as lethal cells (keepout / lethal_outside_areas
-  // filter). We rebuild boundary_costmap_ from each update so the lateral-
-  // OFFSET deviation checks can refuse to skirt out of the zone.
+  // filter), binarised into boundary_costmap_ so the lateral-OFFSET deviation
+  // checks can refuse to skirt out of the zone. The full grid only arrives on
+  // connect and on a resize; every later change comes as a delta on
+  // costmap_updates and must be applied too, or the zone stays frozen at the
+  // first snapshot (occupancy_grid_update.hpp).
   boundary_costmap_sub_ = node->create_subscription<nav_msgs::msg::OccupancyGrid>(
       "/global_costmap/costmap",
       [this](const nav_msgs::msg::OccupancyGrid::SharedPtr og)
       {
-        auto cm = std::make_unique<nav2_costmap_2d::Costmap2D>(og->info.width,
-                                                               og->info.height,
-                                                               og->info.resolution,
-                                                               og->info.origin.position.x,
-                                                               og->info.origin.position.y);
-        unsigned char* char_map = cm->getCharMap();
-        const std::size_t n = static_cast<std::size_t>(og->info.width) * og->info.height;
-        for (std::size_t i = 0; i < n; ++i)
-        {
-          // OccupancyGrid 100/99 = lethal/inscribed (keepout boundary or a
-          // global obstacle — both are things we must not skirt into);
-          // unknown (-1) and free → 0.
-          char_map[i] = (og->data[i] >= 99) ? 254u : 0u;
-        }
+        auto cm = ZoneCostmapFromGrid(*og);
         std::lock_guard<std::mutex> lock(boundary_mutex_);
         boundary_costmap_ = std::move(cm);
         boundary_frame_ = og->header.frame_id;
       },
       rclcpp::QoS(1).transient_local());
+  boundary_update_sub_ = node->create_subscription<map_msgs::msg::OccupancyGridUpdate>(
+      "/global_costmap/costmap_updates",
+      [this](const map_msgs::msg::OccupancyGridUpdate::SharedPtr update)
+      {
+        std::lock_guard<std::mutex> lock(boundary_mutex_);
+        if (boundary_costmap_ == nullptr || !ApplyZoneGridUpdate(*boundary_costmap_, *update))
+        {
+          // No base grid yet, or a delta for a resized grid: the full grid
+          // that a resize republishes replaces it.
+          RCLCPP_DEBUG(logger_,
+                       "FTCController: dropped a global costmap update that does not fit.");
+        }
+      },
+      rclcpp::QoS(10));
 
   // Blade telemetry for the blade-load slowdown (ftc_blade_load.hpp). Always
   // subscribed — the feature can be switched on live via the
@@ -193,9 +217,11 @@ void FTCController::cleanup()
     std::lock_guard lock(corner_geometry_mutex_);
     corner_geometry_.reset();
     checked_corner_geometry_.reset();
+    tick_corner_geometry_.reset();
   }
   pivot_pose_epoch_.reset();
   boundary_costmap_sub_.reset();
+  boundary_update_sub_.reset();
   outside_area_sub_.reset();
   blade_status_sub_.reset();
   cm_state_sub_.reset();
@@ -418,6 +444,12 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
                                                 kContourBypassMinTimeoutS,
                                                 kContourBypassMaxTimeoutS);
 
+  {
+    std::lock_guard<std::mutex> lock(staged_config_mutex_);
+    staged_config_ = config_;
+    staged_config_dirty_ = false;
+  }
+
   // Register parameter-change callback.
   param_cb_handle_ = node->add_on_set_parameters_callback(
       [this](const std::vector<rclcpp::Parameter>& params)
@@ -445,495 +477,536 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
     return false;
   };
 
+  // Validate the WHOLE batch into a copy and adopt it only if every value is
+  // accepted: a rejected batch used to leave the keys before the bad one
+  // applied, so config_ and the node's parameters disagreed. The copy is
+  // staged for the control thread (applyPendingConfig), the only writer of
+  // config_ — this callback runs on the executor thread.
+  Config next;
+  {
+    std::lock_guard<std::mutex> lock(staged_config_mutex_);
+    next = staged_config_;
+  }
+  bool touched = false;
+  const std::string prefix = plugin_name_ + ".";
   for (const auto& p : params)
   {
-    // Strip the plugin namespace prefix before comparing.
-    const std::string prefix = plugin_name_ + ".";
+    // Only this plugin's keys: controller_server hosts other plugins too.
     std::string key = p.get_name();
-    if (key.rfind(prefix, 0) == 0)
+    if (key.rfind(prefix, 0) != 0)
     {
-      key = key.substr(prefix.size());
+      continue;
     }
+    key = key.substr(prefix.size());
+    touched = true;
 
     if (key == "speed_fast")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
         break;
-      config_.speed_fast = p.as_double();
+      next.speed_fast = p.as_double();
     }
     else if (key == "speed_fast_threshold")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 10.0))
         break;
-      config_.speed_fast_threshold = p.as_double();
+      next.speed_fast_threshold = p.as_double();
     }
     else if (key == "speed_fast_threshold_angle")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 180.0))
         break;
-      config_.speed_fast_threshold_angle = p.as_double();
+      next.speed_fast_threshold_angle = p.as_double();
     }
     else if (key == "speed_slow")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
         break;
-      config_.speed_slow = p.as_double();
+      next.speed_slow = p.as_double();
     }
     else if (key == "speed_angular")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 180.0))
         break;
-      config_.speed_angular = p.as_double();
+      next.speed_angular = p.as_double();
     }
     else if (key == "acceleration")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 10.0))
         break;
-      config_.acceleration = p.as_double();
+      next.acceleration = p.as_double();
     }
     else if (key == "obstacle_restart_angular_acceleration")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 10.0))
         break;
-      config_.obstacle_restart_angular_acceleration = p.as_double();
+      next.obstacle_restart_angular_acceleration = p.as_double();
     }
     else if (key == "min_speed_mps")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
         break;
-      config_.min_speed_mps = p.as_double();
+      next.min_speed_mps = p.as_double();
     }
     else if (key == "stall_speed_ratio")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 1.0))
         break;
-      config_.stall_speed_ratio = p.as_double();
+      next.stall_speed_ratio = p.as_double();
     }
     else if (key == "stall_grace_s")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 30.0))
         break;
-      config_.stall_grace_s = p.as_double();
+      next.stall_grace_s = p.as_double();
     }
     else if (key == "stall_crawl_speed")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
         break;
-      config_.stall_crawl_speed = p.as_double();
+      next.stall_crawl_speed = p.as_double();
     }
     else if (key == "blade_load_slowdown_enabled")
     {
-      config_.blade_load_slowdown_enabled = p.as_bool();
+      next.blade_load_slowdown_enabled = p.as_bool();
     }
     else if (key == "blade_load_rpm_full")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 20000.0))
         break;
-      config_.blade_load_rpm_full = p.as_double();
+      next.blade_load_rpm_full = p.as_double();
     }
     else if (key == "blade_load_rpm_min")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 20000.0))
         break;
-      config_.blade_load_rpm_min = p.as_double();
+      next.blade_load_rpm_min = p.as_double();
     }
     else if (key == "blade_load_min_speed_ratio")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 1.0))
         break;
-      config_.blade_load_min_speed_ratio = p.as_double();
+      next.blade_load_min_speed_ratio = p.as_double();
     }
     else if (key == "blade_load_telemetry_max_age_s")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 60.0))
         break;
-      config_.blade_load_telemetry_max_age_s = p.as_double();
+      next.blade_load_telemetry_max_age_s = p.as_double();
     }
     else if (key == "kp_lon")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.kp_lon = p.as_double();
+      next.kp_lon = p.as_double();
     }
     else if (key == "ki_lon")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.ki_lon = p.as_double();
+      next.ki_lon = p.as_double();
     }
     else if (key == "ki_lon_max")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.ki_lon_max = p.as_double();
+      next.ki_lon_max = p.as_double();
     }
     else if (key == "kd_lon")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.kd_lon = p.as_double();
+      next.kd_lon = p.as_double();
     }
     else if (key == "kp_lat")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.kp_lat = p.as_double();
+      next.kp_lat = p.as_double();
     }
     else if (key == "ki_lat")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.ki_lat = p.as_double();
+      next.ki_lat = p.as_double();
     }
     else if (key == "ki_lat_max")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.ki_lat_max = p.as_double();
+      next.ki_lat_max = p.as_double();
     }
     else if (key == "kd_lat")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.kd_lat = p.as_double();
+      next.kd_lat = p.as_double();
     }
     else if (key == "kp_ang")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.kp_ang = p.as_double();
+      next.kp_ang = p.as_double();
     }
     else if (key == "kp_ang_following")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.kp_ang_following = p.as_double();
+      next.kp_ang_following = p.as_double();
     }
     else if (key == "ki_ang")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.ki_ang = p.as_double();
+      next.ki_ang = p.as_double();
     }
     else if (key == "ki_ang_max")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.ki_ang_max = p.as_double();
+      next.ki_ang_max = p.as_double();
     }
     else if (key == "kd_ang")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
-      config_.kd_ang = p.as_double();
+      next.kd_ang = p.as_double();
     }
     else if (key == "derivative_filter_tau")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 5.0))
         break;
-      config_.derivative_filter_tau = p.as_double();
+      next.derivative_filter_tau = p.as_double();
     }
     else if (key == "max_cmd_vel_speed")
     {
       if (reject_invalid(key, p.as_double(), 0.01, 10.0))
         break;
-      config_.max_cmd_vel_speed = p.as_double();
-      std::lock_guard<std::mutex> lock(speed_limit_mutex_);
-      base_max_cmd_vel_speed_ = config_.max_cmd_vel_speed;
+      next.max_cmd_vel_speed = p.as_double();
     }
     else if (key == "max_cmd_vel_ang")
     {
       if (reject_invalid(key, p.as_double(), 0.01, 10.0))
         break;
-      config_.max_cmd_vel_ang = p.as_double();
+      next.max_cmd_vel_ang = p.as_double();
     }
     else if (key == "max_goal_distance_error")
     {
       if (reject_invalid(key, p.as_double(), 0.01, 10.0))
         break;
-      config_.max_goal_distance_error = p.as_double();
+      next.max_goal_distance_error = p.as_double();
     }
     else if (key == "max_goal_angle_error")
     {
       if (reject_invalid(key, p.as_double(), 0.01, 180.0))
         break;
-      config_.max_goal_angle_error = p.as_double();
+      next.max_goal_angle_error = p.as_double();
     }
     else if (key == "pivot_angle_tolerance_deg")
     {
       if (reject_invalid(key, p.as_double(), 1.0, 45.0))
         break;
-      config_.pivot_angle_tolerance_deg = p.as_double();
+      next.pivot_angle_tolerance_deg = p.as_double();
     }
     else if (key == "pivot_coast_time_bound_s")
     {
       if (reject_invalid(key, p.as_double(), 0.01, 2.0))
         break;
-      config_.pivot_coast_time_bound_s = p.as_double();
+      next.pivot_coast_time_bound_s = p.as_double();
     }
     else if (key == "goal_timeout")
     {
       if (reject_invalid(key, p.as_double(), 0.1, 300.0))
         break;
-      config_.goal_timeout = p.as_double();
+      next.goal_timeout = p.as_double();
     }
     else if (key == "max_follow_distance")
     {
       if (reject_invalid(key, p.as_double(), 0.01, 50.0))
         break;
-      config_.max_follow_distance = p.as_double();
+      next.max_follow_distance = p.as_double();
     }
     else if (key == "carrot_max_lead")
     {
       if (reject_invalid(key, p.as_double(), -1.0, 5.0))
         break;
-      config_.carrot_max_lead = p.as_double();
+      next.carrot_max_lead = p.as_double();
     }
     else if (key == "forward_only")
     {
-      config_.forward_only = p.as_bool();
+      next.forward_only = p.as_bool();
     }
     else if (key == "debug_pid")
     {
-      config_.debug_pid = p.as_bool();
+      next.debug_pid = p.as_bool();
     }
     else if (key == "debug_obstacle")
     {
-      config_.debug_obstacle = p.as_bool();
+      next.debug_obstacle = p.as_bool();
     }
     else if (key == "oscillation_recovery")
     {
-      config_.oscillation_recovery = p.as_bool();
+      next.oscillation_recovery = p.as_bool();
     }
     else if (key == "oscillation_v_eps")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 1.0))
         break;
-      config_.oscillation_v_eps = p.as_double();
+      next.oscillation_v_eps = p.as_double();
     }
     else if (key == "oscillation_omega_eps")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 1.0))
         break;
-      config_.oscillation_omega_eps = p.as_double();
+      next.oscillation_omega_eps = p.as_double();
     }
     else if (key == "oscillation_recovery_min_duration")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 300.0))
         break;
-      config_.oscillation_recovery_min_duration = p.as_double();
-      {
-        std::lock_guard<std::mutex> fd_lock(failure_detector_mutex_);
-        failure_detector_.setBufferLength(
-            static_cast<int>(std::round(config_.oscillation_recovery_min_duration * 10.0)));
-      }
+      next.oscillation_recovery_min_duration = p.as_double();
     }
     else if (key == "check_obstacles")
     {
-      config_.check_obstacles = p.as_bool();
+      next.check_obstacles = p.as_bool();
     }
     else if (key == "obstacle_lookahead")
     {
-      config_.obstacle_lookahead = static_cast<int>(p.as_int());
+      next.obstacle_lookahead = static_cast<int>(p.as_int());
     }
     else if (key == "obstacle_footprint")
     {
-      config_.obstacle_footprint = p.as_bool();
+      next.obstacle_footprint = p.as_bool();
     }
     else if (key == "obstacle_body_half_width")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
         break;
-      config_.obstacle_body_half_width = p.as_double();
+      next.obstacle_body_half_width = p.as_double();
     }
     else if (key == "obstacle_clearance_margin")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
         break;
-      config_.obstacle_clearance_margin = p.as_double();
+      next.obstacle_clearance_margin = p.as_double();
     }
     else if (key == "enable_obstacle_deviation")
     {
-      config_.enable_obstacle_deviation = p.as_bool();
+      next.enable_obstacle_deviation = p.as_bool();
     }
     else if (key == "max_lateral_deviation")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 10.0))
         break;
-      config_.max_lateral_deviation = p.as_double();
+      next.max_lateral_deviation = p.as_double();
     }
     else if (key == "deviation_step")
     {
       if (reject_invalid(key, p.as_double(), 0.001, 1.0))
         break;
-      config_.deviation_step = p.as_double();
+      next.deviation_step = p.as_double();
     }
     else if (key == "deviation_blend_rate")
     {
-      config_.deviation_blend_rate = p.as_double();
+      next.deviation_blend_rate = p.as_double();
     }
     else if (key == "min_lateral_deviation")
     {
-      config_.min_lateral_deviation = p.as_double();
+      next.min_lateral_deviation = p.as_double();
     }
     else if (key == "obstacle_wait_timeout_s")
     {
-      config_.obstacle_wait_timeout_s = p.as_double();
+      next.obstacle_wait_timeout_s = p.as_double();
     }
     else if (key == "cm_hold_s")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 25.0))
         break;
-      config_.cm_hold_s = p.as_double();
+      next.cm_hold_s = p.as_double();
     }
     else if (key == "cm_stall_only_s")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 25.0))
         break;
-      config_.cm_stall_only_s = p.as_double();
+      next.cm_stall_only_s = p.as_double();
     }
     else if (key == "obstacle_clear_hold_s")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 30.0))
         break;
-      config_.obstacle_clear_hold_s = p.as_double();
+      next.obstacle_clear_hold_s = p.as_double();
     }
     else if (key == "confine_deviation_to_zone")
     {
-      config_.confine_deviation_to_zone = p.as_bool();
+      next.confine_deviation_to_zone = p.as_bool();
     }
     else if (key == "use_footprint_clearance")
     {
-      config_.use_footprint_clearance = p.as_bool();
+      next.use_footprint_clearance = p.as_bool();
     }
     else if (key == "obstacle_footprint_front_length_m")
     {
-      config_.obstacle_footprint_front_length_m = std::max(0.0, p.as_double());
+      next.obstacle_footprint_front_length_m = std::max(0.0, p.as_double());
     }
     else if (key == "require_clear_exit")
     {
-      config_.require_clear_exit = p.as_bool();
+      next.require_clear_exit = p.as_bool();
     }
     else if (key == "use_offset_lattice")
     {
-      config_.use_offset_lattice = p.as_bool();
+      next.use_offset_lattice = p.as_bool();
     }
     else if (key == "avoidance_horizon_m")
     {
       if (reject_invalid(key, p.as_double(), 0.3, 5.0))
         break;
-      config_.avoidance_horizon_m = p.as_double();
+      next.avoidance_horizon_m = p.as_double();
     }
     else if (key == "avoidance_min_horizon_m")
     {
       if (reject_invalid(key, p.as_double(), 0.2, 5.0))
         break;
-      config_.avoidance_min_horizon_m = p.as_double();
+      next.avoidance_min_horizon_m = p.as_double();
     }
     else if (key == "avoidance_reaction_m")
     {
       if (reject_invalid(key, p.as_double(), 0.0, 2.0))
         break;
-      config_.avoidance_reaction_m = p.as_double();
+      next.avoidance_reaction_m = p.as_double();
     }
     else if (key == "avoidance_max_slope")
     {
       if (reject_invalid(key, p.as_double(), 0.1, 3.0))
         break;
-      config_.avoidance_max_slope = p.as_double();
+      next.avoidance_max_slope = p.as_double();
     }
     else if (key == "obstacle_reverse_enabled")
     {
-      config_.obstacle_reverse_enabled = p.as_bool();
+      next.obstacle_reverse_enabled = p.as_bool();
     }
     else if (key == "reverse_boundary_safe")
     {
-      config_.reverse_boundary_safe = p.as_bool();
+      next.reverse_boundary_safe = p.as_bool();
     }
     else if (key == "obstacle_reverse_max_dist_m")
     {
-      config_.obstacle_reverse_max_dist_m = std::clamp(p.as_double(), 0.0, 2.0);
+      next.obstacle_reverse_max_dist_m = std::clamp(p.as_double(), 0.0, 2.0);
     }
     else if (key == "obstacle_reverse_speed_mps")
     {
-      config_.obstacle_reverse_speed_mps = std::clamp(p.as_double(), 0.0, 1.0);
+      next.obstacle_reverse_speed_mps = std::clamp(p.as_double(), 0.0, 1.0);
     }
     else if (key == "turn_fallback_enabled")
     {
-      config_.turn_fallback_enabled = p.as_bool();
+      next.turn_fallback_enabled = p.as_bool();
     }
     else if (key == "turn_fallback_max_reverse_m")
     {
       if (reject_invalid(key, p.as_double(), 0.0, kTurnFallbackMaxReverseCapM))
         break;
-      config_.turn_fallback_max_reverse_m = p.as_double();
+      next.turn_fallback_max_reverse_m = p.as_double();
     }
     else if (key == "turn_fallback_max_rejoin_arc_m")
     {
       if (reject_invalid(
               key, p.as_double(), kTurnFallbackMinRejoinArcM, kTurnFallbackMaxRejoinArcCapM))
         break;
-      config_.turn_fallback_max_rejoin_arc_m = p.as_double();
+      next.turn_fallback_max_rejoin_arc_m = p.as_double();
     }
     else if (key == "turn_fallback_min_turn_deg")
     {
       if (reject_invalid(key, p.as_double(), 10.0, 180.0))
         break;
-      config_.turn_fallback_min_turn_deg = p.as_double();
+      next.turn_fallback_min_turn_deg = p.as_double();
     }
     else if (key == "turn_fallback_timeout_s")
     {
       if (reject_invalid(key, p.as_double(), 5.0, 300.0))
         break;
-      config_.turn_fallback_timeout_s = p.as_double();
+      next.turn_fallback_timeout_s = p.as_double();
     }
     else if (key == "contour_bypass_enabled")
     {
-      config_.contour_bypass_enabled = p.as_bool();
+      next.contour_bypass_enabled = p.as_bool();
     }
     else if (key == "contour_bypass_max_contour_m")
     {
       if (reject_invalid(
               key, p.as_double(), kContourBypassMinContourM, kContourBypassMaxContourCapM))
         break;
-      config_.contour_bypass_max_contour_m = p.as_double();
+      next.contour_bypass_max_contour_m = p.as_double();
     }
     else if (key == "contour_bypass_max_rejoin_arc_m")
     {
       if (reject_invalid(
               key, p.as_double(), kContourBypassMinRejoinArcM, kContourBypassMaxRejoinArcCapM))
         break;
-      config_.contour_bypass_max_rejoin_arc_m = p.as_double();
+      next.contour_bypass_max_rejoin_arc_m = p.as_double();
     }
     else if (key == "contour_bypass_follow_distance_m")
     {
       if (reject_invalid(key, p.as_double(), kContourBypassMinFollowM, kContourBypassMaxFollowM))
         break;
-      config_.contour_bypass_follow_distance_m = p.as_double();
+      next.contour_bypass_follow_distance_m = p.as_double();
     }
     else if (key == "contour_bypass_timeout_s")
     {
       if (reject_invalid(key, p.as_double(), kContourBypassMinTimeoutS, kContourBypassMaxTimeoutS))
         break;
-      config_.contour_bypass_timeout_s = p.as_double();
+      next.contour_bypass_timeout_s = p.as_double();
     }
   }
 
-  // Ensure slow speed is always the safe baseline when parameters change.
-  current_movement_speed_ = config_.speed_slow;
-
+  if (!result.successful || !touched)
+  {
+    return result;
+  }
+  {
+    std::lock_guard<std::mutex> lock(staged_config_mutex_);
+    staged_config_ = next;
+    staged_config_dirty_ = true;
+  }
+  // Read outside the control loop's config_ (own mutexes): keep them current
+  // at once, as before.
+  {
+    std::lock_guard<std::mutex> lock(speed_limit_mutex_);
+    base_max_cmd_vel_speed_ = next.max_cmd_vel_speed;
+  }
+  {
+    std::lock_guard<std::mutex> fd_lock(failure_detector_mutex_);
+    failure_detector_.setBufferLength(
+        static_cast<int>(std::round(next.oscillation_recovery_min_duration * 10.0)));
+  }
   return result;
+}
+
+void FTCController::applyPendingConfig()
+{
+  std::lock_guard<std::mutex> lock(staged_config_mutex_);
+  if (!staged_config_dirty_)
+  {
+    return;
+  }
+  config_ = staged_config_;
+  staged_config_dirty_ = false;
+  // A parameter change may LOWER the carrot speed to the safe baseline, never
+  // raise it: assigning speed_slow outright jumped a stopped or slowed robot
+  // (obstacle hold, blade-load slowdown) past the acceleration limit, and did
+  // so for any parameter set on controller_server, other plugins' included.
+  current_movement_speed_ = std::min(current_movement_speed_, config_.speed_slow);
 }
 
 // ── setPlan ───────────────────────────────────────────────────────────────────
 
 void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
 {
+  applyPendingConfig();
   pivot_approach_start_.reset();
   current_state_ = PlannerState::PRE_ROTATE;
   state_entered_time_ = clock_->now();
   ++state_entry_seq_;
   is_crashed_ = false;
+  rotation_hold_reason_.clear();
 
   // Reset deviation state with the new path so a previous strip's avoidance
   // doesn't leak into the new one.
@@ -951,6 +1024,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   // mid-reverse budget from the previous one.
   reverse_escape_active_ = false;
   reverse_distance_done_ = 0.0;
+  reverse_elapsed_s_ = 0.0;
   reverse_followable_time_ = 0.0;
   reverse_budget_touched_ = false;
   reverse_engaged_index_ = 0;
@@ -963,6 +1037,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   // Reset angle unwrapping state — the new path's first pose orientation
   // is the new reference; nothing prior to setPlan informs continuity.
   angle_error_raw_prev_ = std::numeric_limits<double>::quiet_NaN();
+  resetOscillation();
 
   global_plan_ = path.poses;
   current_index_ = 0;
@@ -1078,6 +1153,7 @@ void FTCController::newPathReceived(const nav_msgs::msg::Path& path)
   last_cmd_fwd_speed_ = 0.0;
   cm_held_s_ = 0.0;
   cm_stalled_s_ = 0.0;
+  last_cm_hold_arc_.reset();
   is_blade_limited_ = false;
   blade_load_scale_ = 1.0;
 
@@ -1230,6 +1306,15 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
   cmd_vel.header.frame_id = "base_link";
   cmd_vel.header.stamp = clock_->now();
 
+  // The mowing geometry this tick's fallback splices are checked against
+  // (finalizeSplice). Snapshotted BEFORE departure_lock may be taken: a
+  // permitted rotation handoff keeps corner_geometry_mutex_ for the rest of
+  // the tick, and the same tick may already plan a fallback in FOLLOWING.
+  {
+    std::lock_guard lock(corner_geometry_mutex_);
+    tick_corner_geometry_ = corner_geometry_;
+  }
+
   // A successful rotation handoff and its output selection are ordered before
   // complete geometry replacement. Refused handoffs release this lock and keep
   // the rotation state/deadline so a later publication can be re-evaluated.
@@ -1269,9 +1354,9 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
           if (budget)
           {
             const double certified_speed =
-                *budget / (config_.pivot_coast_time_bound_s + 3 * kIntendedCommandHorizonSec);
+                *budget / (config_.pivot_coast_time_bound_s + 3 * command_horizon_s_);
             const double certified_response =
-                *budget / (config_.pivot_coast_time_bound_s + 2 * kIntendedCommandHorizonSec);
+                *budget / (config_.pivot_coast_time_bound_s + 2 * command_horizon_s_);
             if (certified_speed > speed_limit && certified_response > response_limit)
             {
               speed_limit = certified_speed;
@@ -1299,15 +1384,15 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
           !(cmd_vel.twist.angular.z * turn > 0))
         cmd_vel.twist = geometry_msgs::msg::Twist{};
       else
-        cmd_vel.twist.angular.z =
-            std::copysign(std::min(std::abs(cmd_vel.twist.angular.z),
-                                   std::abs(turn) / kIntendedCommandHorizonSec),
-                          turn);
+        cmd_vel.twist.angular.z = std::copysign(std::min(std::abs(cmd_vel.twist.angular.z),
+                                                         std::abs(turn) / command_horizon_s_),
+                                                turn);
     }
     last_cmd_fwd_speed_ = cmd_vel.twist.linear.x;
     return cmd_vel;
   };
 
+  applyPendingConfig();
   const rclcpp::Time now = clock_->now();
   const double dt = (now - last_time_).seconds();
   last_time_ = now;
@@ -1408,9 +1493,19 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
       new_state == PlannerState::FOLLOWING)
   {
     departure_lock.lock();
-    if (settling_rotation || !corner_geometry_ || !corner_geometry_->valid ||
-        !rotationDeparturePermitted(*corner_geometry_))
+    const char* hold = settling_rotation ? nullptr
+                       : !corner_geometry_ || !corner_geometry_->valid
+                           ? "no valid mowing geometry to depart against"
+                       : !rotationDeparturePermitted(*corner_geometry_)
+                           ? "the straight departure after the rotation leaves the mowing area or "
+                             "is blocked"
+                           : nullptr;
+    if (settling_rotation || hold != nullptr)
     {
+      if (hold != nullptr)
+      {
+        noteRotationHold(hold);
+      }
       new_state = current_state_;
       departure_lock.unlock();
     }
@@ -1436,6 +1531,7 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     state_entered_time_ = clock_->now();
     ++state_entry_seq_;
     current_state_ = new_state;
+    rotation_hold_reason_.clear();
   }
 
   // A running turn fallback ends once FOLLOWING has reached its rejoin pose,
@@ -1539,6 +1635,16 @@ geometry_msgs::msg::TwistStamped FTCController::computeVelocityCommands(
     // obstacle-marked abort.
     if (turn_fallback_.phase == TurnFallbackPhase::kIdle && collisionMonitorHoldConfirmed(safe_dt))
     {
+      const double arc = planArcLength(current_index_);
+      if (CmHoldRepeats(last_cm_hold_arc_, arc))
+      {
+        is_crashed_ = true;
+        throw nav2_core::ControllerException(
+            std::string(mowgli_interfaces::ftc_abort_reason::kObstacleAbortMarker) +
+            "FTCController: collision_monitor held the robot again within " +
+            std::to_string(kCmHoldRepeatProgressM) + " m of path, aborting strip.");
+      }
+      last_cm_hold_arc_ = arc;
       reverseEscapeOrWait("collision_monitor holds the robot while the path reads clear",
                           costmap_ros_->getRobotFootprint(),
                           safe_dt);
@@ -1617,8 +1723,10 @@ FTCController::PlannerState FTCController::update_planner_state()
       if (time_in_current_state() > config_.goal_timeout)
       {
         RCLCPP_ERROR(logger_,
-                     "FTCController: timeout (%.1fs) in PRE_ROTATE.",
-                     config_.goal_timeout);
+                     "FTCController: timeout (%.1fs) in PRE_ROTATE%s%s.",
+                     config_.goal_timeout,
+                     rotation_hold_reason_.empty() ? "" : " — held: ",
+                     rotation_hold_reason_.c_str());
         is_crashed_ = true;
         return PlannerState::FINISHED;
       }
@@ -1648,7 +1756,7 @@ FTCController::PlannerState FTCController::update_planner_state()
         // local_control_point_ is the corner transformed at the same supported
         // pose epoch used for the approach speed and response limits.
         const double window =
-            maxLinearSpeed() * (config_.pivot_coast_time_bound_s + 3 * kIntendedCommandHorizonSec);
+            maxLinearSpeed() * (config_.pivot_coast_time_bound_s + 3 * command_horizon_s_);
         const double distance = local_control_point_.translation().norm();
         if (plan_header_.frame_id != "map" ||
             (approach && (!std::isfinite(distance) || distance <= window)))
@@ -1758,9 +1866,11 @@ FTCController::PlannerState FTCController::update_planner_state()
         // Same bound and same escalation as PRE_ROTATE: the BT sees an aborted
         // goal and runs its detour / resume logic.
         RCLCPP_ERROR(logger_,
-                     "FTCController: timeout (%.1fs) pivoting at corner idx=%u.",
+                     "FTCController: timeout (%.1fs) pivoting at corner idx=%u%s%s.",
                      config_.goal_timeout,
-                     current_index_);
+                     current_index_,
+                     rotation_hold_reason_.empty() ? "" : " — held: ",
+                     rotation_hold_reason_.c_str());
         is_crashed_ = true;
         return PlannerState::FINISHED;
       }
@@ -2130,11 +2240,11 @@ void FTCController::update_control_point(double dt)
       // One future sample beyond the 2*T+C reserve avoids alternating STOP
       // pulses as a slowing request becomes the next tick's measured speed.
       pivot_approach_speed_limit_ =
-          travel / (config_.pivot_coast_time_bound_s + 3 * kIntendedCommandHorizonSec);
+          travel / (config_.pivot_coast_time_bound_s + 3 * command_horizon_s_);
       // Reserve one pending and one next intended interval before the
       // declared residual STOP travel; measured speed must fit this reserve.
       pivot_approach_response_limit_ =
-          travel / (config_.pivot_coast_time_bound_s + 2 * kIntendedCommandHorizonSec);
+          travel / (config_.pivot_coast_time_bound_s + 2 * command_horizon_s_);
     }
   }
   catch (const tf2::TransformException& ex)
@@ -2206,7 +2316,7 @@ std::optional<std::size_t> FTCController::stopCornerApproach(bool starting) cons
   if (!std::isfinite(ax) || !std::isfinite(ay))
     return std::nullopt;
   const double window =
-      maxLinearSpeed() * (config_.pivot_coast_time_bound_s + 3 * kIntendedCommandHorizonSec);
+      maxLinearSpeed() * (config_.pivot_coast_time_bound_s + 3 * command_horizon_s_);
   double arc = 0.0;
   for (std::size_t i = current_index_ + 1; i <= *corner; ++i)
   {
@@ -2487,6 +2597,7 @@ void FTCController::enterPivot()
   d_lon_filt_ = 0.0;
   d_angle_filt_ = 0.0;
   angle_error_raw_prev_ = std::numeric_limits<double>::quiet_NaN();
+  resetOscillation();
 }
 
 void FTCController::leavePivot()
@@ -2647,7 +2758,13 @@ bool FTCController::cornerRotationGate(double dt)
     geometry = corner_geometry_;
   }
   if (!geometry || !geometry->valid)
-    return false;  // Original PRE/PIVOT deadline remains authoritative.
+  {
+    // Original PRE/PIVOT deadline remains authoritative; say why it runs.
+    noteRotationHold(!geometry ? "no mowing geometry received on /map_server_node/transit_geometry"
+                               : "the mowing geometry on /map_server_node/transit_geometry is "
+                                 "invalid");
+    return false;
+  }
   const auto pose = pivotMapPose();
   // Missing positional mowing authority is not an observed obstacle. Keep
   // zero under the original PRE/PIVOT deadline without arming obstacle wait.
@@ -2655,6 +2772,7 @@ bool FTCController::cornerRotationGate(double dt)
   if (!geometry->mowing.authorizedWithin({pose.position.x, pose.position.y},
                                          geometry->entry_tolerance))
   {
+    noteRotationHold("the robot is outside the mowing area it may rotate in");
     if (obstacle_waiting_)
       waitOrThrowForObstacle("waiting for mowing authority during an obstacle hold");
     return false;
@@ -2786,23 +2904,16 @@ bool FTCController::checkCollision(int max_points)
     }
   }
 
-  // Check costmap cells along the lookahead path segments.
-  // NOTE: this loop samples global_plan_ poses (plan/map frame) directly
-  // against costmap_map_ (odom frame) — the same map->odom frame bug fixed in
-  // updateLateralDeviation. It is only exercised when enable_obstacle_deviation
-  // is false (not the deployed coverage config), and the footprint check above
-  // is frame-correct, so it is left as-is; transform the window here too if the
-  // deviation-disabled path is ever used in production.
-  for (int i = 0; i < max_points; ++i)
+  // Check costmap cells along the lookahead path segments, in the COSTMAP
+  // frame: global_plan_ is in map, costmap_map_ in odom, and map->odom is not
+  // identity (fusion_graph publishes it), so raw plan coordinates sample the
+  // wrong cells — the bug updateLateralDeviation fixed for its own window.
+  std::vector<geometry_msgs::msg::PoseStamped> window;
+  planWindowInCostmapFrame(current_index_,
+                           current_index_ + static_cast<std::size_t>(std::max(0, max_points)),
+                           window);
+  for (const auto& pose : window)
   {
-    std::size_t index = current_index_ + static_cast<std::size_t>(i);
-    if (index >= global_plan_.size())
-    {
-      index = global_plan_.size() - 1;
-    }
-
-    const auto& pose = global_plan_[index];
-
     if (costmap_map_->worldToMap(pose.pose.position.x, pose.pose.position.y, mx, my))
     {
       const unsigned char cost = costmap_map_->getCost(mx, my);
@@ -2980,6 +3091,7 @@ ReverseEscapeAction FTCController::reverseEscapeStep(const ObstacleDeviation::Fo
   {
     reverse_distance_done_ =
         ReverseEscapeAdvance(cfg, reverse_distance_done_, last_measured_fwd_speed_, dt);
+    reverse_elapsed_s_ += std::max(0.0, dt);
   }
 
   // Boundary-safe: never reverse while outside the recorded area, and only over ground the robot
@@ -3022,8 +3134,9 @@ ReverseEscapeAction FTCController::reverseEscapeStep(const ObstacleDeviation::Fo
                                                       ObstacleDeviation::kLethalOnlyThreshold);
   }
 
-  return have_pose ? ReverseEscapeDecide(cfg, reverse_distance_done_, rear_clear)
-                   : ReverseEscapeAction::kExhausted;
+  return have_pose
+             ? ReverseEscapeDecide(cfg, reverse_distance_done_, rear_clear, reverse_elapsed_s_)
+             : ReverseEscapeAction::kExhausted;
 }
 
 double FTCController::reverseAllowedDistance(double wanted)
@@ -3076,6 +3189,18 @@ double FTCController::reverseAllowedDistance(double wanted)
                            ? "the last piece was itself a reverse"
                            : "the last piece was not a straight drive behind the robot");
   return 0.0;
+}
+
+double FTCController::planArcLength(std::size_t index) const
+{
+  double length = 0.0;
+  const std::size_t last = std::min(index, global_plan_.empty() ? 0 : global_plan_.size() - 1);
+  for (std::size_t i = 0; i < last; ++i)
+  {
+    length += std::hypot(global_plan_[i + 1].pose.position.x - global_plan_[i].pose.position.x,
+                         global_plan_[i + 1].pose.position.y - global_plan_[i].pose.position.y);
+  }
+  return length;
 }
 
 double FTCController::progressSinceReverseEngaged() const
@@ -3211,18 +3336,12 @@ void FTCController::updateLateralDeviation(double dt)
       }
       catch (const tf2::TransformException& ex)
       {
-        // Without the transform we cannot sample obstacles correctly. Skip
-        // avoidance this tick (next tick retries) rather than act on garbage
-        // cells — never silently fall back to the broken raw-coord sampling.
-        RCLCPP_WARN_THROTTLE(logger_,
-                             *clock_,
-                             2000,
-                             "FTCController: obstacle-deviation TF %s->%s failed (%s) — "
-                             "skipping avoidance this tick",
-                             plan_frame.c_str(),
-                             costmap_frame.c_str(),
-                             ex.what());
-        return;
+        // Without the transform the path cannot be checked for obstacles at
+        // all. Never drive on unchecked (that is what "skip avoidance this
+        // tick" used to do) and never fall back to the broken raw-coord
+        // sampling: fail like the carrot's own TF lookup does.
+        throw nav2_core::ControllerException("FTCController: obstacle-check TF " + plan_frame +
+                                             "->" + costmap_frame + " failed: " + ex.what());
       }
       for (std::size_t i = start_idx; i < win_end; ++i)
       {
@@ -3249,7 +3368,12 @@ void FTCController::updateLateralDeviation(double dt)
     boundary_lock.lock();
     if (!buildBoundaryGuard(guard))
     {
-      return;
+      // The zone is unknown: obstacles are still DETECTED (that never needed
+      // the zone), but no offset may leave the line — an obstacle then takes
+      // the wait / reverse / abort path instead of a blind skirt. Returning
+      // here used to skip detection altogether.
+      guard = ObstacleDeviation::BoundaryGuard{};
+      guard.deny_all = true;
     }
   }
 
@@ -3339,6 +3463,7 @@ void FTCController::updateLateralDeviation(double dt)
       // block, and hand a full budget to the next genuine wedge.
       reverse_escape_active_ = false;
       reverse_distance_done_ = 0.0;
+      reverse_elapsed_s_ = 0.0;
       if (is_avoiding_)
       {
         // The nominal path reads clear — but the obstacle sits at the
@@ -3598,6 +3723,7 @@ void FTCController::updateLateralDeviation(double dt)
     if (ReverseBudgetEarnsRefill(refill_cfg, progressSinceReverseEngaged()))
     {
       reverse_distance_done_ = 0.0;
+      reverse_elapsed_s_ = 0.0;
       reverse_budget_touched_ = false;
     }
   }
@@ -3620,7 +3746,8 @@ bool FTCController::buildBoundaryGuard(BoundaryGuard& guard)
                          *clock_,
                          5000,
                          "FTCController: confine_deviation_to_zone but no global costmap "
-                         "received yet — skipping obstacle deviation this tick.");
+                         "received yet — obstacles are detected but the robot will not leave "
+                         "its line to skirt them.");
     return false;
   }
   const std::string costmap_frame = costmap_ros_->getGlobalFrameID();
@@ -3640,7 +3767,7 @@ bool FTCController::buildBoundaryGuard(BoundaryGuard& guard)
                          *clock_,
                          5000,
                          "FTCController: no transform %s <- %s for boundary guard (%s) — "
-                         "skipping obstacle deviation this tick.",
+                         "obstacles are detected but the robot will not leave its line.",
                          boundary_frame_.c_str(),
                          costmap_frame.c_str(),
                          ex.what());
@@ -3694,16 +3821,9 @@ bool FTCController::planWindowInCostmapFrame(std::size_t first,
   }
   catch (const tf2::TransformException& ex)
   {
-    RCLCPP_WARN_THROTTLE(logger_,
-                         *clock_,
-                         2000,
-                         "FTCController: offset-lattice TF %s->%s failed (%s) — skipping "
-                         "avoidance this tick",
-                         plan_frame.c_str(),
-                         costmap_frame.c_str(),
-                         ex.what());
-    out.clear();
-    return false;
+    // Same rule as the legacy window: no transform, no obstacle check, no motion.
+    throw nav2_core::ControllerException("FTCController: offset-lattice TF " + plan_frame + "->" +
+                                         costmap_frame + " failed: " + ex.what());
   }
   return true;
 }
@@ -3763,13 +3883,16 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
   // (reaction slack -> none -> ignore the stations under the body, each over a
   // shrinking horizon): ftc_lattice_solver.hpp, shared with the offline replay
   // tests so they exercise exactly this decision.
+  // The bare chassis: what level 3 tests the stations under the body with.
+  const ObstacleDeviation::Footprint contact = costmap_ros_->getRobotFootprint();
   LatticeSolver solver(*costmap_map_,
                        guard,
                        footprint,
                        std::move(poses),
                        window.carrot_pos,
                        corner_is_last_station,
-                       solver_cfg);
+                       solver_cfg,
+                       contact);
   const std::vector<double>& stations = solver.Stations();
   const auto stations_in = [&solver](double metres)
   {
@@ -3871,7 +3994,8 @@ bool FTCController::planOffsetLattice(std::size_t carrot_idx,
                          2000,
                          "FTCController: lattice profile found only at fallback level %d (%s)",
                          plan_level,
-                         plan_level == 2 ? "no reaction slack" : "ignoring cells under the body");
+                         plan_level == 2 ? "no reaction slack"
+                                         : "bare chassis under the body, no clearance margin");
   }
 
   if (!plan.feasible)
@@ -4050,6 +4174,26 @@ void FTCController::debugObstacle(
 }
 
 // ── Oscillation detection ─────────────────────────────────────────────────────
+
+void FTCController::noteRotationHold(const std::string& reason)
+{
+  if (reason != rotation_hold_reason_)
+  {
+    RCLCPP_WARN(logger_, "FTCController: rotation held — %s.", reason.c_str());
+  }
+  rotation_hold_reason_ = reason;
+}
+
+void FTCController::resetOscillation()
+{
+  {
+    std::lock_guard<std::mutex> fd_lock(failure_detector_mutex_);
+    failure_detector_.clear();
+  }
+  oscillation_detected_ = false;
+  oscillation_warning_ = false;
+  time_last_oscillation_ = clock_->now();
+}
 
 bool FTCController::checkOscillation(const geometry_msgs::msg::TwistStamped& cmd_vel)
 {

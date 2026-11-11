@@ -119,6 +119,10 @@ struct TurnFallbackCfg
   /// certainly the planned direction and only that sweep is checked; a larger
   /// one (up to 180 deg) may go either way, so the FULL turn must be clear.
   double unambiguous_rotation_rad{160.0 * 3.14159265358979323846 / 180.0};
+  /// Heading error the robot may arrive at a pivot with, and overshoot it by
+  /// (rad): pivot_angle_tolerance_deg. Every planned rotation sweeps that much
+  /// further on both ends. 0 = the exact planned arc.
+  double heading_tolerance_rad{0.0};
   /// Extra margin (m, every direction) around the footprint and the body when
   /// PLANNING the rotations, the reverse and the connector. The executing
   /// checks (pivot sweep gate, lattice, rear probe) test the bare shapes every
@@ -312,6 +316,20 @@ inline constexpr double kTurnFallbackReverseDoneM = 0.005;
 /// Look-behind of the per-tick rear probe while reversing (m): the
 /// reverse-escape's.
 inline constexpr double kTurnFallbackRearProbeM = 0.20;
+/// A fallback attempt that found nothing is not repeated before the robot has
+/// moved this far (m) or this long (s) has passed: both planners run inside the
+/// control tick under the costmap lock, and a flickering obstacle would
+/// otherwise re-run them at every new wedge onset from the same spot. A
+/// reverse-escape (0.30 m) always clears the distance, so "back up and try
+/// again from there" is untouched.
+inline constexpr double kFallbackRetryMoveM = 0.05;
+inline constexpr double kFallbackRetryS = 2.0;
+
+inline bool FallbackRetryTooSoon(double moved_m, double elapsed_s)
+{
+  return moved_m < kFallbackRetryMoveM && elapsed_s < kFallbackRetryS;
+}
+
 /// Pose spacing of a spliced connector (m): the coverage planner's sampling.
 inline constexpr double kTurnFallbackConnectorStepM = 0.05;
 /// Clearances are measured (and logged) up to this distance (m).

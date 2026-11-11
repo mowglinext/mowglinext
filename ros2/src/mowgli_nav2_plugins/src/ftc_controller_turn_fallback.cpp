@@ -34,7 +34,9 @@
 #include <tf2/utils.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include "mowgli_interfaces/ftc_abort_reason.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
+#include "mowgli_nav2_plugins/ftc_corner_geometry.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_pivot.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
@@ -150,6 +152,7 @@ TurnFallbackPlan FTCController::planTurnFallback(std::size_t carrot_idx,
   cfg.max_rejoin_arc_m = config_.turn_fallback_max_rejoin_arc_m;
   cfg.min_turn_rad = config_.turn_fallback_min_turn_deg * (M_PI / 180.0);
   cfg.blockage_scan_m = config_.avoidance_horizon_m;
+  cfg.heading_tolerance_rad = config_.pivot_angle_tolerance_deg * (M_PI / 180.0);
 
   TurnFallbackProblem problem;
   if (!buildFallbackProblem(carrot_idx,
@@ -175,6 +178,33 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
                                     const BoundaryGuard& guard,
                                     const ObstacleDeviation::Footprint& body)
 {
+  geometry_msgs::msg::PoseStamped here;  // costmap frame
+  const bool have_here = costmap_ros_->getRobotPose(here);
+  auto& miss = turn_fallback_.last_miss;
+  if (have_here && miss.has_value() &&
+      FallbackRetryTooSoon(std::hypot(here.pose.position.x - miss->x,
+                                      here.pose.position.y - miss->y),
+                           (clock_->now() - miss->when).seconds()))
+  {
+    return false;  // same spot, same verdict: WEDGED handling as before
+  }
+  turn_fallback_.attempted = false;
+  const bool engaged = engageFallback(carrot_idx, guard, body);
+  if (engaged)
+  {
+    miss.reset();
+  }
+  else if (turn_fallback_.attempted && have_here)
+  {
+    miss = TurnFallbackState::Miss{here.pose.position.x, here.pose.position.y, clock_->now()};
+  }
+  return engaged;
+}
+
+bool FTCController::engageFallback(std::size_t carrot_idx,
+                                   const BoundaryGuard& guard,
+                                   const ObstacleDeviation::Footprint& body)
+{
   // Only at the ONSET of a wedge while following the plan: not while a
   // reverse-escape or an obstacle hold already owns the output, and never a
   // second fallback on top of a running one.
@@ -197,14 +227,19 @@ bool FTCController::tryTurnFallback(std::size_t carrot_idx,
                          kTurnFallbackRearmM);
     return false;
   }
+  turn_fallback_.attempted = true;
   if (!config_.turn_fallback_enabled)
   {
     return tryContourBypass(carrot_idx, guard, body);
   }
-  // The reverse obeys the operator's reverse switch, like the reverse-escape.
-  const double max_reverse = config_.obstacle_reverse_enabled
-                                 ? reverseAllowedDistance(config_.turn_fallback_max_reverse_m)
-                                 : 0.0;
+  // The reverse obeys the operator's reverse switch, like the reverse-escape,
+  // and is charged against what this wedge already reversed: a reverse-escape
+  // followed by a fallback must not stack two full reverses.
+  const double max_reverse =
+      config_.obstacle_reverse_enabled
+          ? reverseAllowedDistance(
+                std::max(0.0, config_.turn_fallback_max_reverse_m - reverse_distance_done_))
+          : 0.0;
   std::size_t first = 0;
   TurnFallbackProblem problem;
   const auto t0 = std::chrono::steady_clock::now();
@@ -385,6 +420,10 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
   spliced.insert(spliced.end(),
                  global_plan_.begin() + static_cast<std::ptrdiff_t>(j + 1),
                  global_plan_.end());
+  if (!finalizeSplice(spliced, rejoin_idx, "turn fallback"))
+  {
+    return false;
+  }
 
   const bool pivot_first = adoptFallbackPlan(std::move(spliced), rejoin_idx, plan.skipped_arc_m);
   RCLCPP_INFO(logger_,
@@ -398,6 +437,70 @@ bool FTCController::spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t
               jx,
               jy,
               pivot_corners_.size());
+  return true;
+}
+
+bool FTCController::finalizeSplice(std::vector<geometry_msgs::msg::PoseStamped>& spliced,
+                                   std::size_t& rejoin_idx,
+                                   const char* what)
+{
+  std::vector<PlanPose2D> poses;
+  poses.reserve(spliced.size());
+  for (const auto& ps : spliced)
+  {
+    poses.push_back({ps.pose.position.x, ps.pose.position.y, tf2::getYaw(ps.pose.orientation)});
+  }
+  const std::vector<std::size_t> keep = ChainedPivotKeep(poses);
+  if (keep.size() != spliced.size())
+  {
+    std::vector<geometry_msgs::msg::PoseStamped> merged;
+    std::vector<PlanPose2D> merged_poses;
+    merged.reserve(keep.size());
+    merged_poses.reserve(keep.size());
+    std::size_t new_rejoin = keep.size() - 1;
+    for (std::size_t n = 0; n < keep.size(); ++n)
+    {
+      // A dropped rejoin pose was the middle of a run: the run's last pose,
+      // the one kept, is at the same spot with the outgoing heading.
+      if (keep[n] >= rejoin_idx && new_rejoin == keep.size() - 1)
+      {
+        new_rejoin = n;
+      }
+      merged.push_back(spliced[keep[n]]);
+      merged_poses.push_back(poses[keep[n]]);
+    }
+    RCLCPP_INFO(logger_,
+                "FTCController: %s splice merged %zu chained pivot pose(s) into one corner.",
+                what,
+                spliced.size() - keep.size());
+    spliced = std::move(merged);
+    poses = std::move(merged_poses);
+    rejoin_idx = new_rejoin;
+  }
+
+  // The tick's snapshot (computeVelocityCommands): never lock
+  // corner_geometry_mutex_ here, the caller may hold it through a rotation
+  // handoff. No geometry = an invalid one: a splice without pivots still
+  // passes, one with pivots cannot be executed.
+  const std::shared_ptr<const CornerGeometry> geometry = tick_corner_geometry_;
+  transit::Ring body;
+  for (const auto& p : costmap_ros_->getRobotFootprint())
+  {
+    body.push_back({p.x, p.y});
+  }
+  const std::string violation = SpliceAuthorityViolation(geometry ? *geometry : CornerGeometry{},
+                                                         poses,
+                                                         rejoin_idx,
+                                                         body,
+                                                         config_.avoidance_horizon_m);
+  if (!violation.empty())
+  {
+    RCLCPP_WARN(logger_,
+                "FTCController: %s refused — %s; the PIVOT state could not execute it.",
+                what,
+                violation.c_str());
+    return false;
+  }
   return true;
 }
 
@@ -435,6 +538,8 @@ bool FTCController::adoptFallbackPlan(std::vector<geometry_msgs::msg::PoseStampe
   last_recovery_angular_cmd_ = 0.0;
   reverse_escape_active_ = false;
   reverse_followable_time_ = 0.0;
+  // Arc positions on the replaced plan mean nothing on this one.
+  last_cm_hold_arc_.reset();
   if (turn_fallback_.reverse_done_m > 0.0)
   {
     reverse_distance_done_ =
@@ -492,8 +597,10 @@ void FTCController::turnFallbackReverseTick(double dt, geometry_msgs::msg::Twist
 {
   auto& fb = turn_fallback_;
   // Odometry, not commanded travel, spends the reverse (as the reverse-escape).
-  fb.reverse_done_m =
-      std::min(fb.reverse_target_m, fb.reverse_done_m + std::abs(last_measured_fwd_speed_) * dt);
+  // Only backward motion spends it: forward coasting from before the reverse
+  // must not count as reversed distance.
+  fb.reverse_done_m = std::min(fb.reverse_target_m,
+                               fb.reverse_done_m + std::max(0.0, -last_measured_fwd_speed_) * dt);
   fb.reverse_time_s += dt;
   const double remaining = fb.reverse_target_m - fb.reverse_done_m;
   const double time_cap =
@@ -518,7 +625,11 @@ void FTCController::turnFallbackReverseTick(double dt, geometry_msgs::msg::Twist
                                     tf2::getYaw(robot_pose.pose.orientation)},
                                    std::min(kTurnFallbackRearProbeM, remaining));
   }
-  if (remaining > kTurnFallbackReverseDoneM && rear_clear && fb.reverse_time_s < time_cap)
+  // Boundary safety was decided when the reverse was planned; once under way
+  // only "left the recorded area" can still stop it (as the reverse-escape).
+  const bool left_area = config_.reverse_boundary_safe && outside_area_.load();
+  if (remaining > kTurnFallbackReverseDoneM && rear_clear && !left_area &&
+      fb.reverse_time_s < time_cap)
   {
     cmd_vel.twist.linear.x = -config_.obstacle_reverse_speed_mps;
     cmd_vel.twist.angular.z = 0.0;
@@ -530,25 +641,28 @@ void FTCController::turnFallbackReverseTick(double dt, geometry_msgs::msg::Twist
   const char* why =
       remaining <= kTurnFallbackReverseDoneM
           ? "done"
-          : (!have_pose ? "robot pose lost" : (!rear_clear ? "rear blocked" : "time cap"));
+          : (!have_pose ? "robot pose lost"
+                        : (!rear_clear ? "rear blocked"
+                                       : (left_area ? "left the recorded area" : "time cap")));
   TurnFallbackPlan plan;
   std::size_t first = 0;
   {
     std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*costmap_map_->getMutex());
     std::unique_lock<std::mutex> boundary_lock(boundary_mutex_, std::defer_lock);
     BoundaryGuard guard{};
-    bool guard_ok = true;
     if (config_.confine_deviation_to_zone)
     {
       boundary_lock.lock();
-      guard_ok = buildBoundaryGuard(guard);
+      if (!buildBoundaryGuard(guard))
+      {
+        guard = BoundaryGuard{};
+        guard.deny_all = true;  // zone unknown: nothing may leave the line
+      }
     }
-    if (guard_ok)
-    {
-      const ObstacleDeviation::Footprint body = ObstacleDeviation::expandFootprintLateral(
-          footprint, std::max(0.0, config_.obstacle_clearance_margin));
-      plan = planTurnFallback(current_index_, guard, body, 0.0, first);
-    }
+    const ObstacleDeviation::Footprint body =
+        ObstacleDeviation::expandFootprintLateral(footprint,
+                                                  std::max(0.0, config_.obstacle_clearance_margin));
+    plan = planTurnFallback(current_index_, guard, body, 0.0, first);
   }
   RCLCPP_INFO(logger_,
               "FTCController: turn fallback reversed %.2f of %.2f m (%s); from here: %s.",
@@ -613,8 +727,12 @@ void FTCController::turnFallbackProgress()
                  fb.timeout_s);
     fb.phase = TurnFallbackPhase::kIdle;
     is_crashed_ = true;
+    // An obstacle started this manoeuvre: mark the abort (issue #743) so
+    // FollowStrip's detour logic treats it as one instead of a plain failure.
     throw nav2_core::ControllerException(
-        "FTCController: turn fallback timed out before reaching its rejoin.");
+        std::string(mowgli_interfaces::ftc_abort_reason::kObstacleAbortMarker) +
+        "FTCController: " + (fb.contour ? "contour bypass" : "turn fallback") +
+        " timed out before reaching its rejoin.");
   }
 }
 

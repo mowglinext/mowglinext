@@ -75,13 +75,20 @@ public:
   Checker(const ContourBypassProblem& p, const ContourBypassCfg& cfg)
       : p_(p),
         footprint_(GrowFootprint(p.footprint, cfg.plan_margin_m)),
-        body_(GrowFootprint(p.body, cfg.plan_margin_m))
+        body_(GrowFootprint(p.body, cfg.plan_margin_m)),
+        max_evaluations_(cfg.max_evaluations)
   {
     for (const auto& v : footprint_)
     {
       rear_ = std::min(rear_, v.x);
       front_ = std::max(front_, v.x);
     }
+  }
+
+  /// The footprint-test budget is spent: every further test reads blocked.
+  bool Exhausted() const
+  {
+    return evaluations >= max_evaluations_;
   }
 
   /// The bare lattice body covers a TRUE-lethal cell (the hit test).
@@ -96,6 +103,10 @@ public:
   bool Blocked(const FallbackPose& q, bool off_plan)
   {
     ++evaluations;
+    if (Exhausted())
+    {
+      return true;
+    }
     if (ObstacleDeviation::footprintBlocked(*p_.costmap, ToStamped(q), 0.0, body_, BoundaryGuard{}))
     {
       return true;
@@ -118,6 +129,10 @@ public:
       return true;
     }
     evaluations += 1 + static_cast<std::size_t>(turn / 0.05);
+    if (Exhausted())
+    {
+      return false;
+    }
     if (turn <= kUnambiguousRotationRad)
     {
       return RotationSweepClear(*p_.costmap, p_.guard, footprint_, x, y, from, to);
@@ -129,12 +144,20 @@ public:
   {
     evaluations += 1 + static_cast<std::size_t>(std::hypot(to_x - from.x, to_y - from.y) /
                                                 p_.costmap->getResolution());
+    if (Exhausted())
+    {
+      return false;
+    }
     return StraightSweepClear(*p_.costmap, p_.guard, body_, from, to_x, to_y);
   }
 
   bool ReverseClear(double distance_m)
   {
     ++evaluations;
+    if (Exhausted())
+    {
+      return false;
+    }
     return ReverseSweepClear(*p_.costmap, p_.footprint, p_.robot, distance_m, 0.0);
   }
 
@@ -143,7 +166,7 @@ public:
 private:
   bool AxisInZone(const FallbackPose& q) const
   {
-    if (p_.guard.costmap == nullptr)
+    if (!p_.guard.active())
     {
       return false;
     }
@@ -164,6 +187,7 @@ private:
   ObstacleDeviation::Footprint body_;
   double rear_{0.0};
   double front_{0.0};
+  std::size_t max_evaluations_;
 };
 
 /// Chamfer distance (m) from every cell to the nearest TRUE-lethal local cell
@@ -384,6 +408,12 @@ bool Walk(WalkContext& c, const FallbackPose& start, ContourSide& side)
   double walked_since_engage = 0.0;
   while (side.walk_m < c.cfg.max_contour_m)
   {
+    if (c.check.Exhausted())
+    {
+      side.why =
+          "footprint-test budget spent after " + std::to_string(side.walk_m).substr(0, 4) + " m";
+      return false;
+    }
     const auto next = Step(c, q, side.side, engaged);
     if (!next)
     {
@@ -449,7 +479,8 @@ bool Simplify(WalkContext& c, ContourSide& side)
     }
     if (!reach)
     {
-      side.why = "walk could not be simplified into clear legs";
+      side.why = c.check.Exhausted() ? "footprint-test budget spent while simplifying"
+                                     : "walk could not be simplified into clear legs";
       return false;
     }
     side.rotation_rad += std::abs(WrapPivotAngle(reach_heading - yaw));
@@ -501,15 +532,20 @@ std::vector<StartPose> StartCandidates(WalkContext& c, std::optional<std::size_t
   {
     // The last clear plan pose, then every kStartBackStepM further back (FTC
     // drives the plan up to there): a frontal wall needs pivot room.
+    //
+    // Window pose 0 is where the robot is taken to stand: the splice starts
+    // a plan_idx-0 walk from the robot's ACTUAL pose, so that is what it is
+    // planned from too (the robot may be beside its line, mid-skirt).
     double last_arc = std::numeric_limits<double>::infinity();
-    for (std::size_t i = *leave + 1; i-- > 0;)
+    for (std::size_t i = *leave + 1; i-- > 1;)
     {
-      if (last_arc - c.arc[i] >= kStartBackStepM || i == *leave)
+      if (c.cfg.start_on_plan && (last_arc - c.arc[i] >= kStartBackStepM || i == *leave))
       {
         starts.push_back({ToPose(c.p.plan[i]), 0.0, i});
         last_arc = c.arc[i];
       }
     }
+    starts.push_back({c.p.robot, 0.0, 0});
   }
   for (double r = c.cfg.reverse_step_m; r <= c.cfg.max_reverse_m + 1e-9; r += c.cfg.reverse_step_m)
   {

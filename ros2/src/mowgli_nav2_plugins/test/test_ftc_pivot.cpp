@@ -226,5 +226,49 @@ TEST(FtcPivot, SweepYawsCoverTheShortestRotation)
   EXPECT_EQ(PivotSweepYaws(0.3, 0.3, 0.1).size(), 2u);
 }
 
+TEST(FtcPivot, ChainedPivotKeepLeavesAPlannerPlanUntouched)
+{
+  const auto p = uTurnWithPivots();
+  const auto keep = ChainedPivotKeep(p);
+  ASSERT_EQ(keep.size(), p.size());
+  for (std::size_t i = 0; i < keep.size(); ++i)
+  {
+    EXPECT_EQ(keep[i], i);
+  }
+}
+
+TEST(FtcPivot, ASpliceEndingOnACornerTwinKeepsThePlansCorner)
+{
+  // A connector heading east ends ON the incoming twin of the plan's own
+  // corner (north -> west): three poses at one spot, connector heading, the
+  // plan's incoming twin, the plan's outgoing twin. FindPivotCorners does not
+  // chain corners: it kept the first pair and dropped the plan's corner, which
+  // was then driven on the move.
+  std::vector<PlanPose2D> p;
+  appendStraight(p, 0.0, 0.0, 0.0, 0.5, 0.05);  // connector, heading east
+  const double x = p.back().x;
+  const double y = p.back().y;
+  p.push_back({x, y, M_PI / 2});  // plan pose j: incoming twin (north)
+  p.push_back({x, y, M_PI});  // plan pose j + 1: outgoing twin (west)
+  appendStraight(p, x - 0.05, y, M_PI, 0.5, 0.05);
+
+  const auto chained = FindPivotCorners(p);
+  ASSERT_EQ(chained.size(), 1u);
+  EXPECT_DOUBLE_EQ(p[chained.front() + 1].yaw, M_PI / 2) << "the plan's corner is lost";
+
+  const auto keep = ChainedPivotKeep(p);
+  ASSERT_EQ(keep.size(), p.size() - 1);
+  std::vector<PlanPose2D> merged;
+  for (const std::size_t k : keep)
+  {
+    merged.push_back(p[k]);
+  }
+  const auto corners = FindPivotCorners(merged);
+  ASSERT_EQ(corners.size(), 1u);
+  // One corner, from the connector heading straight to the plan's outgoing one.
+  EXPECT_DOUBLE_EQ(merged[corners.front()].yaw, 0.0);
+  EXPECT_DOUBLE_EQ(merged[corners.front() + 1].yaw, M_PI);
+}
+
 }  // namespace
 }  // namespace mowgli_nav2_plugins

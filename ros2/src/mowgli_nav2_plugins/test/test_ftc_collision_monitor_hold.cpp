@@ -4,6 +4,9 @@
 // Unit tests for FTC's "collision_monitor is holding the robot" decision.
 // Pure logic, no ROS.
 
+#include <limits>
+#include <optional>
+
 #include "mowgli_nav2_plugins/ftc_collision_monitor_hold.hpp"
 #include <gtest/gtest.h>
 
@@ -120,4 +123,27 @@ TEST(CmHoldStep, StallOnlyTimeoutStaysBelowTheProgressChecker)
   const mnp::FtcCmHoldCfg cfg;
   EXPECT_LT(cfg.stall_only_s, 30.0);
   EXPECT_LT(cfg.hold_s, cfg.stall_only_s);
+}
+
+TEST(CmHoldRepeats, FirstConfirmationIsNeverARepeat)
+{
+  EXPECT_FALSE(mnp::CmHoldRepeats(std::nullopt, 12.0));
+}
+
+TEST(CmHoldRepeats, ASecondConfirmationWithoutProgressIsTheSameBlockage)
+{
+  // Back-off, wait, path reads clear, push again: the carrot barely moved.
+  EXPECT_TRUE(mnp::CmHoldRepeats(12.0, 12.0));
+  EXPECT_TRUE(mnp::CmHoldRepeats(12.0, 12.0 + mnp::kCmHoldRepeatProgressM - 0.01));
+}
+
+TEST(CmHoldRepeats, RealProgressMakesItANewBlockage)
+{
+  EXPECT_FALSE(mnp::CmHoldRepeats(12.0, 12.0 + mnp::kCmHoldRepeatProgressM));
+  EXPECT_FALSE(mnp::CmHoldRepeats(12.0, 20.0));
+}
+
+TEST(CmHoldRepeats, NonFiniteProgressNeverEscalates)
+{
+  EXPECT_FALSE(mnp::CmHoldRepeats(12.0, std::numeric_limits<double>::quiet_NaN()));
 }

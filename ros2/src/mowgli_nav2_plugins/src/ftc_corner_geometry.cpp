@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "mowgli_nav2_plugins/ftc_corner_geometry.hpp"
 
+#include <cstdio>
+#include <string>
+#include <vector>
+
 #include "mowgli_nav2_plugins/mowing_geometry.hpp"
 #include <boost/geometry.hpp>
 #include <boost/geometry/geometries/geometries.hpp>
@@ -156,5 +160,67 @@ bool CornerGeometry::rotationClear(transit::Point axle,
         return false;
   }
   return true;
+}
+
+std::string SpliceAuthorityViolation(const CornerGeometry& geometry,
+                                     const std::vector<PlanPose2D>& poses,
+                                     std::size_t upto,
+                                     const transit::Ring& body,
+                                     double departure_cap_m)
+{
+  const std::vector<std::size_t> corners = FindPivotCorners(poses);
+  if (!geometry.valid && !corners.empty() && corners.front() <= upto)
+  {
+    return "no mowing geometry (/map_server_node/transit_geometry) to execute its pivots against";
+  }
+  const auto where = [](const char* what, const PlanPose2D& p)
+  {
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "%s at (%.2f, %.2f)", what, p.x, p.y);
+    return std::string(buf);
+  };
+  for (const std::size_t k : corners)
+  {
+    if (k > upto)
+    {
+      break;
+    }
+    const PlanPose2D& in = poses[k];
+    const PlanPose2D& out = poses[k + 1];
+    const transit::Point axle{in.x, in.y};
+    if (!geometry.mowing.authorizedWithin(axle, geometry.entry_tolerance))
+    {
+      return where("pivot outside the mowing area", in);
+    }
+    const double turn = WrapPivotAngle(out.yaw - in.yaw);
+    if (!geometry.rotationClear(axle, in.yaw, turn, body) &&
+        !geometry.rotationClear(axle, in.yaw, turn - std::copysign(2.0 * M_PI, turn), body))
+    {
+      return where("pivot sweep crosses a drawn obstacle", in);
+    }
+    // The straight run after the corner, as rotationRestartPermitted measures it.
+    const double c = std::cos(out.yaw);
+    const double s = std::sin(out.yaw);
+    double straight = 0.0;
+    for (std::size_t i = k + 2; i < poses.size(); ++i)
+    {
+      const double dx = poses[i].x - out.x;
+      const double dy = poses[i].y - out.y;
+      const double along = dx * c + dy * s;
+      const double lateral = -dx * s + dy * c;
+      if (!std::isfinite(along) || std::abs(lateral) > 1e-6 || along + 1e-6 < straight ||
+          std::abs(WrapPivotAngle(poses[i].yaw - out.yaw)) > 1e-6)
+      {
+        break;
+      }
+      straight = along;
+    }
+    const double run = std::min(std::max(0.0, departure_cap_m), straight);
+    if (run > 0.0 && !geometry.mowing.segmentAuthorized(axle, {in.x + run * c, in.y + run * s}))
+    {
+      return where("departure after the pivot leaves the mowing area", in);
+    }
+  }
+  return {};
 }
 }  // namespace mowgli_nav2_plugins
