@@ -126,7 +126,10 @@ The Nav2 recovery's BackUp is NOT Nav2's: `navigate_to_pose.xml` / `navigate_to_
 | `oscillation_detector.hpp` | 113 | `FailureDetector` — rolling (v, ω) window, mean + zero-crossing test |
 | `path_progress_goal_checker.hpp` | 155 | `PathProgressGoalChecker` — progress-gated goal checker state + params (`path_arc_m_` cumulative arc table) |
 | **`src/`** | | |
-| `ftc_controller.cpp` | ~2.4k | Lifecycle, params + dynamic callback, newPathReceived, computeVelocityCommands, FSM, carrot, PID, collision, deviation, reverse-escape, oscillation |
+| `ftc_controller.cpp` | ~2.2k | Lifecycle, newPathReceived, computeVelocityCommands, FSM, carrot, PID, pivot corners and rotation gates, oscillation |
+| `ftc_controller_params.cpp` | ~800 | `declareParameters` (compiled defaults), `onParameterChange` (whole-batch validation into `staged_config_`), `applyPendingConfig` |
+| `ftc_controller_obstacle_hold.cpp` | ~480 | `checkCollision`, `currentBodyInLethal`, `waitOrThrowForObstacle` / `holdObstacleMotion`, collision_monitor hold, reverse-escape (`reverseEscapeStep`, boundary-safe `reverseAllowedDistance`, `reverseEscapeOrWait`) |
+| `ftc_controller_deviation.cpp` | ~950 | `updateLateralDeviation` (legacy skirt), `buildBoundaryGuard`, `planWindowInCostmapFrame`, `planOffsetLattice`, `applyLateralDeviationToCarrot` |
 | `ftc_controller_plugin.cpp` | 20 | `PLUGINLIB_EXPORT_CLASS(FTCController, nav2_core::Controller)` |
 | `obstacle_deviation.cpp` | 486 | cell/body/footprint samplers, `isObstacleCell`, `hasClearExit`, `findFirstObstacleIndex`, `chooseDeviationSide`, `isPathClearWithDeviation`, `growDeviationUntilClear` |
 | `oscillation_detector.cpp` | 153 | `FailureDetector` impl (normalise by v_max/ω_max, half-full buffer before deciding) |

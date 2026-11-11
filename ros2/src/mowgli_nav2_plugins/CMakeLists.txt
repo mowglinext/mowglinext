@@ -53,6 +53,9 @@ add_library(${PROJECT_NAME} SHARED
   src/ftc_turn_fallback.cpp
   src/ftc_corner_geometry.cpp
   src/ftc_controller.cpp
+  src/ftc_controller_params.cpp
+  src/ftc_controller_obstacle_hold.cpp
+  src/ftc_controller_deviation.cpp
   src/ftc_controller_turn_fallback.cpp
   src/ftc_contour_bypass.cpp
   src/ftc_controller_contour_bypass.cpp
