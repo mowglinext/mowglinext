@@ -74,7 +74,7 @@ bool AxisInZone(const BoundaryGuard& guard,
                 double y,
                 double yaw)
 {
-  if (guard.costmap == nullptr)
+  if (!guard.active())
   {
     return false;
   }
@@ -205,9 +205,17 @@ bool PlannedRotationClear(const TurnFallbackProblem& p,
                           double from_yaw,
                           double to_yaw)
 {
-  if (std::abs(WrapPivotAngle(to_yaw - from_yaw)) <= cfg.unambiguous_rotation_rad)
+  const double turn = WrapPivotAngle(to_yaw - from_yaw);
+  // The robot reaches a corner up to the pivot tolerance off the planned
+  // heading and stops up to it past the target: sweep that whole arc, the one
+  // the executing gate will check from the real heading. An arc that widening
+  // would push past a half turn is no longer unambiguous: check the full turn.
+  const double tol = std::max(0.0, cfg.heading_tolerance_rad);
+  if (std::abs(turn) <= cfg.unambiguous_rotation_rad && std::abs(turn) + 2.0 * tol < M_PI - 1e-3)
   {
-    return RotationSweepClear(*p.costmap, p.guard, shapes.footprint, x, y, from_yaw, to_yaw);
+    const double dir = turn >= 0.0 ? 1.0 : -1.0;
+    return RotationSweepClear(
+        *p.costmap, p.guard, shapes.footprint, x, y, from_yaw - dir * tol, to_yaw + dir * tol);
   }
   return FullTurnClear(*p.costmap, p.guard, shapes.footprint, x, y, from_yaw);
 }

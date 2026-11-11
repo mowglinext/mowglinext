@@ -60,8 +60,16 @@ inline FtcStallResult StallDecision(double target_speed,
   }
 
   const double actual_fwd = std::abs(measured_fwd_speed);
-  const bool stalling =
-      cmd_speed > cfg.stall_crawl_speed && actual_fwd < cfg.stall_speed_ratio * cmd_speed;
+  // Entering a stall needs a command above the crawl (a robot asked to crawl
+  // is not slipping). STAYING in one does not: the latch eases the ramped
+  // command down to exactly the crawl speed, and re-testing `cmd > crawl` then
+  // released it with no traction regained — the target jumped back to
+  // speed_fast, the robot pushed 0.08 -> 0.20 m/s into the obstruction for the
+  // grace period and latched again, a ~1 s duty cycle instead of a crawl.
+  // While latched, only real motion (above the ratio of the crawl) releases it.
+  const bool latched = stall_time > cfg.stall_grace_s;
+  const bool commanding = latched ? cmd_speed > 0.0 : cmd_speed > cfg.stall_crawl_speed;
+  const bool stalling = commanding && actual_fwd < cfg.stall_speed_ratio * cmd_speed;
   stall_time = stalling ? (stall_time + dt) : 0.0;
 
   if (stall_time > cfg.stall_grace_s)

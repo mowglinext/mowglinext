@@ -105,6 +105,40 @@ inline std::vector<std::size_t> FindPivotCorners(const std::vector<PlanPose2D>& 
   return corners;
 }
 
+/// Indices of `poses` to keep so that no THREE consecutive poses share one
+/// position. A runtime splice (turn fallback, contour bypass) can end a
+/// connector on a corner's incoming twin, or leave the plan at its outgoing
+/// twin: the spliced pivot and the plan's own then form a run of three or more
+/// poses at one spot. FindPivotCorners refuses to chain corners and keeps only
+/// the first pair, so the plan's own corner was silently dropped and driven on
+/// the move, with no stop and no sweep check. A run keeps its first and last
+/// pose: ONE corner turning from the run's incoming heading straight to its
+/// outgoing heading, which the PIVOT state checks like any other.
+inline std::vector<std::size_t> ChainedPivotKeep(const std::vector<PlanPose2D>& poses)
+{
+  namespace cg = mowgli_interfaces::coverage_geometry;
+  std::vector<std::size_t> keep;
+  keep.reserve(poses.size());
+  std::size_t i = 0;
+  while (i < poses.size())
+  {
+    std::size_t j = i;
+    while (j + 1 < poses.size() &&
+           std::hypot(poses[j + 1].x - poses[j].x, poses[j + 1].y - poses[j].y) <
+               cg::kPivotCornerMaxStepM)
+    {
+      ++j;
+    }
+    keep.push_back(i);
+    if (j > i)
+    {
+      keep.push_back(j);
+    }
+    i = j + 1;
+  }
+  return keep;
+}
+
 /// First corner at or after `index`, if any.
 inline std::optional<std::size_t> NextPivotCorner(const std::vector<std::size_t>& corners,
                                                   std::size_t index)

@@ -29,6 +29,7 @@ find_package(nav2_util REQUIRED)
 find_package(nav2_ros_common REQUIRED)
 find_package(nav2_smac_planner REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(map_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -52,6 +53,9 @@ add_library(${PROJECT_NAME} SHARED
   src/ftc_turn_fallback.cpp
   src/ftc_corner_geometry.cpp
   src/ftc_controller.cpp
+  src/ftc_controller_params.cpp
+  src/ftc_controller_obstacle_hold.cpp
+  src/ftc_controller_deviation.cpp
   src/ftc_controller_turn_fallback.cpp
   src/ftc_contour_bypass.cpp
   src/ftc_controller_contour_bypass.cpp
@@ -83,6 +87,7 @@ target_link_libraries(${PROJECT_NAME}
   ${nav2_ros_common_TARGETS}
   ${nav2_smac_planner_TARGETS}
   ${nav_msgs_TARGETS}
+  ${map_msgs_TARGETS}
   ${nav2_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${geometry_msgs_TARGETS}
@@ -342,6 +347,28 @@ if(BUILD_TESTING)
     ${tf2_geometry_msgs_TARGETS}
   )
 
+  # Cached global costmap kept current from its delta updates.
+  ament_add_gtest(test_occupancy_grid_update
+    test/test_occupancy_grid_update.cpp
+  )
+
+  target_include_directories(test_occupancy_grid_update
+    PRIVATE
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
+  target_link_libraries(test_occupancy_grid_update
+    ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
+    ${nav2_costmap_2d_TARGETS}
+  )
+
+  # Runtime splices checked against the mowing geometry the PIVOT state uses.
+  ament_add_gtest(test_ftc_splice_authority
+    test/test_ftc_splice_authority.cpp
+  )
+  target_link_libraries(test_ftc_splice_authority ${PROJECT_NAME})
+
   # Turn fallback decision (ftc_turn_fallback.hpp): turn detection, rejoin
   # search, bounded reverse, pivot/straight sweeps, zone rule, and the recorded
   # 2026-09-22 08:08:25 WEDGED. ROS-free.
@@ -419,6 +446,7 @@ ament_export_dependencies(
   nav2_ros_common
   nav2_smac_planner
   nav_msgs
+  map_msgs
   std_srvs
   geometry_msgs
   pluginlib

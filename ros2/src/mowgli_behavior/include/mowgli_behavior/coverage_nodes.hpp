@@ -35,6 +35,7 @@
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "map_msgs/msg/occupancy_grid_update.hpp"
 #include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
@@ -348,6 +349,14 @@ public:
   FollowStrip(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
   {
+    // Subscribe to the global costmap when the tree is built (stack start),
+    // not at the first strip: in delta mode a late subscriber gets the latched
+    // FIRST full grid and none of the deltas published before it subscribed.
+    std::shared_ptr<BTContext> ctx;
+    if (config.blackboard && config.blackboard->get("context", ctx) && ctx && ctx->node)
+    {
+      ensureCostmapSubscriptions(ctx);
+    }
   }
 
   static BT::PortsList providedPorts()
@@ -616,8 +625,13 @@ private:
   // (transient_local) subscription; updated on the node's single MutuallyExclusive
   // callback group so it is serialized against the BT tick (no extra mutex — see
   // bt_context.hpp). Null until the first costmap arrives → detour falls back.
+  // The global costmap publishes in delta mode: the full grid arrives on
+  // connect / resize only, later changes on costmap_updates, applied to this
+  // copy (mowgli_nav2_plugins/occupancy_grid_update.hpp).
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
+  rclcpp::Subscription<map_msgs::msg::OccupancyGridUpdate>::SharedPtr costmap_update_sub_;
   nav_msgs::msg::OccupancyGrid::SharedPtr latest_costmap_;
+  void ensureCostmapSubscriptions(const std::shared_ptr<BTContext>& ctx);
 
   // --- Coverage controller rejoin (FTC turn fallback) ------------------------
   // FTC republishes the rest of the unit on the goal checker's plan topic when

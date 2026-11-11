@@ -72,6 +72,12 @@
 namespace mowgli_nav2_plugins
 {
 
+/// Default ContourBypassCfg::max_evaluations. A 5 m walk round a 3 m bed costs
+/// ~15 000; the synthetic worst case (lawn cut in two, both sides walked to a
+/// 15 m contour and failing) ~71 000 (test_ftc_contour_bypass). The budget sits
+/// above the first and caps anything past the second.
+inline constexpr std::size_t kContourBypassDefaultMaxEvaluations = 100000;
+
 struct ContourBypassCfg
 {
   /// Wall-follower step (m); one local costmap cell.
@@ -123,6 +129,17 @@ struct ContourBypassCfg
   /// Nominal speeds, for the time estimate that picks the side.
   double drive_speed_mps{0.25};
   double turn_speed_rps{0.6};
+  /// Footprint-test budget for the whole plan (both sides, every start,
+  /// simplification included), in the units of ContourBypassPlan::evaluations.
+  /// The planner runs inside one control tick under the costmap lock: once the
+  /// budget is spent every further test reads "blocked" and the walk fails.
+  std::size_t max_evaluations{kContourBypassDefaultMaxEvaluations};
+  /// The robot is ON the plan (within kContourStartOnPlanM of a window pose).
+  /// When it is not — wedged mid-skirt, beside its line — a start further
+  /// along the plan would first drive the plan back onto the line beside the
+  /// obstacle, a stretch nothing here checked: only the robot's own pose (and
+  /// reverses from it) may start the walk.
+  bool start_on_plan{true};
 };
 
 enum class ContourBypassVerdict
@@ -200,6 +217,10 @@ struct ContourBypassPlan
 };
 
 // ── Bounds FTCController enforces on its contour_bypass_* parameters ────────
+
+/// How close the robot must be to a window pose for a walk to start further
+/// along the plan (ContourBypassCfg::start_on_plan).
+inline constexpr double kContourStartOnPlanM = 0.10;
 
 inline constexpr double kContourBypassMinContourM = 1.0;
 inline constexpr double kContourBypassMaxContourCapM = 15.0;

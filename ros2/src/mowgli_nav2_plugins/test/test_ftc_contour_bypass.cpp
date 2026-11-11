@@ -265,4 +265,60 @@ TEST(ContourBypass, FollowablePredicateMovesTheRejoin)
   }
 }
 
+// The planner runs inside one control tick under the costmap lock. Its
+// footprint tests are budgeted: the worst case (neither side ever leaves) ends
+// on the budget instead of walking and simplifying without bound.
+TEST(ContourBypass, AFootprintBudgetBoundsTheWorstCase)
+{
+  World w;
+  w.Obstacle(-0.5, -5.0, 0.0, 5.0);
+  w.Zone(-5.0, 2.0, 5.0, 5.0);
+  w.Zone(-5.0, -5.0, 5.0, -2.0);
+  ContourBypassCfg cfg;
+  cfg.max_contour_m = 15.0;
+  const ContourBypassPlan unbounded = mn::PlanContourBypass(Problem(w, true), cfg);
+  ASSERT_EQ(unbounded.verdict, ContourBypassVerdict::kNoLeave);
+  std::printf("[ contour  ] lawn cut in two: %zu evaluations without a binding budget\n",
+              unbounded.evaluations);
+
+  cfg.max_evaluations = 2000;
+  const ContourBypassPlan bounded = mn::PlanContourBypass(Problem(w, true), cfg);
+  EXPECT_EQ(bounded.verdict, ContourBypassVerdict::kNoLeave);
+  // One more test may run past the line before every check reads "blocked".
+  EXPECT_LT(bounded.evaluations, 2000u + 2000u);
+  EXPECT_LT(bounded.evaluations, unbounded.evaluations);
+}
+
+TEST(ContourBypass, TheDefaultBudgetLeavesRoomForARealBypass)
+{
+  World w;
+  w.Obstacle(-1.0, -1.0, 0.0, 2.0);
+  const ContourBypassPlan plan = mn::PlanContourBypass(Problem(w, false), ContourBypassCfg{});
+  ASSERT_EQ(plan.verdict, ContourBypassVerdict::kPlanned);
+  std::printf("[ contour  ] wide bed: %zu evaluations\n", plan.evaluations);
+  EXPECT_LT(plan.evaluations, mn::kContourBypassDefaultMaxEvaluations / 2);
+}
+
+// Wedged mid-skirt, the robot stands beside its line: a walk that starts
+// further along the plan would first drive the plan back onto the line beside
+// the obstacle, a stretch nothing checked. Off the plan, the walk starts where
+// the robot actually is — which is also what the splice executes.
+TEST(ContourBypass, OffThePlanTheWalkStartsFromTheRobot)
+{
+  World w;
+  w.Obstacle(-1.0, -1.0, 0.0, 2.0);
+  ContourBypassProblem p = Problem(w, false);
+  p.robot = {-3.0, -0.30, 0.0};
+  ContourBypassCfg cfg;
+  cfg.start_on_plan = false;
+  const ContourBypassPlan plan = mn::PlanContourBypass(p, cfg);
+  ASSERT_EQ(plan.verdict, ContourBypassVerdict::kPlanned)
+      << plan.left.why << " / " << plan.right.why;
+  const mn::ContourSide* best = plan.Best();
+  ASSERT_NE(best, nullptr);
+  EXPECT_EQ(best->start_idx, 0u);
+  EXPECT_DOUBLE_EQ(best->legs.front().x, -3.0);
+  EXPECT_DOUBLE_EQ(best->legs.front().y, -0.30);
+}
+
 }  // namespace

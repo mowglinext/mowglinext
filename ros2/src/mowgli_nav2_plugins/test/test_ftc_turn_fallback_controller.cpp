@@ -48,6 +48,7 @@
 #include <nav2_costmap_2d/costmap_2d_ros.hpp>
 #include <nav2_ros_common/lifecycle_node.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <tf2/utils.hpp>
 
 #include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/ftc_controller.hpp"
@@ -66,6 +67,21 @@ struct FTCSpeedLimitTestAccess
     g->valid = true;
     g->mowing.allowed = {{{-5, -5}, {15, -5}, {15, 15}, {-5, 15}}};
     c.corner_geometry_ = std::move(g);
+  }
+
+  /// finalizeSplice exactly as a fallback planned on the tick a rotation
+  /// handed off to FOLLOWING runs it: with corner_geometry_mutex_ HELD by
+  /// computeVelocityCommands' departure lock. Locking it again deadlocked.
+  static bool FinalizeDuringRotationHandoff(FTCController& c,
+                                            std::vector<geometry_msgs::msg::PoseStamped>& spliced,
+                                            std::size_t& rejoin_idx)
+  {
+    {
+      std::lock_guard lock(c.corner_geometry_mutex_);
+      c.tick_corner_geometry_ = c.corner_geometry_;
+    }
+    std::lock_guard departure(c.corner_geometry_mutex_);
+    return c.finalizeSplice(spliced, rejoin_idx, "test");
   }
 };
 }  // namespace mowgli_nav2_plugins
@@ -334,6 +350,11 @@ public:
   double x_{0.0};
   double y_{0.0};
   double yaw_{0.0};
+
+  mn::FTCController& Ftc()
+  {
+    return ftc_;
+  }
 
 private:
   void DeclareFtcParams(const Options& opt)
@@ -630,6 +651,55 @@ TEST_F(FtcTurnFallbackController, NoLidarOverlayNeverReachesTheFallback)
   EXPECT_EQ(h.in_place_episodes_, 0);  // the U-turn is driven as the arc
   h.Drain();
   EXPECT_TRUE(h.progress_plans_.empty());
+}
+
+// A splice whose connector ends on the incoming twin of the plan's own corner:
+// three poses at one spot. finalizeSplice merges them into ONE corner and
+// moves the rejoin (the plan's incoming twin, dropped) onto the run's last
+// pose. It runs under the rotation-handoff lock without taking it again.
+TEST_F(FtcTurnFallbackController, SpliceOnACornerTwinMergesAndRemapsTheRejoin)
+{
+  Harness h({});
+  std::vector<Pose> spliced;
+  for (double x = 1.0; x <= 2.0 + 1e-9; x += 0.05)
+  {
+    spliced.push_back(MakePose(x, 2.0, 0.0));  // connector, east
+  }
+  spliced.push_back(MakePose(2.0, 2.0, M_PI / 2));  // plan pose j: incoming twin (north)
+  std::size_t rejoin = spliced.size() - 1;
+  spliced.push_back(MakePose(2.0, 2.0, M_PI));  // plan pose j + 1: outgoing twin (west)
+  for (double x = 1.95; x >= 1.0 - 1e-9; x -= 0.05)
+  {
+    spliced.push_back(MakePose(x, 2.0, M_PI));
+  }
+  const std::size_t before = spliced.size();
+
+  ASSERT_TRUE(mn::FTCSpeedLimitTestAccess::FinalizeDuringRotationHandoff(h.Ftc(), spliced, rejoin));
+  EXPECT_EQ(spliced.size(), before - 1);
+  ASSERT_LT(rejoin, spliced.size());
+  EXPECT_NEAR(tf2::getYaw(spliced[rejoin].pose.orientation), M_PI, 1e-9);
+  EXPECT_NEAR(tf2::getYaw(spliced[rejoin - 1].pose.orientation), 0.0, 1e-9);
+  EXPECT_DOUBLE_EQ(spliced[rejoin].pose.position.x, 2.0);
+}
+
+TEST_F(FtcTurnFallbackController, ASpliceThePivotStateCouldNotRunIsRefused)
+{
+  Harness h({});
+  std::vector<Pose> spliced;
+  for (double x = 14.0; x <= 15.5 + 1e-9; x += 0.05)
+  {
+    spliced.push_back(MakePose(x, 2.0, 0.0));
+  }
+  // A pivot 0.5 m past the mowing area's edge (x = 15): the rotation gate
+  // never rotates an axle outside its mowing authority.
+  spliced.push_back(MakePose(15.5, 2.0, M_PI / 2));
+  for (double y = 2.05; y <= 3.0 + 1e-9; y += 0.05)
+  {
+    spliced.push_back(MakePose(15.5, y, M_PI / 2));
+  }
+  std::size_t rejoin = spliced.size() - 1;
+  EXPECT_FALSE(
+      mn::FTCSpeedLimitTestAccess::FinalizeDuringRotationHandoff(h.Ftc(), spliced, rejoin));
 }
 
 }  // namespace

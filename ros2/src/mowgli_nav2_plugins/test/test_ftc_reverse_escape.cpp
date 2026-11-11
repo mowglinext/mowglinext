@@ -237,3 +237,43 @@ TEST(ReverseEscapeRelease, FlickeringFeasibilitySpendsTheBudgetInsteadOfDitherin
   ASSERT_GE(exhausted_at_tick, 0) << "the bound must be reached so the BT detour gets its turn";
   EXPECT_LT(exhausted_at_tick, 60) << "within a few seconds, not minutes";
 }
+
+TEST(ReverseEscapeTimeLimit, IsTwiceTheNominalTimePlusAStartupSecond)
+{
+  mnp::ReverseEscapeCfg cfg;
+  cfg.enabled = true;
+  cfg.max_dist_m = 0.30;
+  cfg.speed_mps = 0.15;
+  EXPECT_DOUBLE_EQ(mnp::ReverseEscapeTimeLimitS(cfg), 2.0 * 0.30 / 0.15 + 1.0);
+}
+
+TEST(ReverseEscapeTimeLimit, BlockedWheelsEndTheReverseInTime)
+{
+  // Odometry reads zero (wheels blocked by a low object behind, or a frozen
+  // encoder): the distance budget is never spent, the time bound ends it.
+  mnp::ReverseEscapeCfg cfg;
+  cfg.enabled = true;
+  const double limit = mnp::ReverseEscapeTimeLimitS(cfg);
+  double dist = 0.0;
+  double elapsed = 0.0;
+  int ticks = 0;
+  while (mnp::ReverseEscapeDecide(cfg, dist, /*rear_clear=*/true, elapsed) ==
+             mnp::ReverseEscapeAction::kReverse &&
+         ticks < 1000)
+  {
+    dist = mnp::ReverseEscapeAdvance(cfg, dist, /*measured=*/0.0, 0.1);
+    elapsed += 0.1;
+    ++ticks;
+  }
+  EXPECT_DOUBLE_EQ(dist, 0.0);
+  EXPECT_NEAR(elapsed, limit, 0.1 + 1e-9);
+  EXPECT_LT(ticks, 1000);
+}
+
+TEST(ReverseEscapeTimeLimit, ANonPositiveSpeedNeverReverses)
+{
+  mnp::ReverseEscapeCfg cfg;
+  cfg.enabled = true;
+  cfg.speed_mps = 0.0;
+  EXPECT_EQ(mnp::ReverseEscapeDecide(cfg, 0.0, true, 0.0), mnp::ReverseEscapeAction::kExhausted);
+}

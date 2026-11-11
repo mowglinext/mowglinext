@@ -38,6 +38,7 @@
 #include "mowgli_behavior/unit_resume.hpp"
 #include "mowgli_interfaces/coverage_path_invariants.hpp"
 #include "mowgli_interfaces/ftc_abort_reason.hpp"
+#include "mowgli_nav2_plugins/occupancy_grid_update.hpp"
 #include "tf2/exceptions.hpp"
 
 namespace mowgli_behavior
@@ -294,6 +295,41 @@ std::size_t forwardSkipIndex(const std::vector<geometry_msgs::msg::PoseStamped>&
 // ===========================================================================
 // FollowStrip — execute the coverage plan as trackable continuous sub-paths
 // ===========================================================================
+
+void FollowStrip::ensureCostmapSubscriptions(const std::shared_ptr<BTContext>& ctx)
+{
+  // Subscribe (latched) to the global costmap. Created once.
+  if (!costmap_sub_)
+  {
+    costmap_sub_ = ctx->node->create_subscription<nav_msgs::msg::OccupancyGrid>(
+        "/global_costmap/costmap",
+        rclcpp::QoS(1).transient_local().reliable(),
+        [this](nav_msgs::msg::OccupancyGrid::SharedPtr msg)
+        {
+          latest_costmap_ = std::move(msg);
+        });
+    // The global costmap is in delta mode: without the updates this copy is the
+    // first snapshot forever, and a detour would be confirmed / resumed against
+    // obstacles and boundaries that no longer are (or not yet were) there.
+    costmap_update_sub_ = ctx->node->create_subscription<map_msgs::msg::OccupancyGridUpdate>(
+        "/global_costmap/costmap_updates",
+        rclcpp::QoS(10).reliable(),
+        [this](map_msgs::msg::OccupancyGridUpdate::SharedPtr update)
+        {
+          if (!latest_costmap_)
+          {
+            return;  // no base grid yet: the latched full grid supersedes it
+          }
+          // Copy-on-write: a snapshot handed out by a previous tick stays
+          // immutable while this one takes the delta.
+          auto next = std::make_shared<nav_msgs::msg::OccupancyGrid>(*latest_costmap_);
+          if (mowgli_nav2_plugins::ApplyOccupancyGridUpdate(*next, *update))
+          {
+            latest_costmap_ = std::move(next);
+          }
+        });
+  }
+}
 
 BT::NodeStatus FollowStrip::onStart()
 {
@@ -589,18 +625,9 @@ BT::NodeStatus FollowStrip::onStart()
           }
         });
   }
-  // Detour-and-continue: subscribe (latched) to the global costmap so an
-  // obstacle-abort can be confirmed and a clear resume pose found. Created once.
-  if (!costmap_sub_)
-  {
-    costmap_sub_ = ctx->node->create_subscription<nav_msgs::msg::OccupancyGrid>(
-        "/global_costmap/costmap",
-        rclcpp::QoS(1).transient_local().reliable(),
-        [this](nav_msgs::msg::OccupancyGrid::SharedPtr msg)
-        {
-          latest_costmap_ = std::move(msg);
-        });
-  }
+  // Detour-and-continue: the global costmap confirms an obstacle-abort and
+  // finds a clear resume pose. Normally subscribed at construction already.
+  ensureCostmapSubscriptions(ctx);
   // Per-segment detour budget + footprint radius from ports (see providedPorts).
   {
     int max_detours = 5;

@@ -42,15 +42,36 @@ enum class ReverseEscapeAction
   kExhausted,  ///< Budget spent or rear blocked — caller falls through to wait/abort.
 };
 
+/// Time allowed for one reverse budget: twice the time the distance takes at
+/// the commanded speed, plus a second for the wheels to start. The distance
+/// budget is integrated from odometry, so a reverse whose wheels are blocked
+/// (a low object behind, below the scan plane) or whose odometry reads zero
+/// would otherwise never spend it and back into the obstruction until the
+/// progress checker gives up 30 s later.
+inline constexpr double kReverseTimeFactor = 2.0;
+inline constexpr double kReverseStartupS = 1.0;
+
+inline double ReverseEscapeTimeLimitS(const ReverseEscapeCfg& cfg)
+{
+  if (cfg.speed_mps <= 0.0 || cfg.max_dist_m <= 0.0)
+  {
+    return 0.0;
+  }
+  return kReverseTimeFactor * cfg.max_dist_m / cfg.speed_mps + kReverseStartupS;
+}
+
 /// Pure decision for the WEDGED case (deviation search found no skirt this
 /// tick). `dist_done` is the reversed distance accumulated so far (m, >= 0);
 /// `rear_clear` is whether the footprint at the backed-up pose is free of lethal
-/// cells. The rear-clear gate is checked BEFORE committing to a reverse so we
-/// never back into an obstacle — false forbids the maneuver (fail safe). The
-/// budget cap is strict: once dist_done reaches max_dist_m we stop reversing.
+/// cells; `elapsed_s` is the time already spent reversing on this budget. The
+/// rear-clear gate is checked BEFORE committing to a reverse so we never back
+/// into an obstacle — false forbids the maneuver (fail safe). Both caps are
+/// strict: once dist_done reaches max_dist_m, or elapsed_s the time limit, we
+/// stop reversing.
 inline ReverseEscapeAction ReverseEscapeDecide(const ReverseEscapeCfg& cfg,
                                                double dist_done,
-                                               bool rear_clear)
+                                               bool rear_clear,
+                                               double elapsed_s = 0.0)
 {
   if (!cfg.enabled)
   {
@@ -59,6 +80,10 @@ inline ReverseEscapeAction ReverseEscapeDecide(const ReverseEscapeCfg& cfg,
   if (dist_done >= cfg.max_dist_m)
   {
     return ReverseEscapeAction::kExhausted;  // budget spent
+  }
+  if (!(elapsed_s < ReverseEscapeTimeLimitS(cfg)))
+  {
+    return ReverseEscapeAction::kExhausted;  // no odometric progress in time
   }
   if (!rear_clear)
   {
