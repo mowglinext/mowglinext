@@ -3,6 +3,7 @@
 #include "mowgli_nav2_plugins/authorized_transit_planner.hpp"
 
 #include "mowgli_nav2_plugins/transit_raster.hpp"
+#include "mowgli_nav2_plugins/transit_seams.hpp"
 #include <pluginlib/class_list_macros.hpp>
 
 namespace mowgli_nav2_plugins
@@ -16,6 +17,8 @@ transit::Point point(const geometry_msgs::msg::PoseStamped& pose)
 }
 constexpr double kTerminalOutsideLimit = 0.15;
 constexpr double kAnchorLimit = 0.30;
+// A seam never bridges more than the slack a terminal leg is already granted outside the union.
+constexpr double kMaxSeamTolerance = kTerminalOutsideLimit;
 // How far a start inside the dock body may have to travel to reach clear ground: the body is
 // 0.80 m deep and 0.55 m wide, so the way out is at most that, plus the cell grid.
 constexpr double kDockExitLimit = 1.0;
@@ -32,6 +35,11 @@ void AuthorizedTransitPlanner::configure(const nav2::LifecycleNode::WeakPtr& par
   auto node = parent.lock();
   if (node->declare_or_get_parameter(name + ".tolerance", 0.0) != 0.0)
     throw nav2_core::PlannerException("Authorized transit requires exact goal anchors");
+  // Widest gap between two recorded areas that still counts as one border drawn twice (see
+  // transit_seams.hpp). 0 keeps the exact union; production sets it in nav2_params_base.yaml.
+  seam_tolerance_ = node->declare_or_get_parameter(name + ".seam_tolerance", 0.0);
+  if (!std::isfinite(seam_tolerance_) || seam_tolerance_ < 0 || seam_tolerance_ > kMaxSeamTolerance)
+    throw nav2_core::PlannerException("Authorized transit seam_tolerance must be within 0..0.15 m");
   BasePlanner::configure(parent, name, tf, costmap_ros);
   if (_downsample_costmap)
     throw nav2_core::PlannerException(
@@ -75,6 +83,11 @@ void AuthorizedTransitPlanner::configure(const nav2::LifecycleNode::WeakPtr& par
           {
             result.successful = false;
             result.reason = "Authorized transit requires exact goal anchors";
+          }
+          else if (p.get_name() == name + ".seam_tolerance")
+          {
+            result.successful = false;
+            result.reason = "Authorized transit reads seam_tolerance at configure only";
           }
         return result;
       });
@@ -140,6 +153,21 @@ void AuthorizedTransitPlanner::onGeometry(
   if (dock_bodies.size() == 1 && dock_corridors.size() == 1)
     next.dock =
         transit::dockFrame(dock_bodies.front(), dock_corridors.front(), dock_pose_ahead_of_rear);
+  // Bridge borders drawn twice a few centimetres apart. Obstacles and the dock body are not
+  // involved: seams only ever join two allowed rings, and blocked rings still win over them.
+  if (valid)
+  {
+    auto seams = transit::seamRings(next.allowed, seam_tolerance_);
+    if (!seams.empty())
+      RCLCPP_INFO(_logger,
+                  "Transit geometry: %zu seam stretch(es) bridge gaps up to %.2f m between "
+                  "neighbouring areas",
+                  seams.size(),
+                  seam_tolerance_);
+    next.allowed.insert(next.allowed.end(),
+                        std::make_move_iterator(seams.begin()),
+                        std::make_move_iterator(seams.end()));
+  }
   std::lock_guard lock(geometry_mutex_);
   geometry_ = std::move(next);
   geometry_valid_ = valid && !geometry_.allowed.empty();

@@ -798,6 +798,14 @@ planner_server:
     GridBased:
       plugin: "mowgli_nav2_plugins/AuthorizedTransitPlanner"
       tolerance: 0.0
+      # Transits stay inside the union of the recorded areas. Two areas drawn side
+      # by side rarely share their border exactly: a gap of a few centimetres runs
+      # along it, the exact union treats it as a wall, and the transit leaves through
+      # the one corner where the rings do touch, possibly at the far end of the garden
+      # (operator report 2026-11-10). Gaps up to this width are bridged
+      # (transit_seams.hpp); the path is then never further than this from BOTH areas.
+      # 0 restores the exact union. Accepted range 0..0.15 m; read at configure only.
+      seam_tolerance: 0.10
       downsample_costmap: false
       downsampling_factor: 2
       allow_unknown: false
