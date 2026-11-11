@@ -392,6 +392,9 @@ private:
   std::shared_future<GoalHandle::SharedPtr> goal_handle_future_;
   GoalHandle::SharedPtr goal_handle_;
   std::shared_future<GoalHandle::WrappedResult> goal_result_future_;
+  /// Set by onHalted() so a goal the server accepts afterwards is cancelled
+  /// (cancel_goal.hpp); a fresh one per goal.
+  std::shared_ptr<GoalAbandonment> abandonment_ = std::make_shared<GoalAbandonment>();
 
   // Cached recovery target from the map_server, held across the
   // disable-keepout / clear-costmap phases until we actually send the

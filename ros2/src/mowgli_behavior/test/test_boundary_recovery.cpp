@@ -15,6 +15,7 @@
 
 // SPDX-License-Identifier: GPL-3.0
 
+#include <algorithm>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -366,6 +367,130 @@ TEST_F(BoundaryRecoveryTest, ToggleFailureRefusesMotion)
   toggle_succeeds_ = false;
   EXPECT_EQ(runTree(), BT::NodeStatus::FAILURE);
   EXPECT_EQ(events_, (std::vector<std::string>{"recovery_pose", "keepout_off"}));
+}
+
+// Halted after its Nav2 goal left but before the navigator answered: the goal
+// must still be cancelled once accepted, or the recovery keeps driving on the
+// unrestricted BoundaryRecovery planner with no owner (#772).
+class BoundaryRecoveryHaltTest : public BoundaryRecoveryTest
+{
+protected:
+  void SetUp() override
+  {
+    BoundaryRecoveryTest::SetUp();
+    // The navigator answers only when the test spins nav_executor_.
+    navigate_server_.reset();
+    nav_node_ = rclcpp::Node::make_shared("boundary_recovery_navigator");
+    navigate_server_ = rclcpp_action::create_server<NavigateAction>(
+        nav_node_,
+        "/navigate_to_pose",
+        [this](const rclcpp_action::GoalUUID&, std::shared_ptr<const NavigateAction::Goal>)
+        {
+          events_.push_back("navigate_goal");
+          return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+        },
+        [this](const std::shared_ptr<NavigateGoalHandle>)
+        {
+          ++cancel_requests_;
+          return rclcpp_action::CancelResponse::ACCEPT;
+        },
+        [this](const std::shared_ptr<NavigateGoalHandle> goal_handle)
+        {
+          navigation_handles_.push_back(goal_handle);
+        });
+    nav_executor_.add_node(nav_node_);
+  }
+
+  void TearDown() override
+  {
+    nav_executor_.remove_node(nav_node_);
+    BoundaryRecoveryTest::TearDown();
+  }
+
+  rclcpp::Node::SharedPtr nav_node_;
+  rclcpp::executors::SingleThreadedExecutor nav_executor_;
+};
+
+TEST_F(BoundaryRecoveryHaltTest, HaltBeforeTheNavigatorAnswersCancelsTheGoalOnAcceptance)
+{
+  auto tree = factory_.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"MainTree\">"
+      "<NavigateInsideBoundary/></BehaviorTree></root>",
+      blackboard_);
+  // Recovery pose, keepout off, costmap clear, then the goal is sent; the
+  // navigator is never spun, so it cannot answer.
+  for (int i = 0; i < 200; ++i)
+  {
+    ASSERT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+    executor_.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_EQ(events_, (std::vector<std::string>{"recovery_pose", "keepout_off", "clear_costmap"}))
+      << "test precondition: the navigator must not have answered yet";
+  tree.haltTree();
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  const auto keepout_restored = [&]()
+  {
+    return std::find(events_.begin(), events_.end(), "keepout_on") != events_.end();
+  };
+  while ((cancel_requests_ == 0 || !keepout_restored()) &&
+         std::chrono::steady_clock::now() < deadline)
+  {
+    nav_executor_.spin_some();
+    executor_.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  EXPECT_EQ(navigation_handles_.size(), 1u) << "the navigator never accepted the goal";
+  EXPECT_GT(cancel_requests_, 0u) << "orphaned boundary-recovery goal left running";
+  EXPECT_TRUE(keepout_restored()) << "the halt did not restore the keepout filter";
+}
+
+// The scenario #772 describes: the navigator accepted the goal, then the node
+// is halted before its next tick reads the answer.
+TEST_F(BoundaryRecoveryHaltTest, HaltAfterAcceptanceBeforeTheNextTickCancelsTheGoal)
+{
+  auto tree = factory_.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"MainTree\">"
+      "<NavigateInsideBoundary/></BehaviorTree></root>",
+      blackboard_);
+  for (int i = 0; i < 200; ++i)
+  {
+    ASSERT_EQ(tree.tickOnce(), BT::NodeStatus::RUNNING);
+    executor_.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_EQ(events_, (std::vector<std::string>{"recovery_pose", "keepout_off", "clear_costmap"}));
+  // The navigator accepts, and the answer reaches the node, which is not
+  // ticked again.
+  const auto accept_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (navigation_handles_.empty() && std::chrono::steady_clock::now() < accept_deadline)
+  {
+    nav_executor_.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_EQ(navigation_handles_.size(), 1u);
+  for (int i = 0; i < 20; ++i)
+  {
+    executor_.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  tree.haltTree();
+
+  const auto keepout_restored = [&]()
+  {
+    return std::find(events_.begin(), events_.end(), "keepout_on") != events_.end();
+  };
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while ((cancel_requests_ == 0 || !keepout_restored()) &&
+         std::chrono::steady_clock::now() < deadline)
+  {
+    nav_executor_.spin_some();
+    executor_.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  EXPECT_GT(cancel_requests_, 0u) << "orphaned boundary-recovery goal left running";
+  EXPECT_TRUE(keepout_restored()) << "the halt did not restore the keepout filter";
 }
 
 }  // namespace

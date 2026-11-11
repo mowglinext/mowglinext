@@ -745,7 +745,14 @@ BT::NodeStatus NavigateInsideBoundary::SendNav2Goal()
   }
   goal_msg.behavior_tree = ctx->boundary_recovery_tree_xml;
 
-  goal_handle_future_ = action_client_->async_send_goal(goal_msg);
+  // Fresh abandonment flag for this goal (cancel_goal.hpp): a halt before the
+  // server answers must still cancel it, or the recovery keeps driving on the
+  // unrestricted BoundaryRecovery planner with nobody owning the goal.
+  abandonment_ = std::make_shared<GoalAbandonment>();
+  auto send_goal_options = rclcpp_action::Client<Nav2Goal>::SendGoalOptions{};
+  send_goal_options.goal_response_callback =
+      cancelWhenAbandoned<Nav2Goal>(action_client_, abandonment_);
+  goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
 
   RCLCPP_INFO(ctx->node->get_logger(),
               "NavigateInsideBoundary: nav2 goal sent (x=%.2f y=%.2f, robot %.2fm outside)",
@@ -789,15 +796,18 @@ void NavigateInsideBoundary::onHalted()
 {
   auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
 
-  if (goal_handle_)
+  // Cancels an accepted goal now, or marks a goal still awaiting the server's
+  // answer so it is cancelled on acceptance (cancel_goal.hpp).
+  if (abandonGoal(action_client_,
+                  goal_handle_,
+                  goal_handle_future_,
+                  abandonment_,
+                  ctx->node->get_logger(),
+                  "NavigateInsideBoundary"))
   {
     RCLCPP_INFO(ctx->node->get_logger(), "NavigateInsideBoundary: canceling goal");
-    cancelGoalQuietly(action_client_,
-                      goal_handle_,
-                      ctx->node->get_logger(),
-                      "NavigateInsideBoundary");
-    goal_handle_.reset();
   }
+  goal_handle_.reset();
   if (keepout_disabled_)
   {
     RCLCPP_INFO(ctx->node->get_logger(), "NavigateInsideBoundary: halt — restoring keepout filter");

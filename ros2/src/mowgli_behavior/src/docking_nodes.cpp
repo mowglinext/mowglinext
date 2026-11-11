@@ -398,6 +398,11 @@ BT::NodeStatus UndockRobot::onStart()
   {
     slot->Record(OutcomeFromResultCode(result.code));
   };
+  // As DockRobot: a halt before the server answers must still cancel the goal
+  // once it is accepted (cancel_goal.hpp).
+  goal_abandonment_ = std::make_shared<GoalAbandonment>();
+  send_goal_options.goal_response_callback =
+      cancelWhenAbandoned<UndockAction>(action_client_, goal_abandonment_);
   goal_handle_future_ = action_client_->async_send_goal(goal_msg, send_goal_options);
   goal_handle_.reset();
 
@@ -449,13 +454,19 @@ BT::NodeStatus UndockRobot::onRunning()
 
 void UndockRobot::onHalted()
 {
-  if (goal_handle_)
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  // Cancels an accepted goal now, or one still awaiting the server's answer on
+  // acceptance (cancel_goal.hpp).
+  if (abandonGoal(action_client_,
+                  goal_handle_,
+                  goal_handle_future_,
+                  goal_abandonment_,
+                  ctx->node->get_logger(),
+                  "UndockRobot"))
   {
-    auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
     RCLCPP_INFO(ctx->node->get_logger(), "UndockRobot: canceling active goal");
-    cancelGoalQuietly(action_client_, goal_handle_, ctx->node->get_logger(), "UndockRobot");
-    goal_handle_.reset();
   }
+  goal_handle_.reset();
 }
 
 // ---------------------------------------------------------------------------
