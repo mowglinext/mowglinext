@@ -590,7 +590,14 @@ void FusionGraphNode::LidarMapAnchorStep(const std::vector<Eigen::Vector2d>& cur
     ++lidar_anchor_updates_;
   };
   evaluate();
-  if (d.insert_scan)
+  const double yaw_var = snapshot->covariance(2, 2);
+  const bool yaw_trusted =
+      lidar_map_insert_max_yaw_sigma_rad_ <= 0.0 ||
+      (std::isfinite(yaw_var) &&
+       yaw_var <= lidar_map_insert_max_yaw_sigma_rad_ * lidar_map_insert_max_yaw_sigma_rad_);
+  if (d.insert_scan && !yaw_trusted)
+    ++lidar_map_insert_skipped_yaw_;
+  if (d.insert_scan && yaw_trusted)
   {
     std::vector<std::pair<double, double>> pts;
     pts.reserve(curr_scan.size());

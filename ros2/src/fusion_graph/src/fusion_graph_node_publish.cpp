@@ -19,7 +19,6 @@
 #include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
-#include "fusion_graph/anchor_slew.hpp"
 #include "fusion_graph/covariance_frame.hpp"
 #include "fusion_graph/fusion_graph_node.hpp"
 #include "fusion_graph/fusion_graph_node_util.hpp"
@@ -342,16 +341,13 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
   pose_extrap_.OnFusionPose(this->now().seconds(), out.pose);
 
   // 1b. /imu/fg_yaw — yaw-only sensor_msgs/Imu (cov_yaw, others 1e6
-  //     to disable). Published in both primary and observer mode so
-  //     ekf_map_node can fuse it as imu2 absolute yaw without
-  //     creating a feedback loop (fusion_graph never reads
-  //     /odometry/filtered_map).
+  //     to disable). Published in both primary and observer mode.
   sensor_msgs::msg::Imu yaw_msg;
   yaw_msg.header.stamp = odom.header.stamp;
   yaw_msg.header.frame_id = base_frame_;
   yaw_msg.orientation = QuatFromYaw(extrapolated_map_base.theta());
-  // Roll/pitch covariances marked huge so robot_localization ignores
-  // them; only orientation_covariance[8] (yaw variance) is real.
+  // Roll/pitch covariances marked huge; only orientation_covariance[8]
+  // (yaw variance) is real.
   for (auto& v : yaw_msg.orientation_covariance)
     v = 0.0;
   yaw_msg.orientation_covariance[0] = 1e6;
@@ -369,12 +365,11 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
     pub_fg_yaw_->publish(yaw_msg);
   }
 
-  // 2. TF map -> odom. Skipped in observer mode so the active
-  //    map-frame primary (typically ekf_map_node) keeps single
-  //    ownership of the map→odom transform. The /odometry/filtered_map
-  //    publish above still happens — downstream consumers that
-  //    explicitly route to /fusion_graph/odometry (via launch remap)
-  //    can use it for diagnostics or A/B comparison.
+  // 2. TF map -> odom. Skipped in observer mode (never selected by
+  //    navigation.launch.py) so a second instance cannot fight the primary
+  //    over map→odom. The /odometry/filtered_map publish above still happens
+  //    — observer mode remaps it to /fusion_graph/odometry for A/B
+  //    comparison.
   if (!primary_mode_)
     return;
 
@@ -429,48 +424,6 @@ void FusionGraphNode::PublishOutputs(const TickOutput& out)
       PublishSupportLocked();
     }
   }
-}
-
-gtsam::Pose2 FusionGraphNode::SlewPublishedAnchor(const gtsam::Pose2& target,
-                                                  bool anchor_valid,
-                                                  double dt)
-{
-  // An odom re-base (OnTimer) sets force_pub_resync_: the target anchor just
-  // jumped by a coordinated amount that leaves map→base UNCHANGED, so the
-  // published anchor must snap to it (not ramp) or map→base would move. Drop
-  // pub_valid so AnchorSlewStep snaps on this cycle.
-  if (force_pub_resync_.exchange(false, std::memory_order_acq_rel))
-    t_map_odom_pub_valid_ = false;
-
-  // Thin wrapper over the pure AnchorSlewStep (anchor_slew.hpp). Single
-  // writer of t_map_odom_pub_ per run mode (TF thread when the broadcast
-  // thread runs, executor otherwise) → no lock taken here.
-  const AnchorSlewCfg cfg{anchor_slew_enabled_,
-                          anchor_max_lin_slew_mps_,
-                          anchor_max_ang_slew_radps_,
-                          anchor_snap_dist_m_,
-                          anchor_snap_yaw_rad_};
-  double px = t_map_odom_pub_.x();
-  double py = t_map_odom_pub_.y();
-  double pyaw = t_map_odom_pub_.theta();
-  double ox = 0.0;
-  double oy = 0.0;
-  double oyaw = 0.0;
-  AnchorSlewStep(t_map_odom_pub_valid_,
-                 px,
-                 py,
-                 pyaw,
-                 anchor_valid,
-                 target.x(),
-                 target.y(),
-                 target.theta(),
-                 dt,
-                 cfg,
-                 ox,
-                 oy,
-                 oyaw);
-  t_map_odom_pub_ = gtsam::Pose2(px, py, pyaw);
-  return gtsam::Pose2(ox, oy, oyaw);
 }
 
 void FusionGraphNode::TfBroadcastLoop()

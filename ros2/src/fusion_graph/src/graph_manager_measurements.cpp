@@ -75,10 +75,12 @@ bool GraphManager::AddQueuedGnssFactorLocked(gtsam::NonlinearFactorGraph& factor
     noise = gtsam::noiseModel::Robust::Create(gtsam::noiseModel::mEstimator::Huber::Create(
                                                   params_.huber_k_gps),
                                               noise);
-  factors.add(GnssLeverArmFactor(PoseKey(q.target_node ? *q.target_node : *new_node),
-                                 q.xy,
-                                 gtsam::Vector2(params_.lever_arm_x, params_.lever_arm_y),
-                                 noise));
+  // A retimed fix observes the antenna at node ∘ (node→acquisition offset) ∘
+  // lever, which is the same factor with the lever replaced by that point.
+  const gtsam::Vector2 antenna =
+      q.antenna_in_node.value_or(gtsam::Vector2(params_.lever_arm_x, params_.lever_arm_y));
+  factors.add(GnssLeverArmFactor(
+      PoseKey(q.target_node ? *q.target_node : *new_node), q.xy, antenna, noise));
   return true;
 }
 

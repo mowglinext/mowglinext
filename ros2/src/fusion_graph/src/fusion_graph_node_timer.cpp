@@ -167,13 +167,11 @@ void FusionGraphNode::OnTimer()
       t_map_odom_anchor_valid_ = true;
       support_anchor_snapshot_ = *snap;
     }
-    // Odom re-base: once the robot has driven odom_rebase_dist_m from the odom
-    // origin, reset the odom POSITION onto the robot (heading kept) and shift
-    // the anchor so map→base is unchanged. This keeps the lever arm |dr| small
-    // so graph-yaw jitter can't rotate it into large map→odom position steps.
-    // OnImu (same executor thread) can't interrupt; the lock guards the TF
-    // reader thread. force_pub_resync_ makes the slew snap the published anchor
-    // to the new (coordinated) target so map→base stays continuous.
+    // Optional odom re-base (odom_rebase_dist_m > 0, off by default — see
+    // fusion_graph_node.hpp): reset the odom POSITION onto the robot (heading
+    // kept) and shift the anchor so map→base is unchanged. odom→base_footprint
+    // jumps by |dr|. OnImu (same executor thread) can't interrupt; the lock
+    // guards the TF reader thread.
     if (odom_rebase_dist_m_ > 0.0 && t_map_odom_anchor_valid_)
     {
       std::lock_guard<std::mutex> lock(tf_state_mu_);
@@ -185,7 +183,6 @@ void FusionGraphNode::OnTimer()
         dr_y_ = 0.0;
         lidar_anchor_odom_.RebaseRaw(Sophus::SE2d(dr_yaw_, Eigen::Vector2d::Zero()));
         t_map_odom_anchor_ = map_base.compose(gtsam::Pose2(0.0, 0.0, dr_yaw_).inverse());
-        force_pub_resync_.store(true, std::memory_order_release);
       }
     }
     PublishOutputs(*snap);

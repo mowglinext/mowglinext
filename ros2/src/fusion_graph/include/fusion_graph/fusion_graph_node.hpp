@@ -41,6 +41,7 @@
 #include <tf2_ros/transform_listener.hpp>
 
 #include "fusion_graph/dr_slip_veto.hpp"
+#include "fusion_graph/dr_stationary.hpp"
 #include "fusion_graph/graph_manager.hpp"
 #include "fusion_graph/lidar_anchor_odom.hpp"
 #include "fusion_graph/lidar_anchor_shadow_stats.hpp"
@@ -237,6 +238,12 @@ private:
   // ticks_per_meter, wheel_track or aggregation window can re-floor them.
   double dr_slip_gyro_max_rad_per_s_ = kDrSlipGyroMaxDefaultRadPerS;
   double dr_slip_wheel_min_rad_per_s_ = kDrSlipWheelMinDefaultRadPerS;
+  // Dead-reckoning stationary hold (dr_stationary.hpp). The graph snaps a
+  // truly-stationary node's dθ to 0; dead reckoning integrated the raw gyro
+  // regardless, so a parked robot's odom→base yaw drifted and was pulled back
+  // at every stationary node (sawtooth). Same thresholds as the graph, in
+  // rate form (per-tick thresholds / kTunedNodePeriodS).
+  DrStationaryThresholds dr_stationary_;
 
   // GPS antenna radial offset from base_link, hypot(lever_arm_x,
   // lever_arm_y). Used by the RTK wrong-fix gate in OnGnss to
@@ -288,61 +295,19 @@ private:
   // map→odom broadcast for one cycle, which is the intent.
   std::atomic<bool> t_map_odom_anchor_valid_{false};
 
-  // ── map→odom slew-rate limiter (continuity restoration) ─────────
-  // t_map_odom_anchor_ above is the RAW target: it steps discontinuously
-  // whenever a new node lands with a graph correction (GPS innovation,
-  // accumulated refinement snapped in at
-  // the end of a stationary_node_period_s window). Publishing it directly
-  // pushes those steps straight into map→base = anchor ⊙ odom→base, and
-  // Nav2's controller tracks a teleporting pose → left/right weave and
-  // in-place hunting. REP-105 requires the map-frame correction to be
-  // applied CONTINUOUSLY. So the TF thread eases a PUBLISHED anchor toward
-  // the raw target at a bounded rate: a few-cm RTK correction becomes a
-  // sub-second ramp instead of a step; a genuine relocalization (target
-  // jumps past anchor_snap_dist_m / anchor_snap_yaw_rad — re-seed, first
-  // fix after a long Float) snaps immediately so we never
-  // lag reality. Set anchor_slew_enabled=false to reproduce the pre-slew
-  // step behaviour exactly (A/B validation).
-  //
-  // t_map_odom_pub_ is written ONLY by the TF broadcast thread (single
-  // writer → no lock for its own state). t_map_odom_pub_shared_ is a copy
-  // published back under tf_state_mu_ so PublishOutputs (executor thread)
-  // serves /odometry/filtered_map + /imu/fg_yaw from the SAME smoothed
-  // anchor as the TF, keeping viz and TF consistent.
-  bool anchor_slew_enabled_ = true;
-  double anchor_max_lin_slew_mps_ = 0.10;
-  double anchor_max_ang_slew_radps_ = 0.20;
-  double anchor_snap_dist_m_ = 0.50;
-  double anchor_snap_yaw_rad_ = 0.35;
-  gtsam::Pose2 t_map_odom_pub_{0.0, 0.0, 0.0};
-  bool t_map_odom_pub_valid_ = false;
-  // Smoothed anchor mirrored under tf_state_mu_ for PublishOutputs
-  // (/odometry/filtered_map + /imu/fg_yaw) to match the TF exactly.
-  gtsam::Pose2 t_map_odom_pub_shared_{0.0, 0.0, 0.0};
-  bool t_map_odom_pub_shared_valid_ = false;
-  // Wall-clock of the last inline map-frame publish, for the slew dt when
-  // the dedicated TF thread is disabled (observer / tf_broadcast_rate<=0).
-  double last_map_pub_s_ = -1.0;
-
-  // ── Odom re-base (lever-arm limiter) ────────────────────────────
-  // map→odom = graph_pose ⊙ dr⁻¹, so a small graph YAW jitter rotates the
-  // odom→base offset and becomes a map→odom POSITION step proportional to
-  // |dr| (distance from the odom origin). As the robot drives away from
-  // that origin the same jitter produces ever-larger position jumps → the
-  // fused pose teleports vs the smooth odom trail and the controller can't
-  // track. When |dr| exceeds odom_rebase_dist_m we reset the odom POSITION
-  // origin onto the robot (dr_x/y→0, heading kept) and shift the anchor so
-  // map→base is unchanged — keeping the lever arm small. 0 = disabled.
+  // ── Odom re-base (opt-in, OFF by default) ───────────────────────
+  // When |dr| exceeds odom_rebase_dist_m the odom POSITION origin is moved
+  // onto the robot (dr_x/y→0, heading kept) and the anchor shifted so
+  // map→base is unchanged. That makes odom→base_footprint JUMP by |dr|,
+  // which every odom-frame consumer sees (local costmap, behavior_server's
+  // BackUp/DriveOnHeading, docking_server's fixed_frame, collision_monitor's
+  // base_shift_correction). It used to be on (6 m) to limit a lever-arm
+  // effect of the map→odom slew limiter — interpolating the anchor's yaw and
+  // translation separately moved map→base by |dr|·Δθ. The slew limiter was
+  // never wired into the published TF and has been removed; without it a
+  // graph correction enters map→base = anchor ⊙ dr unchanged, whatever |dr|
+  // is, so the re-base buys nothing. 0 = disabled (default).
   double odom_rebase_dist_m_ = 0.0;
-  // Set by OnTimer at a re-base; SlewPublishedAnchor snaps the published
-  // anchor to the (coordinated) new target so map→base stays continuous
-  // across the reset instead of the slew ramping it.
-  std::atomic<bool> force_pub_resync_{false};
-
-  // Advance t_map_odom_pub_ toward the raw target anchor by at most
-  // anchor_max_{lin,ang}_slew over dt; snap on relocalization-scale jumps.
-  // Returns the anchor to broadcast. Single-writer per run mode.
-  gtsam::Pose2 SlewPublishedAnchor(const gtsam::Pose2& target, bool anchor_valid, double dt);
 
   // Latched seeds for initialization.
   std::optional<gtsam::Vector2> seed_xy_;  // from latest GPS
@@ -410,7 +375,10 @@ private:
   double latest_scan_stamp_s_ = 0.0;
   double consumed_scan_stamp_s_ = 0.0;
   double lidar_scan_max_age_s_ = 0.5;
+  // Continuous-odometry history at IMU rate + the odometry at each graph node.
+  // Retimes LiDAR scans AND GNSS fixes onto graph nodes.
   LidarScanHistory lidar_scan_history_;
+  static constexpr double kGnssRetimeMaxAgeS = 1.0;
   Sophus::SE2d lidar_scan_dr_;
   double lidar_scan_stamp_s_ = 0.0;
   void ResetLidarTiming();
@@ -427,6 +395,8 @@ private:
   int lidar_map_radius_tiles_ = 2;
   double lidar_map_insert_period_s_ = 0.5;
   double lidar_map_insert_min_travel_m_ = 0.10;
+  double lidar_map_insert_max_yaw_sigma_rad_ = 0.10;
+  uint64_t lidar_map_insert_skipped_yaw_ = 0;  // scans not learned: yaw σ too large
   double lidar_map_rebuild_period_s_ = 5.0;
   double lidar_anchor_engage_age_s_ = 1.0;
   double lidar_anchor_apply_age_s_ = 20.0;
@@ -671,6 +641,12 @@ private:
   // MGNSS-002 comment in OnGnss).
   bool last_position_dead_reckoning_ = false;
   bool last_position_dead_reckoning_valid_ = false;
+  // Receipt time of the last mode message. The verdict is honoured only while
+  // fresh (kLocalizationModeMaxAgeS): the monitor publishes at 10 Hz, so a
+  // silent monitor must not latch DEAD_RECKONING and withhold every /gps/fix.
+  std::optional<rclcpp::Time> last_position_mode_stamp_;
+  static constexpr double kLocalizationModeMaxAgeS = 2.0;
+  bool PositionDeadReckoningFresh() const;
   // One-shot per dock session: ensures SeedFromDockPose fires exactly
   // once per docked interval, even when the boot-while-docked race
   // means neither the rising_edge nor boot_while_docked branches can
@@ -737,6 +713,12 @@ private:
   // multi-site data. See rtk_wrongfix_gate.hpp for the decision function,
   // fusion_graph.yaml for the fuller field-data writeup.
   double rtk_wrongfix_max_jump_m_ = 0.08;
+  // The slack also scales with the reported precision of the two fixes being
+  // compared (WrongFixSlackM): k·hypot(σ_prev, σ_now). Under RTK-Fixed this
+  // stays below rtk_wrongfix_max_jump_m_; under Float it stops ordinary
+  // epoch-to-epoch jitter from rejecting every sample of a parked robot.
+  double rtk_wrongfix_sigma_k_ = 3.0;
+  std::optional<double> last_gps_sigma_m_;
   // Stuck-receiver payload-value gate state (mowglinext#694,
   // gps_stuck_gate.hpp). NaN-initialized last_gps_lat_/lon_ so the very
   // first fix always counts as a change (NaN != NaN).
