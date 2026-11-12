@@ -138,7 +138,8 @@
  * mqtt_port          int     1883            GUI Settings → MQTT) by full_system.launch.py;
  * mqtt_username      string  ""              these package-share defaults only apply when the
  * mqtt_password      string  ""              node is run standalone (e.g. in tests).
- * mqtt_client_id     string  "mowgli_ros2"
+ * mqtt_client_id     string  ""  — empty = mqtt_client_id(mqtt_topic_prefix, "bridge")
+ *                                    (mqtt_connection.hpp); a non-empty value is used as is
  * mqtt_topic_prefix  string  "mowgli"
  * home_assistant_discovery_enabled bool false — publish
  * retained Home Assistant device discovery
@@ -181,6 +182,7 @@
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/start_in_area.hpp"
+#include "mowgli_monitoring/mqtt_connection.hpp"
 #include "mowgli_monitoring/mqtt_goto.hpp"
 #include "mowgli_monitoring/mqtt_publish_policy.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -308,7 +310,7 @@ public:
     int port{1883};
     std::string username{};
     std::string password{};
-    std::string client_id{"mowgli_ros2"};
+    std::string client_id{};
     bool use_ssl{false};
     /// Full topic (e.g. "mowgli/available") for the LWT + explicit online/
     /// offline publishes. Empty disables the availability feature entirely.
@@ -844,7 +846,8 @@ private:
   int mqtt_port_{1883};
   std::string mqtt_username_{};
   std::string mqtt_password_{};
-  std::string mqtt_client_id_{"mowgli_ros2"};
+  // Resolved in declare_parameters(): the parameter, or the derived default.
+  std::string mqtt_client_id_{};
   std::string topic_prefix_{"mowgli"};
   double publish_rate_{1.0};
   bool use_ssl_{false};
@@ -863,6 +866,8 @@ private:
 
   // Tracks MQTT connection edges so discovery is refreshed after reconnect.
   bool mqtt_was_connected_{false};
+  // Paces every connection attempt, the first one in create_mqtt_client() included.
+  ReconnectBackoff reconnect_backoff_;
   std::string host_ip_{};
   bool host_ip_published_{false};
   // Set by MQTT callbacks and consumed by on_timer() after spin_once() has

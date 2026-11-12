@@ -265,6 +265,43 @@ TEST_F(HomeAssistantDiscoveryNodeTest, RepublishesDiscoveryWhenHomeAssistantCome
 }
 
 // ===========================================================================
+// Reconnect pacing
+// ===========================================================================
+
+TEST_F(HomeAssistantDiscoveryNodeTest, AnUnreachableBrokerIsRetriedWithBackoffNotEveryTick)
+{
+  // A broker that never accepts: on_timer() ticks every 100 ms, but connect()
+  // runs on the first tick and about 1 s later (2 calls in 2.5 s), not on every tick.
+  class UnreachableMqttClient : public RecordingMqttClient
+  {
+  public:
+    bool connect() noexcept override
+    {
+      ++connect_calls;
+      return false;
+    }
+    int connect_calls{0};
+  };
+  auto client = std::make_unique<UnreachableMqttClient>();
+  client->connected = false;
+  UnreachableMqttClient* unreachable = client.get();
+  auto node = std::make_shared<MqttBridgeNode>(std::move(client), rclcpp::NodeOptions{});
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+  while (std::chrono::steady_clock::now() < end)
+  {
+    executor.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  executor.remove_node(node);
+
+  EXPECT_GE(unreachable->connect_calls, 1);
+  EXPECT_LE(unreachable->connect_calls, 2);
+}
+
+// ===========================================================================
 // serialise_status
 // ===========================================================================
 

@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cctype>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -57,6 +58,18 @@ namespace mowgli_monitoring
 {
 
 using namespace std::chrono_literals;
+
+namespace
+{
+
+// Monotonic seconds for ReconnectBackoff: wall-clock or sim-time jumps must not
+// stall or hasten a reconnect.
+double steady_now_s()
+{
+  return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+}  // namespace
 
 // ===========================================================================
 // StubMqttClient
@@ -131,10 +144,8 @@ struct MosquittoMqttClient::Impl
   rclcpp::Clock throttle_clock{RCL_STEADY_TIME};
   mosquitto* mosq{nullptr};
   bool connected{false};
-  std::chrono::steady_clock::time_point last_reconnect_attempt{};
 
   static constexpr int kMaxLoopIterationsPerSpin = 64;
-  static constexpr std::chrono::seconds kReconnectMinInterval{1};
 
   std::mutex callbacks_mutex;
   std::unordered_map<std::string, MessageCallback> callbacks;
@@ -433,20 +444,15 @@ void MosquittoMqttClient::spin_once() noexcept
     }
   }
 
+  // A lost connection is retried by MqttBridgeNode::on_timer(), paced by its
+  // ReconnectBackoff; reconnecting here too would bypass that pacing.
   if (rc != MOSQ_ERR_SUCCESS && rc != MOSQ_ERR_NO_CONN)
   {
     RCLCPP_WARN_THROTTLE(impl_->logger,
                          impl_->throttle_clock,
                          10000,
-                         "mosquitto_loop error: %s — attempting reconnect",
+                         "mosquitto_loop error: %s",
                          mosquitto_strerror(rc));
-    // spin_once() runs at 20 Hz; mosquitto_reconnect() blocks on the TCP connect.
-    const auto now = std::chrono::steady_clock::now();
-    if (now - impl_->last_reconnect_attempt >= Impl::kReconnectMinInterval)
-    {
-      impl_->last_reconnect_attempt = now;
-      mosquitto_reconnect(impl_->mosq);
-    }
   }
 
   // libmosquitto invokes on_message_cb from inside mosquitto_loop(). Queue
@@ -560,8 +566,12 @@ void MqttBridgeNode::declare_parameters()
   mqtt_port_ = declare_parameter<int>("mqtt_port", 1883);
   mqtt_username_ = declare_parameter<std::string>("mqtt_username", "");
   mqtt_password_ = declare_parameter<std::string>("mqtt_password", "");
-  mqtt_client_id_ = declare_parameter<std::string>("mqtt_client_id", "mowgli_ros2");
+  mqtt_client_id_ = declare_parameter<std::string>("mqtt_client_id", "");
   topic_prefix_ = declare_parameter<std::string>("mqtt_topic_prefix", "mowgli");
+  if (mqtt_client_id_.empty())
+  {
+    mqtt_client_id_ = mqtt_client_id(topic_prefix_, "bridge");
+  }
   publish_rate_ = declare_parameter<double>("publish_rate", 1.0);
   battery_empty_voltage_ = declare_parameter<double>("battery_empty_voltage", 24.0);
   battery_full_voltage_ = declare_parameter<double>("battery_full_voltage", 28.0);
@@ -706,7 +716,11 @@ void MqttBridgeNode::create_mqtt_client()
   cfg.availability_topic = full_topic("available");
 
   mqtt_client_ = std::make_unique<MosquittoMqttClient>(std::move(cfg), get_logger());
-  RCLCPP_INFO(get_logger(), "Using MosquittoMqttClient → %s:%d", mqtt_host_.c_str(), mqtt_port_);
+  RCLCPP_INFO(get_logger(),
+              "Using MosquittoMqttClient → %s:%d as client ID '%s'",
+              mqtt_host_.c_str(),
+              mqtt_port_,
+              mqtt_client_id_.c_str());
 #else
   mqtt_client_ = std::make_unique<StubMqttClient>(get_logger());
   RCLCPP_WARN(get_logger(),
@@ -714,10 +728,11 @@ void MqttBridgeNode::create_mqtt_client()
               "MQTT messages will be logged at DEBUG level only.");
 #endif
 
+  reconnect_backoff_.attempt_due(steady_now_s());
   if (!mqtt_client_->connect())
   {
     RCLCPP_ERROR(get_logger(),
-                 "Failed to connect to MQTT broker at %s:%d. Will retry via spin_once.",
+                 "Failed to connect to MQTT broker at %s:%d. Will retry with backoff.",
                  mqtt_host_.c_str(),
                  mqtt_port_);
   }
@@ -2213,17 +2228,23 @@ void MqttBridgeNode::on_timer()
   expire_map_poll(areas_poll_in_flight_, areas_poll_, srv_get_area_, "areas");
   expire_map_poll(area_poll_in_progress_, boundary_poll_, srv_get_mowing_area_, "area boundary");
 
-  // Attempt reconnect if disconnected.
+  // Reconnect if disconnected, paced by reconnect_backoff_. This is the only
+  // place a lost connection is retried.
+  const double now_s = steady_now_s();
   if (!mqtt_client_->is_connected())
   {
     mqtt_was_connected_ = false;
-    RCLCPP_WARN_THROTTLE(get_logger(),
-                         *get_clock(),
-                         10000,
-                         "MQTT disconnected — attempting reconnect.");
-    mqtt_client_->connect();
+    if (reconnect_backoff_.attempt_due(now_s))
+    {
+      RCLCPP_WARN(get_logger(),
+                  "MQTT disconnected — reconnecting as '%s' (next attempt in %.0f s).",
+                  mqtt_client_id_.c_str(),
+                  reconnect_backoff_.next_attempt_in_s(now_s));
+      mqtt_client_->connect();
+    }
     return;
   }
+  reconnect_backoff_.connected(now_s);
 
   if (!mqtt_was_connected_)
   {
