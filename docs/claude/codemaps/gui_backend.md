@@ -85,7 +85,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `gui/pkg/api/calibration_status.go` | 240 | `/calibration/status`: dock pose from yaml, IMU/mag calibration files under `/ros2_ws/maps` |
 | `gui/pkg/api/containers.go` | 234 | Docker list/start/stop/restart + WS log stream with stdcopy demux |
 | `gui/pkg/api/schedules.go` | 224 | Schedule CRUD (`schedule:<id>` DB keys, validation); `areaId` (stable `MapArea.id`, 0 = all) + `areaName` snapshot; `saveScheduleChecked` rejects an ENABLED schedule that starts < 60 min from another enabled one on a shared weekday (wraps midnight/week; HTTP 409, MQTT logged+dropped; disabling always allowed); calls `notifyScheduleChanged()` after every write so `schedule_mqtt.go` mirrors it |
-| `gui/pkg/api/schedule_mqtt.go` | 323 | `ScheduleMqttBridge`: publishes `<prefix>/schedules` retained on the same external broker as `mqtt_bridge_node`, accepts `<prefix>/schedules/set`\|`/delete`, both going through `validateSchedule`/`saveSchedule` — no separate validation path |
+| `gui/pkg/api/schedule_mqtt.go` | 323 | `ScheduleMqttBridge`: publishes `<prefix>/schedules` retained on the same external broker as `mqtt_bridge_node`, accepts `<prefix>/schedules/set`\|`/delete`, both going through `validateSchedule`/`saveSchedule` — no separate validation path; client ID `mqttClientID(prefix, "gui")`, the bridge's rule (`mqtt_connection.hpp`) |
 | `gui/pkg/api/remote_access.go` | ~180 | `/remote-access/{settings,status,apply,logout}` (auth key masked, write-only) |
 | `gui/pkg/api/irrisense.go` | 228 | IrriSense settings/status/gardens (token masked, write-only) |
 | `gui/pkg/api/notifications.go` | ~230 | Push notification settings/status/test (ntfy + Telegram tokens masked, write-only; unknown event kinds dropped) |
