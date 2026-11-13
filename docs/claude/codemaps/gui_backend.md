@@ -235,7 +235,7 @@ cd gui && go test ./pkg/api -run 'TestSchemaDefaultsMatchTemplate|TestLed'   # s
 cd gui && ./generate_go_msgs.sh && ./generate_ts_types.sh && git diff --exit-code pkg/msgs web/src/types/ros.generated.ts
 docker build -t mowglinext-gui gui/                      # multi-arch image; CI: .github/workflows/gui-docker.yml
 ```
-**CI:** `gui-docker.yml` (image build only), `gui-ci.yml` (web tsc/eslint/vitest only — `working-directory: gui/web`), `msg-codegen-drift.yml` (regenerates Go+TS msgs and fails on diff). **No workflow runs `go test`** — run it locally before pushing Go changes.
+**CI:** `gui-docker.yml` (image build only), `gui-ci.yml` (job `unit-tests`: web tsc/eslint/vitest; job `go-tests`: `go test ./...` + `-race` on the blackbox packages), `msg-codegen-drift.yml` (regenerates Go+TS msgs and fails on diff).
 
 Tests (what each pins):
 - `gui/pkg/api/settings_test.go` — legacy + YAML settings round-trips, sparse prune, reset-to-default, retired-key scrub, GNSS normalisation, env fallback precedence, legacy `GPS_*` env purge (uses `chdirToGuiRoot` so `asserts/` resolves).

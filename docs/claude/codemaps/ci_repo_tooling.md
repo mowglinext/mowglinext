@@ -1,7 +1,7 @@
 # Codemap: ci_repo_tooling
 
-> Everything that gates, builds, labels and publishes the repo from outside the runtime stack: the 18 GitHub Actions workflows (`.github/workflows/`, including `updater.yml` and `deployment-release.yml` — added 2026-09 by commit `81ee625d` onward for the host updater + complete multi-platform deployment releases), the drift gates (config / msg-codegen / protocol-version), the GHCR image pipelines, the wiki + GitHub Pages publishers, the repo metadata (CODEOWNERS, labeler, issue/PR templates), the `.githooks/pre-push` formatter, the Codespaces/devcontainer image, the agent config under `.claude/` + `AGENTS.md`, the `tools/motor` sidecar ROS2 package (`mowgli_tools` drive-PID tuner), and the mowgli.garden landing page + one-line install composer under `docs/`.
-> Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
+> Everything that gates, builds, labels and publishes the repo from outside the runtime stack: the 22 GitHub Actions workflows (`.github/workflows/`, including `updater.yml` and `deployment-release.yml` — added 2026-09 by commit `81ee625d` onward for the host updater + complete multi-platform deployment releases — and `coverage-replay.yml` / `sensors-mavros.yml`, added 2026-10), the drift gates (config / msg-codegen / protocol-version), the GHCR image pipelines, the wiki + GitHub Pages publishers, the repo metadata (CODEOWNERS, labeler, issue/PR templates), the `.githooks/pre-push` formatter, the Codespaces/devcontainer image, the agent config under `.claude/` + `AGENTS.md`, the `tools/motor` sidecar ROS2 package (`mowgli_tools` drive-PID tuner), and the mowgli.garden landing page + one-line install composer under `docs/`.
+> Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed. Workflow list, triggers, checks and line counts refreshed 2026-11-09 at `6b2c24c3` (#1100); `Lnn` line references inside workflows were not re-checked.
 > Loaded on demand from `CLAUDE.md`.
 
 Complete deployment image metadata/versioning: `.github/workflows/deployment-release.yml`, validated before descriptor publication by `gui/cmd/publish-deployment/main.go`. Image contract 1 links immutable bytes to release/version/source/component/protocol; custom-image verification lives in `gui/pkg/updater/image_release.go`.
@@ -18,7 +18,8 @@ Complete deployment image metadata/versioning: `.github/workflows/deployment-rel
 | `mowgli_robot.yaml` drift / padded-default failure | `ros2-ci.yml` job `config-drift` L96–113 → `ros2/scripts/check_config_drift.py` (CLAUDE.md Invariant 15) |
 | Go/TS/firmware message types out of sync after a `.msg` change | `.github/workflows/msg-codegen-drift.yml` L49–69 — `firmware/scripts/sync_ros_lib.py --check`, then regenerates and `git diff --exit-code` on `gui/pkg/msgs` and `gui/web/src/types/ros.generated.ts` |
 | COBS wire changed but `MOWGLI_PROTOCOL_VERSION` not bumped | `.github/workflows/protocol-version-drift.yml` L42–43 → `firmware/scripts/protocol_version_guard.py --check` |
-| GUI tests / lint / typecheck gate | `.github/workflows/gui-ci.yml` L58–76 (`npx tsc --noEmit`, `yarn lint`, `yarn test`); node 22 pinned L45–50 |
+| GUI tests / lint / typecheck gate | `.github/workflows/gui-ci.yml` job `unit-tests` (`npx tsc --noEmit`, `yarn lint`, `yarn test`, then Playwright `system-power.spec.ts` + `blackbox.spec.ts`) and job `go-tests` (`go test ./...` + `-race` on the blackbox packages); node 22 pinned in `unit-tests` |
+| A `mowgli_coverage` PR fails `Planner replay (...)` | `.github/workflows/coverage-replay.yml` — builds the planner at the PR base and at the candidate and requires byte-identical output on 26 fixtures (`ros2/src/mowgli_coverage/test/replay/`, `compare_replay.py --require-identical`); an intended planner-output change fails it by design |
 | Firmware build matrix + prebuilt release binaries | `.github/workflows/firmware-ci.yml` jobs `defaults-parity` L25–34, `build` L36–62 (`Yardforce500`, `Yardforce500B`), `release` L71–123 (tag `v*.*.*`) |
 | Publish a new sensor container image | add a thin caller like `.github/workflows/sensors-lidar-rplidar.yml` calling `_sensor-docker.yml` (inputs: `image`, `context`, `dockerfile`, `target`, `smoke-test`, `no-cache`) |
 | Multi-arch ROS2 / GUI image + manifest merge | `.github/workflows/ros2-docker.yml` (jobs `build`/`merge`/`notify-failure`), `.github/workflows/gui-docker.yml` (jobs `build`/`merge`) |
@@ -39,21 +40,25 @@ Complete deployment image metadata/versioning: `.github/workflows/deployment-rel
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`.github/workflows/`** | | |
-| `ros2-ci.yml` | 516 | The ROS2 gate: jobs `changes`, `config-drift`, `build-and-test` (**required check** `Build & Test (ROS2 kilted)`), `format-check`, `static-analysis`. `changes` also runs `.github/scripts/check_submodule_pins.sh` on every PR (no paths filter) against `.github/submodule-pins.txt`, to catch a stale-branch gitlink rollback (regression from merging #615) |
-| `ros2-docker.yml` | 234 | GHCR `mowgli-ros2` runtime image, native amd64 + arm64 runners, digest merge, failure-issue bot |
-| `_sensor-docker.yml` | 219 | Reusable multi-arch sensor-image builder (`workflow_call`); one thin caller per sensor |
-| `gui-docker.yml` | 166 | GHCR `mowglinext-gui` image; PR builds are `type=cacheonly` (no push) |
-| `firmware-ci.yml` | 123 | `board_defaults_parity.py` guard, PlatformIO build matrix, tagged prebuilt-binary release |
-| `gui-ci.yml` | 76 | vitest + `tsc --noEmit` + eslint on `gui/web/**` (node 22) |
+| `ros2-ci.yml` | 654 | The ROS2 gate: jobs `changes`, `config-drift`, `build-and-test` (**required check** `Build & Test (ROS2 kilted)`), `format-check`, `static-analysis`. `changes` also runs `.github/scripts/check_submodule_pins.sh` on every PR (no paths filter) against `.github/submodule-pins.txt`, to catch a stale-branch gitlink rollback (regression from merging #615) |
+| `ros2-docker.yml` | 244 | GHCR `mowgli-ros2` runtime image, native amd64 + arm64 runners, digest merge, failure-issue bot |
+| `_sensor-docker.yml` | 221 | Reusable multi-arch sensor-image builder (`workflow_call`); one thin caller per sensor |
+| `gui-docker.yml` | 171 | GHCR `mowglinext-gui` image; PR builds are `type=cacheonly` (no push) |
+| `firmware-ci.yml` | 170 | `board_defaults_parity.py` guard, PlatformIO build matrix, tagged prebuilt-binary release |
+| `gui-ci.yml` | 140 | Jobs `unit-tests` (vitest + `tsc --noEmit` + eslint + two Playwright specs, node 22) and `go-tests` (`go test ./...` + race checks); also `workflow_call`ed by `deployment-release.yml` |
+| `coverage-replay.yml` | 353 | `mowgli_coverage` PR gate: baseline-vs-candidate standalone planner replay on 26 fixtures × 3 build types, `--require-identical` (commit `8b3a59c0`) |
+| `ros2-simulation-clock.yml` | 103 | Builds the `simulation-clock-test` image target (amd64) and requires 20 installed Webots clock tests, zero skips |
 | `msg-codegen-drift.yml` | 70 | Firmware `ros_lib` + Go + TS message-type drift gate |
-| `sensors-gps.yml` | — | **No image build any more** (removed 2026-09-19, `bfd44f1a`, "#625"): GNSS ships via the external `UNIVERSAL_GNSS_IMAGE`, not a local build. Just compiles + `colcon test`s `mowgli_gnss_bridge`'s gtests |
+| `sensors-gps.yml` | 165 | **No image build any more** (removed 2026-09-19, `bfd44f1a`, "#625"): GNSS ships via the external `UNIVERSAL_GNSS_IMAGE`, not a local build. Just compiles + `colcon test`s `mowgli_gnss_bridge`'s gtests |
 | `wiki-sync.yml` | 50 | Copies `wiki/*.md` into the GitHub wiki repo and commits as `github-actions[bot]` |
 | `pages.yml` | 43 | Uploads `docs/` and deploys to GitHub Pages (env `github-pages`) |
-| `updater.yml` | — | Host updater test/build + cross-built static binaries (commit `81ee625d`) |
-| `deployment-release.yml` | — | Publishes a complete multi-platform deployment (every prebuilt image permutation + firmware) as a GitHub Release |
+| `updater.yml` | 95 | Host updater test/build + cross-built static binaries (commit `81ee625d`) |
+| `deployment-release.yml` | 230 | Publishes a complete multi-platform deployment (every prebuilt image permutation + firmware) as a GitHub Release |
 | `protocol-version-drift.yml` | 43 | COBS wire fingerprint vs `MOWGLI_PROTOCOL_VERSION` |
-| `sensors-lidar-ldlidar.yml`, `sensors-lidar-stl27l.yml` | 32, 32 | Callers with `target: runtime` |
-| `sensors-lidar-rplidar.yml` | 31 | Caller with no `target` |
+| `sensors-openmower.yml` | 260 | `openmower` image via `_sensor-docker.yml` + jobs `test` (the only place `mowgli_openmower_bridge`'s gtests run) and `simulate` (emulated v1 LowLevel + xESC) |
+| `sensors-mavros.yml` | 33 | `python3 sensors/mavros/test_integration.py` — source-level contract check for the external MowgliMAVROS sidecar; builds no image (commit `7748af56`) |
+| `sensors-lidar-ldlidar.yml`, `sensors-lidar-stl27l.yml` | 33, 33 | Callers with `target: runtime` |
+| `sensors-lidar-rplidar.yml` | 32 | Caller with no `target` |
 | `welcome.yml` | 32 | `actions/first-interaction@v1` greeting on first issue/PR |
 | `auto-label.yml` | 17 | `actions/labeler@v6` using `.github/labeler.yml` |
 | **`.github/` metadata** | | |
@@ -110,30 +115,34 @@ Also deployed by `pages.yml` but not part of the composer logic: `docs/CNAME` (`
 |----------|---------------|-----------|--------------|-------|
 | `ros2-ci.yml` | main, dev, feat/**, fix/**, refactor/**, chore/**, perf/** | `ros2/**`, `tools/motor/**`, `install/config/mowgli/**`, self | **`[main, dev]`, no paths** (deliberate, L11–23) | `concurrency: ros2-ci-${{ github.ref }}` |
 | `ros2-docker.yml` | same set + tags `v*.*.*` | `ros2/**`, `tools/motor/**`, self | — | `workflow_dispatch` input `no-cache` |
-| `gui-ci.yml` | same set | `gui/web/**`, self | `[main, dev]`, same paths | `workflow_dispatch` |
+| `gui-ci.yml` | same set | `gui/web/**`, `gui/*.go`, `gui/pkg/**`, `gui/asserts/**`, `gui/go.mod`/`go.sum`, robot template + `config/backends/**`, self | `[main, dev]`, same paths | `workflow_dispatch`, `workflow_call` |
+| `coverage-replay.yml` | — | — | `[main, dev]`, `ros2/src/mowgli_coverage/**`, self | `workflow_dispatch` (baseline `origin/dev`) |
+| `ros2-simulation-clock.yml` | main, dev | `ros2/Dockerfile`, the Webots clock patch + its test, self | `[main, dev]`, same paths | `workflow_dispatch` |
 | `gui-docker.yml` | same set | `gui/**`, self | same branch set + paths | `workflow_dispatch` input `no-cache` |
 | `firmware-ci.yml` | same set + tags `v*.*.*` | `firmware/**`, self | any base, `firmware/**` | — |
 | `msg-codegen-drift.yml` | same set | `mowgli_interfaces/**`, `gui/generate_*`, `gui/pkg/msgs/**`, `gui/web/src/types/ros.generated.ts`, `firmware/scripts/sync_ros_lib.py`, firmware `mower_msgs/**` | `[main, dev]` | — |
 | `protocol-version-drift.yml` | same set | `mowgli_protocol.h`, `ll_datatypes.hpp`, `protocol_version_guard.py`, `protocol_baseline.json` | `[main, dev]` | — |
-| `sensors-*.yml` | same set | that sensor's dir + self + `_sensor-docker.yml` (gps also `ros2/src/mowgli_interfaces/**`, `ros2/src/external/universal-gnss/**`) | — | `workflow_dispatch` |
+| `sensors-*.yml` | same set (openmower also tags `v*.*.*`) | that sensor's dir + self + `_sensor-docker.yml` (gps also `ros2/src/mowgli_interfaces/**`, `ros2/src/external/universal-gnss/**`; openmower also `mowgli_interfaces`, `mowgli_hardware`, the robot template + `backends/openmower.yaml`) | — except `sensors-mavros.yml`: `[main, dev]`, same paths | `workflow_dispatch` |
 | `pages.yml` | main | `docs/**` | — | `workflow_dispatch`; `concurrency: pages` |
 | `wiki-sync.yml` | main | `wiki/**` | — | `workflow_dispatch`; needs `contents: write` |
 | `auto-label.yml` / `welcome.yml` | — | — | `pull_request_target` (opened/synchronize) / (opened) + `issues` | — |
 
 ### Required / named checks
+- Required by the repository ruleset on `main` and `dev` (checked 2026-11-09): the five `ros2-ci.yml` jobs `Detect ROS2 changes`, `Build & Test (ROS2 kilted)`, `Formatting (clang-format)`, `Static Analysis (cppcheck)`, `Config Drift (mowgli_robot.yaml)`. Nothing else is required — `Planner replay (...)` included.
 - `Build & Test (ROS2 kilted)` — required on `dev`. Do NOT rename the job, add a `strategy.matrix`, or move path filtering back onto the `pull_request` trigger (`ros2-ci.yml` L11–23, L115–127).
-- Other job display names: `Detect ROS2 changes`, `Config Drift (mowgli_robot.yaml)`, `Formatting (clang-format)`, `Static Analysis (cppcheck)`, `Codegen Drift (Go / TS / firmware msg types)`, `Protocol Version Drift (COBS wire vs MOWGLI_PROTOCOL_VERSION)`, `board_defaults single-source guard`, `Publish prebuilt firmware`, `Unit Tests (vitest + tsc)`, `Notify on failure`.
+- Other job display names: `Detect ROS2 changes`, `Config Drift (mowgli_robot.yaml)`, `Formatting (clang-format)`, `Static Analysis (cppcheck)`, `Codegen Drift (Go / TS / firmware msg types)`, `Protocol Version Drift (COBS wire vs MOWGLI_PROTOCOL_VERSION)`, `board_defaults single-source guard`, `Publish prebuilt firmware`, `Unit Tests (vitest + tsc)`, `Go Tests (gui backend)`, `Planner replay (Release|Debug|RelWithDebInfo)`, `Installed Webots clock (linux/amd64)`, `Test mowgli_openmower_bridge`, `Simulate OpenMower v1 hardware`, `Validate external sidecar contract`, `Notify on failure`.
 
 ### Published artifacts
 | Target | Produced by | Tags |
 |--------|-------------|------|
 | `ghcr.io/<repo>/mowgli-ros2` (target `runtime`, `ros2/Dockerfile`) | `ros2-docker.yml` | `type=ref,event=branch`, semver, `sha-<short>` |
 | `ghcr.io/<repo>/mowglinext-gui` (context `./gui`) | `gui-docker.yml` | same |
-| `ghcr.io/<repo>/{gps,lidar-ldlidar,lidar-rplidar,lidar-stl27l}` | `_sensor-docker.yml` callers | same |
+| `ghcr.io/<repo>/{lidar-ldlidar,lidar-rplidar,lidar-stl27l,openmower}` | `_sensor-docker.yml` callers (no `gps` image since `bfd44f1a`) | same |
 | GitHub Release assets `dist/*.bin`, `dist/*.elf`, `dist/manifest.json` | `firmware-ci.yml` `release` | tag `v*.*.*` |
 | GitHub Pages site (mowgli.garden) | `pages.yml` | — |
 | GitHub wiki | `wiki-sync.yml` | — |
 | Actions artifacts `test-results-lyrical`, `cppcheck-report`, `digests-*` | `ros2-ci.yml`, image workflows | 14 / 7 / 1-day retention |
+| Actions artifacts `coverage-planner-replay-<build_type>`, `installed-webots-clock` | `coverage-replay.yml`, `ros2-simulation-clock.yml` | 14 / 7-day retention |
 
 Image names are lowercased into `GITHUB_ENV` in every image job (fork owners with mixed-case names). ROS2 images set `sbom: false` (syft SPDX exceeded buildkit's 40 MiB attestation cap); sensor images keep `sbom: true`. Build caches: `type=registry,ref=<image>:buildcache-{amd64,arm64}`.
 

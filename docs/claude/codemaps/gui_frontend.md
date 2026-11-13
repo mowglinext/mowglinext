@@ -198,7 +198,7 @@ cd gui/web && yarn generate:api   # regenerate src/api/Api.ts from ../docs/swagg
 
 **E2E (playwright, fully mocked — no backend, no robot).** `tests/e2e/pages.spec.ts` (8 pages × 8 scenarios: shell mounts, title renders, ZERO uncaught page errors, screenshot to `tests/e2e/.artifacts/`), `log-stream.spec.ts` (high-rate log retention + docker-stamped lines), `map-console.spec.ts` (map layers mount with no source/fragment errors), `reset-mowing-progress.spec.ts`, `visual-effects.spec.ts` (Visual/Balanced/Efficient compositing + reduced-motion).
 
-**CI.** `.github/workflows/gui-ci.yml` — single job `unit-tests` on `ubuntu-24.04`, node 22, paths filter `gui/web/**`: `npx tsc --noEmit` → `yarn lint` → `yarn test`. **Playwright e2e is NOT run in CI.** `.github/workflows/msg-codegen-drift.yml` job `codegen-drift` re-runs `gui/generate_ts_types.sh` and fails on a diff in `gui/web/src/types/ros.generated.ts`.
+**CI.** `.github/workflows/gui-ci.yml` — job `unit-tests` on `ubuntu-24.04`, node 22: `npx tsc --noEmit` → `yarn lint` → `yarn test` → Playwright `system-power.spec.ts` + `blackbox.spec.ts` (chromium). **The other Playwright specs are NOT run in CI.** (Job `go-tests` covers the Go backend.) `.github/workflows/msg-codegen-drift.yml` job `codegen-drift` re-runs `gui/generate_ts_types.sh` and fails on a diff in `gui/web/src/types/ros.generated.ts`.
 
 ## Change coupling — "if you change X, also update Y"
 
