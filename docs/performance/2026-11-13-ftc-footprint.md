@@ -35,6 +35,25 @@ outside this timing scope.
 | unknown | 0.184 | 0.187 | -1.8% | -10.7 to 5.6% |
 | inflated | 5.496 | 1.594 | 71.0% | 68.0 to 77.6% |
 
+## Independent verification and inspectable measurements
+
+An independent reviewer rebuilt both arms and all 104 FTC regression tests, verified the original
+source/library provenance and recomputed all original statistics exactly. On nine new seeds
+(41000–41008), 25 calls per arm and scene, the clear-lawn primary metric was
+**4.402 → 1.096 ms CPU (-75.1%, paired 95% CI 74.1–76.8%)**. Every new solver result matched.
+
+**Clutter gains depend on the solver outcome mix.** The original 21 clutter seeds include seven
+quickly wedged solves; the independent nine include five. The latter mix gives only a 4.8% median
+reduction (95% CI 2.0–75.5%), while its feasible solves retain roughly 74–75% savings. A 50% gain
+across arbitrary clutter seeds is not established. Clear-lawn and other scenario rows must be
+interpreted at their stated workload, rather than as a uniform robot-wide CPU reduction.
+
+The accompanying [paired timing data](2026-11-13-ftc-footprint-paired.csv) contains every original
+and independent batch total, call count, seed, feasibility and result digest. Divide totals by
+calls before taking medians; preserve pairs and keep the two campaigns separate. Digests cover
+feasible/level/horizon/cost/offset bits and match within every pair. The standalone benchmark below
+emits those result fields directly for independent comparisons.
+
 ## Correctness and tradeoffs
 
 Every measured solver result matches the pristine baseline: feasible/wedged, degradation level,
@@ -69,18 +88,31 @@ The retained implementation checks that property and falls back instead of assum
 
 ## Build and reproduce
 
-In a sourced, dependency-complete non-root ROS workspace:
+From this branch's repository root in a sourced, dependency-complete, non-root ROS workspace,
+create a pristine baseline worktree and build the **same benchmark source** against each arm:
 
 ```bash
-cmake --build build/mowgli_nav2_plugins --target ftc_solver_bench --parallel 1
-taskset -c 3 build/mowgli_nav2_plugins/ftc_solver_bench clear 20000 50
-colcon test --packages-select mowgli_nav2_plugins --return-code-on-test-failure
+repo=$PWD
+baseline=$(mktemp -d)
+git worktree add --detach "$baseline" 6445b2c014720124e68cd96395e44d1d78491522
+base_build=$(mktemp -d)
+candidate_build=$(mktemp -d)
+bench="$repo/ros2/src/mowgli_nav2_plugins/test/bench"
+cmake -S "$bench" -B "$base_build" -DCMAKE_BUILD_TYPE=Release \
+  -DMOWGLI_PACKAGE_ROOT="$baseline/ros2/src/mowgli_nav2_plugins"
+cmake -S "$bench" -B "$candidate_build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$base_build" --parallel 1
+cmake --build "$candidate_build" --parallel 1
+taskset -c 3 "$base_build/ftc_solver_bench" clear 20000 50
+taskset -c 3 "$candidate_build/ftc_solver_bench" clear 20000 50
 ```
 
-For the exact local run, use the evidence scripts above. Baseline and candidate vendor libraries
-are identical and their paths are recorded. Focused source builds were used locally; a full robot
-image / whole-workspace build was not run. The scalar footprint/lattice and fallback suites use
-actual `Costmap2D` libraries without a ROS graph or physics simulator.
+Run paired seeds 20000–20020 with alternating A/B then B/A order for the original campaign.
+Each process prints total CPU/elapsed nanoseconds, calls and exact result fields. Compare those
+fields before accepting a pair; use the same core and dependencies for both arms. The companion
+CSV preserves all measured totals for checking the reported statistics without private host scripts.
+The standalone targets need installed ROS/vendor dependencies, but neither a whole-workspace build
+nor a simulator. No physical robot or complete-controller latency is established by this benchmark.
 
 ## Changed files in this changeset
 
@@ -89,6 +121,8 @@ actual `Costmap2D` libraries without a ROS graph or physics simulator.
 - `ros2/src/mowgli_nav2_plugins/test/footprint_reference.hpp`
 - `ros2/src/mowgli_nav2_plugins/test/test_footprint_raster_parity.cpp`
 - `ros2/src/mowgli_nav2_plugins/test/bench/ftc_solver_bench.cpp`
+- `ros2/src/mowgli_nav2_plugins/test/bench/CMakeLists.txt`
+- `docs/performance/2026-11-13-ftc-footprint-paired.csv`
 - `docs/performance/2026-11-13-ftc-footprint.md`
 
 ## Limits and next steps
