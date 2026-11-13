@@ -37,7 +37,14 @@
     "cancel": "Annuler",
     "interrupted": "Capture interrompue",
     "dropped": "{{count}} observations perdues dans la capture",
-    "phase": {"ready": "Prête", "disabled": "Désactivée", "capturing": "Collecte après l’événement", "writing": "Sauvegarde de la capture", "pruning": "Application des limites de stockage", "stopped": "Arrêtée"}
+    "phase": {
+      "ready": "Prête",
+      "disabled": "Désactivée",
+      "capturing": "Collecte après l’événement",
+      "writing": "Sauvegarde de la capture",
+      "pruning": "Application des limites de stockage",
+      "stopped": "Arrêtée"
+    }
   },
   "bladeDirection": {
     "title": "Sens demandé de la lame",
@@ -319,7 +326,9 @@
     "onboarding": "Installation",
     "more": "Plus",
     "close": "Fermer",
-    "setupShort": "Installer"
+    "setupShort": "Installer",
+    "extensions": "Extensions",
+    "extensionsShort": "Modules"
   },
   "pageMeta": {
     "home": {
@@ -349,6 +358,9 @@
     },
     "logs": {
       "subtitle": "Sortie des conteneurs"
+    },
+    "extensions": {
+      "subtitle": "Intégrations optionnelles, autorisations explicites"
     }
   },
   "parametersPage": {
@@ -3326,7 +3338,11 @@
     "newKey": "Nom du nouveau paramètre",
     "newValue": "Valeur du nouveau paramètre",
     "valueType": "Type de valeur",
-    "types": {"string": "Chaîne", "number": "Nombre", "boolean": "Booléen"},
+    "types": {
+      "string": "Chaîne",
+      "number": "Nombre",
+      "boolean": "Booléen"
+    },
     "invalidName": "Utilisez un nom de paramètre simple et exact : lettres, chiffres et underscores ; commencez par une lettre ou un underscore. Aucun renommage automatique.",
     "duplicateKey": "Ce paramètre existe déjà, y compris en attente de suppression.",
     "protectedKey": "Ce paramètre appartient à une autre section ou est masqué/retiré.",
@@ -5432,5 +5448,129 @@
     "body": "Les roues ont creusé plusieurs fois ici et la tondeuse n'est qu'à {{distance}} m du point. Vérifiez que rien n'est coincé dessous ou devant. Si elle creuse encore une fois à cet endroit, elle s'arrêtera de nouveau.",
     "ok": "Reprendre la tonte",
     "cancel": "Annuler"
+  },
+  "extensions": {
+    "title": "Extensions",
+    "intro": "Gérez les intégrations optionnelles séparément de la tondeuse. Importez un bundle pour vérifier sa source, ses autorisations et sa compatibilité avant toute modification.",
+    "customImport": "Import personnalisé",
+    "refresh": "Actualiser",
+    "loading": "Chargement des extensions",
+    "unavailable": "Gestionnaire d’extensions indisponible",
+    "setupTitle": "Configuration de l’hôte requise",
+    "setupHelp": "Un administrateur doit configurer l’outil d’extensions de l’hôte et son registre. Sur une ancienne installation, mettez d’abord à jour les outils de l’hôte. Actualisez après configuration ; cette page ne peut modifier ni la confiance des dépôts ni les autorisations de l’hôte.",
+    "source": "Dépôt",
+    "revision": "Commit source",
+    "runtime": "Exécution / profil",
+    "units": "Services",
+    "permissions": "Autorisations",
+    "noPermissions": "Aucune autorisation demandée",
+    "digest": "Identité du bundle",
+    "healthLimits": "La santé comporte plusieurs niveaux",
+    "processOnlyHelp": "Cette intégration indique uniquement l’état du processus. Un processus actif ne garantit ni le fonctionnement de l’application ni l’intégrité des données.",
+    "applicationHelp": "La santé de l’application et des données reste inconnue sans preuve fournie par l’intégration. Un processus actif ne constitue pas un contrôle de santé.",
+    "process": "Processus",
+    "application": "Application",
+    "data": "Données",
+    "sourceUnknown": "Source indisponible",
+    "managed": "Gérée",
+    "observeOnly": "Observation seule",
+    "compatible": "Compatible",
+    "incompatible": "Bloquée",
+    "enabled": "Activée",
+    "disabled": "Désactivée",
+    "externalHelp": "Ce service est géré en dehors de MowgliNext. Vous pouvez l’observer ou oublier son enregistrement ; son processus et ses données restent intacts.",
+    "recoveryRequired": "Une opération interrompue nécessite une récupération",
+    "blocked": "Impossible d’appliquer ce bundle",
+    "update": "Importer une mise à jour",
+    "details": "Source et autorisations",
+    "empty": "Aucune extension enregistrée. Commencez par un import personnalisé.",
+    "repositoriesHelp": "Les intégrations résident dans leurs propres dépôts. Les intégrations officielles, communautaires et privées utilisent le même format de bundle. L’import ne rend pas automatiquement un dépôt fiable.",
+    "cancel": "Annuler",
+    "review": "Vérifier le bundle",
+    "applyImport": "Appliquer l’import vérifié",
+    "confirm": "Confirmer",
+    "confirmTitle": "{{action}} {{id}} ?",
+    "importHelp": "Choisissez un bundle JSON local (2 Mio maximum). Vérifiez-le avant de l’appliquer. Les extensions gérées sont installées désactivées ; leur activation est une étape distincte. Les services externes conservent leur gestionnaire actuel.",
+    "bundleFile": "Fichier bundle",
+    "fileLimit": "Choisissez un fichier .json de 2 Mio maximum.",
+    "invalidFile": "Impossible de lire ce bundle JSON. Choisissez un objet JSON local valide et réessayez.",
+    "importAction": "Action d’import",
+    "advancedBinding": "Avancé : projet et stockage existants",
+    "bindingHelp": "Laissez les champs vides pour utiliser les valeurs de l’hôte. L’adoption nécessite le nom du projet existant. L’interface autorise la configuration sous /etc/mowgli-extensions/<id> et les données sous le répertoire <id> du registre de l’hôte (habituellement /var/lib/mowgli-extensions/<id>). Utilisez la CLI locale pour les autres chemins.",
+    "adoptProject": "Saisissez le nom du projet existant pour adopter cette extension.",
+    "trustHelp": "Un administrateur doit approuver le dépôt et les autorisations demandées dans la configuration de l’hôte. Les sources communautaires ou privées sont prises en charge lorsqu’elles sont explicitement approuvées.",
+    "binding": {
+      "project": "Projet",
+      "config_dir": "Répertoire de configuration",
+      "data_dir": "Répertoire des données"
+    },
+    "importActions": {
+      "install": "Installer désactivée",
+      "adopt": "Adopter une installation existante",
+      "upgrade": "Mettre à jour l’extension enregistrée"
+    },
+    "importRetention": {
+      "install": "Le bundle sera enregistré sans démarrage. Les données conservées restent intactes. Activez l’extension séparément après l’installation.",
+      "adopt": "Cette action prend en charge le projet existant indiqué. Vérifiez soigneusement le projet et les chemins de stockage ; les données existantes sont conservées.",
+      "upgrade": "Cette action remplace la version enregistrée et peut redémarrer une extension activée. Configuration et données sont conservées ; vérifiez les éventuels blocages de compatibilité des données.",
+      "external": "Cette action enregistre un service externe pour observation uniquement. Son gestionnaire, ses processus, sa configuration et ses données restent intacts."
+    },
+    "actions": {
+      "enable": "Activer",
+      "disable": "Désactiver",
+      "rollback": "Revenir à la version précédente",
+      "remove": "Supprimer",
+      "forget": "Oublier l’enregistrement",
+      "recover": "Récupérer",
+      "install": "Installer",
+      "adopt": "Adopter",
+      "upgrade": "Mettre à jour"
+    },
+    "actionHelp": {
+      "enable": "Démarrer cette extension avec les autorisations vérifiées et les données conservées. Le logiciel de la tondeuse reste inchangé.",
+      "disable": "Arrêter cette extension. Son enregistrement, sa configuration et ses données sont conservés.",
+      "rollback": "Restaurer le bundle précédemment enregistré. Configuration et données sont conservées ; le retour est autorisé uniquement si les données restent compatibles.",
+      "remove": "Supprimer les services gérés et l’enregistrement de cette extension désactivée. La configuration, les données et les volumes de stockage sont conservés.",
+      "forget": "Oublier l’enregistrement de ce service externe. Il continue à fonctionner sous son gestionnaire actuel ; configuration et données restent intactes.",
+      "recover": "Réconcilier l’opération d’extension interrompue depuis le journal de l’hôte. Configuration et données sont conservées. Vérifiez l’état obtenu avant de relancer une autre action."
+    },
+    "operation": {
+      "running": "{{action}} {{id}} en cours",
+      "succeeded": "{{action}} {{id}} terminé",
+      "failed": "Échec : {{action}} {{id}}"
+    },
+    "health": {
+      "unknown": "Inconnue",
+      "running": "Actif",
+      "stopped": "Arrêté",
+      "healthy": "Sain",
+      "unhealthy": "Défaillant",
+      "ready": "Prêt",
+      "verified": "Vérifié",
+      "failed": "Échec",
+      "error": "Erreur",
+      "not-checked": "Non contrôlé",
+      "not-observed": "Non observé",
+      "not-applicable": "Sans objet",
+      "unverified": "Non vérifié"
+    },
+    "previousVersion": "Version précédente",
+    "reviewIdentity": "Identité de la validation",
+    "serviceSummary": "Services de ce bundle",
+    "serviceSummaryHelp": "Détails d’exécution validés par l’hôte. Seuls les noms des variables d’environnement sont affichés, jamais leurs valeurs.",
+    "serviceSummaryMissing": "L’hôte n’a fourni aucun résumé des services pour ce bundle Compose. Mettez à jour l’outil d’extensions de l’hôte et vérifiez à nouveau le bundle avant de l’appliquer.",
+    "service": {
+      "image": "Image figée",
+      "mounts": "Stockage monté",
+      "networks": "Réseaux",
+      "environment": "Variables d’environnement",
+      "bind": "Répertoire de l’hôte",
+      "volume": "Volume nommé",
+      "readOnly": "Lecture seule",
+      "readWrite": "Lecture et écriture",
+      "internal": "Interne uniquement",
+      "egress": "Sortie réseau activée",
+      "none": "Aucun"
+    }
   }
 }

@@ -21,6 +21,7 @@ const PAGES = [
     {route: "/parameters", heading: /Paramètres|Parameters/i},
     {route: "/logs", heading: /Logs/i},
     {route: "/fleet", heading: /Flotte|Fleet/i},
+    {route: "/extensions", heading: /Extensions/i},
 ];
 
 for (const scenario of SCENARIOS) {
