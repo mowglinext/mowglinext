@@ -47,6 +47,7 @@
 #include <limits>
 #include <string>
 
+#include "mowgli_localization/deskew_history_cursor.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/qos.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -203,55 +204,6 @@ private:
     }
   }
 
-  // Linear interpolation of ω_z at query time `t_s`. Returns the
-  // interpolated value via `omega_out` and `true` on success. If `t_s`
-  // falls outside the buffer (e.g. before the oldest sample or after
-  // the newest), the caller decides what to do; `omega_out` is then
-  // set to the nearest endpoint value.
-  bool interp_omega(double t_s, double& omega_out) const
-  {
-    if (imu_buffer_.empty())
-    {
-      omega_out = 0.0;
-      return false;
-    }
-    if (t_s <= imu_buffer_.front().t_s)
-    {
-      // Query predates buffer — use oldest sample as best guess.
-      omega_out = imu_buffer_.front().omega_z;
-      return false;
-    }
-    if (t_s >= imu_buffer_.back().t_s)
-    {
-      // Query past newest — use newest sample. The caller can decide
-      // to gate on the gap if it matters.
-      omega_out = imu_buffer_.back().omega_z;
-      return false;
-    }
-    // Buffer is small (≤ ~50 samples for 0.5 s @ 100 Hz IMU) → linear
-    // scan is cheaper than binary search and avoids the iterator
-    // arithmetic that std::lower_bound on a deque incurs.
-    for (size_t i = 1; i < imu_buffer_.size(); ++i)
-    {
-      const auto& b = imu_buffer_[i];
-      if (b.t_s >= t_s)
-      {
-        const auto& a = imu_buffer_[i - 1];
-        const double dt = b.t_s - a.t_s;
-        if (dt <= 0.0)
-        {
-          omega_out = b.omega_z;
-          return true;
-        }
-        const double f = (t_s - a.t_s) / dt;
-        omega_out = a.omega_z + f * (b.omega_z - a.omega_z);
-        return true;
-      }
-    }
-    omega_out = imu_buffer_.back().omega_z;
-    return false;
-  }
-
   // Forward-velocity history for linear deskew (mirrors the IMU buffer).
   void on_wheel(const nav_msgs::msg::Odometry& msg)
   {
@@ -266,44 +218,6 @@ private:
     have_wheel_ = true;
     while (!vx_buffer_.empty() && (t - vx_buffer_.front().t_s) > imu_buffer_horizon_s_)
       vx_buffer_.pop_front();
-  }
-
-  bool interp_vx(double t_s, double& vx_out) const
-  {
-    if (vx_buffer_.empty())
-    {
-      vx_out = 0.0;
-      return false;
-    }
-    if (t_s <= vx_buffer_.front().t_s)
-    {
-      vx_out = vx_buffer_.front().vx;
-      return false;
-    }
-    if (t_s >= vx_buffer_.back().t_s)
-    {
-      vx_out = vx_buffer_.back().vx;
-      return false;
-    }
-    for (size_t i = 1; i < vx_buffer_.size(); ++i)
-    {
-      const auto& b = vx_buffer_[i];
-      if (b.t_s >= t_s)
-      {
-        const auto& a = vx_buffer_[i - 1];
-        const double dt = b.t_s - a.t_s;
-        if (dt <= 0.0)
-        {
-          vx_out = b.vx;
-          return true;
-        }
-        const double f = (t_s - a.t_s) / dt;
-        vx_out = a.vx + f * (b.vx - a.vx);
-        return true;
-      }
-    }
-    vx_out = vx_buffer_.back().vx;
-    return false;
   }
 
   // Fires every scan_watchdog_period_s_. Silence here means the LiDAR half of
@@ -394,6 +308,9 @@ private:
     const float ang_inc = in.angle_increment;
     const float inv_ang_inc = 1.0f / ang_inc;
 
+    // Histories cannot change during this callback (single-threaded executor).
+    DeskewHistoryCursor<ImuSample> omega_cursor(imu_buffer_, &ImuSample::omega_z);
+    DeskewHistoryCursor<VxSample> vx_cursor(vx_buffer_, &VxSample::vx);
     for (size_t i = 0; i < n; ++i)
     {
       const float r = in.ranges[i];
@@ -411,10 +328,10 @@ private:
       const double t_ray = scan_stamp_s + dt;
 
       double omega_at_ray = 0.0;
-      const bool ok = interp_omega(t_ray, omega_at_ray);
+      const bool ok = omega_cursor.Interpolate(t_ray, omega_at_ray);
       if (!ok)
       {
-        // t_ray fell outside the IMU buffer — interp_omega already
+        // t_ray fell outside the IMU buffer — the cursor already
         // populated omega_at_ray with the nearest endpoint, but
         // bump the counter so the rate is visible in stats.
         interp_misses_++;
@@ -447,7 +364,7 @@ private:
       if (lin)
       {
         double v_at_ray = latest_vx_;
-        interp_vx(t_ray, v_at_ray);
+        vx_cursor.Interpolate(t_ray, v_at_ray);
         const double px = static_cast<double>(r) * std::cos(alpha_corr) + v_at_ray * dt;
         const double py = static_cast<double>(r) * std::sin(alpha_corr);
         r_out = std::hypot(px, py);

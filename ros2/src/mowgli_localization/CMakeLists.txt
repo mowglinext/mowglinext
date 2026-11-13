@@ -204,6 +204,8 @@ add_executable(scan_deskew_node
   src/scan_deskew_node.cpp
 )
 
+target_include_directories(scan_deskew_node PRIVATE ${INCLUDE_DIR})
+
 target_link_libraries(scan_deskew_node
   ${rclcpp_TARGETS}
   ${sensor_msgs_TARGETS}
@@ -324,6 +326,21 @@ if(BUILD_TESTING)
   target_link_libraries(test_localization_monitor_freshness
     ${mowgli_interfaces_TARGETS}
   )
+
+  add_executable(scan_deskew_bench EXCLUDE_FROM_ALL
+    test/bench/scan_deskew_bench.cpp
+  )
+  target_include_directories(scan_deskew_bench PRIVATE ${INCLUDE_DIR})
+  target_link_libraries(scan_deskew_bench
+    ${rclcpp_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+  )
+
+  ament_add_gtest(test_deskew_history_cursor
+    test/test_deskew_history_cursor.cpp
+  )
+  target_include_directories(test_deskew_history_cursor PRIVATE ${INCLUDE_DIR})
 
   # ---- test_costmap_scan_filter ----
   # The ground filter is tested through the production header
