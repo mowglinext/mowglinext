@@ -336,6 +336,12 @@ if(BUILD_TESTING)
     ${sensor_msgs_TARGETS}
   )
 
+  # Corridor filter's point-in-recorded-area index vs the plain even-odd test.
+  ament_add_gtest(test_area_ring_index
+    test/test_area_ring_index.cpp
+  )
+  target_include_directories(test_area_ring_index PRIVATE ${INCLUDE_DIR})
+
   ament_add_gtest(test_navsat_projection_utils
     test/test_navsat_projection_utils.cpp
   )

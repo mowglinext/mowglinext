@@ -117,6 +117,7 @@
 #include "mowgli_interfaces/msg/lidar_ignore_corridor_array.hpp"
 #include "mowgli_interfaces/msg/recorded_area_polygon_array.hpp"
 #include "mowgli_interfaces/msg/status.hpp"
+#include "mowgli_localization/area_ring_index.hpp"
 #include "mowgli_localization/gravity_estimator.hpp"
 #include "mowgli_localization/scan_ground_filter.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -305,12 +306,8 @@ public:
 
   // --- LiDAR-ignore corridor filter (pure) --------------------------------
 
-  /// A point in the MAP frame.
-  struct Point2D
-  {
-    double x{0.0};
-    double y{0.0};
-  };
+  /// A point in the MAP frame (area_ring_index.hpp).
+  using Point2D = mowgli_localization::Point2D;
 
   /// The robot's pose in the MAP frame (fused, from /odometry/filtered_map).
   struct Pose2D
@@ -411,45 +408,17 @@ public:
     return false;
   }
 
-  /// True if (px, py) is inside the polygon `ring` — standard even-odd
-  /// ray-casting, with an IMPLICIT closing edge between the last and first
-  /// point (an explicit repeated first-as-last point is harmless). A ring
-  /// with fewer than 3 points is degenerate and never contains anything.
-  static bool point_in_polygon(double px, double py, const std::vector<Point2D>& ring)
-  {
-    if (ring.size() < 3)
-      return false;
-    bool inside = false;
-    for (std::size_t i = 0, j = ring.size() - 1; i < ring.size(); j = i++)
-    {
-      const Point2D& pi = ring[i];
-      const Point2D& pj = ring[j];
-      if ((pi.y > py) == (pj.y > py))
-        continue;
-      const double x_at_py = pi.x + (py - pi.y) * (pj.x - pi.x) / (pj.y - pi.y);
-      if (px < x_at_py)
-        inside = !inside;
-    }
-    return inside;
-  }
-
   /// True if (px, py) falls inside ANY of the given recorded-area rings —
   /// the corridor filter's area-side restriction (file header comment,
   /// item 3). Each area's OUTER ring only: an obstacle hole inside a
   /// recorded area is NOT subtracted, so a beam landing inside a mapped
   /// obstacle that also happens to be within a corridor's reach is still
   /// "on the area side" — a known, accepted simplification (see
-  /// RecordedAreaPolygonArray.msg).
-  static bool point_in_any_area(double px,
-                                double py,
-                                const std::vector<std::vector<Point2D>>& areas)
+  /// RecordedAreaPolygonArray.msg). The rings are indexed once per area-list
+  /// update (area_ring_index.hpp): this runs for every beam of every scan.
+  static bool point_in_any_area(double px, double py, const std::vector<AreaRingIndex>& areas)
   {
-    for (const auto& ring : areas)
-    {
-      if (point_in_polygon(px, py, ring))
-        return true;
-    }
-    return false;
+    return point_in_any_ring(px, py, areas);
   }
 
   /// Result of apply_corridor_ignore_filter — split by WHICH of the two
@@ -488,7 +457,7 @@ public:
   static CorridorFilterStats apply_corridor_ignore_filter(
       sensor_msgs::msg::LaserScan& io,
       const std::vector<Corridor>& corridors,
-      const std::vector<std::vector<Point2D>>& recorded_areas,
+      const std::vector<AreaRingIndex>& recorded_areas,
       const std::optional<Pose2D>& robot_pose_map,
       const LidarExtrinsics& extrinsics)
   {
@@ -651,7 +620,7 @@ private:
 
   void on_recorded_areas(const mowgli_interfaces::msg::RecordedAreaPolygonArray& msg)
   {
-    std::vector<std::vector<Point2D>> areas;
+    std::vector<AreaRingIndex> areas;
     areas.reserve(msg.areas.size());
     for (const auto& a : msg.areas)
     {
@@ -659,7 +628,7 @@ private:
       ring.reserve(a.area.points.size());
       for (const auto& pt : a.area.points)
         ring.push_back(Point2D{static_cast<double>(pt.x), static_cast<double>(pt.y)});
-      areas.push_back(std::move(ring));
+      areas.emplace_back(std::move(ring));
     }
     RCLCPP_INFO(get_logger(), "Recorded area polygons updated: %zu", areas.size());
     last_recorded_areas_ = std::move(areas);
@@ -854,7 +823,7 @@ private:
   /// header comment, item 3. Empty until the first message or if no area is
   /// recorded yet; apply_corridor_ignore_filter then suppresses nothing,
   /// same "no guessing" rule as an empty corridor list.
-  std::vector<std::vector<Point2D>> last_recorded_areas_;
+  std::vector<AreaRingIndex> last_recorded_areas_;
   /// Latest fused pose from /odometry/filtered_map, freshness-gated by
   /// corridor_pose_max_age_s_ at use (on_scan), same pattern as
   /// last_up_in_imu_/last_imu_stamp_ above.
