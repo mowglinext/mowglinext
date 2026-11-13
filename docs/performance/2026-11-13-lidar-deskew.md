@@ -31,6 +31,19 @@ Whole-robot CPU, scan-matching accuracy and physical behavior are unmeasured.
 | reverse_time | 67.807 | 65.808 | 2.9% | -19.5 to 9.9% |
 | start | 67.731 | 18.921 | 72.1% | 70.4 to 76.5% |
 
+## Independent verification and inspectable measurements
+
+An independent reviewer rebuilt both node arms and all three interpolation tests, verified the
+baseline and recomputed the original statistics exactly. Nine fresh paired seeds (41000–41008),
+2,000 callbacks per arm and scene, reproduce the rotation primary metric at
+**41.057 → 11.590 µs CPU (-71.8%, paired 95% CI 70.9–72.9%)**. Every fresh range/intensity bit
+and diagnostic counter matches, including the remaining five node benchmark scenarios.
+
+The accompanying [paired timing data](2026-11-13-lidar-deskew-paired.csv) includes every original
+and independent batch total, call count, seed and result digest. Divide totals by calls before
+taking medians; preserve pairs and keep the two campaigns separate. Digests cover all range and
+intensity bits plus diagnostic counters. The standalone benchmark emits those fields directly.
+
 ## Correctness and tradeoffs
 
 The benchmark includes the actual pristine/candidate node source. Access macros expose private
@@ -70,17 +83,33 @@ explicitly receives its new helper include path. No full image or robot deployme
 
 ## Build and reproduce
 
-In a sourced, dependency-complete non-root ROS workspace:
+From this branch's repository root in a sourced, dependency-complete, non-root ROS workspace,
+create a pristine baseline worktree and build the **same benchmark source** against each arm:
 
 ```bash
-cmake --build build/mowgli_localization --target scan_deskew_node test_deskew_history_cursor scan_deskew_bench --parallel 1
-ctest --test-dir build/mowgli_localization -R '^test_deskew_history_cursor$' --output-on-failure
-ROS_DOMAIN_ID=97 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp taskset -c 3 build/mowgli_localization/scan_deskew_bench rotation 20000 2000 720
+repo=$PWD
+baseline=$(mktemp -d)
+git worktree add --detach "$baseline" 6445b2c014720124e68cd96395e44d1d78491522
+base_build=$(mktemp -d)
+candidate_build=$(mktemp -d)
+bench="$repo/ros2/src/mowgli_localization/test/bench"
+cmake -S "$bench" -B "$base_build" -DCMAKE_BUILD_TYPE=Release \
+  -DMOWGLI_PACKAGE_ROOT="$baseline/ros2/src/mowgli_localization"
+cmake -S "$bench" -B "$candidate_build" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$base_build" --parallel 1
+cmake --build "$candidate_build" --parallel 1
+export ROS_DOMAIN_ID=98 RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface name="lo"/></Interfaces><AllowMulticast>false</AllowMulticast></General></Domain></CycloneDDS>'
+taskset -c 3 "$base_build/scan_deskew_bench" rotation 20000 2000 720
+taskset -c 3 "$candidate_build/scan_deskew_bench" rotation 20000 2000 720
 ```
 
-Use a private loopback-only DDS configuration when reproducing the node benchmark; the exact
-local scripts and `CYCLONEDDS_URI` are in the evidence bundle. The same benchmark can include the
-pristine node using `DESKEW_NODE_SOURCE`; the local build script records that path explicitly.
+Run paired seeds 20000–20020 with alternating A/B then B/A order for the original campaign.
+Each process prints total CPU/elapsed nanoseconds, calls and exact result fields. Compare those
+fields before accepting a pair; use the same core and dependencies for both arms. The companion
+CSV preserves all measured totals for checking the reported statistics without private host scripts.
+The standalone targets need installed ROS/vendor dependencies, but neither a whole-workspace build
+nor a simulator. No physical robot or complete-controller latency is established by this benchmark.
 
 ## Changed files in this changeset
 
@@ -89,6 +118,8 @@ pristine node using `DESKEW_NODE_SOURCE`; the local build script records that pa
 - `ros2/src/mowgli_localization/CMakeLists.txt`
 - `ros2/src/mowgli_localization/test/test_deskew_history_cursor.cpp`
 - `ros2/src/mowgli_localization/test/bench/scan_deskew_bench.cpp`
+- `ros2/src/mowgli_localization/test/bench/CMakeLists.txt`
+- `docs/performance/2026-11-13-lidar-deskew-paired.csv`
 - `docs/performance/2026-11-13-lidar-deskew.md`
 
 ## Limits and next steps
