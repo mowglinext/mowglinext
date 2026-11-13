@@ -215,6 +215,8 @@ if(BUILD_TESTING)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  # Opt-in benchmark, not part of the default build or CI:
+  #   colcon build --packages-select mowgli_nav2_plugins --cmake-target ftc_solver_bench
   add_executable(ftc_solver_bench EXCLUDE_FROM_ALL
     test/bench/ftc_solver_bench.cpp
   )

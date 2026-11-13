@@ -7,6 +7,9 @@
 
 // Frozen scalar oracle from dev 6445b2c01. Keep independent of the optimized
 // sampler: differential tests protect every cell/guard/threshold decision.
+// It is a deliberate copy of the pre-optimisation production code. Do not
+// edit it to follow obstacle_deviation.cpp; change it only when the intended
+// collision-check behaviour changes, so a drift in either side fails the test.
 #pragma once
 #include <algorithm>
 #include <cmath>
