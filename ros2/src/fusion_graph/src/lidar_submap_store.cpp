@@ -4,11 +4,13 @@
 
 #include <array>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "fusion_graph/lidar_map_file.hpp"
 
@@ -296,13 +298,20 @@ void LidarSubmapStore::WriteTile(
   Write(out, tile_size_m_);
   Write(out, datum_lat_);
   Write(out, datum_lon_);
+  // Preserve the packed file format (double + byte, without struct padding),
+  // but amortize stream bookkeeping over a row. The constructor bounds this
+  // buffer to 2048 * 9 bytes even for the largest supported tile.
+  std::vector<char> row(tile_cells_ * 9);
   for (std::size_t y = 0; y < tile_cells_; ++y)
+  {
     for (std::size_t x = 0; x < tile_cells_; ++x)
     {
       const auto evidence = map.EvidenceAt(ox + x, oy + y);
-      Write(out, evidence.log_odds);
-      Write(out, evidence.touched);
+      std::memcpy(row.data() + x * 9, &evidence.log_odds, sizeof(evidence.log_odds));
+      row[x * 9 + 8] = static_cast<char>(evidence.touched);
     }
+    out.write(row.data(), static_cast<std::streamsize>(row.size()));
+  }
   out.flush();
   if (!out)
     throw std::runtime_error("cannot write LiDAR tile");
@@ -330,14 +339,21 @@ void LidarSubmapStore::ReadTile(
       !Close(resolution, params_.resolution_m) || !Close(size, tile_size_m_) ||
       !Close(lat, datum_lat_) || !Close(lon, datum_lon_))
     throw std::runtime_error("LiDAR tile geometry or datum mismatch");
+  std::vector<char> row(tile_cells_ * 9);
   for (std::size_t y = 0; y < tile_cells_; ++y)
+  {
+    in.read(row.data(), static_cast<std::streamsize>(row.size()));
+    if (!in)
+      throw std::runtime_error("truncated LiDAR tile");
     for (std::size_t x = 0; x < tile_cells_; ++x)
     {
-      const auto odds = Read<double>(in);
-      const auto touched = Read<std::uint8_t>(in);
+      double odds;
+      std::memcpy(&odds, row.data() + x * 9, sizeof(odds));
+      const auto touched = static_cast<std::uint8_t>(row[x * 9 + 8]);
       if (!map.SetEvidence(ox + x, oy + y, {odds, touched}))
         throw std::runtime_error("invalid LiDAR tile evidence");
     }
+  }
 }
 void LidarSubmapStore::SaveWindow(const LidarOccupancyMapper& map, int cx, int cy) const
 {
