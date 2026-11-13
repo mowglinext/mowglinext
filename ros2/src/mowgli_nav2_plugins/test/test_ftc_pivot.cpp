@@ -182,6 +182,16 @@ TEST(FtcPivot, ArrivalAndAlignment)
   EXPECT_FALSE(PivotArrived(-0.03, 0, kPivotArrivalToleranceM));
   EXPECT_FALSE(PivotArrived(0.0, 0.125, kPivotArrivalToleranceM));
   EXPECT_TRUE(PivotArrived(0.012, -0.016, kPivotArrivalToleranceM));
+  // Corner ABEAM (forward motion cannot close it): the lateral band applies.
+  EXPECT_TRUE(PivotArrived(0.009, 0.057, kPivotArrivalToleranceM, 0.08))
+      << "field 2026-11-13: on the corner, 6 cm to the side";
+  EXPECT_TRUE(PivotArrived(-0.013, -0.070, kPivotArrivalToleranceM, 0.08));
+  EXPECT_FALSE(PivotArrived(0.0, 0.10, kPivotArrivalToleranceM, 0.08)) << "beyond the band";
+  // Corner AHEAD: the band never shortens a normal approach.
+  EXPECT_FALSE(PivotArrived(0.05, 0.0, kPivotArrivalToleranceM, 0.08));
+  EXPECT_FALSE(PivotArrived(0.03, 0.03, kPivotArrivalToleranceM, 0.08));
+  // Default lateral band = the disc (old behaviour).
+  EXPECT_FALSE(PivotArrived(0.0, 0.05, kPivotArrivalToleranceM));
   const double tol = 10.0 * M_PI / 180.0;
   EXPECT_FALSE(PivotAligned(0.5, tol));
   EXPECT_TRUE(PivotAligned(0.1, tol));

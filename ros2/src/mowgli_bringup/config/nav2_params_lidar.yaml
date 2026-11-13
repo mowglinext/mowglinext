@@ -210,11 +210,15 @@ collision_monitor:
       # Uses the live footprint the local costmap publishes (chassis polygon),
       # so the projection matches the real robot outline, not a hand-tuned box.
       footprint_topic: "/local_costmap/published_footprint"
-      # Look-ahead horizon. At the 0.20 m/s mow speed this projects ~0.24 m
-      # ahead; at the 0.30 m/s transit cap ~0.36 m — short enough to sit inside
-      # PolygonSlow's chassis+15 cm slow zone (obstacle already slowed us first),
-      # long enough to stop before the chassis front (base_link +0.48) touches.
-      time_before_collision: 1.2
+      # Look-ahead horizon. 0.8 s (was 1.2, 2026-11-13): at the 0.20 m/s mow
+      # speed this projects ~0.16 m ahead, at the 0.30 m/s transit cap ~0.24 m —
+      # still inside PolygonSlow's chassis+15 cm slow zone and still a stop
+      # before the chassis front touches (the firmware wheel loop stops the
+      # robot in well under 0.1 m from these speeds). 1.2 s held the robot
+      # (FTC "WEDGED": collision_monitor holds while the path reads clear) in
+      # every tight spot near the dock and the hedge where FTC's lattice had
+      # already found a skirt — field 2026-11-13.
+      time_before_collision: 0.8
       simulation_time_step: 0.1
       # 3 points (was 8 — SAFETY_REVIEW_2026-07-23 A-C1): the LD19's 455
       # bins/rev = 0.79°/bin, so requiring 8 returns means an obstacle must
@@ -264,10 +268,10 @@ collision_monitor:
       type: "polygon"
       points: "[[0.62, 0.20], [0.62, -0.20], [0.48, -0.20], [0.48, 0.20]]"
       action_type: "approach"
-      # Match FootprintApproach's projection horizon (1.2 s) so the two front
+      # Match FootprintApproach's projection horizon (0.8 s) so the two front
       # catchers agree on when to start easing off; 0.1 s step is fine for a
       # near-field box.
-      time_before_collision: 1.2
+      time_before_collision: 0.8
       simulation_time_step: 0.1
       min_points: 2
       visualize: true

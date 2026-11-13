@@ -136,6 +136,13 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   config_.max_goal_distance_error = declare_double("max_goal_distance_error", 1.0);
   config_.max_goal_angle_error = declare_double("max_goal_angle_error", 10.0);
   config_.pivot_angle_tolerance_deg = declare_double("pivot_angle_tolerance_deg", 10.0);
+  config_.pivot_arrival_lateral_tolerance_m =
+      declare_double("pivot_arrival_lateral_tolerance_m", 0.08);
+  if (!std::isfinite(config_.pivot_arrival_lateral_tolerance_m) ||
+      config_.pivot_arrival_lateral_tolerance_m < kPivotArrivalToleranceM ||
+      config_.pivot_arrival_lateral_tolerance_m > 0.15)
+    throw nav2_core::ControllerException(
+        plugin_name_ + ".pivot_arrival_lateral_tolerance_m must be finite and in [0.02, 0.15]");
   // Injected by navigation.launch.py (robot_config_util.coverage_entry_tolerance);
   // also read by the transit tree's coverage_entry_goal_checker. 0 = exact line.
   config_.coverage_entry_tolerance_m = declare_double("coverage_entry_tolerance_m", 0.0);
@@ -507,6 +514,12 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 1.0, 45.0))
         break;
       next.pivot_angle_tolerance_deg = p.as_double();
+    }
+    else if (key == "pivot_arrival_lateral_tolerance_m")
+    {
+      if (reject_invalid(key, p.as_double(), kPivotArrivalToleranceM, 0.15))
+        break;
+      next.pivot_arrival_lateral_tolerance_m = p.as_double();
     }
     else if (key == "pivot_coast_time_bound_s")
     {

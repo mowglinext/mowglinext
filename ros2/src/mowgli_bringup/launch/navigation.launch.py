@@ -1019,9 +1019,12 @@ def generate_launch_description() -> LaunchDescription:
                     f"[{rear:.3f}, {-half:.3f}], [{rear:.3f}, {half:.3f}]]")
 
         if "PolygonStopNarrow" in cm_params:
-            # Band from just behind the front edge to 0.12 m ahead of it.
+            # Band from just behind the front edge to 0.05 m ahead of it
+            # (was 0.12 until 2026-11-13: swept over the approach horizon it
+            # reached ~0.36 m past the nose and held the robot beside the dock
+            # and the hedge where FTC's own footprint check found clearance).
             cm_params["PolygonStopNarrow"]["points"] = _poly(
-                fp_f + 0.12, fp_f - 0.02, fp_hw)
+                fp_f + 0.05, fp_f - 0.02, fp_hw)
         if "PolygonStop" in cm_params:
             # Whole body plus 0.05 m fore and aft.
             cm_params["PolygonStop"]["points"] = _poly(

@@ -785,6 +785,10 @@ private:
     /// straight after a corner is one swath spacing long, too short for the
     /// lateral loop to absorb a large heading error before the next pivot.
     double pivot_angle_tolerance_deg{10.0};
+    /// Lateral arrival band (m) for a pivot corner lying ABEAM of base_link
+    /// (PivotArrived): forward motion cannot close a sideways offset, so the
+    /// 2 cm disc alone timed out with the robot already on the corner.
+    double pivot_arrival_lateral_tolerance_m{0.08};
     /// Declared upper bound on residual forward travel / speed after STOP.
     /// This is a response assumption, not a calibrated physical stopping time.
     double pivot_coast_time_bound_s{0.5};
