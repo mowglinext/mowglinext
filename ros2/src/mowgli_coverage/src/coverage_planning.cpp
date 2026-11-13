@@ -583,17 +583,21 @@ std::vector<std::pair<double, double>> sampleDubins(const Pose& start,
   return pts;
 }
 
+std::vector<RingIndex> indexRings(const std::vector<std::vector<std::pair<double, double>>>& rings)
+{
+  return {rings.begin(), rings.end()};
+}
+
 // True iff every sampled point of `pts` is inside `boundary`. A point lying ON
 // the boundary (within kOnEdgeTolM) counts as inside — pointInRing() alone
 // resolves on-edge poses inconsistently, and the outermost driven geometry sits
 // exactly on this ring when the headland stage is off (see kOnEdgeTolM).
-bool allInside(const std::vector<std::pair<double, double>>& pts,
-               const std::vector<std::pair<double, double>>& boundary)
+bool allInside(const std::vector<std::pair<double, double>>& pts, const RingIndex& boundary)
 {
   for (const auto& p : pts)
   {
-    if (!pointInRing(p.first, p.second, boundary) &&
-        distanceToRing(p.first, p.second, boundary) > kOnEdgeTolM)
+    if (!boundary.contains(p.first, p.second) &&
+        distanceToRing(p.first, p.second, boundary.ring()) > kOnEdgeTolM)
     {
       return false;
     }
@@ -605,13 +609,13 @@ bool allInside(const std::vector<std::pair<double, double>>& pts,
 // turn-around connector or corner fillet must not cut through an obstacle).
 // Empty `holes` → trivially clear.
 bool clearOfHoles(const std::vector<std::pair<double, double>>& pts,
-                  const std::vector<std::vector<std::pair<double, double>>>& holes)
+                  const std::vector<RingIndex>& holes)
 {
   for (const auto& hole : holes)
   {
     for (const auto& p : pts)
     {
-      if (pointInRing(p.first, p.second, hole))
+      if (hole.contains(p.first, p.second))
       {
         return false;
       }
@@ -626,15 +630,14 @@ bool clearOfHoles(const std::vector<std::pair<double, double>>& pts,
 // `op_width/2`, picking the SHORTEST in-bounds Dubins path at each radius.
 // Falls back to a straight connector (densified) if nothing fits — sets
 // `used_fallback`. Returns points start-inclusive, goal-exclusive.
-std::vector<std::pair<double, double>> buildConnector(
-    const Pose& start,
-    const Pose& goal,
-    const std::vector<std::pair<double, double>>& boundary,
-    const std::vector<std::vector<std::pair<double, double>>>& holes,
-    double turn_radius,
-    double min_radius,
-    double step,
-    bool& used_fallback)
+std::vector<std::pair<double, double>> buildConnector(const Pose& start,
+                                                      const Pose& goal,
+                                                      const RingIndex& boundary,
+                                                      const std::vector<RingIndex>& holes,
+                                                      double turn_radius,
+                                                      double min_radius,
+                                                      double step,
+                                                      bool& used_fallback)
 {
   used_fallback = false;
   std::vector<std::pair<double, double>> best_pts;
@@ -731,8 +734,8 @@ struct PivotJoin
 PivotJoin planPivotJoin(const Pose& start,
                         const Pose& goal,
                         const std::vector<std::pair<double, double>>& straight,
-                        const std::vector<std::pair<double, double>>& boundary,
-                        const std::vector<std::vector<std::pair<double, double>>>& holes,
+                        const RingIndex& boundary,
+                        const std::vector<RingIndex>& holes,
                         const PivotJoinLimits& limits)
 {
   PivotJoin join;
@@ -887,8 +890,8 @@ constexpr double kRingCornerPokeSlackM = 0.05;
 // polyline; arc sampled at `step`.
 std::vector<std::pair<double, double>> roundSharpCorners(
     const std::vector<std::pair<double, double>>& pts,
-    const std::vector<std::pair<double, double>>& boundary,
-    const std::vector<std::vector<std::pair<double, double>>>& holes,
+    const RingIndex& boundary,
+    const std::vector<RingIndex>& holes,
     double max_turn_rad,
     double fillet_r,
     double min_radius,
@@ -1675,6 +1678,9 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
     const auto headland_passes =
         hl.generateHeadlandSwaths(safe_cells, op_width, n_rings, /*dir_out2in=*/true);
     t_headland_ms = elapsedMs(t_headland0);
+    const RingIndex fillet_boundary(plan.safe_boundary.size() >= 3 ? plan.safe_boundary
+                                                                   : field_outer_pts);
+    const auto fillet_holes = indexRings(plan.safe_holes);
     bool first_pass = true;
     std::size_t first_pass_rings = 0;  // loops kept from the OUTERMOST pass
     for (const auto& pass_lines : headland_passes)
@@ -1756,8 +1762,6 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
             // Fillet every corner sharper than ~30° with a forward arc (floored at
             // min_turn_radius so FTC can track it); corners that cannot be
             // rounded in-bounds are left sharp, as before.
-            const auto& fillet_boundary =
-                plan.safe_boundary.size() >= 3 ? plan.safe_boundary : field_outer_pts;
             constexpr double kRingCornerThreshold = 30.0 * M_PI / 180.0;
             // Corners the robot will PIVOT at are left sharp so the ring reaches the very
             // corner (see corner_pivot_limits in coverage_planning.hpp).
@@ -1773,7 +1777,7 @@ BoustrophedonPlan planBoustrophedon(const f2c::types::Cell& field_cell,
             }
             auto rounded = roundSharpCorners(sparse,
                                              fillet_boundary,
-                                             plan.safe_holes,
+                                             fillet_holes,
                                              kRingCornerThreshold,
                                              std::max(2.0 * min_turn_radius, min_turn_radius),
                                              std::max(0.02, min_turn_radius),
@@ -2032,16 +2036,14 @@ constexpr double kClearanceClampMarginM = 0.02;
 // edge. Poses already inside are returned unchanged, so applying this to a whole
 // path only nudges the out-of-bounds convex-corner pokes and is a no-op for every
 // ring/swath/connector pose the planner already kept in-bounds.
-std::pair<double, double> clampInsideRing(double x,
-                                          double y,
-                                          const std::vector<std::pair<double, double>>& ring,
-                                          double margin)
+std::pair<double, double> clampInsideRing(double x, double y, const RingIndex& index, double margin)
 {
+  const auto& ring = index.ring();
   // A pose sitting exactly ON the ring is left alone: with the headland stage
   // off the swath ENDS lie on this ring by construction, and pointInRing()
   // resolves such poses inconsistently — clamping them would silently deform
   // half the swath ends inward. Same tolerance allInside() uses (kOnEdgeTolM).
-  if (ring.size() < 3 || pointInRing(x, y, ring) || distanceToRing(x, y, ring) <= kOnEdgeTolM)
+  if (ring.size() < 3 || index.contains(x, y) || distanceToRing(x, y, ring) <= kOnEdgeTolM)
   {
     return {x, y};
   }
@@ -2079,7 +2081,7 @@ std::pair<double, double> clampInsideRing(double x,
   inx /= inl;
   iny /= inl;
   const double cx = px + margin * inx, cy = py + margin * iny;
-  if (pointInRing(cx, cy, ring))
+  if (index.contains(cx, cy))
   {
     return {cx, cy};
   }
@@ -2106,9 +2108,23 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
     twin_out.reserve(pts.size() + 16);
     twin_out.push_back((*is_twin)[0]);
   }
-  const auto same = [](const std::pair<double, double>& a, const std::pair<double, double>& b)
+  // Length and heading of step pts[i] -> pts[i + 1], each computed once (they used
+  // to be recomputed up to four times per pose; same values: a - b == -(b - a)).
+  std::vector<double> step_len(pts.size() - 1), step_heading(pts.size() - 1);
+  for (std::size_t i = 0; i + 1 < pts.size(); ++i)
   {
-    return std::hypot(a.first - b.first, a.second - b.second) < cg::kPivotCornerMaxStepM;
+    const double dx = pts[i + 1].first - pts[i].first, dy = pts[i + 1].second - pts[i].second;
+    step_len[i] = std::hypot(dx, dy);
+    step_heading[i] = std::atan2(dy, dx);
+  }
+  // pts[i] coincides with its predecessor / successor (a corner twin).
+  const auto same_as_prev = [&](std::size_t i)
+  {
+    return step_len[i - 1] < cg::kPivotCornerMaxStepM;
+  };
+  const auto same_as_next = [&](std::size_t i)
+  {
+    return step_len[i] < cg::kPivotCornerMaxStepM;
   };
   // A generated offset can spread one sharp corner across a short bevel.
   // Classify same-direction turns together only where their intervening chord
@@ -2122,12 +2138,10 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
   {
     for (std::size_t i = 1; i + 1 < pts.size(); ++i)
     {
-      if (!same(pts[i], pts[i - 1]) && !same(pts[i], pts[i + 1]))
+      if (!same_as_prev(i) && !same_as_next(i))
       {
-        const double incoming =
-            std::atan2(pts[i].second - pts[i - 1].second, pts[i].first - pts[i - 1].first);
-        const double outgoing =
-            std::atan2(pts[i + 1].second - pts[i].second, pts[i + 1].first - pts[i].first);
+        const double incoming = step_heading[i - 1];
+        const double outgoing = step_heading[i];
         turns[i] = std::atan2(std::sin(outgoing - incoming), std::cos(outgoing - incoming));
         const double angle = std::abs(turns[i]);
         if (angle > cg::kPivotCornerMinTurnRad && angle <= min_turn_rad)
@@ -2147,8 +2161,7 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
       while (last + 2 < pts.size())
       {
         const double a = turns[last], b = turns[last + 1];
-        const double chord = std::hypot(pts[last + 1].first - pts[last].first,
-                                        pts[last + 1].second - pts[last].second);
+        const double chord = step_len[last];
         const double minimum_chord =
             2.0 * min_turn_radius * std::sin(0.5 * std::min(std::abs(a), std::abs(b)));
         if (a * b <= 0.0 || !tight[last] || !tight[last + 1] || chord + 1e-12 >= minimum_chord)
@@ -2179,15 +2192,11 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
       twin_out.push_back((*is_twin)[i]);
     }
     // Already a corner twin (either half): leave it to the contract.
-    if (same(pts[i], pts[i - 1]) || same(pts[i], pts[i + 1]))
+    if (same_as_prev(i) || same_as_next(i))
     {
       continue;
     }
-    const double inx = pts[i].first - pts[i - 1].first;
-    const double iny = pts[i].second - pts[i - 1].second;
-    const double outx = pts[i + 1].first - pts[i].first;
-    const double outy = pts[i + 1].second - pts[i].second;
-    const double turn = headingError(std::atan2(iny, inx), std::atan2(outy, outx));
+    const double turn = headingError(step_heading[i - 1], step_heading[i]);
     // This retained zero-radius corner requires a stop even when a whole
     // pivot disc does not fit. The twin is not a clearance certificate: FTC
     // must check an executable signed arc at the actual pose before rotating.
@@ -2209,6 +2218,80 @@ std::vector<std::pair<double, double>> pivotSharpCorners(
   return out;
 }
 
+std::optional<std::size_t> leastCostInScanOrder(
+    const std::vector<ScanCandidate>& candidates,
+    const std::function<double(const ScanCandidate&)>& cost)
+{
+  std::optional<std::size_t> best;
+  double best_cost = std::numeric_limits<double>::max();
+  for (const auto& c : candidates)
+  {
+    if (c.gap >= best_cost)
+    {
+      continue;
+    }
+    const double value = cost(c);
+    if (value < best_cost)
+    {
+      best_cost = value;
+      best = c.order;
+    }
+  }
+  return best;
+}
+
+std::optional<std::size_t> leastCostNearestFirst(
+    std::vector<ScanCandidate> candidates, const std::function<double(const ScanCandidate&)>& cost)
+{
+  // Proof sketch. Let m be the least cost and k the first candidate (scan order)
+  // costing m. Every candidate before k costs more than m, so when the scan reaches
+  // k its best is above m >= gap(k): k is evaluated and taken, and nothing after it
+  // is strictly cheaper. So the scan picks k. Here: once a gap reaches the best
+  // cost found (times 1 + slack), that candidate and every farther one cannot beat
+  // it; every candidate costing m is therefore evaluated, and ties keep the
+  // earliest in scan order — k again. The only assumption, cost >= gap within the
+  // slack, is checked for k itself; the slack is ~10 orders of magnitude above the
+  // rounding of a summed polyline length.
+  constexpr double kGapRelSlack = 1e-6;
+  const auto by_order = candidates;
+  for (const auto& c : candidates)
+  {
+    if (!std::isfinite(c.gap))
+    {
+      return leastCostInScanOrder(by_order, cost);
+    }
+  }
+  std::stable_sort(candidates.begin(),
+                   candidates.end(),
+                   [](const ScanCandidate& a, const ScanCandidate& b)
+                   {
+                     return a.gap < b.gap;
+                   });
+  const ScanCandidate* best = nullptr;
+  double best_cost = std::numeric_limits<double>::max();
+  for (const auto& c : candidates)
+  {
+    // >=, not >: a gap of exactly best·(1 + slack) still costs more than best when
+    // best > 0, and with best == 0 the later zero gaps come later in scan order and
+    // lose the tie — so coincident entries do not defeat the pruning.
+    if (best != nullptr && c.gap >= best_cost * (1.0 + kGapRelSlack))
+    {
+      break;
+    }
+    const double value = cost(c);
+    if (value < best_cost || (best != nullptr && value == best_cost && c.order < best->order))
+    {
+      best_cost = value;
+      best = &c;
+    }
+  }
+  if (best == nullptr || best_cost < best->gap)
+  {
+    return leastCostInScanOrder(by_order, cost);
+  }
+  return best->order;
+}
+
 std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     const BoustrophedonPlan& plan,
     const std::vector<std::pair<double, double>>& boundary,
@@ -2221,6 +2304,13 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     bool pin_first_subpath,
     PlanningTrace* trace)
 {
+  // Every join below is validated against these rings, many thousands of times.
+  const RingIndex boundary_index(boundary);
+  const RingIndex swath_turn_index(swath_turn_boundary);
+  const auto hole_index = indexRings(plan.safe_holes);
+  const RingIndex& swath_envelope =
+      swath_turn_boundary.size() >= 3 ? swath_turn_index : boundary_index;
+
   // Flatten the plan into ordered drivable segments (densified polylines),
   // rings first (outermost → inner) then the swaths.
   //
@@ -2433,11 +2523,81 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     std::pair<double, double> cur =
         !sw_in.empty() ? sw_in.front().first : std::pair<double, double>{0.0, 0.0};
     ordered_swaths.reserve(sw_in.size());
+    // Cost of continuing from `cur` into swath i (entered from its end if `reversed`).
+    // LOAD-BEARING: every cost must be >= `gap` (the straight distance from `cur` to
+    // the entry), or leastCostNearestFirst may choose differently from the
+    // index-order scan and silently reorder the plan. Holds below: the straight gap
+    // itself, a polyline from `cur` to the entry, or the gap plus a turn penalty.
+    auto joinCost = [&](std::size_t i, bool reversed, double gap)
+    {
+      const auto& entry = reversed ? sw_in[i].second : sw_in[i].first;
+      const auto& exit = reversed ? sw_in[i].first : sw_in[i].second;
+      double cost = gap;
+      if (!ordered_swaths.empty())
+      {
+        const auto& previous = ordered_swaths.back();
+        const Pose start{cur.first,
+                         cur.second,
+                         std::atan2(previous.second.second - previous.first.second,
+                                    previous.second.first - previous.first.first)};
+        const Pose goal{entry.first,
+                        entry.second,
+                        std::atan2(exit.second - entry.second, exit.first - entry.first)};
+        const RingIndex& envelope = swath_envelope;
+        bool fallback = false;
+        const auto conn = buildConnector(start,
+                                         goal,
+                                         envelope,
+                                         hole_index,
+                                         turn_radius,
+                                         std::max(0.02, min_turn_radius),
+                                         step,
+                                         fallback);
+        if (!fallback && !conn.empty())
+        {
+          cost = std::hypot(conn.back().first - entry.first, conn.back().second - entry.second);
+          for (std::size_t k = 1; k < conn.size(); ++k)
+          {
+            cost +=
+                std::hypot(conn[k].first - conn[k - 1].first, conn[k].second - conn[k - 1].second);
+          }
+        }
+        else if (!conn.empty() && allInside(conn, envelope) && clearOfHoles(conn, hole_index) &&
+                 straightFallbackIsContinuous(start, goal))
+        {
+          cost = gap;
+        }
+        else
+        {
+          // A stop/reorientation has a cost even when the endpoints nearly
+          // coincide. Express heading changes as equivalent arc length at
+          // the configured radius; a Nav2 relocation gets a full-circle
+          // penalty. These are ordering heuristics, not transit routes or
+          // execution-time estimates. The join builder still decides safety.
+          const double radius = std::max(0.02, std::max(turn_radius, min_turn_radius));
+          const auto pivot = planPivotJoin(start, goal, conn, envelope, hole_index, pivot_limits);
+          const double heading = std::atan2(goal.y - start.y, goal.x - start.x);
+          cost +=
+              radius * (pivot.ok ? (gap < mowgli_interfaces::coverage_geometry::kPivotCornerMaxStepM
+                                        ? headingError(goal.theta, start.theta)
+                                        : headingError(heading, start.theta) +
+                                              headingError(goal.theta, heading))
+                                 : 2.0 * M_PI);
+        }
+      }
+      return cost;
+    };
+    // The next swath is the first (in swath index order, forward before reversed)
+    // of least join cost. Scanning in that order wastes most of the work: until a
+    // near swath comes up the best so far is large, so joins to swaths far across
+    // the lawn are sampled and validated in full (~30 per row on a 600 m² lawn,
+    // ~270 samples each). leastCostNearestFirst makes the same choice from the
+    // nearest few; the straight gap to a swath's entry bounds its join from below.
+    std::vector<ScanCandidate> candidates;
+    candidates.reserve(2 * sw_in.size());
     for (std::size_t n = 0; n < sw_in.size(); ++n)
     {
-      std::size_t best = sw_in.size();
-      bool flip = false;
-      double best_d = std::numeric_limits<double>::max();
+      candidates.clear();
       for (std::size_t i = 0; i < sw_in.size(); ++i)
       {
         if (used[i])
@@ -2447,75 +2607,20 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
         for (bool reversed : {false, true})
         {
           const auto& entry = reversed ? sw_in[i].second : sw_in[i].first;
-          const auto& exit = reversed ? sw_in[i].first : sw_in[i].second;
           const double gap = std::hypot(entry.first - cur.first, entry.second - cur.second);
-          if (gap >= best_d)
-          {
-            continue;
-          }
-          double cost = gap;
-          if (!ordered_swaths.empty())
-          {
-            const auto& previous = ordered_swaths.back();
-            const Pose start{cur.first,
-                             cur.second,
-                             std::atan2(previous.second.second - previous.first.second,
-                                        previous.second.first - previous.first.first)};
-            const Pose goal{entry.first,
-                            entry.second,
-                            std::atan2(exit.second - entry.second, exit.first - entry.first)};
-            const auto& envelope = swath_turn_boundary.size() >= 3 ? swath_turn_boundary : boundary;
-            bool fallback = false;
-            const auto conn = buildConnector(start,
-                                             goal,
-                                             envelope,
-                                             plan.safe_holes,
-                                             turn_radius,
-                                             std::max(0.02, min_turn_radius),
-                                             step,
-                                             fallback);
-            if (!fallback && !conn.empty())
-            {
-              cost = std::hypot(conn.back().first - entry.first, conn.back().second - entry.second);
-              for (std::size_t k = 1; k < conn.size(); ++k)
-              {
-                cost += std::hypot(conn[k].first - conn[k - 1].first,
-                                   conn[k].second - conn[k - 1].second);
-              }
-            }
-            else if (!conn.empty() && allInside(conn, envelope) &&
-                     clearOfHoles(conn, plan.safe_holes) &&
-                     straightFallbackIsContinuous(start, goal))
-            {
-              cost = gap;
-            }
-            else
-            {
-              // A stop/reorientation has a cost even when the endpoints nearly
-              // coincide. Express heading changes as equivalent arc length at
-              // the configured radius; a Nav2 relocation gets a full-circle
-              // penalty. These are ordering heuristics, not transit routes or
-              // execution-time estimates. The join builder still decides safety.
-              const double radius = std::max(0.02, std::max(turn_radius, min_turn_radius));
-              const auto pivot =
-                  planPivotJoin(start, goal, conn, envelope, plan.safe_holes, pivot_limits);
-              const double heading = std::atan2(goal.y - start.y, goal.x - start.x);
-              cost += radius *
-                      (pivot.ok ? (gap < mowgli_interfaces::coverage_geometry::kPivotCornerMaxStepM
-                                       ? headingError(goal.theta, start.theta)
-                                       : headingError(heading, start.theta) +
-                                             headingError(goal.theta, heading))
-                                : 2.0 * M_PI);
-            }
-          }
-          if (cost < best_d)
-          {
-            best_d = cost;
-            best = i;
-            flip = reversed;
-          }
+          candidates.push_back({gap, 2 * i + (reversed ? 1 : 0)});
         }
       }
+      // No comparable cost only with non-finite geometry: keep the first remaining swath.
+      const std::size_t choice =
+          leastCostNearestFirst(candidates,
+                                [&](const ScanCandidate& c)
+                                {
+                                  return joinCost(c.order / 2, (c.order % 2) != 0, c.gap);
+                                })
+              .value_or(candidates.front().order);
+      const std::size_t best = choice / 2;
+      const bool flip = (choice % 2) != 0;
       used[best] = true;
       auto sw = sw_in[best];
       if (flip)
@@ -2588,24 +2693,22 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       // limited turn envelope can never push a headland ring's own connector
       // off ring 0.
       const bool is_swath_join = (i - 1) >= first_swath_seg_idx;
-      const std::vector<std::pair<double, double>>& conn_boundary =
-          (is_swath_join && swath_turn_boundary.size() >= 3) ? swath_turn_boundary : boundary;
+      const RingIndex& conn_boundary = is_swath_join ? swath_envelope : boundary_index;
       bool conn_safe = false;
       PivotJoin pivot_join;
       {
         bool fallback = false;
         auto conn = buildConnector(
-            start, goal, conn_boundary, plan.safe_holes, turn_radius, min_radius, step, fallback);
+            start, goal, conn_boundary, hole_index, turn_radius, min_radius, step, fallback);
         conn_safe = !conn.empty() && (!fallback || (allInside(conn, conn_boundary) &&
-                                                    clearOfHoles(conn, plan.safe_holes) &&
+                                                    clearOfHoles(conn, hole_index) &&
                                                     straightFallbackIsContinuous(start, goal)));
         // No arc and no aligned straight: before splitting, try to keep the
         // join as a pivot join (short, in-bounds, pivot sweep inside the
         // designed envelope). Disabled pivot limits leave this `ok == false`.
         if (!conn_safe && fallback)
         {
-          pivot_join =
-              planPivotJoin(start, goal, conn, conn_boundary, plan.safe_holes, pivot_limits);
+          pivot_join = planPivotJoin(start, goal, conn, conn_boundary, hole_index, pivot_limits);
         }
         // Pure accounting of how this join resolved (issue #499) — see
         // ConnectorStats. Deliberately AFTER the decision so the classification
@@ -2699,7 +2802,7 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
       continue;
     }
     auto rounded = roundSharpCorners(
-        sp, boundary, plan.safe_holes, kCornerThreshold, fillet_r, min_radius, step);
+        sp, boundary_index, hole_index, kCornerThreshold, fillet_r, min_radius, step);
     // Pivot corner twins, marked BEFORE the clamp below. Up to here the only
     // bit-exact consecutive duplicates are the twins appendPivotJoin emitted:
     // the densifiers skip zero-length steps, the connectors drop their start,
@@ -2724,7 +2827,7 @@ std::vector<std::vector<std::pair<double, double>>> buildContinuousSubPaths(
     {
       for (auto& pt : rounded)
       {
-        pt = clampInsideRing(pt.first, pt.second, boundary, kClearanceClampMarginM);
+        pt = clampInsideRing(pt.first, pt.second, boundary_index, kClearanceClampMarginM);
       }
     }
     // A corner the fillet could not round is still a zero-radius corner. FTC
@@ -3061,6 +3164,123 @@ double distanceToRing(double x, double y, const std::vector<std::pair<double, do
     best = std::min(best, std::hypot(x - px, y - py));
   }
   return best;
+}
+
+RingIndex::RingIndex(const std::vector<std::pair<double, double>>& ring) : ring_(&ring)
+{
+  const std::size_t n = ring.size();
+  if (n < 3)
+  {
+    return;
+  }
+  double lo = std::numeric_limits<double>::infinity();
+  double hi = -lo;
+  for (const auto& p : ring)
+  {
+    if (!std::isfinite(p.first) || !std::isfinite(p.second))
+    {
+      linear_ = true;  // never seen in a plan; keep the plain scan's semantics
+      return;
+    }
+    lo = std::min(lo, p.second);
+    hi = std::max(hi, p.second);
+  }
+  if (!(hi > lo))
+  {
+    return;  // flat ring: no edge can straddle any y
+  }
+  if (!std::isfinite(hi - lo) || !(static_cast<double>(n) / (hi - lo) < 1e300))
+  {
+    linear_ = true;  // an extent the band arithmetic cannot represent
+    return;
+  }
+  y_min_ = lo;
+  y_max_ = hi;
+  // ~One band per vertex; halve while long edges span too many bands.
+  bands_ = std::min<std::size_t>(n, 1 << 16);
+  constexpr std::pair<std::size_t, std::size_t> kNoBand{1, 0};  // horizontal: never crosses
+  std::vector<std::pair<std::size_t, std::size_t>> spans(n);
+  for (;;)
+  {
+    scale_ = static_cast<double>(bands_) / (hi - lo);
+    std::size_t total = 0;
+    for (std::size_t i = 0, j = n - 1; i < n; j = i++)
+    {
+      const double a = ring[i].second, b = ring[j].second;
+      spans[i] = a == b ? kNoBand : std::pair{band(std::min(a, b)), band(std::max(a, b))};
+      total += spans[i] == kNoBand ? 0 : spans[i].second - spans[i].first + 1;
+    }
+    // Terminates by 16 bands at the latest: a span never exceeds the band count.
+    if (total <= 16 * n)
+    {
+      break;
+    }
+    bands_ /= 2;
+  }
+  offsets_.assign(bands_ + 1, 0);
+  for (const auto& span : spans)
+  {
+    if (span != kNoBand)
+    {
+      for (std::size_t b = span.first; b <= span.second; ++b)
+      {
+        ++offsets_[b + 1];
+      }
+    }
+  }
+  for (std::size_t b = 0; b < bands_; ++b)
+  {
+    offsets_[b + 1] += offsets_[b];
+  }
+  edges_.resize(offsets_.back());
+  std::vector<std::size_t> fill(offsets_.begin(), offsets_.end() - 1);
+  for (std::size_t i = 0; i < n; ++i)
+  {
+    if (spans[i] != kNoBand)
+    {
+      for (std::size_t b = spans[i].first; b <= spans[i].second; ++b)
+      {
+        edges_[fill[b]++] = i;
+      }
+    }
+  }
+}
+
+bool RingIndex::contains(double x, double y) const
+{
+  if (linear_)
+  {
+    return pointInRing(x, y, *ring_);
+  }
+  // Outside [y_min, y_max) every edge has both ends on one side of the ray (NaN too).
+  if (offsets_.empty() || !(y >= y_min_ && y < y_max_))
+  {
+    return false;
+  }
+  const auto& ring = *ring_;
+  const std::size_t n = ring.size();
+  const std::size_t b = band(y);
+  bool inside = false;
+  for (std::size_t k = offsets_[b]; k < offsets_[b + 1]; ++k)
+  {
+    const std::size_t i = edges_[k];
+    const std::size_t j = i == 0 ? n - 1 : i - 1;
+    // pointInRing's expression, verbatim.
+    const double xi = ring[i].first, yi = ring[i].second;
+    const double xj = ring[j].first, yj = ring[j].second;
+    const bool crosses = ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (crosses)
+    {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Only called with y_min_ <= y <= y_max_, so the product is finite and >= 0.
+std::size_t RingIndex::band(double y) const
+{
+  return std::min(static_cast<std::size_t>((y - y_min_) * scale_), bands_ - 1);
 }
 
 f2c::types::LinearRing bufferRingOutward(const f2c::types::LinearRing& in, double margin)

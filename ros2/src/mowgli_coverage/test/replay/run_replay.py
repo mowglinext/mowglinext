@@ -5,6 +5,7 @@ import argparse
 import copy
 import gzip
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
@@ -124,6 +125,14 @@ def run_command(command, timeout, errors=None):
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
+def _bench_fixtures():
+    path = pathlib.Path(__file__).resolve().parents[1] / 'bench' / 'make_bench_fixtures.py'
+    spec = importlib.util.spec_from_file_location('coverage_bench_fixtures', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def cases(binary, timeout=300):
     recorded = [
         [0.69736, 0.542974],
@@ -203,6 +212,12 @@ def cases(binary, timeout=300):
     result['isabey'] = fixture(
         [isabey], obstacle_margin=0.389, pivot_sweep_radius=0.597, boundary_margin=0.597
     )
+    # Realistic lawns (concave, drawn obstacles, shipped margins) from the
+    # performance benchmark: they exercise the indexed containment tests and
+    # nearest-first swath chaining at scale. The cheapest three keep CI short.
+    bench = _bench_fixtures()
+    for name in ('blob200_o5_r5', 'blob600_o10_r0', 'blob600_o10_rm1'):
+        result[name] = bench.build(name)
     return result
 
 
