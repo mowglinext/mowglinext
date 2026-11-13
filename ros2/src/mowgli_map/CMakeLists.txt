@@ -282,6 +282,32 @@ if(BUILD_TESTING)
     ${tf2_geometry_msgs_TARGETS}
   )
 
+  # mow_progress export: byte-identical to GridMapRosConverter::toOccupancyGrid.
+  # No node — rclcpp only for rclcpp::Time. bench/ builds the same file via a shim.
+  ament_add_gtest(test_occupancy_grid_export
+    test/test_occupancy_grid_export.cpp
+  )
+  target_include_directories(test_occupancy_grid_export PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${grid_map_ros_INCLUDE_DIRS}
+  )
+  target_link_libraries(test_occupancy_grid_export
+    ${rclcpp_TARGETS}
+    ${grid_map_core_TARGETS}
+    ${grid_map_ros_LIBRARIES}
+    ${nav_msgs_TARGETS}
+  )
+
+  # Obstacle-tracker clustering stage == the original flood fill + radius filter.
+  ament_add_gtest(test_costmap_clusters
+    test/test_costmap_clusters.cpp
+  )
+  target_include_directories(test_costmap_clusters PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/test
+  )
+  target_link_libraries(test_costmap_clusters ${nav_msgs_TARGETS})
+
   # Pure logic, no ROS deps — mirrors fusion_graph's header-only gate tests.
   ament_add_gtest(test_boundary_classifier
     test/test_boundary_classifier.cpp

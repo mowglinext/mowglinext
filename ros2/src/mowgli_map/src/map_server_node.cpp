@@ -38,6 +38,7 @@
 
 #include "mowgli_interfaces/wgs84_projection.hpp"
 #include "mowgli_map/internal_helpers.hpp"
+#include "mowgli_map/occupancy_grid_export.hpp"
 #include "mowgli_map/peer_dock_rings.hpp"
 #include <grid_map_core/GridMap.hpp>
 #include <grid_map_core/GridMapMath.hpp>
@@ -1275,10 +1276,11 @@ void MapServerNode::rebuild_mow_progress_cache()
     mow_progress_cache_valid_ = false;
     return;
   }
-  // 0 → unmowed (rendered transparent by the GUI), 100 → mowed. The converter
-  // handles the grid_map↔OccupancyGrid index convention correctly.
-  grid_map::GridMapRosConverter::toOccupancyGrid(
-      mow_progress_map_, layer, 0.0F, 100.0F, mow_progress_cache_);
+  // 0 → unmowed (rendered transparent by the GUI), 100 → mowed. Byte-identical
+  // to GridMapRosConverter::toOccupancyGrid (index convention included), but
+  // it reads the layer buffer directly instead of one string-keyed layer
+  // lookup per cell on this full-garden pass.
+  layer_to_occupancy_grid(mow_progress_map_, layer, 0.0F, 100.0F, mow_progress_cache_);
   mow_progress_cache_valid_ = true;
 }
 
