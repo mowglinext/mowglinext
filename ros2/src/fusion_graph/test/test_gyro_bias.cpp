@@ -196,3 +196,62 @@ TEST(GyroBias, DisableLeavesGyroUncompensated)
   // switch turns off the bias mechanism cleanly — yaw drift is the
   // stationary-yaw test's concern.
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 5. A SLOW real rotation is not a bias. Field 2026-11-12: the estimate
+//    climbed from ~0 to +0.011 rad/s over 4 min of mowing while the dock
+//    recalibration moved by only -0.004 rad/s. A pivot finishing, or a slow
+//    corner approach, turns at ~0.04 rad/s — under the per-node stationary
+//    threshold (0.05 rad/s of wheel yaw) and under the 0.10 rad/s sample
+//    gate — so the EMA learned real rotation as bias. The wheels DO report
+//    that rotation (encoder ticks), so it must not count as stillness.
+// ─────────────────────────────────────────────────────────────────────
+TEST(GyroBias, SlowRealRotationIsNotLearnedAsBias)
+{
+  fg::GraphManager gm(MakeParams());
+  gm.Initialize(gtsam::Pose2(0.0, 0.0, 0.0), 0.0);
+
+  constexpr double kDt = 0.1;
+  constexpr double kWz = 0.04;  // rad/s, wheels and gyro agree
+  for (int i = 0; i < 300; ++i)  // 30 s
+  {
+    gm.AddWheelTwist(0.0, 0.0, kWz, kDt);
+    gm.AddGyroDelta(kWz, kDt);
+    gm.Tick(kDt * (i + 1));
+  }
+  const auto stats = gm.Stats();
+  EXPECT_EQ(stats.gyro_bias_updates, 0u);
+  EXPECT_NEAR(stats.gyro_bias_z, 0.0, 1.0e-9);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 6. Brief stops between manoeuvres are not stillness either: the chassis
+//    still rocks and settles. Only a sustained stop (>= gyro_bias_min_still_s)
+//    feeds the estimate.
+// ─────────────────────────────────────────────────────────────────────
+TEST(GyroBias, BriefStopsDoNotUpdateBias)
+{
+  fg::GraphManager gm(MakeParams());
+  gm.Initialize(gtsam::Pose2(0.0, 0.0, 0.0), 0.0);
+
+  constexpr double kDt = 0.1;
+  double t = 0.0;
+  for (int cycle = 0; cycle < 20; ++cycle)
+  {
+    for (int i = 0; i < 10; ++i)  // 1 s pivoting
+    {
+      t += kDt;
+      gm.AddWheelTwist(0.0, 0.0, 0.5, kDt);
+      gm.AddGyroDelta(0.5, kDt);
+      gm.Tick(t);
+    }
+    for (int i = 0; i < 5; ++i)  // 0.5 s stop, gyro still settling
+    {
+      t += kDt;
+      gm.AddWheelTwist(0.0, 0.0, 0.0, kDt);
+      gm.AddGyroDelta(0.05, kDt);
+      gm.Tick(t);
+    }
+  }
+  EXPECT_EQ(gm.Stats().gyro_bias_updates, 0u);
+}
