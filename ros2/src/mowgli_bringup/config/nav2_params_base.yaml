@@ -449,6 +449,12 @@ controller_server:
       # STOP <= 0.5 s. Physical calibration is outstanding; no global deadband
       # or angular-safety limits change. Only explicit pivot approaches use it.
       pivot_coast_time_bound_s: 0.5
+      # Lateral arrival band at a pivot corner lying ABEAM of base_link (the
+      # 2 cm disc still governs a normal approach, so row ends are unchanged).
+      # Forward motion cannot close a sideways offset: with 2 cm alone FTC
+      # aborted "timeout approaching pivot corner" standing on the corner 4-7 cm
+      # to the side (field 2026-11-13). Live-tunable, [0.02, 0.15].
+      pivot_arrival_lateral_tolerance_m: 0.08
       # Carrot speed. BOTH are overridden at launch (navigation.launch.py):
       #   speed_fast = mowing_speed
       #   speed_slow = clamp(mowing_speed * turn_speed_ratio,
