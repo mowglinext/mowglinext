@@ -1100,7 +1100,8 @@ FTCController::PlannerState FTCController::update_planner_state()
           !obstacle_waiting_ && !turnFallbackReversing() &&
           PivotArrived(local_control_point_.translation().x(),
                        local_control_point_.translation().y(),
-                       kPivotArrivalToleranceM))
+                       kPivotArrivalToleranceM,
+                       config_.pivot_arrival_lateral_tolerance_m))
       {
         return PlannerState::PIVOT;
       }

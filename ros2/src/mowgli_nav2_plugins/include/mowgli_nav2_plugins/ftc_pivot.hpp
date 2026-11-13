@@ -160,11 +160,28 @@ inline std::size_t PivotAwareStartIndex(const std::vector<std::size_t>& corners,
   return std::binary_search(corners.begin(), corners.end(), start) ? start + 1 : start;
 }
 
-/// True only within the planar arrival disc, including lateral and overshoot
-/// error. Neither a passed longitudinal plane nor zero speed establishes arrival.
-inline bool PivotArrived(double corner_x_m, double corner_y_m, double tolerance_m)
+/// True within the planar arrival disc, including lateral and overshoot error.
+/// Neither a passed longitudinal plane nor zero speed establishes arrival.
+///
+/// `lateral_tolerance_m` (>= tolerance_m) widens ONE case only: the corner lies
+/// ABEAM of base_link (|x| within the disc in the robot frame) but beside it.
+/// Driving forward cannot reduce that offset, so the 2 cm disc was never
+/// reached and FTC aborted on "timeout approaching pivot corner" with the robot
+/// standing on the corner 4-7 cm to the side (field 2026-11-13, twin corners a
+/// few cm apart after a pivot that ended 9 deg short). A normal approach, with
+/// the corner ahead, still stops within `tolerance_m`, so row ends are not
+/// shortened. The pivot itself is gated on the live pose (sweep + departure).
+inline bool PivotArrived(double corner_x_m,
+                         double corner_y_m,
+                         double tolerance_m,
+                         double lateral_tolerance_m = 0.0)
 {
-  return std::hypot(corner_x_m, corner_y_m) <= tolerance_m;
+  if (std::hypot(corner_x_m, corner_y_m) <= tolerance_m)
+    return true;
+  // Abeam = more beside than ahead: a corner (almost) straight ahead keeps the
+  // disc even when it is within `tolerance_m` along the axis.
+  return std::abs(corner_x_m) <= tolerance_m && std::abs(corner_y_m) > std::abs(corner_x_m) &&
+         std::abs(corner_y_m) <= std::max(tolerance_m, lateral_tolerance_m);
 }
 
 /// True once the robot faces the outgoing heading within `tolerance_rad`.

@@ -1739,7 +1739,7 @@ def test_collision_monitor_polygons_follow_the_chassis() -> None:
             f"{polygon}.points must be DERIVED from the chassis footprint at "
             "launch, not left as a literal in the overlay yaml."
         )
-    assert re.search(r"_poly\(\s*fp_f \+ 0\.12,\s*fp_f - 0\.02,\s*fp_hw\)", src)
+    assert re.search(r"_poly\(\s*fp_f \+ 0\.05,\s*fp_f - 0\.02,\s*fp_hw\)", src)
     assert re.search(r"_poly\(\s*fp_f \+ 0\.05,\s*fp_r - 0\.05,\s*fp_hw\)", src)
     # The footprint triple must be bound unconditionally — reading it from the
     # injection closure when only an `if rp:` branch assigned it is the
@@ -1897,3 +1897,25 @@ def test_ftc_safety_critical_keys_are_stated_explicitly(overlay: str) -> None:
             "is not a safe value for this robot"
         )
         assert low <= ftc[key] <= high, f"FollowCoveragePath.{key}={ftc[key]} outside [{low}, {high}]"
+
+
+def test_collision_monitor_transform_tolerance_is_top_level() -> None:
+    """collision_monitor declares a TOP-LEVEL `transform_tolerance`. The nested
+    `controller.transform_tolerance` spelling belongs to docking_server; under
+    collision_monitor it is never declared, so the node silently ran on the
+    0.1 s default (found live 2026-11-13)."""
+    base = _load_yaml("nav2_params_base.yaml")["collision_monitor"]["ros__parameters"]
+    assert "controller.transform_tolerance" not in base
+    assert "controller" not in base
+    assert float(base["transform_tolerance"]) == 0.5
+
+
+def test_lidar_collision_monitor_approach_horizon() -> None:
+    """Both LiDAR front approach gates share one look-ahead horizon, short
+    enough not to hold the robot where FTC already found clearance (0.8 s,
+    field 2026-11-13) and long enough to stop before contact."""
+    cmon = _load_yaml("nav2_params_lidar.yaml")["collision_monitor"]["ros__parameters"]
+    horizons = {name: float(cmon[name]["time_before_collision"])
+                for name in ("FootprintApproach", "PolygonStopNarrow")}
+    assert len(set(horizons.values())) == 1, horizons
+    assert 0.5 <= horizons["FootprintApproach"] <= 1.0, horizons
