@@ -1392,7 +1392,12 @@ collision_monitor:
     # straight to twist_mux on cmd_vel_monitored.
     cmd_vel_out_topic: cmd_vel_monitored
     state_topic: collision_monitor_state
-    controller.transform_tolerance: 0.5
+    # TOP-LEVEL key: collision_monitor declares `transform_tolerance` itself.
+    # It used to read `controller.transform_tolerance` (the docking_server
+    # spelling), which this node never declares, so it silently ran on Nav2's
+    # 0.1 s default — too tight for base_shift_correction against a LiDAR scan
+    # stamped up to ~0.2 s behind the forward-stamped TF on the Pi.
+    transform_tolerance: 0.5
     # Source timeout: how long before stale sensor data triggers a stop.
     # 1.5 s (was 5.0 — SAFETY_REVIEW_2026-07-23 A-C2): at the 0.20 m/s mow
     # speed a 5 s stale window let a dead LiDAR/scan-filter chain mow BLIND for
