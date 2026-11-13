@@ -647,6 +647,97 @@ TEST_F(CancelOnHaltTest, DockRobotStillWantedAfterDelayedAcceptanceIsNotCanceled
   EXPECT_FALSE(ctx->docking_active);
 }
 
+TEST_F(CancelOnHaltTest, UndockRobotHaltedBeforeAcceptanceCancelsTheLateGoal)
+{
+  undock->holdAcceptance(true);
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><UndockRobot/></BehaviorTree></root>",
+      blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return undock->acceptanceRequested();
+      },
+      5.0));
+  tree->haltTree();
+
+  undock->holdAcceptance(false);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return undock->goalCount() == 1;
+      },
+      5.0));
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return undock->isCanceling(0);
+      },
+      5.0))
+      << "orphaned undock goal left running";
+  undock->canceled(0);
+}
+
+// The scenario #772 describes: the server accepted the goal, then the node is
+// halted before its next tick reads the answer.
+TEST_F(CancelOnHaltTest, UndockRobotHaltedAfterAcceptanceBeforeTheNextTickCancelsTheGoal)
+{
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><UndockRobot/></BehaviorTree></root>",
+      blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return undock->goalCount() == 1;
+      },
+      5.0));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));  // the answer reaches the node
+  tree->haltTree();
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return undock->isCanceling(0);
+      },
+      5.0))
+      << "orphaned undock goal left running";
+  undock->canceled(0);
+}
+
+TEST_F(CancelOnHaltTest, UndockRobotStillWantedAfterDelayedAcceptanceIsNotCanceled)
+{
+  undock->holdAcceptance(true);
+  tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+      "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\"><UndockRobot/></BehaviorTree></root>",
+      blackboard));
+  ASSERT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return undock->acceptanceRequested();
+      },
+      5.0));
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+
+  undock->holdAcceptance(false);
+  ASSERT_TRUE(waitFor(
+      [&]()
+      {
+        return undock->goalCount() == 1;
+      },
+      5.0));
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));  // the answer reaches the node
+  EXPECT_FALSE(undock->isCanceling(0));
+  undock->succeed(0);
+  EXPECT_TRUE(waitFor(
+      [&]()
+      {
+        return tree->tickOnce() == BT::NodeStatus::SUCCESS;
+      },
+      5.0));
+}
+
 // BoundaryGuard's GOTO dock-transit exemption, as shipped in main_tree.xml,
 // follows the real DockRobot lifecycle: it holds only while a dock goal runs
 // under COMMAND_GOTO (9), and never again once that DockRobot is halted
