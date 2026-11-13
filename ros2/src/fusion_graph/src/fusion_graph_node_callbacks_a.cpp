@@ -124,20 +124,30 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
     double dt = (stamp - *last_imu_stamp_).seconds();
     if (dt > 0.0 && dt < kMotionIntegrationGapS)
     {
-      graph_->AddGyroDelta(msg->angular_velocity.z, dt);
-      // Local-frame dead reckoning. Yaw integrates the bias-corrected
-      // gyro_z (hardware_bridge subtracts the dock-time IMU bias);
-      // position uses the latest wheel vx with the just-updated yaw.
-      // Sub-cm/sub-° accuracy per IMU sample at typical 91 Hz / 0.5 m/s.
-      const double gz = msg->angular_velocity.z;
+      const double gz_raw = msg->angular_velocity.z;
+      // Local-frame dead reckoning. Yaw integrates the gyro with the graph's
+      // running bias estimate removed (hardware_bridge already subtracts the
+      // dock-time calibration; the graph refines the thermal residual while
+      // parked) — the same rate the graph integrates, so DR and graph yaw no
+      // longer diverge by the residual bias. Position uses the latest wheel vx
+      // with the just-updated yaw.
+      const double gz_corrected = graph_->AddGyroDelta(gz_raw, dt);
+      // Stationary hold (dr_stationary.hpp): wheels still and the gyro below
+      // the hand-push threshold → no yaw integration, exactly like the graph's
+      // stationary snap. Without it a parked robot's odom yaw drifted by the
+      // residual bias and was pulled back at every stationary node.
+      const bool hold_yaw = DrHoldYaw(wheel_vx_, wheel_wz_, gz_raw, dr_stationary_);
+      const double gz = hold_yaw ? 0.0 : gz_corrected;
       // Slip veto (see header): if the wheels claim a yaw rate the
       // gyro doesn't see, the chassis is being skated, not driven —
       // its forward velocity is phantom. Drop the translation for
       // this sample; yaw still integrates from the gyro, which is the
       // honest source during a slipping pivot. Without this the odom
       // frame accumulates the fictitious forward motion unbounded.
-      const bool dr_slip =
-          DrSlipVetoed(wheel_wz_, gz, dr_slip_wheel_min_rad_per_s_, dr_slip_gyro_max_rad_per_s_);
+      const bool dr_slip = DrSlipVetoed(wheel_wz_,
+                                        gz_corrected,
+                                        dr_slip_wheel_min_rad_per_s_,
+                                        dr_slip_gyro_max_rad_per_s_);
       const double vx_eff = dr_slip ? 0.0 : wheel_vx_;
       {
         // tf_state_mu_: dr_* is read concurrently by TfBroadcastLoop.
@@ -155,11 +165,11 @@ void FusionGraphNode::OnImu(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       // × Δθ in the map frame; without this term the gate sees a
       // pure-sweep jump as if it were a phantom translation and
       // rejects every legitimate fix.
-      abs_dtheta_since_last_gps_rad_ += std::abs(gz) * dt;
+      abs_dtheta_since_last_gps_rad_ += std::abs(gz_raw) * dt;
       // Parallel accumulator for the stuck-receiver gate's stand-down check
       // — see fusion_graph_node.hpp for why this one resets every GPS
       // message (bounded) while the gate's distance accumulator does not.
-      abs_dtheta_since_last_gps_sample_rad_ += std::abs(gz) * dt;
+      abs_dtheta_since_last_gps_sample_rad_ += std::abs(gz_raw) * dt;
     }
   }
   const auto odom =
@@ -207,6 +217,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     last_rtk_fixed_stamp_.reset();
     last_usable_gnss_stamp_.reset();
     last_gps_map_xy_.reset();
+    last_gps_sigma_m_.reset();
     ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
     RCLCPP_WARN(get_logger(), "fusion_graph: ROS time moved backward; GNSS evidence epoch reset");
     return;
@@ -223,6 +234,13 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     }
     return;
   }
+
+  // Stuck-gate stand-down input: rotation since the PREVIOUS GNSS observation.
+  // Captured and reset here, before any gate below can return, so it resets on
+  // every new observation whatever its verdict (see fusion_graph_node.hpp —
+  // it must answer "are we turning right now").
+  const double abs_dtheta_since_prev_sample_rad = abs_dtheta_since_last_gps_sample_rad_;
+  abs_dtheta_since_last_gps_sample_rad_ = 0.0;
 
   // First valid fix gates the dock-arrival pose seed below. Without
   // this, a robot that boots already docked could anchor on the dock
@@ -253,9 +271,9 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // though the wrong-fix/sigma/docking gates below can each return before
   // reaching the stuck check itself. NaN-initialized last_gps_lat_/lon_
   // always count the first real fix as a change. Only the DISTANCE
-  // accumulator resets here — the rotation stand-down accumulator resets
-  // unconditionally further down (every message, not just on a value
-  // change); see fusion_graph_node.hpp for why the two differ.
+  // accumulator resets here — the rotation stand-down accumulator was reset
+  // at the top for every new observation (not just on a value change); see
+  // fusion_graph_node.hpp for why the two differ.
   if (GpsValueChanged(msg->latitude, msg->longitude, last_gps_lat_, last_gps_lon_))
   {
     wheel_dist_since_gps_value_changed_m_ = 0.0;
@@ -263,58 +281,18 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   last_gps_lat_ = msg->latitude;
   last_gps_lon_ = msg->longitude;
 
-  // RTK wrong-fix detection — fires before any QueueGnss so a bad
-  // sample never reaches iSAM2. F9P can re-solve the carrier-phase
-  // ambiguity on a different integer set after a brief signal drop
-  // (vegetation, multipath spike) and the new solution jumps by
-  // 3-10 cm while still reporting status=GBAS_FIX with sub-cm
-  // covariance. If the wheel says we didn't move, the jump is not
-  // real motion — drop the sample.
-  if (last_gps_map_xy_)
-  {
-    const double jump = std::hypot(mx - (*last_gps_map_xy_).x(), my - (*last_gps_map_xy_).y());
-    // Motion-consistent gate: the GPS step must be explainable by how far the
-    // chassis ACTUALLY travelled since the last fix (wheel arc + lever-arm
-    // sweep from in-place rotation) plus a fixed slack budget. The motion-
-    // consistent gate compares the jump against actual wheel travel at any
-    // speed and reduces to the old fixed budget when stationary (wheel_dist≈0).
-    // rtk_wrongfix_max_jump_m is the slack on top of travel — size it to a
-    // few × the raw GNSS jitter σ. See rtk_wrongfix_gate.hpp for the pure
-    // decision function + unit tests (test_rtk_wrongfix_gate.cpp).
-    if (GpsJumpImplausible(jump,
-                           rtk_wrongfix_max_jump_m_,
-                           lever_arm_radius_m_,
-                           abs_dtheta_since_last_gps_rad_,
-                           wheel_dist_since_last_gps_m_))
-    {
-      graph_->RecordGpsRejectWrongFix();
-      RCLCPP_WARN_THROTTLE(get_logger(),
-                           *get_clock(),
-                           2000,
-                           "fusion_graph: RTK wrong-fix? jump=%.3f m, wheel=%.3f m, "
-                           "sweep_budget=%.3f m — sample dropped",
-                           jump,
-                           wheel_dist_since_last_gps_m_,
-                           lever_arm_radius_m_ * abs_dtheta_since_last_gps_rad_);
-      // Reset accumulators + cache so a repeated wrong-fix doesn't
-      // permanently lock us out — once two consecutive samples agree,
-      // last_gps_map_xy_ updates and we resume normal flow. See
-      // rtk_wrongfix_gate.hpp's header comment: this reset MUST happen on
-      // reject as well as accept, or the gate becomes the reverted
-      // GnssMobileGate's reject-forever failure mode.
-      last_gps_map_xy_ = gtsam::Vector2(mx, my);
-      ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
-      return;
-    }
-  }
-  last_gps_map_xy_ = gtsam::Vector2(mx, my);
-  ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
-
   // covariance[0] is variance of east; take sqrt for sigma. Use the
   // diagonal mean for a single sigma_xy (factor model is isotropic).
   const double var_x = msg->position_covariance[0];
   const double var_y = msg->position_covariance[4];
-  double sigma = std::sqrt(0.5 * (var_x + var_y));
+  const double receiver_sigma = std::sqrt(0.5 * (var_x + var_y));
+  double sigma = receiver_sigma;
+  // Both precision rejects run BEFORE the wrong-fix gate below, so a fix with no
+  // trustworthy accuracy never becomes that gate's reference position (it used
+  // to, and the good fix after it then looked like a jump and was dropped).
+  // They leave the gate's reference and accumulators untouched: the next valid
+  // fix is compared with the last valid one against the travel since then.
+  //
   // SAFETY: a fix with UNKNOWN covariance, or a zero/non-finite reported σ, has
   // NO trustworthy accuracy. The old code set σ=-1.0 here as a "floor" sentinel,
   // but graph_manager then clamps σ UP to gps_sigma_floor (3 mm) — so a fix with
@@ -369,6 +347,64 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                          gps_max_sigma_reject_m_);
     return;
   }
+
+  // RTK wrong-fix detection — fires before any QueueGnss so a bad
+  // sample never reaches iSAM2. F9P can re-solve the carrier-phase
+  // ambiguity on a different integer set after a brief signal drop
+  // (vegetation, multipath spike) and the new solution jumps by
+  // 3-10 cm while still reporting status=GBAS_FIX with sub-cm
+  // covariance. If the wheel says we didn't move, the jump is not
+  // real motion — drop the sample.
+  if (last_gps_map_xy_)
+  {
+    const double jump = std::hypot(mx - (*last_gps_map_xy_).x(), my - (*last_gps_map_xy_).y());
+    // Motion-consistent gate: the GPS step must be explainable by how far the
+    // chassis ACTUALLY travelled since the last fix (wheel arc + lever-arm
+    // sweep from in-place rotation) plus a fixed slack budget. The motion-
+    // consistent gate compares the jump against actual wheel travel at any
+    // speed and reduces to the old fixed budget when stationary (wheel_dist≈0).
+    // rtk_wrongfix_max_jump_m is the slack on top of travel — size it to a
+    // few × the raw GNSS jitter σ. See rtk_wrongfix_gate.hpp for the pure
+    // decision function + unit tests (test_rtk_wrongfix_gate.cpp).
+    // The slack grows with the reported σ of the two fixes compared, so RTK
+    // Float jitter on a parked robot is not read as a wrong-fix
+    // (WrongFixSlackM; unchanged under RTK-Fixed).
+    const double slack_m = WrongFixSlackM(rtk_wrongfix_max_jump_m_,
+                                          rtk_wrongfix_sigma_k_,
+                                          last_gps_sigma_m_.value_or(receiver_sigma),
+                                          receiver_sigma);
+    if (GpsJumpImplausible(jump,
+                           slack_m,
+                           lever_arm_radius_m_,
+                           abs_dtheta_since_last_gps_rad_,
+                           wheel_dist_since_last_gps_m_))
+    {
+      graph_->RecordGpsRejectWrongFix();
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           2000,
+                           "fusion_graph: RTK wrong-fix? jump=%.3f m, wheel=%.3f m, "
+                           "sweep_budget=%.3f m, slack=%.3f m — sample dropped",
+                           jump,
+                           wheel_dist_since_last_gps_m_,
+                           lever_arm_radius_m_ * abs_dtheta_since_last_gps_rad_,
+                           slack_m);
+      // Reset accumulators + cache so a repeated wrong-fix doesn't
+      // permanently lock us out — once two consecutive samples agree,
+      // last_gps_map_xy_ updates and we resume normal flow. See
+      // rtk_wrongfix_gate.hpp's header comment: this reset MUST happen on
+      // reject as well as accept, or the gate becomes the reverted
+      // GnssMobileGate's reject-forever failure mode.
+      last_gps_map_xy_ = gtsam::Vector2(mx, my);
+      last_gps_sigma_m_ = receiver_sigma;
+      ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
+      return;
+    }
+  }
+  last_gps_map_xy_ = gtsam::Vector2(mx, my);
+  last_gps_sigma_m_ = receiver_sigma;
+  ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
+
   // Robust noise model on GPS — applied unconditionally now (was
   // RTK-Float only). Field measurement 2026-05-17 (gps_stability.py,
   // 10 min stationary on RTK-Fixed 100 %) showed even Fixed solutions
@@ -549,7 +585,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // GPS trust it does not need. Both DO apply to the "yielding" docked case
   // just below (a confident RTK-Fixed sample overriding the dock prior),
   // where a stuck receiver must not be allowed to win that override.
-  if (last_position_dead_reckoning_valid_ && last_position_dead_reckoning_)
+  if (PositionDeadReckoningFresh())
   {
     graph_->RecordGpsRejectDeadReckoning();
     RCLCPP_WARN_THROTTLE(get_logger(),
@@ -565,18 +601,17 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // differed from the previous sample; the distance accumulator is updated
   // unconditionally above (search "since the reported GPS VALUE last
   // changed") so it stays correct across every earlier return in this
-  // function too. The rotation stand-down accumulator, by contrast, resets
-  // right below regardless of this gate's verdict — see fusion_graph_node.hpp
+  // function too. The rotation stand-down accumulator, by contrast, was reset
+  // at the top for every new observation, whatever its verdict — see fusion_graph_node.hpp
   // for why: it must answer "are we turning right now", not "has there been
   // any turn since the receiver got stuck" (the latter is what silently
   // disabled this gate for the rest of a real drive in the field, 2026-09-21
   // — a single transit turn exceeded the stand-down budget within seconds
   // and it never got the chance to reset again while /gps/fix stayed stuck).
   const bool gps_stuck = GpsStuckImplausible(wheel_dist_since_gps_value_changed_m_,
-                                             abs_dtheta_since_last_gps_sample_rad_,
+                                             abs_dtheta_since_prev_sample_rad,
                                              gps_stuck_min_wheel_dist_m_,
                                              gps_stuck_max_yaw_rad_);
-  abs_dtheta_since_last_gps_sample_rad_ = 0.0;
   if (gps_stuck)
   {
     graph_->RecordGpsRejectStuckValue();
@@ -595,6 +630,7 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
   // state at callback-delivery time.
   const rclcpp::Time measurement_stamp(msg->header.stamp, get_clock()->get_clock_type());
   std::optional<uint64_t> measurement_node;
+  std::optional<gtsam::Vector2> antenna_in_node;
   if (graph_->IsInitialized() && measurement_stamp.nanoseconds() != 0)
   {
     constexpr double kFutureStampToleranceS = 0.5;
@@ -617,11 +653,29 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                            "fusion_graph: no live graph node at/before GNSS epoch; sample dropped");
       return;
     }
+    // Retime to the acquisition instant. The node is up to one node period
+    // (more when stationary-throttled) before the fix; at mowing speed that is
+    // ~1 cm of travel the factor used to attribute to the node itself. The
+    // continuous odometry history (also used by the LiDAR anchor) gives the
+    // node→acquisition displacement; the antenna at that instant, expressed in
+    // the node's body frame, replaces the lever arm. No history match (just
+    // re-seeded, stamp newer than the last IMU sample) = previous behaviour.
+    if (const auto at = lidar_scan_history_.At(measurement_stamp.seconds(),
+                                               this->now().seconds(),
+                                               kGnssRetimeMaxAgeS);
+        at && graph_->GetPose(at->index))
+    {
+      measurement_node = at->index;
+      const gtsam::Point2 antenna =
+          at->offset.transformFrom(gtsam::Point2(lever_arm_x_m_, lever_arm_y_m_));
+      antenna_in_node = gtsam::Vector2(antenna.x(), antenna.y());
+    }
   }
 
   SynchronizeSupportEpoch();
   const uint64_t ingestion_token = ++next_ingestion_token_;
-  if (!graph_->QueueGnss(mx, my, sigma, /*robust=*/true, measurement_node, ingestion_token))
+  if (!graph_->QueueGnss(
+          mx, my, sigma, /*robust=*/true, measurement_node, ingestion_token, antenna_in_node))
   {
     RCLCPP_WARN_THROTTLE(get_logger(),
                          *get_clock(),
@@ -670,25 +724,29 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
     auto snap = graph_->LatestSnapshot();
     if (snap)
     {
-      const double dx = mx - snap->pose.x();
-      const double dy = my - snap->pose.y();
+      // Use the freshest yaw seed if we have one (COG/mag have already
+      // populated seed_yaw_ if they're alive); otherwise keep the
+      // autoloaded yaw — it's better than nothing and the next COG
+      // sample will pull it.
+      const double yaw = seed_yaw_.value_or(snap->pose.theta());
+      // mx/my is the ANTENNA; the graph pose is base_footprint. Remove the
+      // lever arm rotated by the heading being anchored.
+      const gtsam::Pose2 anchor =
+          gtsam::Pose2(mx, my, yaw) * gtsam::Pose2(-lever_arm_x_m_, -lever_arm_y_m_, 0.0);
+      const double dx = anchor.x() - snap->pose.x();
+      const double dy = anchor.y() - snap->pose.y();
       const double dist = std::hypot(dx, dy);
       if (dist > rtk_autoload_override_threshold_m_)
       {
-        // Use the freshest yaw seed if we have one (COG/mag have already
-        // populated seed_yaw_ if they're alive); otherwise keep the
-        // autoloaded yaw — it's better than nothing and the next COG
-        // sample will pull it.
-        const double yaw = seed_yaw_.value_or(snap->pose.theta());
-        const gtsam::Pose2 anchor(mx, my, yaw);
-        // σ=5mm matches RTK-Fixed reported precision; σ_yaw 5° is loose
-        // enough to let COG correct it without fighting if the
-        // autoloaded yaw is wrong.
-        graph_->ForceAnchor(snap->node_index, anchor, 0.005, 5.0 * M_PI / 180.0);
+        // Rigid gauge move of the whole loaded trajectory (like the dock
+        // seed), not a prior: a prior had to out-vote the reload's own pins and
+        // left both a residual offset and the stale heading. σ 5 mm on XY
+        // matches RTK-Fixed; σ_yaw 5° stays loose so COG corrects the yaw.
+        graph_->RigidTransformAll(anchor.compose(snap->pose.inverse()), 0.005, 5.0 * M_PI / 180.0);
         SynchronizeSupportEpoch();
         ResetLidarTiming();
-        // ForceAnchor publishes an estimate revision; OnTimer applies its
-        // rigid correction while retaining any DR tail beyond the head.
+        // The estimate revision is applied by OnTimer as a left correction of
+        // the map→odom anchor, retaining the DR tail beyond the head.
         rtk_autoload_override_done_ = true;
         RCLCPP_WARN(get_logger(),
                     "fusion_graph: RTK-Fixed override of autoloaded pose — "
@@ -696,8 +754,8 @@ void FusionGraphNode::OnGnss(sensor_msgs::msg::NavSatFix::ConstSharedPtr msg)
                     static_cast<unsigned long>(snap->node_index),
                     snap->pose.x(),
                     snap->pose.y(),
-                    mx,
-                    my,
+                    anchor.x(),
+                    anchor.y(),
                     dist);
       }
       else

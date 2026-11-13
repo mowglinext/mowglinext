@@ -226,11 +226,6 @@ if(BUILD_TESTING)
   )
   target_link_libraries(test_pose_extrapolator fusion_graph_core)
 
-  ament_add_gtest(test_map_odom_slew
-    test/test_map_odom_slew.cpp
-  )
-  target_link_libraries(test_map_odom_slew fusion_graph_core)
-
   ament_add_gtest(test_yaw_gates
     test/test_yaw_gates.cpp
   )
@@ -245,6 +240,16 @@ if(BUILD_TESTING)
     test/test_dr_slip_veto.cpp
   )
   target_link_libraries(test_dr_slip_veto fusion_graph_core)
+
+  ament_add_gtest(test_dr_stationary
+    test/test_dr_stationary.cpp
+  )
+  target_link_libraries(test_dr_stationary fusion_graph_core)
+
+  ament_add_gtest(test_graph_corrections
+    test/test_graph_corrections.cpp
+  )
+  target_link_libraries(test_graph_corrections fusion_graph_core)
 
   ament_add_gtest(test_rtk_wrongfix_gate
     test/test_rtk_wrongfix_gate.cpp

@@ -324,7 +324,13 @@ try
   const uint64_t cutoff = (params_.max_graph_nodes > 0 && next_idx > params_.max_graph_nodes)
                               ? next_idx - params_.max_graph_nodes
                               : 0;
-  auto pin_noise = MakeDiagonal({0.01, 0.01, 0.01});
+  // Same strength as a fresh Initialize(): a persisted pose is last session's
+  // belief, and the robot may have been moved since. At 1 cm / 0.6° the
+  // reload out-voted the very seeds meant to correct it (RTK override 5 mm /
+  // 5°, dock re-anchor 10 cm / 2°), leaving a stale heading for the first
+  // seconds of driving.
+  auto pin_noise =
+      MakeDiagonal({params_.prior_sigma_xy, params_.prior_sigma_xy, params_.prior_sigma_theta});
   gtsam::NonlinearFactorGraph fg;
   gtsam::Values kept_values;
   for (const auto& key_value : loaded_values)

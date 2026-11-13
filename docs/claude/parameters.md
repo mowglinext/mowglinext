@@ -514,7 +514,7 @@ parameters remain directly under `FollowPath`.
 | Concern | Lines | Representative keys |
 |---|---|---|
 | Graph cadence | 8–24 | `node_period_s` 0.02 (**overridden to 0.04 by `navigation.launch.py:1090`**) |
-| Odom re-base | 25–39 | `odom_rebase_dist_m` 6.0 |
+| Odom re-base | 25–40 | `odom_rebase_dist_m` 0.0 (off since 2026-11: a re-base jumps odom→base_footprint; the lever-arm premise only held for the removed slew limiter) |
 | Wheel between-factor noise | 40–59 | `wheel_sigma_x_per_sqrt_m` 0.05, `wheel_sigma_y_per_sqrt_m` 0.005 (non-holonomic σ_y ≪ σ_x), `wheel_creep_speed_mps`, `wheel_sigma_theta` |
 | Gyro between-factor | 60–98 | `gyro_sigma_theta` 0.005 |
 | Pivot downweight | 99–117 | `pivot_gate_dtheta_rad` 0.012, `pivot_wheel_sigma_x` 0.5 |

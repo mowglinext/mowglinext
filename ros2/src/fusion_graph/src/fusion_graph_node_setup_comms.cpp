@@ -111,12 +111,9 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
   }
 
   // /imu/fg_yaw — yaw-only sensor_msgs/Imu published BEST_EFFORT to
-  // match cog_to_imu / mag_yaw_publisher conventions. Lets ekf_map_node
-  // (when running as primary in observer mode) subscribe as a yaw
-  // source, replacing the mag_yaw_publisher slot. fusion_graph yaw is
-  // typically σ ≈ 0.5° vs ekf's σ ≈ 13° in stationary, so this
-  // dramatically tightens the EKF map-frame yaw without changing the
-  // primary localizer.
+  // match cog_to_imu / mag_yaw_publisher conventions. The fused map-frame
+  // heading as a plain IMU message, for tooling and A/B comparison; no
+  // in-repo consumer today.
   pub_fg_yaw_ = create_publisher<sensor_msgs::msg::Imu>("/imu/fg_yaw", rclcpp::SensorDataQoS());
   pub_diag_ =
       create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/fusion_graph/diagnostics", 10);
@@ -368,6 +365,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         last_rtk_fixed_stamp_.reset();
         last_usable_gnss_stamp_.reset();
         last_gps_map_xy_.reset();
+        last_gps_sigma_m_.reset();
         ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
         // Re-zero the dead-reckoning frame. Without this the odom→base
         // transform keeps whatever offset it had accumulated (observed
@@ -482,6 +480,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
             std::to_string(static_cast<int>(lidar_anchor_gate_ ? lidar_anchor_gate_->state()
                                                                : LidarAnchorState::kDisabled)));
         add("lidar_map_occupied_cells", std::to_string(lidar_map_occupied_cells_));
+        add("lidar_map_insert_skipped_yaw", std::to_string(lidar_map_insert_skipped_yaw_));
         add("lidar_filter_calls", std::to_string(lidar_filter_calls_));
         add("lidar_filter_compute_ms", std::to_string(lidar_filter_compute_ms_));
         add("lidar_filter_map_builds", std::to_string(lidar_filter_map_builds_));
@@ -528,6 +527,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         add("gps_rejects_wrongfix", std::to_string(stats.gps_rejects_wrongfix));
         add("gps_rejects_dead_reckoning", std::to_string(stats.gps_rejects_dead_reckoning));
         add("gps_rejects_stuck_value", std::to_string(stats.gps_rejects_stuck_value));
+        add("isam_resets", std::to_string(stats.isam_resets));
+        add("cog_flip_recoveries", std::to_string(cog_flip_recoveries_));
         add("stationary_hand_push", std::to_string(stats.stationary_hand_push));
         add("slip_veto", std::to_string(stats.slip_veto));
         add("live_nodes", std::to_string(graph_->LiveNodeCount()));

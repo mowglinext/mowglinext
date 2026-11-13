@@ -43,7 +43,7 @@ struct FtcStallResult
 // currently-commanded, already-ramped movement speed — the reference the
 // stall check compares the odom-measured forward speed against ("we told
 // it to go this fast; is it actually?"). `stall_time` is caller-owned
-// debounce state (mirrors AnchorSlewStep's in-place mutation), accumulated
+// debounce state (mutated in place), accumulated
 // while stalling and reset to 0 the instant traction returns. Returns the
 // eased target plus `in_stall` so the caller can also bound the commanded
 // velocity and freeze the carrot (see the header comment above).

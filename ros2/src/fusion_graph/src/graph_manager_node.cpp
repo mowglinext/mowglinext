@@ -389,6 +389,20 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
     const auto k_bias_prev = Symbol('b', next_index_ - 1);
     const auto k_bias_curr = Symbol('b', next_index_);
 
+    // Load() and RigidTransformAll() restore pose keys only, and a rebase can
+    // window bias keys out: re-create the previous bias variable at the current
+    // estimate with its prior instead of referencing a missing key (which threw
+    // and reset the whole graph on the first node after every load / dock seed).
+    if (!isam_.valueExists(k_bias_prev) && !new_values_.exists(k_bias_prev))
+    {
+      new_values_.insert(k_bias_prev, current_bias_estimate_);
+      new_factors_.add(
+          gtsam::PriorFactor<double>(k_bias_prev,
+                                     current_bias_estimate_,
+                                     gtsam::noiseModel::Diagonal::Sigmas(
+                                         gtsam::Vector1(params_.gyro_bias_prior_sigma_rad_per_s))));
+    }
+
     // Insert the new bias variable initialised at the current best
     // estimate. iSAM2 will refine it on the next update.
     new_values_.insert(k_bias_curr, current_bias_estimate_);
