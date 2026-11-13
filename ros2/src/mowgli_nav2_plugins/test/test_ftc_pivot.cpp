@@ -190,6 +190,9 @@ TEST(FtcPivot, ArrivalAndAlignment)
   // Corner AHEAD: the band never shortens a normal approach.
   EXPECT_FALSE(PivotArrived(0.05, 0.0, kPivotArrivalToleranceM, 0.08));
   EXPECT_FALSE(PivotArrived(0.03, 0.03, kPivotArrivalToleranceM, 0.08));
+  // Within the disc's reach along the axis but more AHEAD than beside: the disc
+  // still governs (ExternalCapWinsDuringApproach, 2.01 cm almost head-on).
+  EXPECT_FALSE(PivotArrived(0.0199, 0.003, kPivotArrivalToleranceM, 0.08));
   // Default lateral band = the disc (old behaviour).
   EXPECT_FALSE(PivotArrived(0.0, 0.05, kPivotArrivalToleranceM));
   const double tol = 10.0 * M_PI / 180.0;
