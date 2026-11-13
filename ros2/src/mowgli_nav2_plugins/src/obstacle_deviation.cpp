@@ -243,6 +243,56 @@ bool ObstacleDeviation::footprintBlocked(const nav2_costmap_2d::Costmap2D& costm
   int my1 = 0;
   costmap.worldToMapEnforceBounds(min_x, min_y, mx0, my0);
   costmap.worldToMapEnforceBounds(max_x, max_y, mx1, my1);
+
+  // Without a zone guard only the local costs can block a sample. Inspect
+  // those bytes first, and compute world coordinates only for candidate hits.
+  // Verify the centre round-trip on both axes before taking this path: at
+  // extreme origins/resolutions floating-point rounding can map a centre to
+  // a different cell. The original sampler below remains authoritative there.
+  bool aligned = !guard.active();
+  const auto centre_maps_back = [&](int mx, int my)
+  {
+    double x = 0.0;
+    double y = 0.0;
+    unsigned int sx = 0;
+    unsigned int sy = 0;
+    costmap.mapToWorld(mx, my, x, y);
+    return costmap.worldToMap(x, y, sx, sy) && sx == static_cast<unsigned int>(mx) &&
+           sy == static_cast<unsigned int>(my);
+  };
+  for (int mx = mx0; aligned && mx <= mx1; ++mx)
+  {
+    aligned = centre_maps_back(mx, my0);
+  }
+  for (int my = my0; aligned && my <= my1; ++my)
+  {
+    aligned = centre_maps_back(mx0, my);
+  }
+  if (aligned)
+  {
+    const auto* cells = costmap.getCharMap();
+    const auto width = costmap.getSizeInCellsX();
+    for (int my = my0; my <= my1; ++my)
+    {
+      const auto* row = cells + static_cast<std::size_t>(my) * width;
+      const auto* end = row + mx1 + 1;
+      for (const auto* hit = row + mx0; hit != end; ++hit)
+      {
+        if (*hit < threshold)
+        {
+          continue;
+        }
+        double cx = 0.0;
+        double cy = 0.0;
+        costmap.mapToWorld(static_cast<unsigned int>(hit - row), my, cx, cy);
+        if (pointInPolygon(world_poly, cx, cy))
+        {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
   for (int my = my0; my <= my1; ++my)
   {
     for (int mx = mx0; mx <= mx1; ++mx)
