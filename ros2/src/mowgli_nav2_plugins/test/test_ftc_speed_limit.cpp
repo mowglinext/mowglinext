@@ -1304,6 +1304,9 @@ protected:
 
 // A resumed FOLLOWING state can leave the stop point beside the body. The
 // ordinary driving floor must not sustain an orbit outside the arrival radius.
+// Since 2026-11-13 a corner ABEAM within pivot_arrival_lateral_tolerance_m is
+// an arrival (field: the robot stalled 10 s 4-7 cm beside the corner and FTC
+// aborted); the 2 cm disc only governs a corner ahead.
 TEST_P(FtcPivotArrival, AsideCornerConvergesWithoutDrivingFloorOrbit)
 {
   SetParameter("goal_timeout", 12.0);
@@ -1326,7 +1329,7 @@ TEST_P(FtcPivotArrival, AsideCornerConvergesWithoutDrivingFloorOrbit)
     EXPECT_LE(command.linear.x, .3);
     if (Access::State(controller_) == 5)
     {
-      EXPECT_LE(std::hypot(x_ - 1, y_), .02);
+      EXPECT_LE(std::hypot(x_ - 1, y_), .08);
       pivoted = true;
     }
     if (pivoted && Access::State(controller_) == 1 && Access::Index(controller_) > 20)

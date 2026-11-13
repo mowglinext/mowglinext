@@ -178,7 +178,9 @@ inline bool PivotArrived(double corner_x_m,
 {
   if (std::hypot(corner_x_m, corner_y_m) <= tolerance_m)
     return true;
-  return std::abs(corner_x_m) <= tolerance_m &&
+  // Abeam = more beside than ahead: a corner (almost) straight ahead keeps the
+  // disc even when it is within `tolerance_m` along the axis.
+  return std::abs(corner_x_m) <= tolerance_m && std::abs(corner_y_m) > std::abs(corner_x_m) &&
          std::abs(corner_y_m) <= std::max(tolerance_m, lateral_tolerance_m);
 }
 
