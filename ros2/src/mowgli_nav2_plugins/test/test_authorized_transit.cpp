@@ -254,9 +254,24 @@ TEST(TransitGeometry, RasterMatchesOriginalCellClassifier)
           for (unsigned x = 0; x < grid.width; ++x)
           {
             const auto p = grid.centre(x, y);
-            ASSERT_EQ(bool(mask[y * grid.width + x]), geometry.authorized(p) && geometry.clear(p))
+            const auto cell = mask[y * grid.width + x];
+            ASSERT_EQ(bool(cell), geometry.authorized(p) && geometry.clear(p))
                 << "shift=" << shift << " resolution=" << resolution << " seam=" << seam
                 << " cell=" << x << "," << y;
+            if (cell > 1)
+            {
+              for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                  const int nx = static_cast<int>(x) + dx, ny = static_cast<int>(y) + dy;
+                  if (nx >= 0 && nx < static_cast<int>(grid.width) && ny >= 0 &&
+                      ny < static_cast<int>(grid.height) && mask[ny * grid.width + nx] > 1)
+                  {
+                    const auto q = grid.centre(nx, ny);
+                    EXPECT_TRUE(geometry.segmentAuthorized(p, q) && geometry.segmentClear(p, q));
+                  }
+                }
+            }
           }
       }
 }

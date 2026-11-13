@@ -4,8 +4,12 @@
 #include "fusion_graph/factors.hpp"
 
 #include <cmath>
+#include <iostream>
+#include <memory>
+#include <string>
 
 #include <gtsam/base/Matrix.h>
+#include <gtsam/linear/JacobianFactor.h>
 
 namespace fusion_graph
 {
@@ -157,6 +161,63 @@ gtsam::Vector YawUnaryFactor::evaluateError(const gtsam::Pose2& X, OptMat H) con
 gtsam::NonlinearFactor::shared_ptr YawUnaryFactor::clone() const
 {
   return gtsam::NonlinearFactor::shared_ptr(new YawUnaryFactor(*this));
+}
+
+// ---------------------------------------------------------------------------
+// LinkedPosePriorFactor
+// ---------------------------------------------------------------------------
+
+LinkedPosePriorFactor::LinkedPosePriorFactor(const gtsam::PriorFactor<gtsam::Pose2>& prior,
+                                             gtsam::Key link)
+    : gtsam::NonlinearFactor(gtsam::KeyVector{prior.key(), link}), prior_(prior)
+{
+}
+
+std::shared_ptr<gtsam::GaussianFactor> LinkedPosePriorFactor::linearize(
+    const gtsam::Values& c) const
+{
+  // The prior's own linearisation, verbatim (including the unit model a
+  // constrained prior would carry), plus a zero block for the link.
+  const auto jf = std::dynamic_pointer_cast<gtsam::JacobianFactor>(prior_.linearize(c));
+  if (!jf)
+    return jf;
+  return std::make_shared<gtsam::JacobianFactor>(keys()[0],
+                                                 jf->getA(jf->begin()),
+                                                 keys()[1],
+                                                 gtsam::Matrix::Zero(3, 3),
+                                                 jf->getb(),
+                                                 jf->get_model());
+}
+
+gtsam::NonlinearFactor::shared_ptr LinkedPosePriorFactor::clone() const
+{
+  return gtsam::NonlinearFactor::shared_ptr(new LinkedPosePriorFactor(*this));
+}
+
+bool LinkedPosePriorFactor::equals(const gtsam::NonlinearFactor& other, double tol) const
+{
+  const auto* o = dynamic_cast<const LinkedPosePriorFactor*>(&other);
+  return o && keys() == o->keys() && prior_.equals(o->prior_, tol);
+}
+
+void LinkedPosePriorFactor::print(const std::string& s, const gtsam::KeyFormatter& kf) const
+{
+  std::cout << s << "LinkedPosePriorFactor (zero-Jacobian link to " << kf(keys()[1]) << ")\n";
+  prior_.print("  ", kf);
+}
+
+void AddPosePriorTree(gtsam::NonlinearFactorGraph& fg,
+                      const std::vector<gtsam::PriorFactor<gtsam::Pose2>>& priors,
+                      size_t plain_tail)
+{
+  const size_t linked = priors.size() > plain_tail ? priors.size() - plain_tail : 0;
+  for (size_t j = 0; j < priors.size(); ++j)
+  {
+    if (j == 0 || j >= linked)
+      fg.add(priors[j]);
+    else
+      fg.add(LinkedPosePriorFactor(priors[j], priors[(j - 1) / 2].key()));
+  }
 }
 
 }  // namespace fusion_graph

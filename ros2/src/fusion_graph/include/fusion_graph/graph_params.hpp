@@ -29,6 +29,10 @@ inline constexpr double kTunedNodePeriodS = 0.04;
 // sigma would make the GTSAM noise model singular.
 inline constexpr double kMinWheelSigmaM = 1.0e-4;
 
+/// Encoder-level stillness for the gyro-bias estimator: per-node wheel
+/// translation (m) and wheel yaw (rad) at or below this are "no tick moved".
+inline constexpr double kBiasStillWheelEps = 1.0e-4;
+
 struct GraphParams
 {
   // Node creation cadence — one Pose2 per node_period_s of wall-clock.
@@ -296,6 +300,14 @@ struct GraphParams
   // Aligned with stationary_gyro_thresh_rad_per_s but kept separate
   // so the two gates can be tuned independently.
   double gyro_bias_max_sample_rad_per_s = 0.10;
+  // The bias is learned only after the wheels have reported NO motion at all
+  // (encoder-level stillness, kBiasStillWheelEps) for at least this long.
+  // The ordinary per-node stationary gate admits up to 0.05 rad/s of wheel
+  // yaw — a pivot finishing or a slow corner approach — and the EMA learned
+  // that real rotation as bias (field 2026-11-12: +0.011 rad/s over 4 min of
+  // mowing against a -0.004 rad/s change at the dock). A short stop between
+  // manoeuvres is excluded too: the chassis is still settling.
+  double gyro_bias_min_still_s = 1.0;
 
   // Adaptive process-noise inflation on wheel σ_x.
   //

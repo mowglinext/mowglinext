@@ -128,9 +128,14 @@ std::vector<uint8_t> rasterAuthorization(const Geometry& geometry,
   std::vector<uint8_t> allowed(std::size_t{grid.width} * grid.height, 0);
   if (allowed.empty())
     return allowed;
+  const double max_coord = std::max(std::abs(grid.origin_x) + grid.width * grid.resolution,
+                                    std::abs(grid.origin_y) + grid.height * grid.resolution);
+  const double ulp = std::nextafter(max_coord, INFINITY) - max_coord;
+  const bool mark_interior = grid.resolution > kEpsilon && ulp < 1e-4 * grid.resolution;
+  const uint8_t authorized_value = mark_interior ? 2 : 1;
   const auto set = [&](unsigned x, unsigned y)
   {
-    allowed[std::size_t{y} * grid.width + x] = 1;
+    allowed[std::size_t{y} * grid.width + x] = authorized_value;
   };
   const auto clear = [&](unsigned x, unsigned y)
   {
@@ -145,6 +150,21 @@ std::vector<uint8_t> rasterAuthorization(const Geometry& geometry,
   {
     rasterInside(geometry.blocked[i], grid, check, clear);
     rasterEdges(geometry.blocked[i], grid, geometry.margin(i) + kEpsilon, false, check, clear);
+  }
+  if (mark_interior)
+  {
+    const double pad = std::max(kEpsilon, 2 * kEpsilon / grid.resolution);
+    const double slack = 1.5 * grid.resolution + pad;
+    const auto near = [&](unsigned x, unsigned y)
+    {
+      auto& cell = allowed[std::size_t{y} * grid.width + x];
+      if (cell > 1)
+        cell = 1;
+    };
+    for (const auto& ring : geometry.allowed)
+      rasterEdges(ring, grid, slack, false, check, near);
+    for (std::size_t i = 0; i < geometry.blocked.size(); ++i)
+      rasterEdges(geometry.blocked[i], grid, geometry.margin(i) + slack, false, check, near);
   }
   return allowed;
 }
