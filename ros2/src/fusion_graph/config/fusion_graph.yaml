@@ -22,20 +22,22 @@ fusion_graph_node:
     # kTunedNodePeriodS = 0.04), so their rad/s trip points hold at any cadence.
     node_period_s: 0.02
 
-    # ── Odom re-base (map→odom lever-arm bound) ────────────────────────
-    # SAFETY (SAFETY_REVIEW_2026-07-23 G-C1): the map→odom anchor is
-    # `graph_pose ∘ dr⁻¹`, so any graph YAW correction Δθ not mirrored in the
-    # gyro-integrated dead-reckoning becomes a map-pose POSITION step of
-    # |dr|·sin(Δθ) — and |dr| grows to the full distance driven since the last
-    # re-seed. At |dr| = 25 m, a 2° COG/loop-closure correction
-    # teleports the believed map pose ~0.87 m in ONE TF cycle. The coverage
-    # path and its obstacle holes live in the MAP frame, so that step lands
-    # the blade off-lane over excluded obstacles. Re-basing the odom origin
-    # onto the robot every 6 m keeps |dr| ≤ 6 m, capping the same 2°
-    # correction at ~0.21 m. map→base stays continuous across a re-base by
-    # construction (anchor shifted in the same locked update). 0 disables
-    # (the pre-review behaviour).
-    odom_rebase_dist_m: 6.0
+    # ── Odom re-base (periodic, OFF) ───────────────────────────────────
+    # SAFETY_REVIEW_2026-07-23 G-C1 turned this on (6 m) on the premise that a
+    # graph yaw correction Δθ moves the map pose by |dr|·sin(Δθ). It does not:
+    # map→base = anchor ∘ dr, and a revision left-multiplies the anchor by
+    # X_new·X_old⁻¹, so the map pose moves by exactly the graph's correction at
+    # the robot, whatever |dr| is. Only map→odom ALONE swings by |dr|·Δθ, and
+    # tf2 interpolates both legs consistently (residual ≈ |dr|·Δθ²/8: 4 mm for
+    # 2° at 25 m). The periodic re-base, on the other hand, makes
+    # odom→base_footprint jump by 6 m for every odom-frame consumer (local
+    # costmap, BackUp / DriveOnHeading, docking_server's fixed_frame,
+    # collision_monitor's base_shift_correction). Known residual: a LARGE yaw
+    # correction (180° flip recovery, /set_pose) far from the odom origin can
+    # mis-place a lookup interpolated inside the one TF period (50 ms) that
+    # straddles it — the same class of glitch the old dr reset produced there.
+    # 0 disables.
+    odom_rebase_dist_m: 0.0
 
     # ── Wheel between-factor noise ─────────────────────────────────────
     # Translational noise is a RANDOM WALK scaled by the distance each node
@@ -234,6 +236,11 @@ fusion_graph_node:
     # shrink the WHOLE budget, not just this slack term, and masquerade as
     # "the slack is too tight" here).
     rtk_wrongfix_max_jump_m: 0.08
+    # σ-scaled slack: the budget is max(rtk_wrongfix_max_jump_m,
+    # k·hypot(σ_prev, σ_now)) of the two fixes compared. RTK-Fixed (σ ≈ 1 cm →
+    # 0.04 m) keeps the fixed 0.08 m; RTK-Float (σ 5-30 cm) no longer has its
+    # ordinary epoch-to-epoch jitter rejected as wrong-fixes. 0 = fixed only.
+    rtk_wrongfix_sigma_k: 3.0
     # DEPRECATED — no longer used by the motion-consistent gate above.
     # Removed 2026-07. Clear any per-site overlay that still carries this key.
 
@@ -385,6 +392,10 @@ fusion_graph_node:
     lidar_map_insert_min_travel_m: 0.10   # ...and only after the robot moved this far: a still robot
                                           # (docked without charger voltage, paused) would re-write the
                                           # same scene at a drifting pose and grow false walls
+    lidar_map_insert_max_yaw_sigma_rad: 0.10  # ...and only while the fused yaw σ is ≤ 5.7°: RTK-Fixed
+                                          # bounds position, not heading; a wrong yaw would write the scene
+                                          # rotated into the persistent tiles (0 = no yaw gate;
+                                          # diagnostics lidar_map_insert_skipped_yaw counts refusals)
     lidar_map_rebuild_period_s: 5.0       # publish local grid; PF rebuild deferred until computation
     lidar_anchor_max_rate_hz: 5.0
     lidar_anchor_calibration_period_s: 60.0

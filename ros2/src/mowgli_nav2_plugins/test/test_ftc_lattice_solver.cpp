@@ -357,3 +357,89 @@ TEST(FtcLatticeSolver, RecordedCornerWithoutTheHedgeCellsIsDriven)
 }
 
 }  // namespace
+
+namespace
+{
+
+/// The bare chassis (no clearance margin): what FTC passes as the contact body.
+ObstacleDeviation::Footprint BareBody()
+{
+  ObstacleDeviation::Footprint fp;
+  for (const auto& [x, y] : std::vector<std::pair<double, double>>{
+           {0.54, 0.285}, {0.54, -0.285}, {-0.18, -0.285}, {-0.18, 0.285}})
+  {
+    geometry_msgs::msg::Point p;
+    p.x = x;
+    p.y = y;
+    fp.push_back(p);
+  }
+  return fp;
+}
+
+LatticeSolver SolverWithContact(const nav2_costmap_2d::Costmap2D& costmap,
+                                const std::vector<Pose>& plan,
+                                std::size_t carrot_idx)
+{
+  const LatticeSolverCfg cfg = RobotCfg();
+  const LatticeWindow w = ResampleLatticeWindow(
+      plan, carrot_idx, 0, plan.size() - 1, std::nullopt, cfg.station_spacing_m, kLead, kHorizon);
+  std::vector<Pose> poses;
+  for (const std::size_t i : w.pose_idx)
+  {
+    poses.push_back(plan[i]);
+  }
+  return LatticeSolver(costmap,
+                       BoundaryGuard{},
+                       RobotBody(),
+                       std::move(poses),
+                       w.carrot_pos,
+                       w.corner_is_last_station,
+                       cfg,
+                       BareBody());
+}
+
+}  // namespace
+
+TEST(FtcLatticeSolver, Level3NeverDrivesTheBareChassisThroughALethalCell)
+{
+  // A post appears 0.4 m ahead of the carrot, ON the line: no profile can get
+  // the body round it before the stations the body is about to cover. Level 3
+  // used to treat those stations as free and returned a ramp straight through
+  // the post as "feasible".
+  nav2_costmap_2d::Costmap2D costmap(200, 200, kRes, -2.0, -5.0);
+  MarkLethal(costmap, 2.2, 0.0);
+  const auto plan = StraightPath(0.0, 5.0, 0.0);
+  LatticeSolver solver = SolverWithContact(costmap, plan, 30);
+  EXPECT_FALSE(solver.Solve(0.0, 0, 0).plan.feasible);
+}
+
+TEST(FtcLatticeSolver, ASingleStationWindowStillChecksTheLastStretch)
+{
+  // The carrot is pinned on the last pose of the plan (no corner, nothing
+  // ahead): one station, which the DP used to call feasible whatever lay
+  // between the robot and the end of the path.
+  const auto plan = StraightPath(0.0, 3.0, 0.0);
+  nav2_costmap_2d::Costmap2D clear(200, 200, kRes, -2.0, -5.0);
+  LatticeSolver free_solver = SolverWithContact(clear, plan, plan.size() - 1);
+  ASSERT_EQ(free_solver.Stations().size(), 1u);
+  EXPECT_TRUE(free_solver.Solve(0.0, 0, 0).plan.feasible);
+
+  nav2_costmap_2d::Costmap2D blocked(200, 200, kRes, -2.0, -5.0);
+  MarkLethal(blocked, 3.2, 0.0);  // under the body of the robot trailing the carrot
+  LatticeSolver solver = SolverWithContact(blocked, plan, plan.size() - 1);
+  EXPECT_FALSE(solver.Solve(0.0, 0, 0).plan.feasible);
+}
+
+TEST(FtcLatticeSolver, TrailingBodySpansOneLeadEvenAtTheStartOfALeg)
+{
+  // Carrot on the first pose of a leg: no pose exists behind it. A station
+  // further on must still be tested over the lead of path behind it (where
+  // the chassis will be while the carrot is there), not on its own pose only.
+  nav2_costmap_2d::Costmap2D costmap(200, 200, kRes, -2.0, -5.0);
+  MarkLethal(costmap, 0.30, 0.0);  // under pose 7's body, behind pose 10's
+  const auto plan = StraightPath(0.0, 5.0, 0.0);
+  LatticeSolver solver = SolverWithContact(costmap, plan, 0);
+  ASSERT_EQ(solver.CarrotPos(), 0u);
+  ASSERT_EQ(solver.PoseBlock(10, 0.0), LatticeBlock::kFree);
+  EXPECT_EQ(solver.SpanBlock(10, 0.0, 0, 0), LatticeBlock::kObstacle);
+}

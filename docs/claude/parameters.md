@@ -26,7 +26,7 @@
 | `ros2/src/mowgli_map/config/obstacle_tracker.yaml` (18 L) | LiDAR cluster→obstacle promotion thresholds | `full_system.launch.py` obstacle_tracker node | maintainer |
 | `ros2/src/mowgli_behavior/config/behavior_tree.yaml` (11 L) | `tree_file`, `tick_rate`, legacy `battery_*_pct` **aliases that no longer match the node's param names** | `full_system.launch.py:172` | maintainer |
 | `ros2/src/mowgli_localization/config/wheel_odometry.yaml` (18 L) | `wheel_distance`, `ticks_per_meter`, `publish_tf: false` (Invariant 2 guard) | **no launch file** — `wheel_odometry_node` is not launched; the file is only read by `test_tf_ownership.py:81` | maintainer |
-| `ros2/src/mowgli_monitoring/config/{diagnostics,mqtt_bridge}.yaml` | freshness/battery/temp thresholds; MQTT broker + prefix, publish cadence (`publish_rate`, `state_heartbeat_period_s`, `position_deadband_m`, `position_heartbeat_period_s`, `diagnostics_publish_period_s` — not GUI-exposed, see docs/MQTT_CONTROL.md) | `full_system.launch.py` | maintainer |
+| `ros2/src/mowgli_monitoring/config/{diagnostics,mqtt_bridge}.yaml` | freshness/battery/temp thresholds; MQTT broker + prefix, publish cadence (`publish_rate`, `state_heartbeat_period_s`, `position_deadband_m`, `position_heartbeat_period_s`, `diagnostics_publish_period_s`), and the `<prefix>/goto` request limits and store (`goto_max_age_s`, `goto_max_future_s`, `goto_require_clock_sync`, `goto_clock_max_error_s`, `goto_max_distance_m`, `goto_store_path`, `goto_store_ttl_s`, `goto_store_max_entries`, `goto_cancel_window_s`) — not GUI-exposed, see docs/MQTT_CONTROL.md | `full_system.launch.py` | maintainer |
 | `docker/.env` (gitignored; template `docker/.env.example`) | which **containers** run, image tags, host devices, GNSS sidecar wiring | compose fragments in `install/compose/*.yml` | installer `install/lib/env.sh` `setup_env` L210–374; operator by hand |
 | `docker/docker-compose.yaml` (generated at install; gitignored, `.gitignore:33`) | the merged stack | `docker compose` | `install/lib/compose.sh` `build_compose_stack` (L11 `FINAL_COMPOSE_FILE`) |
 
@@ -136,6 +136,7 @@ The five `wheel_pid_*` defaults are pinned in lockstep across template ↔ `mowg
 | `area_simplification_tolerance` (L115) | 0.05 | `full_system.launch.py:262` (Douglas–Peucker on `RecordArea`) | Mapping | launch |
 | `area_record_rate_hz` (L129) | 10.0 | `full_system.launch.py:265` | Mapping | launch |
 | `goto_timeout_sec` (L240) | 300.0 (0 = no limit; invalid values fall back to 300 with an ERROR) | `full_system.launch.py:511` → BT blackboard → `NavigateToPose` in `GotoSequence` (monotonic clock; on expiry the Nav2 goal is cancelled and the GOTO ends `GOTO_FAILED`); guarded by `test_launch_injection.py::test_full_system_injects_goto_timeout` | — | launch |
+| `goto_deadline_sec` (L244) | 1800.0 (0 = no limit; invalid values fall back to 1800 with an ERROR) | `full_system.launch.py:522` → `behavior_tree_node` → `GotoActionServer` (monotonic clock from acceptance, root-guard pauses included; on expiry command 8 and the goal ends `DEADLINE`; action goals only); guarded by `test_launch_injection.py::test_full_system_injects_goto_deadline` | — | launch |
 | `mowing_enabled` (L308) | `true` | **hardware_bridge only** `mowgli.launch.py:238` (dry-run blade inhibit; guarded by `test_launch_injection.py`) | Mowing | launch |
 | `mowing_speed` (L309) | 0.20 | BT `full_system.launch.py:245` (→ `SetNavMode`); `FollowCoveragePath.speed_fast` `navigation.launch.py:755`; also raises FTC's `max_cmd_vel_speed` clamp L764 | Mowing | dynamic (BT sets it per nav mode, `navigation_nodes.cpp:962`) |
 | `transit_speed` (L310) | 0.20 | BT `full_system.launch.py:244`; `FollowPath.primary_controller.max_linear_vel` `navigation.launch.py:745` | Mowing | dynamic (`navigation_nodes.cpp:961`) |
@@ -260,7 +261,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | Key (L) | Default | Becomes | GUI | Life |
 |---|---|---|---|---|
 | `dock_approach_distance` (L440) | 1.5 | staging distance | Docking | launch |
-| `dock_approach_overshoot` (L449) | 0.05 | forward shift of `home_dock.pose` L682–686 | Docking | launch |
+| `dock_approach_overshoot` (L449) | 0.05 | forward shift of `home_dock.pose` L682–686 AND of the `gps_dock_detection` target (`approach_overshoot_m`, clamped to [0, 0.30] m — before 2026-11 the detection path ignored it, so the robot stopped short of the contacts) | Docking | launch |
 | `dock_max_retries` (L450) | 3 | `docking_server.max_retries` L669 | Docking | launch |
 | `dock_use_charger_detection` (L451) | `true` | `simple_charging_dock.use_battery_status` L697 | Docking | launch |
 | `dock_charging_threshold` (L455) | 0.3 | `simple_charging_dock.charging_threshold` L693 | Docking | launch |
@@ -310,7 +311,7 @@ All feed the xacro in `mowgli.launch.py:108–120`; `lidar_z`/`lidar_yaw`/`imu_y
 | `obstacle_clearance_margin` (L627) | 0.2 | `FTC.obstacle_clearance_margin` = clamp(0.0, 0.50) L831 | Obstacles | launch |
 | `obstacle_wait_timeout_s` (L632) | 2.5 | `FTC.obstacle_wait_timeout_s` = clamp(0.5, 60.0) L838 | Obstacles | launch |
 | `reverse_boundary_safe` | `true` (struct default `false`) | `FTC.reverse_boundary_safe` (`nav2_params_base.yaml`) | Obstacles | dynamic. A reverse (reverse-escape, turn-fallback reverse) only runs inside every recorded area over a straight forward piece just driven (`retrace.hpp`). |
-| `obstacle_reverse_enabled` (L651) | `true` | `FTC.obstacle_reverse_enabled` L844 | Obstacles | dynamic (FTC param callback, `ftc_controller.cpp:260`) |
+| `obstacle_reverse_enabled` (L651) | `true` | `FTC.obstacle_reverse_enabled` L844 | Obstacles | dynamic (FTC param callback, `ftc_controller_params.cpp`) |
 | `obstacle_reverse_max_dist_m` (L654) | 0.30 | clamp(0.0, 1.0) L845 | Obstacles | dynamic |
 | `obstacle_reverse_speed_mps` (L657) | 0.15 | clamp(0.0, 0.30) L847 | Obstacles | dynamic |
 | `obstacle_margin` | 0.389 (= the derived floor on the shipped chassis, pinned by `test_nav2_params.py`) | `coverage_server.obstacle_margin` = `robot_config_util.planning_obstacle_margin` — clamp [floor, 1.0], floor = max(`chassis_half_width` + clamped `obstacle_clearance_margin` + `FTC_TRACKING_SLACK_M` 0.05, `chassis_half_width` + global-cell diagonal) rounded up to the mm. **NOT** sent to map_server any more | Obstacles | launch |
@@ -513,7 +514,7 @@ parameters remain directly under `FollowPath`.
 | Concern | Lines | Representative keys |
 |---|---|---|
 | Graph cadence | 8–24 | `node_period_s` 0.02 (**overridden to 0.04 by `navigation.launch.py:1090`**) |
-| Odom re-base | 25–39 | `odom_rebase_dist_m` 6.0 |
+| Odom re-base | 25–40 | `odom_rebase_dist_m` 0.0 (off since 2026-11: a re-base jumps odom→base_footprint; the lever-arm premise only held for the removed slew limiter) |
 | Wheel between-factor noise | 40–59 | `wheel_sigma_x_per_sqrt_m` 0.05, `wheel_sigma_y_per_sqrt_m` 0.005 (non-holonomic σ_y ≪ σ_x), `wheel_creep_speed_mps`, `wheel_sigma_theta` |
 | Gyro between-factor | 60–98 | `gyro_sigma_theta` 0.005 |
 | Pivot downweight | 99–117 | `pivot_gate_dtheta_rad` 0.012, `pivot_wheel_sigma_x` 0.5 |
@@ -568,7 +569,7 @@ Follow all six steps, in order. Skipping step 2 is the classic failure: the key 
 
 1. **Template first (Invariant 15).** Add `my_param: <default>` with a comment explaining the value to `ros2/src/mowgli_bringup/config/mowgli_robot.yaml`. **Do NOT add it to `install/config/mowgli/mowgli_robot.yaml`** — that file is sparse and holds only install choices + calibration outputs. If the value is a genuine install-time choice, do the reverse (installed file only, plus an entry in the parity-test allowlist).
 2. **Inject it in the launch file that owns the node.** `mowgli.launch.py` L194–268 for `hardware_bridge`; `full_system.launch.py` L216–354 for the BT and L371–435 for `map_server`; `navigation.launch.py` `_inject_dock_pose_and_speeds` L646–955 for anything under Nav2 / `coverage_server` / `collision_monitor`; `fusion_graph.launch.py` L143–158 for the localizer. Keep the inline `robot_params.get(key, <fallback>)` fallback equal to the template value. **Injected dicts are appended after the static params file, so they win** — that ordering is how `tool_width` overrides `map_server.yaml`, and it is also why `imu_cal_samples` overrides `hardware_bridge.yaml`.
-3. **Declare it in the node.** `declare_parameter<T>("my_param", <same default>)` in the constructor (`.claude/rules/ros2.md` — no undeclared parameter access). If it should be live-tunable, handle it in the node's `add_on_set_parameters_callback` (`ftc_controller.cpp:260`) or read it per-operation (`coverage_server.cpp:445`).
+3. **Declare it in the node.** `declare_parameter<T>("my_param", <same default>)` in the constructor (`.claude/rules/ros2.md` — no undeclared parameter access). If it should be live-tunable, handle it in the node's `add_on_set_parameters_callback` (`ftc_controller_params.cpp`) or read it per-operation (`coverage_server.cpp:445`).
 4. **GUI schema.** Add the field to the right section of `gui/asserts/mower_config.schema.json` with `title`, `description`, and a `default` **identical to the template**. That default is what the GUI's reset-to-default writes and what the backend prunes against.
 5. **Parity test.** `gui/pkg/api/schema_template_parity_test.go` `TestSchemaDefaultsMatchTemplate` fails on any schema default that differs from the template or has no template line. If the parameter legitimately has no template line, add it to `schemaDefaultsWithNoTemplateEntry` (L26) **with the reason**.
 6. **Guards and docs.** Add an AST guard to `ros2/src/mowgli_bringup/test/test_launch_injection.py` if the injection has semantics a refactor could break (clamping, sentinel ranges, which node receives it); add a static pin to `test/test_nav2_params.py` if it lands in the merged Nav2 doc; extend `ros2/scripts/check_config_drift.py`'s field lists if it is structural or a calibration output. Then update this file, the relevant codemap, and — only if it changes an architecture rule — CLAUDE.md.

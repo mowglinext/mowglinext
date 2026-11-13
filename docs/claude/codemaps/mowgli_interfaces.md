@@ -38,7 +38,7 @@
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`ros2/src/mowgli_interfaces/`** | | |
-| `CMakeLists.txt` | 91 | `rosidl_generate_interfaces` over the three lists (15 msg, 14 srv, 3 action) + INTERFACE target `mowgli_interfaces_headers` exporting `include/` |
+| `CMakeLists.txt` | 113 | `rosidl_generate_interfaces` over the three lists (23 msg, 27 srv, 4 action) + INTERFACE target `mowgli_interfaces_headers` exporting `include/` |
 | `package.xml` | 30 | Deps: `builtin_interfaces`, `std_msgs`, `geometry_msgs`, `nav_msgs`; member of `rosidl_interface_packages` |
 | **`include/mowgli_interfaces/`** | | |
 | `linear_command_policy.hpp` | 35 | Shared fresh BT-autonomy predicate and soft linear deadband for STM32, OpenMower and sim actuation; firmware-mode fallback is not BT evidence |
@@ -84,6 +84,7 @@
 | `TriggerReplan.srv` | 4 | `reason` → `success`, `message` — no ROS server |
 | **`action/`** | | |
 | `CalibrateDock.action` | 70 | Goal `include_imu_yaw`, `include_mag`; Result `RETRY_*` (0-7), dock pose, `cog_std_deg`, IMU block; Feedback `PHASE_*` (0-5) |
+| `Goto.action` | 55 | Goal `x`, `y`, `yaw` (map frame, `base_link`); Result `error_code` (`NONE`/`REFUSED`/`FAILED`/`LOW_BATTERY_DOCKED`/`LOW_BATTERY_DOCK_FAILED`/`CRITICAL_BATTERY`/`INTERRUPTED`/`DEADLINE`/`CANCELED`/`SHUTDOWN`), `error_msg`, `final_pose` + `final_pose_valid`, `settled`; Feedback `PHASE_ACTIVE`/`PHASE_PAUSED`, `state_name`, current pose, `distance_remaining` |
 | `CoverageTask.action` | 11 | `area_index` → `coverage_percent` — no server or client |
 | `PlanCoverage.action` | 55 | Goal `outer_boundary`, `obstacles[]`, `mow_angle_deg`, `perpendicular`, `override_ring_direction` + `ring_direction` (false = coverage_server's live parameter); Result `SEGMENT_RING/SWATH`, `segments[]`, `segment_types[]`, `full_path`, `drivable_subpaths[]`, counts; Feedback `phase` |
 
@@ -126,6 +127,7 @@ None — this package builds no executables. Every type below is served/publishe
 | `/obstacle_tracker/clear_obstacle` | `srv/ClearObstacle` | `obstacle_tracker_node.cpp:149` | none in-repo |
 | `/calibrate_imu_yaw_node/calibrate` | `srv/CalibrateImuYaw` | `calibrate_imu_yaw_node.cpp:252` | GUI `gui/pkg/api/calibration.go:132,200` |
 | `/calibrate_imu_yaw_node/calibrate_dock` | `action/CalibrateDock` | `calibrate_imu_yaw_node.cpp:314-316` | none — GUI drives `~/dock_calibration/start` (`std_srvs/Trigger`, `:338`; `calibration.go:84`) and watches the status topic |
+| `/behavior_tree_node/goto` | `action/Goto` | `mowgli_behavior/include/mowgli_behavior/goto_action.hpp` (`GotoActionServer`) | `mowgli_monitoring` `mqtt_bridge_node` (`<prefix>/goto`) |
 | `/plan_coverage` | `action/PlanCoverage` | `ros2/src/mowgli_coverage/src/coverage_server.cpp:110` | `coverage_nodes.cpp:1914` (`PlanCoverageArea`) |
 
 ### Parameters

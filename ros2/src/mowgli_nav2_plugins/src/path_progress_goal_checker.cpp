@@ -225,16 +225,16 @@ void PathProgressGoalChecker::onPath(nav_msgs::msg::Path::SharedPtr msg)
   const double fx = msg->poses.front().pose.position.x;
   const double fy = msg->poses.front().pose.position.y;
 
-  // Detect a NEW path so we can reset progress. FTC re-publishes its
-  // global_plan on EVERY tick during FOLLOWING — the start pose
-  // wobbles by a few centimetres each tick because FTC uses the
-  // robot's current TF position as the trim-front of its republished
-  // plan. The earlier 5 cm "start moved" threshold reset
-  // max_reached_index_=0 multiple times per second on coverage paths
-  // longer than ~10 m, so the 95 % progress gate never fired and
-  // FollowStrip systematically aborted on WAITING_FOR_GOAL_APPROACH.
+  // Detect a NEW path so we can reset progress. Publishers of this topic:
+  // FollowStrip (one plan per dispatched unit) and FTC, which republishes
+  // only the remainder of the unit after a turn-fallback / contour-bypass
+  // rejoin. (FTC used to republish its plan every tick with a start pose
+  // that wobbled by a few centimetres; the earlier 5 cm "start moved"
+  // threshold then reset max_reached_index_=0 several times per second and
+  // the 95 % gate never fired. The thresholds below date from then and stay
+  // insensitive to such wobble.)
   //
-  // Use TWO insensitive-to-republish signals instead:
+  // Two signals:
   //   1. Pose-count change (a fresh setPlan always changes n).
   //   2. Front pose moved by MORE than 2 m (a real new strip start;
   //      republish wobble is a few cm at most).

@@ -182,6 +182,19 @@ TEST(FtcPivot, ArrivalAndAlignment)
   EXPECT_FALSE(PivotArrived(-0.03, 0, kPivotArrivalToleranceM));
   EXPECT_FALSE(PivotArrived(0.0, 0.125, kPivotArrivalToleranceM));
   EXPECT_TRUE(PivotArrived(0.012, -0.016, kPivotArrivalToleranceM));
+  // Corner ABEAM (forward motion cannot close it): the lateral band applies.
+  EXPECT_TRUE(PivotArrived(0.009, 0.057, kPivotArrivalToleranceM, 0.08))
+      << "field 2026-11-13: on the corner, 6 cm to the side";
+  EXPECT_TRUE(PivotArrived(-0.013, -0.070, kPivotArrivalToleranceM, 0.08));
+  EXPECT_FALSE(PivotArrived(0.0, 0.10, kPivotArrivalToleranceM, 0.08)) << "beyond the band";
+  // Corner AHEAD: the band never shortens a normal approach.
+  EXPECT_FALSE(PivotArrived(0.05, 0.0, kPivotArrivalToleranceM, 0.08));
+  EXPECT_FALSE(PivotArrived(0.03, 0.03, kPivotArrivalToleranceM, 0.08));
+  // Within the disc's reach along the axis but more AHEAD than beside: the disc
+  // still governs (ExternalCapWinsDuringApproach, 2.01 cm almost head-on).
+  EXPECT_FALSE(PivotArrived(0.0199, 0.003, kPivotArrivalToleranceM, 0.08));
+  // Default lateral band = the disc (old behaviour).
+  EXPECT_FALSE(PivotArrived(0.0, 0.05, kPivotArrivalToleranceM));
   const double tol = 10.0 * M_PI / 180.0;
   EXPECT_FALSE(PivotAligned(0.5, tol));
   EXPECT_TRUE(PivotAligned(0.1, tol));
@@ -224,6 +237,50 @@ TEST(FtcPivot, SweepYawsCoverTheShortestRotation)
   EXPECT_LE(wrap.size(), 6u);
   EXPECT_NEAR(wrap.back(), M_PI + 0.1, 1e-12);
   EXPECT_EQ(PivotSweepYaws(0.3, 0.3, 0.1).size(), 2u);
+}
+
+TEST(FtcPivot, ChainedPivotKeepLeavesAPlannerPlanUntouched)
+{
+  const auto p = uTurnWithPivots();
+  const auto keep = ChainedPivotKeep(p);
+  ASSERT_EQ(keep.size(), p.size());
+  for (std::size_t i = 0; i < keep.size(); ++i)
+  {
+    EXPECT_EQ(keep[i], i);
+  }
+}
+
+TEST(FtcPivot, ASpliceEndingOnACornerTwinKeepsThePlansCorner)
+{
+  // A connector heading east ends ON the incoming twin of the plan's own
+  // corner (north -> west): three poses at one spot, connector heading, the
+  // plan's incoming twin, the plan's outgoing twin. FindPivotCorners does not
+  // chain corners: it kept the first pair and dropped the plan's corner, which
+  // was then driven on the move.
+  std::vector<PlanPose2D> p;
+  appendStraight(p, 0.0, 0.0, 0.0, 0.5, 0.05);  // connector, heading east
+  const double x = p.back().x;
+  const double y = p.back().y;
+  p.push_back({x, y, M_PI / 2});  // plan pose j: incoming twin (north)
+  p.push_back({x, y, M_PI});  // plan pose j + 1: outgoing twin (west)
+  appendStraight(p, x - 0.05, y, M_PI, 0.5, 0.05);
+
+  const auto chained = FindPivotCorners(p);
+  ASSERT_EQ(chained.size(), 1u);
+  EXPECT_DOUBLE_EQ(p[chained.front() + 1].yaw, M_PI / 2) << "the plan's corner is lost";
+
+  const auto keep = ChainedPivotKeep(p);
+  ASSERT_EQ(keep.size(), p.size() - 1);
+  std::vector<PlanPose2D> merged;
+  for (const std::size_t k : keep)
+  {
+    merged.push_back(p[k]);
+  }
+  const auto corners = FindPivotCorners(merged);
+  ASSERT_EQ(corners.size(), 1u);
+  // One corner, from the connector heading straight to the plan's outgoing one.
+  EXPECT_DOUBLE_EQ(merged[corners.front()].yaw, 0.0);
+  EXPECT_DOUBLE_EQ(merged[corners.front() + 1].yaw, M_PI);
 }
 
 }  // namespace

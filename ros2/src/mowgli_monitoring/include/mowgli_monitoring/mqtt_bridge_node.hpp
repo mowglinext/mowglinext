@@ -47,6 +47,11 @@
  *   /gps/fix                             → <prefix>/gps        (JSON: lat/lon/alt) — position topic
  *   /odometry/filtered_map               → <prefix>/pose       (JSON: x, y, yaw, MAP frame) —
  *                                           the fused localizer pose, position topic
+ *   /odometry/filtered_map               → <prefix>/pose_wgs84 (JSON: lat, lon, yaw, datum) —
+ *                                           the same pose converted to WGS84, position topic
+ *   /behavior_tree_node/goto (feedback,  → <prefix>/goto/event (JSON) — every GOTO request's
+ *   result) and the bridge's own checks    progress and result; <prefix>/goto/state retains
+ *                                           the latest one
  *   /gps/status                          → <prefix>/rtk_status (JSON) — retained; the SAME
  *                                           mowgli_interfaces/msg/GnssStatus + gnss_status_utils
  *                                           helpers the LED ring and behavior tree use, so this
@@ -96,6 +101,10 @@
  *                          area now, ahead of the normal area-iteration order (fresh, non-retained
  *                          payload: ASCII decimal uint8 area index, same index space as
  *                          <prefix>/areas above)
+ *   <prefix>/goto       → /behavior_tree_node/goto action goal (fresh, non-retained JSON with a
+ *                          WGS84 target, converted with the datum; see mqtt_goto.hpp)
+ *   <prefix>/goto/cancel → cancels that request's goal only (never refused for age, clock or
+ *                          store); the outcome is published on <prefix>/goto/cancel/result
  *
  * See docs/MQTT_CONTROL.md for the full JSON schema of every topic above.
  *
@@ -150,14 +159,18 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "action_msgs/msg/goal_status_array.hpp"
+#include "action_msgs/srv/cancel_goal.hpp"
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "geometry_msgs/msg/polygon.hpp"
+#include "mowgli_interfaces/action/goto.hpp"
 #include "mowgli_interfaces/gnss_status_utils.hpp"
 #include "mowgli_interfaces/msg/emergency.hpp"
 #include "mowgli_interfaces/msg/gnss_status.hpp"
@@ -168,10 +181,12 @@
 #include "mowgli_interfaces/srv/get_mowing_area.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
 #include "mowgli_interfaces/srv/start_in_area.hpp"
+#include "mowgli_monitoring/mqtt_goto.hpp"
 #include "mowgli_monitoring/mqtt_publish_policy.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -322,6 +337,67 @@ private:
 // ---------------------------------------------------------------------------
 // MqttBridgeNode
 // ---------------------------------------------------------------------------
+
+/**
+ * @brief A ~/goto action client whose next goal ID is chosen by the caller.
+ *
+ * The MQTT bridge saves a goal's ID before the goal leaves, so that a goal a
+ * crashed run sent — even one whose response it never received — can be
+ * canceled by that ID after a restart. rclcpp_action draws the ID from the
+ * virtual ClientBase::generate_goal_id(), which this client overrides. That
+ * function is documented as internal to rclcpp_action: this relies on the
+ * rclcpp_action of the ROS distribution the image is built with, and
+ * test_mqtt_goto checks that the chosen ID is the one the server sees.
+ */
+class PresetIdGotoClient : public rclcpp_action::Client<mowgli_interfaces::action::Goto>
+{
+public:
+  using rclcpp_action::Client<mowgli_interfaces::action::Goto>::Client;
+
+  /// Created and registered with the node like rclcpp_action::create_client().
+  static std::shared_ptr<PresetIdGotoClient> create(rclcpp::Node& node, const std::string& name)
+  {
+    std::weak_ptr<rclcpp::node_interfaces::NodeWaitablesInterface> weak_waitables =
+        node.get_node_waitables_interface();
+    std::shared_ptr<PresetIdGotoClient> client(
+        new PresetIdGotoClient(node.get_node_base_interface(),
+                               node.get_node_graph_interface(),
+                               node.get_node_logging_interface(),
+                               name),
+        [weak_waitables](PresetIdGotoClient* ptr)
+        {
+          if (auto waitables = weak_waitables.lock())
+          {
+            waitables->remove_waitable(
+                std::shared_ptr<PresetIdGotoClient>(ptr, [](PresetIdGotoClient*) {}), nullptr);
+          }
+          delete ptr;
+        });
+    node.get_node_waitables_interface()->add_waitable(client, nullptr);
+    return client;
+  }
+
+  /// The ID the next async_send_goal() uses.
+  void set_next_goal_id(const rclcpp_action::GoalUUID& id)
+  {
+    next_goal_id_ = id;
+  }
+
+protected:
+  rclcpp_action::GoalUUID generate_goal_id() override
+  {
+    if (next_goal_id_)
+    {
+      const auto id = *next_goal_id_;
+      next_goal_id_.reset();
+      return id;
+    }
+    return rclcpp_action::Client<mowgli_interfaces::action::Goto>::generate_goal_id();
+  }
+
+private:
+  std::optional<rclcpp_action::GoalUUID> next_goal_id_;
+};
 
 /**
  * @brief Bridges selected ROS2 topics to/from an MQTT broker.
@@ -525,6 +601,20 @@ public:
                              const rclcpp::Time& last_publish,
                              double min_interval_s);
 
+  /**
+   * @brief Build the <prefix>/pose_wgs84 payload: the fused map-frame pose
+   *        converted to WGS84 with the datum, which is included.
+   * @param valid false when the datum is unset (0, 0).
+   */
+  static std::string serialise_pose_wgs84(const nav_msgs::msg::Odometry& msg,
+                                          double datum_lat,
+                                          double datum_lon,
+                                          double age_s,
+                                          bool valid);
+
+  /// The name of a mowgli_interfaces/action/Goto result error_code.
+  static std::string goto_error_code_name(uint16_t code);
+
   /// Deadband sample of an odometry pose: planar x/y (metres) and yaw.
   static MotionDeadbandGate::Sample odometry_motion_sample(const nav_msgs::msg::Odometry& msg);
   /// Deadband sample of a GPS fix: latitude/longitude (degrees), no heading.
@@ -600,6 +690,73 @@ private:
 
   void on_mqtt_command(const std::string& topic, const std::string& payload, bool retained);
   void on_mqtt_start_area(const std::string& topic, const std::string& payload, bool retained);
+
+  // ---- MQTT GOTO (<prefix>/goto, <prefix>/goto/cancel → ~/goto action) -------
+
+  using GotoAction = mowgli_interfaces::action::Goto;
+  using GotoGoalHandle = rclcpp_action::ClientGoalHandle<GotoAction>;
+  struct ActiveGoto
+  {
+    GotoGoalHandle::SharedPtr handle;  ///< null until the goal response arrives
+    std::string goal_id;  ///< the goal ID as 32 hex digits, chosen before the goal is sent
+    uint32_t seq{0};
+    std::string phase;
+    bool cancel_requested{false};  ///< a cancel that arrived before the goal response
+  };
+  void on_mqtt_goto(const std::string& topic, const std::string& payload, bool retained);
+  void on_mqtt_goto_cancel(const std::string& topic, const std::string& payload, bool retained);
+  /// Loads the request store; requests still active from a previous run end
+  /// ABORTED (bridge_restarted), and the goals that run sent are canceled by
+  /// their saved IDs once the action server is reachable (never another
+  /// client's goal).
+  void init_goto_store();
+  /// Records the event in the store (pruned and saved on a phase change) and
+  /// publishes it on <prefix>/goto/event and, retained, <prefix>/goto/state.
+  /// Returns false when a phase change could not be saved; such an event is
+  /// published with "durable": false, or not at all without publish_unsaved.
+  bool publish_goto_event(mqtt_goto::GotoEvent event,
+                          bool phase_changed,
+                          bool publish_unsaved = true);
+  void prune_goto_store(int64_t now_ms);
+  /// Ends a request before any goal is sent (phase REFUSED, error_code REFUSED).
+  void refuse_goto(const std::string& request_id, const std::string& reason);
+  /// Ends an active request whose goal is gone (phase ABORTED, error_code LOST).
+  void lose_goto(const std::string& request_id, const std::string& reason);
+  /// Periodic: publishes queued events, sends the queued cancels of goals left
+  /// running by a previous run, and ends the active requests once the action
+  /// server is gone.
+  void check_goto_requests();
+  void cancel_goto_goal(const std::string& request_id, const ActiveGoto& active);
+  /// A goal to cancel by its ID: left running by a previous run, or whose
+  /// handle the client lost. Retried until the server answers.
+  struct PendingCancel
+  {
+    std::string request_id;
+    bool in_flight{false};
+    bool accepted{false};  ///< canceling; stopped once its status says it ended
+    std::chrono::steady_clock::time_point next_try{};
+    /// Until then, "unknown" answers keep the goal watched (it may still arrive).
+    std::chrono::steady_clock::time_point window_end{};
+  };
+  PendingCancel make_pending_cancel(const std::string& request_id) const;
+  /// Cancels one ~/goto goal by its ID through the action's cancel service.
+  void cancel_goal_by_id(const std::string& goal_id_hex);
+  void on_goal_cancel_response(const std::string& goal_id_hex,
+                               const action_msgs::srv::CancelGoal::Response& response);
+  /// Follows the goals in goto_cancels_ until the action's status says they ended.
+  void on_goal_status(const action_msgs::msg::GoalStatusArray& msg);
+  /// Clears a pending cancel (saved) and reports `result` (with the goal's
+  /// terminal `status` when known) on goto/cancel/result.
+  void resolve_goal_cancel(const std::string& goal_id_hex,
+                           const std::string& result,
+                           const std::string& status);
+  /// Publishes {"request_id", "result", ["status",] "stamp"} on <prefix>/goto/cancel/result.
+  void reply_goto_cancel(const std::string& request_id,
+                         const std::string& result,
+                         const std::string& status = "");
+  /// The latest fused pose in WGS84, or nullopt when there is none or no datum.
+  std::optional<mqtt_goto::WgsPose> current_wgs84_pose() const;
+  mqtt_goto::WgsPose to_wgs84(const geometry_msgs::msg::PoseStamped& pose, bool valid) const;
   /// `<prefix>/external_rain` → `/external_rain` (std_msgs/Bool, transient_local).
   /// Unlike command/start_area this is STATE, not operator intent, so a retained
   /// message is accepted — it is exactly how the last value survives a restart.
@@ -725,6 +882,28 @@ private:
   std::optional<mowgli_interfaces::msg::GnssStatus> pending_gnss_status_{};
   rclcpp::Time last_gnss_status_publish_{0, 0, RCL_ROS_TIME};
   std::optional<nav_msgs::msg::Odometry> pending_pose_{};
+  std::optional<nav_msgs::msg::Odometry> pending_pose_wgs84_{};
+  rclcpp::Time last_pose_wgs84_publish_{0, 0, RCL_ROS_TIME};
+  std::optional<nav_msgs::msg::Odometry> latest_pose_{};
+
+  // ---- MQTT GOTO state ----------------------------------------------------
+  std::shared_ptr<PresetIdGotoClient> goto_client_;
+  mqtt_goto::RequestStore goto_store_;
+  bool goto_store_ok_{true};
+  std::map<std::string, ActiveGoto> goto_active_;
+  rclcpp::Client<action_msgs::srv::CancelGoal>::SharedPtr goto_cancel_client_;
+  std::map<std::string, PendingCancel> goto_cancels_;  ///< by goal ID (32 hex digits)
+  rclcpp::Subscription<action_msgs::msg::GoalStatusArray>::SharedPtr goto_status_sub_;
+  std::vector<std::string> goto_pending_events_;  ///< built before the broker was reachable
+  double goto_max_age_s_{30.0};
+  double goto_max_future_s_{5.0};
+  double goto_max_distance_m_{2000.0};
+  bool goto_require_clock_sync_{true};
+  double goto_clock_max_error_s_{2.0};
+  std::string goto_store_path_{};
+  double goto_store_ttl_s_{86400.0};
+  int goto_store_max_entries_{200};
+  double goto_cancel_window_s_{30.0};
   rclcpp::Time last_pose_publish_{0, 0, RCL_ROS_TIME};
 
   // ---- Send-on-change / deadband state (mqtt_publish_policy.hpp) -------------
@@ -753,6 +932,10 @@ private:
                                 0.2,
                                 kHeadingDeadbandRad,
                                 30.0};
+  MotionDeadbandGate pose_wgs84_gate_{MotionDeadbandGate::Frame::kPlanarMetres,
+                                      0.2,
+                                      kHeadingDeadbandRad,
+                                      30.0};
   MotionDeadbandGate gps_gate_{MotionDeadbandGate::Frame::kWgs84Degrees,
                                0.2,
                                kHeadingDeadbandRad,

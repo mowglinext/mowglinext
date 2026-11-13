@@ -105,6 +105,40 @@ inline std::vector<std::size_t> FindPivotCorners(const std::vector<PlanPose2D>& 
   return corners;
 }
 
+/// Indices of `poses` to keep so that no THREE consecutive poses share one
+/// position. A runtime splice (turn fallback, contour bypass) can end a
+/// connector on a corner's incoming twin, or leave the plan at its outgoing
+/// twin: the spliced pivot and the plan's own then form a run of three or more
+/// poses at one spot. FindPivotCorners refuses to chain corners and keeps only
+/// the first pair, so the plan's own corner was silently dropped and driven on
+/// the move, with no stop and no sweep check. A run keeps its first and last
+/// pose: ONE corner turning from the run's incoming heading straight to its
+/// outgoing heading, which the PIVOT state checks like any other.
+inline std::vector<std::size_t> ChainedPivotKeep(const std::vector<PlanPose2D>& poses)
+{
+  namespace cg = mowgli_interfaces::coverage_geometry;
+  std::vector<std::size_t> keep;
+  keep.reserve(poses.size());
+  std::size_t i = 0;
+  while (i < poses.size())
+  {
+    std::size_t j = i;
+    while (j + 1 < poses.size() &&
+           std::hypot(poses[j + 1].x - poses[j].x, poses[j + 1].y - poses[j].y) <
+               cg::kPivotCornerMaxStepM)
+    {
+      ++j;
+    }
+    keep.push_back(i);
+    if (j > i)
+    {
+      keep.push_back(j);
+    }
+    i = j + 1;
+  }
+  return keep;
+}
+
 /// First corner at or after `index`, if any.
 inline std::optional<std::size_t> NextPivotCorner(const std::vector<std::size_t>& corners,
                                                   std::size_t index)
@@ -126,11 +160,28 @@ inline std::size_t PivotAwareStartIndex(const std::vector<std::size_t>& corners,
   return std::binary_search(corners.begin(), corners.end(), start) ? start + 1 : start;
 }
 
-/// True only within the planar arrival disc, including lateral and overshoot
-/// error. Neither a passed longitudinal plane nor zero speed establishes arrival.
-inline bool PivotArrived(double corner_x_m, double corner_y_m, double tolerance_m)
+/// True within the planar arrival disc, including lateral and overshoot error.
+/// Neither a passed longitudinal plane nor zero speed establishes arrival.
+///
+/// `lateral_tolerance_m` (>= tolerance_m) widens ONE case only: the corner lies
+/// ABEAM of base_link (|x| within the disc in the robot frame) but beside it.
+/// Driving forward cannot reduce that offset, so the 2 cm disc was never
+/// reached and FTC aborted on "timeout approaching pivot corner" with the robot
+/// standing on the corner 4-7 cm to the side (field 2026-11-13, twin corners a
+/// few cm apart after a pivot that ended 9 deg short). A normal approach, with
+/// the corner ahead, still stops within `tolerance_m`, so row ends are not
+/// shortened. The pivot itself is gated on the live pose (sweep + departure).
+inline bool PivotArrived(double corner_x_m,
+                         double corner_y_m,
+                         double tolerance_m,
+                         double lateral_tolerance_m = 0.0)
 {
-  return std::hypot(corner_x_m, corner_y_m) <= tolerance_m;
+  if (std::hypot(corner_x_m, corner_y_m) <= tolerance_m)
+    return true;
+  // Abeam = more beside than ahead: a corner (almost) straight ahead keeps the
+  // disc even when it is within `tolerance_m` along the axis.
+  return std::abs(corner_x_m) <= tolerance_m && std::abs(corner_y_m) > std::abs(corner_x_m) &&
+         std::abs(corner_y_m) <= std::max(tolerance_m, lateral_tolerance_m);
 }
 
 /// True once the robot faces the outgoing heading within `tolerance_rad`.

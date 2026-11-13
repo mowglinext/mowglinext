@@ -46,6 +46,13 @@ void FusionGraphNode::DeclareParameters()
   lidar_map_radius_tiles_ = declare_parameter<int>("lidar_map_radius_tiles", 2);
   lidar_map_insert_period_s_ = declare_parameter<double>("lidar_map_insert_period_s", 0.5);
   lidar_map_insert_min_travel_m_ = declare_parameter<double>("lidar_map_insert_min_travel_m", 0.10);
+  // Heading-quality gate on map learning: a scan is written into the
+  // persistent tiles only while the fused yaw σ is at most this (rad). RTK
+  // Fixed bounds position, not heading — a wrong yaw (before a flip recovery,
+  // a stale reload) would otherwise write the scene rotated into the map for
+  // good. 0 = no yaw gate.
+  lidar_map_insert_max_yaw_sigma_rad_ =
+      declare_parameter<double>("lidar_map_insert_max_yaw_sigma_rad", 0.10);
   lidar_map_rebuild_period_s_ = declare_parameter<double>("lidar_map_rebuild_period_s", 5.0);
   // 1.0 s, not 0.3: a 5 Hz receiver whose stamps arrive ~80 ms old sits at
   // ~0.28 s of age just before every next fix — 0.3 flapped on timer phase.

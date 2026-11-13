@@ -72,8 +72,9 @@ controller_server:
     # default gave both controllers ZERO velocity feedback — MPPI planned every
     # cycle as if stationary (circling on tight coverage) and RPP's lookahead
     # collapsed to its minimum (transit weaving). Use /wheel_odom (raw, carries
-    # angular velocity); the fused /odometry/filtered currently reports
-    # twist.angular.z = 0 (separate fusion gap, so it is NOT usable here yet).
+    # angular velocity). The fused /odometry/filtered also carries the
+    # bias-corrected gyro yaw rate in twist.angular.z (fusion_graph) and would
+    # do; /wheel_odom stays the live choice.
     odom_topic: /wheel_odom
     # 10 Hz: 0.3 m/s × 100 ms = 3 cm of motion between decisions, matches
     # the 5-10 Hz upstream costmap / GPS refresh. Dropped from 20 Hz
@@ -251,7 +252,7 @@ controller_server:
       is_overshoot_valid: true
 
     # FollowPath (transit / dock approach / home / undock recovery) —
-    # MPPI. FTC was the wrong tool for transit: it has a rigid state
+    # RotationShim + RPP (see below). FTC was the wrong tool for transit: it has a rigid state
     # machine (PRE_ROTATE / FOLLOWING / WAITING_FOR_GOAL_APPROACH /
     # POST_ROTATE), rejects plans with fewer than 3 poses, and aborts
     # the action when the lateral residual exceeds
@@ -283,8 +284,9 @@ controller_server:
     #     (RPP samples by distance, not pose index).
     #
     # Transit uses RPP (this slot); the coverage slot (FollowCoveragePath)
-    # uses MPPI — RPP's lookahead-carrot tracking doesn't hold the < 10 mm
-    # lateral precision the swath tiling needs.
+    # uses FTC — RPP's lookahead-carrot tracking doesn't hold the < 10 mm
+    # lateral precision the swath tiling needs (MPPI there was reverted
+    # 2026-06-19).
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
 
@@ -447,6 +449,12 @@ controller_server:
       # STOP <= 0.5 s. Physical calibration is outstanding; no global deadband
       # or angular-safety limits change. Only explicit pivot approaches use it.
       pivot_coast_time_bound_s: 0.5
+      # Lateral arrival band at a pivot corner lying ABEAM of base_link (the
+      # 2 cm disc still governs a normal approach, so row ends are unchanged).
+      # Forward motion cannot close a sideways offset: with 2 cm alone FTC
+      # aborted "timeout approaching pivot corner" standing on the corner 4-7 cm
+      # to the side (field 2026-11-13). Live-tunable, [0.02, 0.15].
+      pivot_arrival_lateral_tolerance_m: 0.08
       # Carrot speed. BOTH are overridden at launch (navigation.launch.py):
       #   speed_fast = mowing_speed
       #   speed_slow = clamp(mowing_speed * turn_speed_ratio,
@@ -476,7 +484,10 @@ controller_server:
       # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
       # command for stall_grace_s, the wheels are slipping / the chassis is
       # blocked. Ease the carrot to stall_crawl_speed instead of flooring it —
-      # which digs holes in soft turf (operator report). Set ratio ≤ 0 to disable.
+      # which digs holes in soft turf (operator report) — and STAY there until
+      # the robot really moves at the crawl again (ftc_stall.hpp: the latch is
+      # no longer released by the command itself reaching the crawl speed).
+      # Set ratio ≤ 0 to disable.
       stall_speed_ratio: 0.35
       stall_grace_s: 0.6
       stall_crawl_speed: 0.08
@@ -555,9 +566,10 @@ controller_server:
       # validated live 2026-06-21 (forward skirt, no reverse, no pirouette).
       forward_only: true
       # Obstacle avoidance by lateral path deviation. Reads the local
-      # obstacle_layer fed by /scan_costmap (nav2_params_lidar.yaml). Turned OFF
-      # in the no-LiDAR overlay (no obstacle_layer to read) — that variant tracks
-      # the path only and relies on collision_monitor + firmware for safety.
+      # obstacle_layer fed by /scan_costmap (nav2_params_lidar.yaml). Also ON in
+      # the no-LiDAR overlay since 2026-10-10, where the local costmap's only
+      # source is the fleet_layer (the other mowers' footprints): on a lawn
+      # without peers it sees nothing and the robot just tracks the path.
       check_obstacles: true
       # OVERRIDDEN AT LAUNCH (task #51) by mowgli_robot.yaml's
       # obstacle_detection_range_m (default 1.5 m), converted to poses —
@@ -730,6 +742,9 @@ controller_server:
       # drove. Field 2026-10-26: a 0.30 m reverse-escape took the mower from 0.00 m to 0.33 m outside.
       reverse_boundary_safe: true
       obstacle_reverse_max_dist_m: 0.30
+      # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml's obstacle_reverse_speed_mps
+      # (navigation.launch.py, clamped to [0, 0.30]); this static value only
+      # governs a raw `ros2 launch` of this file with no robot-config injection.
       obstacle_reverse_speed_mps: 0.10   # must clear the firmware deadband (~0.05)
       # TURN FALLBACK (ftc_turn_fallback.hpp). Field 2026-09-22: all 8 WEDGED
       # of a 110-min mow were in TURNS (U-turns, omega loops, 70-107 deg kinks)
@@ -1383,7 +1398,12 @@ collision_monitor:
     # straight to twist_mux on cmd_vel_monitored.
     cmd_vel_out_topic: cmd_vel_monitored
     state_topic: collision_monitor_state
-    controller.transform_tolerance: 0.5
+    # TOP-LEVEL key: collision_monitor declares `transform_tolerance` itself.
+    # It used to read `controller.transform_tolerance` (the docking_server
+    # spelling), which this node never declares, so it silently ran on Nav2's
+    # 0.1 s default — too tight for base_shift_correction against a LiDAR scan
+    # stamped up to ~0.2 s behind the forward-stamped TF on the Pi.
+    transform_tolerance: 0.5
     # Source timeout: how long before stale sensor data triggers a stop.
     # 1.5 s (was 5.0 — SAFETY_REVIEW_2026-07-23 A-C2): at the 0.20 m/s mow
     # speed a 5 s stale window let a dead LiDAR/scan-filter chain mow BLIND for

@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -97,6 +98,14 @@ bool FTCController::tryContourBypass(std::size_t carrot_idx,
                 why.c_str());
     return false;
   }
+  double robot_to_plan = std::numeric_limits<double>::infinity();
+  for (const auto& p : problem.plan)
+  {
+    robot_to_plan = std::min(robot_to_plan,
+                             std::hypot(p.pose.position.x - problem.robot.x,
+                                        p.pose.position.y - problem.robot.y));
+  }
+  cfg.start_on_plan = robot_to_plan <= kContourStartOnPlanM;
   const ContourBypassPlan plan = PlanContourBypass(problem, cfg);
   const double ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
@@ -270,11 +279,15 @@ bool FTCController::spliceContourBypass(const ContourSide& side, std::size_t win
   {
     spliced.push_back(make(jx, jy, yaw_in));  // corner: incoming heading
   }
-  const std::size_t rejoin_idx = spliced.size();
+  std::size_t rejoin_idx = spliced.size();
   spliced.push_back(rejoin);  // corner: outgoing heading = the plan pose itself
   spliced.insert(spliced.end(),
                  global_plan_.begin() + static_cast<std::ptrdiff_t>(j + 1),
                  global_plan_.end());
+  if (!finalizeSplice(spliced, rejoin_idx, "contour bypass"))
+  {
+    return false;
+  }
 
   const bool pivot_first = adoptFallbackPlan(std::move(spliced), rejoin_idx, side.skipped_arc_m);
   RCLCPP_INFO(logger_,

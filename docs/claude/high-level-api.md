@@ -165,6 +165,38 @@ refuses command 9.
   the beginning, with a new goal and a fresh timeout. With `goto_timeout_sec: 0` the navigation is
   not time-bounded at all.
 
+### GOTO action (`~/goto`)
+
+`/behavior_tree_node/goto` (`mowgli_interfaces/action/Goto`, `goto_action.hpp`) runs the same
+mission as `~/goto_pose`, with a goal ID, a result fetchable by that ID after the end, client
+cancellation and feedback. Use it when the caller needs to know how *its* GOTO ended.
+
+- **Admission**: the action server accepts every goal, then admits it with the same checks as
+  `~/goto_pose` (`admitGoto` → `acceptGotoRequest`). A refused goal is aborted at once with
+  `error_code` `REFUSED` and the reason in `error_msg`; a goal sent while another action goal is
+  active is refused `busy` without reaching the admission.
+- **End of a goal**: after every tick, `evaluateGotoMission` reads the context, in this order:
+  the outcome recorded by `SetGotoOutcome` before each terminal GOTO status (`REACHED`,
+  `FAILED`, `LOW_BATTERY_DOCKED`, `LOW_BATTERY_DOCK_FAILED`, `CRITICAL_BATTERY_DOCKED`); a client
+  cancellation (`CANCELED`, the GOTO is stopped with command 8 if still running); `current_command` no longer 9
+  without an outcome (`INTERRUPTED`, `error_msg` `command=<n> state=<last published state_name>`, e.g. STOP,
+  HOME, `~/start_in_area`, maintenance, `CHARGER_FAILED`); a `CRITICAL_BATTERY_*` state
+  (`CRITICAL_BATTERY`, the battery logic keeps the robot and command 9); past
+  `goto_deadline_sec` since acceptance (`DEADLINE`, stopped with command 8). Root-guard pauses
+  keep command 9 and no outcome: the goal stays active with feedback `PHASE_PAUSED`.
+  `CRITICAL_BATTERY_DOCKED` is recorded only after the critical charge, so an action goal
+  has already ended `CRITICAL_BATTERY` on the earlier `CRITICAL_BATTERY_*` states. Feedback is
+  published at most once per second.
+- **Success** (`NONE`) waits for the wheels (`/wheel_odom`) to report standstill for 0.5 s,
+  3 s at most; `settled` says whether that happened. Every result carries `final_pose`
+  (`map → base_link`), valid only if the transform is under 1 s old and localization is not
+  degraded.
+- **Limits**: results are kept `result_timeout` (1 h) after the end and lost on a node restart;
+  `SHUTDOWN` reaches a client only if the node can still communicate when it stops;
+  one result per goal, at most once. A GOTO started through `~/goto_pose` has no goal and is not
+  tracked by the server; `goto_deadline_sec` applies to action goals only. The GUI has no
+  action transport (foxglove_bridge), so the action is for ROS clients.
+
 ## GUI Scheduler and the IrriSense Soil Gate
 The GUI's scheduler (`gui/pkg/providers/scheduler.go`) polls its `schedule:*` DB entries every minute and issues `COMMAND_START` (1) when one is due, after `safeToStart()` (no emergency, state not NULL/AUTONOMOUS/RECORDING). It then asks the soil provider (`types.ISoilProvider`, implemented by `gui/pkg/providers/irrisense.go`, the operator's **IrriSense Cloud** irrigation service polled every 10 min over its read-only `/api/ha/gardens/{id}` API with a read-only API token stored ONLY in the GUI key-value DB under `irrisense.*` — never in `mowgli_robot.yaml`). A zone is WET if enabled and (`deficit_mm ≤ wetDeficitMm` [2.0] OR `last_watered_at` within `dryAfterWateringHours` [3.0]); the garden is WET if ANY selected zone is (all enabled zones unless `irrisense.zoneIds` lists some) — pure rule in `irrisense_wetness.go`. The run is skipped ONLY when `Enabled && GateScheduler && Fresh && Wet` (`SoilStatus.BlocksScheduledMowing()`), and the skip is recorded on the schedule as `lastSkipReason` / `lastSkippedAt`. Everything else is **fail-open**: unreachable service, bad token, 429 (backed off per `Retry-After`), or a last good fetch older than `maxStaleMinutes` [90] reports `unknown` and the mow starts as before — a cloud outage must never keep the robot docked. Surface: `GET/PUT /api/irrisense/settings` (token write-only, masked on read), `GET /api/irrisense/status`, `GET /api/irrisense/gardens`; Settings → IrriSense section and the chip on the Schedule page.
 

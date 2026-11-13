@@ -30,6 +30,7 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(map_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -84,6 +85,7 @@ target_link_libraries(behavior_tree_node
   ${nav2_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   ${nav_msgs_TARGETS}
+  ${map_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${action_msgs_TARGETS}
   ${std_msgs_TARGETS}
@@ -172,6 +174,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
     ${std_msgs_TARGETS}
@@ -201,6 +204,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
     ${std_msgs_TARGETS}
@@ -230,6 +234,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -257,6 +262,7 @@ if(BUILD_TESTING)
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${tf2_TARGETS}
     ${tf2_ros_TARGETS}
   )
@@ -281,6 +287,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -318,6 +325,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -348,6 +356,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -377,6 +386,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -407,6 +417,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -447,6 +458,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -485,6 +497,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -513,6 +526,7 @@ if(BUILD_TESTING)
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${tf2_ros_TARGETS}
   )
@@ -571,6 +585,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -606,6 +621,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -641,6 +657,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -738,6 +755,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -774,6 +792,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -952,9 +971,37 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
+  # ---- test_goto_action ----
+  # The ~/goto action server: the end-of-goal decision, and a real action
+  # client against GotoActionServer (refusal, settled success, busy, cancel,
+  # interruption, critical-battery takeover, pause, deadline, one result).
+  ament_add_ros_isolated_gtest(test_goto_action
+    test/test_goto_action.cpp
+    TIMEOUT 120
+  )
+
+  target_include_directories(test_goto_action PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_goto_action
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
     ${tf2_TARGETS}
     ${tf2_ros_TARGETS}
     ${tf2_geometry_msgs_TARGETS}
@@ -982,6 +1029,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1021,6 +1069,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1055,6 +1104,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1083,6 +1133,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1121,6 +1172,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1159,6 +1211,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1199,6 +1252,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1229,6 +1283,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}

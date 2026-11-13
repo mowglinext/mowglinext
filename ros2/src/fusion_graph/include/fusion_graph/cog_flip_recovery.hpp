@@ -37,7 +37,7 @@ struct CogFlipRecoveryResult
 };
 
 // Feed one COG sample. `count` and `prev_yaw` are caller-owned debounce state
-// (mutated in place, like AnchorSlewStep's px/py/pyaw) — reset to 0/nullopt
+// (mutated in place) — reset to 0/nullopt
 // whenever the sample is not a suspected flip or the flipped COGs disagree
 // with each other. `seconds_since_last_recovery` is nullopt if no recovery
 // has ever fired (the rate limit always passes then); the caller computes it

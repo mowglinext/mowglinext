@@ -12,10 +12,14 @@
 #include <fstream>
 #include <iomanip>
 #include <ios>
+#include <optional>
 #include <sstream>
+#include <utility>
+#include <vector>
 
 #include "fusion_graph/factors.hpp"
 #include "fusion_graph/graph_manager.hpp"
+#include <Eigen/Cholesky>
 #include <gtsam/base/GenericValue.h>
 #include <gtsam/base/serialization.h>
 #include <gtsam/linear/NoiseModel.h>
@@ -55,6 +59,7 @@ void GraphManager::RebaseISAM2()
   uint64_t snapshot_updates = 0;
   uint64_t snapshot_nodes = 0;
   uint64_t generation = 0;
+  std::optional<Eigen::Matrix3d> head_cov;
   {
     std::lock_guard<std::mutex> lock(mu_);
     if (rebase_in_progress_)
@@ -74,6 +79,20 @@ void GraphManager::RebaseISAM2()
       cutoff_index = next_index_ - params_.max_graph_nodes;
     snapshot_updates = successful_updates_;
     snapshot_nodes = next_index_;
+    // The head's marginal carries everything the absolute observations told
+    // the graph so far; it becomes the only absolute prior of the rebuild.
+    // O(depth) on the Bayes tree, the same call RefreshLatestLocked makes.
+    if (next_index_ > 0 && HasPoseAt(next_index_ - 1))
+    {
+      try
+      {
+        head_cov = isam_.marginalCovariance(PoseKey(next_index_ - 1));
+      }
+      catch (const std::exception&)
+      {
+        head_cov.reset();  // fall back to independent priors below
+      }
+    }
     generation = ++rebase_generation_;
     rebase_in_progress_ = true;
     rebase_pending_factors_.resize(0);
@@ -89,30 +108,14 @@ void GraphManager::RebaseISAM2()
   p.relinearizeSkip = std::max(1, relinearize_skip);
   gtsam::ISAM2 fresh(p);
 
-  // Re-anchor every existing variable with a tight prior. The exact
-  // sigma is a balance: too tight and future absolute observations can't move
-  // anything; too loose and iSAM2 wanders. 5 cm / 3° matches typical
-  // RTK + COG noise floors and keeps the rebase non-destructive.
   gtsam::NonlinearFactorGraph fg;
-  auto noise = MakeDiagonal({0.05, 0.05, 0.05});
   gtsam::Values kept_values;
-  for (const auto& kv : estimate_snapshot)
-  {
-    // Sliding-window drop: skip pose nodes older than the cutoff.
-    // gtsam::Symbol::index() recovers the monotonic node index from
-    // the key. Non-pose keys (if any) fall through the window check
-    // unchanged. cutoff_index == 0 means "keep everything".
-    const gtsam::Symbol s(kv.key);
-    if (cutoff_index > 0 && (s.chr() == 'x' || s.chr() == 'b') && s.index() < cutoff_index)
-      continue;
-    if (s.chr() == 'b')
-      fg.add(gtsam::PriorFactor<double>(kv.key,
-                                        kv.value.cast<double>(),
-                                        MakeDiagonal({params_.gyro_bias_prior_sigma_rad_per_s})));
-    else
-      fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, kv.value.cast<gtsam::Pose2>(), noise));
-    kept_values.insert(kv.key, kv.value);
-  }
+  BuildRebaseGraph(estimate_snapshot,
+                   cutoff_index,
+                   snapshot_nodes > 0 ? std::optional<uint64_t>(snapshot_nodes - 1) : std::nullopt,
+                   head_cov,
+                   fg,
+                   kept_values);
   // SAFETY (SAFETY_REVIEW_2026-07-23 G-H4): this update runs on the detached
   // maintenance thread — an unguarded GTSAM throw here propagates out of the
   // thread lambda and std::terminate()s the whole node (dead localizer
@@ -188,6 +191,89 @@ void GraphManager::RebaseISAM2()
     rebase_pending_factors_.resize(0);
     rebase_pending_values_.clear();
     rebase_in_progress_ = false;
+  }
+}
+
+namespace
+{
+// Symmetric, positive-definite copy of a marginal, or nullopt.
+std::optional<Eigen::Matrix3d> UsableCovariance(const std::optional<Eigen::Matrix3d>& cov)
+{
+  if (!cov || !cov->allFinite())
+    return std::nullopt;
+  Eigen::Matrix3d sym = 0.5 * (*cov + cov->transpose());
+  sym += Eigen::Matrix3d::Identity() * 1.0e-10;
+  Eigen::LLT<Eigen::Matrix3d> llt(sym);
+  if (llt.info() != Eigen::Success)
+    return std::nullopt;
+  return sym;
+}
+}  // namespace
+
+void GraphManager::BuildRebaseGraph(const gtsam::Values& estimate,
+                                    uint64_t cutoff_index,
+                                    std::optional<uint64_t> head_index,
+                                    const std::optional<Eigen::Matrix3d>& head_cov,
+                                    gtsam::NonlinearFactorGraph& fg,
+                                    gtsam::Values& kept) const
+{
+  // Fallback (no usable head marginal, or the head is missing): one 5 cm / 3°
+  // prior per variable, the previous behaviour.
+  const auto independent_noise = MakeDiagonal({0.05, 0.05, 0.05});
+  const auto bias_noise = MakeDiagonal({params_.gyro_bias_prior_sigma_rad_per_s});
+  const auto cov = UsableCovariance(head_cov);
+  const bool chain =
+      cov && head_index && estimate.exists(PoseKey(*head_index)) && *head_index >= cutoff_index;
+
+  std::vector<std::pair<uint64_t, gtsam::Pose2>> poses;
+  for (const auto& kv : estimate)
+  {
+    const gtsam::Symbol sym(kv.key);
+    if (cutoff_index > 0 && (sym.chr() == 'x' || sym.chr() == 'b') && sym.index() < cutoff_index)
+      continue;  // sliding window
+    kept.insert(kv.key, kv.value);
+    if (sym.chr() == 'b')
+    {
+      fg.add(gtsam::PriorFactor<double>(kv.key, kv.value.cast<double>(), bias_noise));
+      continue;
+    }
+    const auto pose = kv.value.cast<gtsam::Pose2>();
+    if (!chain)
+    {
+      fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, pose, independent_noise));
+      continue;
+    }
+    poses.emplace_back(sym.index(), pose);
+  }
+  if (!chain)
+    return;
+
+  // Head: its full marginal (tangent frame, like the published covariance).
+  fg.add(gtsam::PriorFactor<gtsam::Pose2>(PoseKey(*head_index),
+                                          estimate.at<gtsam::Pose2>(PoseKey(*head_index)),
+                                          gtsam::noiseModel::Gaussian::Covariance(*cov)));
+
+  // Window: consecutive kept nodes re-linked by their estimated relative pose
+  // at odometry strength (σ = k·√distance, the wheel random walk; gyro σ on
+  // yaw). Every residual is zero at the snapshot, so the estimate is
+  // unchanged, but a later observation of an older node still propagates to
+  // the head instead of landing on an isolated prior.
+  std::sort(poses.begin(),
+            poses.end(),
+            [](const auto& a, const auto& b)
+            {
+              return a.first < b.first;
+            });
+  const double creep_m = params_.wheel_creep_speed_mps * params_.node_period_s;
+  for (std::size_t i = 1; i < poses.size(); ++i)
+  {
+    const gtsam::Pose2 rel = poses[i - 1].second.between(poses[i].second);
+    const double dist = rel.translation().norm() + creep_m;
+    const double sx = std::max(kMinWheelSigmaM, params_.wheel_sigma_x_per_sqrt_m * std::sqrt(dist));
+    const double sy = std::max(kMinWheelSigmaM, params_.wheel_sigma_y_per_sqrt_m * std::sqrt(dist));
+    const double st = std::max(1.0e-4, params_.gyro_sigma_theta);
+    fg.add(gtsam::BetweenFactor<gtsam::Pose2>(
+        PoseKey(poses[i - 1].first), PoseKey(poses[i].first), rel, MakeDiagonal({sx, sy, st})));
   }
 }
 

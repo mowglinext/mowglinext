@@ -140,29 +140,16 @@ void FusionGraphNode::OnCogHeading(sensor_msgs::msg::Imu::ConstSharedPtr msg)
       if (flip.should_anchor)
       {
         last_flip_recovery_stamp_ = this->now();
-        const gtsam::Pose2 anchor(snap->pose.x(), snap->pose.y(), yaw);
-        // Tight yaw (1°) — we are deliberately overriding the flipped
-        // estimate with the physics-grounded COG heading. Keep xy at its
-        // current σ-equivalent (5 mm) since only yaw is wrong.
-        graph_->ForceAnchor(snap->node_index, anchor, 0.005, 1.0 * M_PI / 180.0);
+        // Yaw-only (1°): we deliberately override the flipped heading with the
+        // physics-grounded COG. XY is left to GNSS — the old 5 mm XY pin held
+        // the position estimated under the WRONG heading (lever arm off by
+        // twice its length) — and dead reckoning is NOT reset: this fires
+        // while driving forward, and zeroing dr_* made odom→base_footprint
+        // jump under Nav2. The estimate revision is applied by OnTimer as a
+        // left correction of the map→odom anchor, so map→base turns while
+        // odom stays continuous.
+        graph_->AnchorYaw(snap->node_index, yaw, 1.0 * M_PI / 180.0);
         SynchronizeSupportEpoch();
-        // Re-datum dead reckoning to the re-anchored node. dr_* carries the
-        // OLD (flipped) heading lineage; without this reset the map→odom
-        // recompute cancels against the stale dr_yaw_ and odom→base keeps
-        // publishing the flipped heading — the two TF legs disagree by 180°
-        // the moment the robot moves. SeedFromDockPose does the same after
-        // a large yaw change (the RTK-override path doesn't, because it only
-        // shifts xy and dr_yaw_ stays valid there).
-        {
-          // tf_state_mu_: dr_* / anchor are read concurrently by
-          // TfBroadcastLoop.
-          std::lock_guard<std::mutex> lock(tf_state_mu_);
-          dr_x_ = 0.0;
-          dr_y_ = 0.0;
-          dr_yaw_ = 0.0;
-          ResetLidarTiming();
-          t_map_odom_anchor_valid_ = false;
-        }
         ++cog_flip_recoveries_;
         RCLCPP_WARN(get_logger(),
                     "fusion_graph: 180° yaw-flip recovery — estimate %.1f° vs "
@@ -428,6 +415,20 @@ void FusionGraphNode::OnLocalizationMode(std_msgs::msg::Int32::ConstSharedPtr ms
   // (mowgli_localization/localization_monitor_policy.hpp).
   last_position_dead_reckoning_ = (msg->data == 0);
   last_position_dead_reckoning_valid_ = true;
+  last_position_mode_stamp_ = this->now();
+}
+
+bool FusionGraphNode::PositionDeadReckoningFresh() const
+{
+  // Honour DEAD_RECKONING only while the monitor is demonstrably alive (it
+  // publishes at 10 Hz). A latched verdict from a monitor that stopped — or a
+  // ROS-time rewind — must not withhold every /gps/fix indefinitely; the
+  // payload-value stuck gate stays active either way.
+  if (!last_position_dead_reckoning_valid_ || !last_position_dead_reckoning_ ||
+      !last_position_mode_stamp_)
+    return false;
+  const double age_s = (this->now() - *last_position_mode_stamp_).seconds();
+  return age_s >= 0.0 && age_s <= kLocalizationModeMaxAgeS;
 }
 
 }  // namespace fusion_graph

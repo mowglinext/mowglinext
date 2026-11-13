@@ -106,10 +106,10 @@ void GraphManager::AddWheelTwist(double vx, double vy, double wz, double dt)
   accum_.dt_total += dt;
 }
 
-void GraphManager::AddGyroDelta(double wz, double dt)
+double GraphManager::AddGyroDelta(double wz, double dt)
 {
   if (dt <= 0.0)
-    return;
+    return wz;
   std::lock_guard<std::mutex> lock(mu_);
 
   // Track the running maximum on the RAW sample for the multi-source
@@ -157,6 +157,7 @@ void GraphManager::AddGyroDelta(double wz, double dt)
     const double sigma = params_.gyro_noise_density_rad_per_s;
     accum_.gyro_preint_variance += dt * dt * sigma * sigma;
   }
+  return wz_corrected;
 }
 
 bool GraphManager::QueueGnss(double x,
@@ -164,15 +165,18 @@ bool GraphManager::QueueGnss(double x,
                              double sigma_xy,
                              bool robust,
                              std::optional<uint64_t> target_node,
-                             uint64_t ingestion_token)
+                             uint64_t ingestion_token,
+                             std::optional<gtsam::Vector2> antenna_in_node)
 {
   std::lock_guard<std::mutex> lock(mu_);
   if (target_node && !HasPoseAt(*target_node))
     return false;
   if (sigma_xy < params_.gps_sigma_floor)
     sigma_xy = params_.gps_sigma_floor;
-  queue_.gnss =
-      UnaryQueue::Gnss{gtsam::Vector2(x, y), sigma_xy, robust, target_node, ingestion_token};
+  if (antenna_in_node && !antenna_in_node->allFinite())
+    antenna_in_node.reset();
+  queue_.gnss = UnaryQueue::Gnss{
+      gtsam::Vector2(x, y), sigma_xy, robust, target_node, ingestion_token, antenna_in_node};
   return true;
 }
 
@@ -305,6 +309,7 @@ GraphStats GraphManager::Stats() const
   s.gps_rejects_wrongfix = stats_gps_rejects_wrongfix_;
   s.gps_rejects_dead_reckoning = stats_gps_rejects_dead_reckoning_;
   s.gps_rejects_stuck_value = stats_gps_rejects_stuck_value_;
+  s.isam_resets = stats_isam_resets_;
   s.stationary_hand_push = stats_hand_push_;
   s.slip_veto = stats_slip_veto_;
   s.residual_ema_rad = residual_ema_;
@@ -367,6 +372,25 @@ void GraphManager::ForceAnchor(uint64_t node_index,
   InvalidateGnssSupportLocked();
   // A historical anchor can also revise the head. Publication tracks estimate
   // revisions, so no DR recapture or special invalidation is needed here.
+  if (latest_)
+    RefreshLatestLocked(latest_->node_index, latest_->timestamp);
+}
+
+void GraphManager::AnchorYaw(uint64_t node_index, double yaw, double sigma_theta)
+{
+  std::lock_guard<std::mutex> lock(mu_);
+  if (!std::isfinite(yaw))
+    return;
+  if (!(sigma_theta > 0.0))
+    sigma_theta = 0.05;
+  if (!HasPoseAt(node_index))
+    return;
+  gtsam::NonlinearFactorGraph fg;
+  fg.add(YawUnaryFactor(PoseKey(node_index), yaw, MakeDiagonal({sigma_theta})));
+  if (!ApplyIsamUpdateLocked(fg, gtsam::Values()))
+    return;  // ill-posed reset; latest_ is now null
+  estimate_dirty_ = true;
+  InvalidateGnssSupportLocked();
   if (latest_)
     RefreshLatestLocked(latest_->node_index, latest_->timestamp);
 }

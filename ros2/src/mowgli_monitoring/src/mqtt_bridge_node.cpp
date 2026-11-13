@@ -36,6 +36,7 @@
 #include <string>
 #include <utility>
 
+#include "mowgli_interfaces/wgs84_projection.hpp"
 #include "mowgli_monitoring/battery_percentage.hpp"
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -623,6 +624,52 @@ void MqttBridgeNode::declare_parameters()
                                  position_deadband_m_,
                                  kHeadingDeadbandRad,
                                  position_heartbeat_period_s_);
+  pose_wgs84_gate_ = MotionDeadbandGate(MotionDeadbandGate::Frame::kPlanarMetres,
+                                        position_deadband_m_,
+                                        kHeadingDeadbandRad,
+                                        position_heartbeat_period_s_);
+
+  // <prefix>/goto: issued_at must lie in [now - max_age, now + max_future] on a
+  // clock the kernel reports synchronized (unless goto_require_clock_sync is
+  // off), and the target within goto_max_distance_m of the datum.
+  goto_max_age_s_ = clamp_parameter("goto_max_age_s",
+                                    declare_parameter<double>("goto_max_age_s", 30.0),
+                                    1.0,
+                                    600.0);
+  goto_max_future_s_ = clamp_parameter("goto_max_future_s",
+                                       declare_parameter<double>("goto_max_future_s", 5.0),
+                                       0.0,
+                                       60.0);
+  goto_max_distance_m_ = clamp_parameter("goto_max_distance_m",
+                                         declare_parameter<double>("goto_max_distance_m", 2000.0),
+                                         1.0,
+                                         100000.0);
+  goto_require_clock_sync_ = declare_parameter<bool>("goto_require_clock_sync", true);
+  goto_clock_max_error_s_ =
+      clamp_parameter("goto_clock_max_error_s",
+                      declare_parameter<double>("goto_clock_max_error_s", 2.0),
+                      0.001,
+                      60.0);
+  // Requests seen on <prefix>/goto, kept across restarts so a duplicate never
+  // starts a second mission. Empty disables persistence (and so every GOTO).
+  goto_store_path_ =
+      declare_parameter<std::string>("goto_store_path", "/ros2_ws/maps/mqtt_goto_requests.txt");
+  // A goal left by a previous run is watched this long for a sign that it
+  // runs (a goal request still in transit can be accepted after a cancel that
+  // the server answered "unknown") before the cancel ends "not_seen".
+  goto_cancel_window_s_ = clamp_parameter("goto_cancel_window_s",
+                                          declare_parameter<double>("goto_cancel_window_s", 30.0),
+                                          1.0,
+                                          600.0);
+  goto_store_ttl_s_ = clamp_parameter("goto_store_ttl_s",
+                                      declare_parameter<double>("goto_store_ttl_s", 86400.0),
+                                      60.0,
+                                      2592000.0);
+  goto_store_max_entries_ = static_cast<int>(
+      clamp_parameter("goto_store_max_entries",
+                      static_cast<double>(declare_parameter<int>("goto_store_max_entries", 200)),
+                      10.0,
+                      10000.0));
 }
 
 double MqttBridgeNode::clamp_parameter(const char* name, double value, double lo, double hi)
@@ -789,6 +836,21 @@ void MqttBridgeNode::create_subscriptions()
                             on_mqtt_start_area(topic, payload, retained);
                           });
 
+  mqtt_client_->subscribe(full_topic("goto"),
+                          [this](const std::string& topic,
+                                 const std::string& payload,
+                                 bool retained)
+                          {
+                            on_mqtt_goto(topic, payload, retained);
+                          });
+  mqtt_client_->subscribe(full_topic("goto/cancel"),
+                          [this](const std::string& topic,
+                                 const std::string& payload,
+                                 bool retained)
+                          {
+                            on_mqtt_goto_cancel(topic, payload, retained);
+                          });
+
   // External rain verdict (e.g. a roof weather station behind Home Assistant).
   // transient_local so behavior_tree_node gets the last value even when it
   // (re)starts after this bridge has already delivered it.
@@ -844,6 +906,17 @@ void MqttBridgeNode::create_service_client()
       create_client<mowgli_interfaces::srv::StartInArea>("/behavior_tree_node/start_in_area");
   srv_get_mowing_area_ =
       create_client<mowgli_interfaces::srv::GetMowingArea>("/map_server_node/get_mowing_area");
+  goto_client_ = PresetIdGotoClient::create(*this, "/behavior_tree_node/goto");
+  goto_status_sub_ = create_subscription<action_msgs::msg::GoalStatusArray>(
+      "/behavior_tree_node/goto/_action/status",
+      rclcpp::QoS(10),
+      [this](action_msgs::msg::GoalStatusArray::ConstSharedPtr msg)
+      {
+        on_goal_status(*msg);
+      });
+  goto_cancel_client_ =
+      create_client<action_msgs::srv::CancelGoal>("/behavior_tree_node/goto/_action/cancel_goal");
+  init_goto_store();
 }
 
 void MqttBridgeNode::create_timer()
@@ -1004,6 +1077,8 @@ void MqttBridgeNode::on_pose(nav_msgs::msg::Odometry::ConstSharedPtr msg)
     return;  // a localizer that has not converged yet must not put NaN on the wire
   }
   pending_pose_ = *msg;
+  pending_pose_wgs84_ = *msg;
+  latest_pose_ = *msg;
 }
 
 // ---------------------------------------------------------------------------
@@ -1229,6 +1304,760 @@ void MqttBridgeNode::on_mqtt_start_area(const std::string& /*topic*/,
                       static_cast<unsigned>(area_index));
         }
       });
+}
+
+// ---------------------------------------------------------------------------
+// MQTT GOTO: <prefix>/goto and <prefix>/goto/cancel → ~/goto action
+// ---------------------------------------------------------------------------
+
+namespace
+{
+int64_t system_now_ms()
+{
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+/// A pose older than this is reported invalid in <prefix>/goto/event.
+constexpr double kGotoPoseMaxAgeS = 2.0;
+/// How long a cancel of a goal left by a previous run waits for an answer
+/// before it is sent again.
+constexpr std::chrono::seconds kGotoCancelRetry{2};
+double yaw_of(const geometry_msgs::msg::Quaternion& q)
+{
+  return std::atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+}
+}  // namespace
+
+std::string MqttBridgeNode::goto_error_code_name(uint16_t code)
+{
+  switch (code)
+  {
+    case GotoAction::Result::NONE:
+      return "NONE";
+    case GotoAction::Result::REFUSED:
+      return "REFUSED";
+    case GotoAction::Result::FAILED:
+      return "FAILED";
+    case GotoAction::Result::LOW_BATTERY_DOCKED:
+      return "LOW_BATTERY_DOCKED";
+    case GotoAction::Result::LOW_BATTERY_DOCK_FAILED:
+      return "LOW_BATTERY_DOCK_FAILED";
+    case GotoAction::Result::CRITICAL_BATTERY:
+      return "CRITICAL_BATTERY";
+    case GotoAction::Result::INTERRUPTED:
+      return "INTERRUPTED";
+    case GotoAction::Result::DEADLINE:
+      return "DEADLINE";
+    case GotoAction::Result::CANCELED:
+      return "CANCELED";
+    case GotoAction::Result::SHUTDOWN:
+      return "SHUTDOWN";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+std::string MqttBridgeNode::serialise_pose_wgs84(const nav_msgs::msg::Odometry& msg,
+                                                 double datum_lat,
+                                                 double datum_lon,
+                                                 double age_s,
+                                                 bool valid)
+{
+  double lat = 0.0;
+  double lon = 0.0;
+  mowgli_interfaces::wgs84::FromEnu(
+      msg.pose.pose.position.x, msg.pose.pose.position.y, datum_lat, datum_lon, lat, lon);
+  const int64_t stamp_ms = static_cast<int64_t>(msg.header.stamp.sec) * 1000 +
+                           static_cast<int64_t>(msg.header.stamp.nanosec / 1000000U);
+  char buf[320];
+  std::snprintf(buf,
+                sizeof(buf),
+                "{\"lat\":%.8f,\"lon\":%.8f,\"yaw\":%.4f,\"valid\":%s,\"stamp\":\"%s\","
+                "\"age_s\":%.2f,\"datum\":{\"lat\":%.8f,\"lon\":%.8f}}",
+                lat,
+                lon,
+                yaw_of(msg.pose.pose.orientation),
+                valid ? "true" : "false",
+                mqtt_goto::format_iso_utc_ms(stamp_ms).c_str(),
+                age_s,
+                datum_lat,
+                datum_lon);
+  return std::string{buf};
+}
+
+mqtt_goto::WgsPose MqttBridgeNode::to_wgs84(const geometry_msgs::msg::PoseStamped& pose,
+                                            bool valid) const
+{
+  mqtt_goto::WgsPose out;
+  mowgli_interfaces::wgs84::FromEnu(
+      pose.pose.position.x, pose.pose.position.y, datum_lat_, datum_lon_, out.lat, out.lon);
+  out.yaw = yaw_of(pose.pose.orientation);
+  out.valid = valid && (datum_lat_ != 0.0 || datum_lon_ != 0.0);
+  out.age_s = std::max(0.0, (now() - rclcpp::Time(pose.header.stamp, RCL_ROS_TIME)).seconds());
+  return out;
+}
+
+std::optional<mqtt_goto::WgsPose> MqttBridgeNode::current_wgs84_pose() const
+{
+  if (!latest_pose_ || (datum_lat_ == 0.0 && datum_lon_ == 0.0))
+  {
+    return std::nullopt;
+  }
+  geometry_msgs::msg::PoseStamped pose;
+  pose.header = latest_pose_->header;
+  pose.pose = latest_pose_->pose.pose;
+  auto out = to_wgs84(pose, true);
+  out.valid = out.valid && out.age_s <= kGotoPoseMaxAgeS;
+  return out;
+}
+
+void MqttBridgeNode::init_goto_store()
+{
+  if (goto_store_path_.empty())
+  {
+    goto_store_ok_ = false;
+    RCLCPP_WARN(get_logger(), "goto_store_path is empty: every <prefix>/goto is refused.");
+    return;
+  }
+  if (!goto_store_.load(goto_store_path_))
+  {
+    goto_store_ok_ = false;
+    RCLCPP_ERROR(get_logger(),
+                 "GOTO request store '%s' is unreadable: every <prefix>/goto is refused "
+                 "(state_unavailable) until it is repaired or removed.",
+                 goto_store_path_.c_str());
+    return;
+  }
+  const int64_t now_ms = system_now_ms();
+  for (const auto& id : goto_store_.active_ids())
+  {
+    auto stored = *goto_store_.find(id);
+    mqtt_goto::GotoEvent event;
+    event.request_id = id;
+    event.seq = stored.seq + 1;
+    event.phase = "ABORTED";
+    event.error_code = "LOST";
+    event.error_msg = "bridge_restarted";
+    event.datum_lat = datum_lat_;
+    event.datum_lon = datum_lon_;
+    event.stamp_ms = now_ms;
+    stored.phase = event.phase;
+    stored.updated_ms = now_ms;
+    stored.seq = event.seq;
+    // The goal ID was chosen and saved before the goal was sent, so the goal can
+    // be canceled even if the previous run never saw its response.
+    stored.cancel_pending = !stored.goal_id.empty();
+    stored.last_event = mqtt_goto::serialise_goto_event(event);
+    goto_pending_events_.push_back(stored.last_event);
+    goto_store_.put(id, stored);
+    RCLCPP_WARN(get_logger(), "GOTO request %s was active at shutdown: ended.", id.c_str());
+  }
+  // Every goal still to be canceled, from this run or an earlier one.
+  for (const auto& id : goto_store_.cancel_pending_ids())
+  {
+    goto_cancels_[goto_store_.find(id)->goal_id] = make_pending_cancel(id);
+  }
+  // The clock may not be synchronized yet at boot: pruning on it could drop a
+  // request that is still fresh, so it waits for the first save after sync.
+  if (mqtt_goto::read_kernel_clock_state().synchronized)
+  {
+    prune_goto_store(now_ms);
+  }
+  if (!goto_store_.save(goto_store_path_))
+  {
+    goto_store_ok_ = false;
+    RCLCPP_ERROR(get_logger(),
+                 "GOTO request store '%s' is not writable: every <prefix>/goto is refused.",
+                 goto_store_path_.c_str());
+  }
+}
+
+void MqttBridgeNode::prune_goto_store(int64_t now_ms)
+{
+  goto_store_.prune(now_ms,
+                    static_cast<int64_t>(goto_store_ttl_s_ * 1000.0),
+                    static_cast<std::size_t>(goto_store_max_entries_),
+                    static_cast<int64_t>((goto_max_age_s_ + goto_max_future_s_) * 1000.0));
+}
+
+bool MqttBridgeNode::publish_goto_event(mqtt_goto::GotoEvent event,
+                                        bool phase_changed,
+                                        bool publish_unsaved)
+{
+  event.datum_lat = datum_lat_;
+  event.datum_lon = datum_lon_;
+  event.stamp_ms = system_now_ms();
+  std::string goal_id;
+  if (const auto active = goto_active_.find(event.request_id); active != goto_active_.end())
+  {
+    goal_id = active->second.goal_id;
+  }
+  else if (const auto* stored = goto_store_.find(event.request_id))
+  {
+    goal_id = stored->goal_id;
+  }
+  const auto* previous = goto_store_.find(event.request_id);
+  const bool cancel_pending = previous != nullptr && previous->cancel_pending;
+  bool saved = false;
+  if (goto_store_ok_)
+  {
+    goto_store_.put(event.request_id,
+                    {event.phase,
+                     event.stamp_ms,
+                     event.seq,
+                     goal_id,
+                     cancel_pending,
+                     mqtt_goto::serialise_goto_event(event)});
+    if (!phase_changed)
+    {
+      saved = true;  // progress only: the stored phase did not change
+    }
+    else
+    {
+      prune_goto_store(event.stamp_ms);
+      saved = goto_store_.save(goto_store_path_);
+    }
+  }
+  if (!saved)
+  {
+    if (goto_store_ok_)
+    {
+      goto_store_ok_ = false;
+      RCLCPP_ERROR(get_logger(),
+                   "GOTO request store '%s' could not be written: further <prefix>/goto "
+                   "requests are refused until the bridge restarts with a writable store.",
+                   goto_store_path_.c_str());
+    }
+    event.durable = false;
+    if (!publish_unsaved)
+    {
+      return false;
+    }
+  }
+  const std::string payload = mqtt_goto::serialise_goto_event(event);
+  // In memory the request always holds the event last published, saved or
+  // not, so a duplicate request_id is answered with it.
+  goto_store_.put(event.request_id,
+                  {event.phase, event.stamp_ms, event.seq, goal_id, cancel_pending, payload});
+  mqtt_client_->publish(full_topic("goto/event"), payload, /*retain=*/false);
+  mqtt_client_->publish(full_topic("goto/state"), payload, /*retain=*/true);
+  return saved;
+}
+
+void MqttBridgeNode::refuse_goto(const std::string& request_id, const std::string& reason)
+{
+  RCLCPP_WARN(get_logger(), "GOTO request %s refused: %s", request_id.c_str(), reason.c_str());
+  mqtt_goto::GotoEvent event;
+  event.request_id = request_id;
+  event.seq = 1;
+  event.phase = "REFUSED";
+  event.error_code = "REFUSED";
+  event.error_msg = reason;
+  event.current = current_wgs84_pose();
+  publish_goto_event(std::move(event), true);
+}
+
+void MqttBridgeNode::lose_goto(const std::string& request_id, const std::string& reason)
+{
+  auto it = goto_active_.find(request_id);
+  if (it == goto_active_.end())
+  {
+    return;
+  }
+  mqtt_goto::GotoEvent event;
+  event.request_id = request_id;
+  event.seq = it->second.seq + 1;
+  event.phase = "ABORTED";
+  event.error_code = "LOST";
+  event.error_msg = reason;
+  event.current = current_wgs84_pose();
+  publish_goto_event(event, true);
+  goto_active_.erase(it);
+  RCLCPP_WARN(get_logger(), "GOTO request %s lost: %s", request_id.c_str(), reason.c_str());
+}
+
+void MqttBridgeNode::reply_goto_cancel(const std::string& request_id,
+                                       const std::string& result,
+                                       const std::string& status)
+{
+  char buf[200];
+  std::snprintf(buf,
+                sizeof(buf),
+                "{\"request_id\":\"%s\",\"result\":\"%s\",%s\"stamp\":\"%s\"}",
+                mqtt_goto::json_escape(request_id).c_str(),
+                result.c_str(),
+                status.empty() ? "" : ("\"status\":\"" + status + "\",").c_str(),
+                mqtt_goto::format_iso_utc_ms(system_now_ms()).c_str());
+  mqtt_client_->publish(full_topic("goto/cancel/result"), buf, /*retain=*/false);
+}
+
+MqttBridgeNode::PendingCancel MqttBridgeNode::make_pending_cancel(
+    const std::string& request_id) const
+{
+  PendingCancel pending;
+  pending.request_id = request_id;
+  pending.window_end = std::chrono::steady_clock::now() +
+                       std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                           std::chrono::duration<double>(goto_cancel_window_s_));
+  return pending;
+}
+
+void MqttBridgeNode::cancel_goal_by_id(const std::string& goal_id_hex)
+{
+  auto request = std::make_shared<action_msgs::srv::CancelGoal::Request>();
+  request->goal_info.goal_id.uuid = mqtt_goto::goal_id_from_hex(goal_id_hex);
+  goto_cancel_client_->async_send_request(
+      request,
+      [this, goal_id_hex](rclcpp::Client<action_msgs::srv::CancelGoal>::SharedFuture future)
+      {
+        on_goal_cancel_response(goal_id_hex, *future.get());
+      });
+}
+
+void MqttBridgeNode::on_goal_cancel_response(const std::string& goal_id_hex,
+                                             const action_msgs::srv::CancelGoal::Response& response)
+{
+  using Response = action_msgs::srv::CancelGoal::Response;
+  auto it = goto_cancels_.find(goal_id_hex);
+  if (it == goto_cancels_.end())
+  {
+    return;  // already resolved: a late answer to an earlier attempt
+  }
+  it->second.in_flight = false;
+  if (response.return_code == Response::ERROR_NONE)
+  {
+    // Accepted: the goal is canceling. It has stopped only once the action's
+    // status reports it ended (on_goal_status).
+    if (!it->second.accepted)
+    {
+      it->second.accepted = true;
+      reply_goto_cancel(it->second.request_id, "canceling");
+    }
+    return;
+  }
+  if (response.return_code == Response::ERROR_GOAL_TERMINATED)
+  {
+    resolve_goal_cancel(goal_id_hex, "ended", "");
+    return;
+  }
+  // UNKNOWN_GOAL_ID does not prove the goal will never run: a goal request
+  // still in transit can be accepted after this cancel. Keep watching it (the
+  // action status, and a retry every kGotoCancelRetry) until the window ends.
+  if (response.return_code != Response::ERROR_UNKNOWN_GOAL_ID)
+  {
+    RCLCPP_WARN(get_logger(),
+                "GOTO: cancel of goal %s refused (return code %d); retrying.",
+                goal_id_hex.c_str(),
+                static_cast<int>(response.return_code));
+  }
+}
+
+void MqttBridgeNode::on_goal_status(const action_msgs::msg::GoalStatusArray& msg)
+{
+  using GoalStatus = action_msgs::msg::GoalStatus;
+  for (const auto& status : msg.status_list)
+  {
+    const std::string goal_id = mqtt_goto::goal_id_to_hex(status.goal_info.goal_id.uuid);
+    const auto it = goto_cancels_.find(goal_id);
+    if (it == goto_cancels_.end())
+    {
+      continue;
+    }
+    switch (status.status)
+    {
+      case GoalStatus::STATUS_CANCELED:
+        resolve_goal_cancel(goal_id, "stopped", "CANCELED");
+        break;
+      case GoalStatus::STATUS_SUCCEEDED:
+        resolve_goal_cancel(goal_id, "stopped", "SUCCEEDED");
+        break;
+      case GoalStatus::STATUS_ABORTED:
+        resolve_goal_cancel(goal_id, "stopped", "ABORTED");
+        break;
+      case GoalStatus::STATUS_CANCELING:
+        if (!it->second.accepted)
+        {
+          it->second.accepted = true;
+          reply_goto_cancel(it->second.request_id, "canceling");
+        }
+        break;
+      default:
+        // ACCEPTED or EXECUTING: the goal runs (possibly accepted after an
+        // earlier cancel was answered "unknown"): cancel it now.
+        if (!it->second.accepted && !it->second.in_flight)
+        {
+          it->second.next_try = std::chrono::steady_clock::now();
+        }
+        break;
+    }
+  }
+}
+
+void MqttBridgeNode::resolve_goal_cancel(const std::string& goal_id_hex,
+                                         const std::string& result,
+                                         const std::string& status)
+{
+  auto it = goto_cancels_.find(goal_id_hex);
+  if (it == goto_cancels_.end())
+  {
+    return;
+  }
+  const std::string request_id = it->second.request_id;
+  goto_cancels_.erase(it);
+  if (const auto* stored = goto_store_.find(request_id); stored && goto_store_ok_)
+  {
+    auto entry = *stored;
+    entry.cancel_pending = false;
+    goto_store_.put(request_id, entry);
+    if (!goto_store_.save(goto_store_path_))
+    {
+      goto_store_ok_ = false;
+      RCLCPP_ERROR(get_logger(),
+                   "GOTO request store '%s' could not be written: further <prefix>/goto "
+                   "requests are refused.",
+                   goto_store_path_.c_str());
+    }
+  }
+  // If that save failed, the next run still finds cancel_pending and checks the
+  // goal again: harmless, the goal is no longer running.
+  reply_goto_cancel(request_id, result, status);
+  RCLCPP_INFO(get_logger(),
+              "GOTO request %s: goal %s %s%s%s.",
+              request_id.c_str(),
+              goal_id_hex.c_str(),
+              result.c_str(),
+              status.empty() ? "" : " ",
+              status.c_str());
+}
+
+void MqttBridgeNode::check_goto_requests()
+{
+  if (mqtt_client_->is_connected())
+  {
+    for (const auto& payload : goto_pending_events_)
+    {
+      mqtt_client_->publish(full_topic("goto/event"), payload, /*retain=*/false);
+      mqtt_client_->publish(full_topic("goto/state"), payload, /*retain=*/true);
+    }
+    goto_pending_events_.clear();
+  }
+  // Goals a previous run left behind: canceled by their own ID, retried until
+  // the server answers that the goal is canceling (then followed until it
+  // ends) or that it does not run it.
+  const auto now = std::chrono::steady_clock::now();
+  if (goto_cancel_client_->service_is_ready())
+  {
+    std::vector<std::string> unseen;
+    for (auto& [goal_id, pending] : goto_cancels_)
+    {
+      if (pending.in_flight && now >= pending.next_try)
+      {
+        pending.in_flight = false;  // no answer: send it again
+      }
+      if (pending.accepted || pending.in_flight)
+      {
+        continue;
+      }
+      if (now >= pending.window_end)
+      {
+        unseen.push_back(goal_id);  // never seen running during the whole window
+      }
+      else if (now >= pending.next_try)
+      {
+        pending.in_flight = true;
+        pending.next_try = now + kGotoCancelRetry;
+        cancel_goal_by_id(goal_id);
+      }
+    }
+    for (const auto& goal_id : unseen)
+    {
+      resolve_goal_cancel(goal_id, "not_seen", "");
+    }
+  }
+  if (!goto_client_->action_server_is_ready())
+  {
+    // behavior_tree_node went away, and its goals with it.
+    std::vector<std::string> lost;
+    for (const auto& [id, active] : goto_active_)
+    {
+      lost.push_back(id);
+    }
+    for (const auto& id : lost)
+    {
+      lose_goto(id, "action_lost");
+    }
+  }
+}
+
+void MqttBridgeNode::on_mqtt_goto(const std::string& /*topic*/,
+                                  const std::string& payload,
+                                  bool retained)
+{
+  if (!is_fresh_control_message(retained))
+  {
+    RCLCPP_WARN(get_logger(), "Retained MQTT goto ignored as stale operator intent.");
+    return;
+  }
+  const auto parsed = mqtt_goto::parse_goto_request(payload);
+  // A known request_id is answered with its last state and never sent again,
+  // whatever its age: this is how a client asks how a mission ended.
+  if (!parsed.request_id.empty())
+  {
+    if (const auto* known = goto_store_.find(parsed.request_id))
+    {
+      mqtt_client_->publish(full_topic("goto/event"), known->last_event, /*retain=*/false);
+      return;
+    }
+  }
+  if (!parsed.request)
+  {
+    if (parsed.request_id.empty())
+    {
+      RCLCPP_WARN(get_logger(), "MQTT goto payload without a valid request_id. Ignored.");
+      return;
+    }
+    refuse_goto(parsed.request_id, parsed.error);
+    return;
+  }
+  const auto& request = *parsed.request;
+  if (!goto_store_ok_)
+  {
+    refuse_goto(request.request_id, "state_unavailable");
+    return;
+  }
+  if (goto_require_clock_sync_)
+  {
+    const std::string clock_error =
+        mqtt_goto::check_clock(mqtt_goto::read_kernel_clock_state(), goto_clock_max_error_s_);
+    if (!clock_error.empty())
+    {
+      refuse_goto(request.request_id, clock_error);
+      return;
+    }
+  }
+  const std::string freshness = mqtt_goto::check_freshness(request.issued_at_ms,
+                                                           system_now_ms(),
+                                                           goto_max_age_s_,
+                                                           goto_max_future_s_);
+  if (!freshness.empty())
+  {
+    refuse_goto(request.request_id, freshness);
+    return;
+  }
+  if (datum_lat_ == 0.0 && datum_lon_ == 0.0)
+  {
+    refuse_goto(request.request_id, "datum_unset");
+    return;
+  }
+  double x = 0.0;
+  double y = 0.0;
+  mowgli_interfaces::wgs84::ToEnu(request.lat, request.lon, datum_lat_, datum_lon_, x, y);
+  if (std::hypot(x, y) > goto_max_distance_m_)
+  {
+    refuse_goto(request.request_id, "out_of_range");
+    return;
+  }
+  if (!goto_active_.empty())
+  {
+    refuse_goto(request.request_id, "busy");
+    return;
+  }
+  if (!goto_client_->action_server_is_ready())
+  {
+    refuse_goto(request.request_id, "action_unavailable");
+    return;
+  }
+
+  // SUBMITTED is saved to disk, with the goal ID chosen here, before the goal
+  // leaves: a request the store could not record is refused, so a restart can
+  // never send it a second time, and can always cancel its goal by that ID.
+  const std::string id = request.request_id;
+  const auto goal_uuid = mqtt_goto::new_goal_id();
+  goto_active_[id] =
+      ActiveGoto{nullptr, mqtt_goto::goal_id_to_hex(goal_uuid), 0, "SUBMITTED", false};
+  mqtt_goto::GotoEvent submitted;
+  submitted.request_id = id;
+  submitted.seq = 1;
+  submitted.phase = "SUBMITTED";
+  submitted.current = current_wgs84_pose();
+  if (submitted.current && submitted.current->valid)
+  {
+    submitted.distance_remaining_m =
+        std::hypot(x - latest_pose_->pose.pose.position.x, y - latest_pose_->pose.pose.position.y);
+  }
+  // SUBMITTED promises the request is saved: when it is not, only the refusal
+  // is published.
+  if (!publish_goto_event(submitted, true, /*publish_unsaved=*/false))
+  {
+    goto_active_.erase(id);
+    mqtt_goto::GotoEvent refused;
+    refused.request_id = id;
+    refused.seq = 2;
+    refused.phase = "REFUSED";
+    refused.error_code = "REFUSED";
+    refused.error_msg = "state_unavailable";
+    publish_goto_event(std::move(refused), true);
+    return;
+  }
+  goto_active_[id].seq = 1;
+
+  GotoAction::Goal goal;
+  goal.x = x;
+  goal.y = y;
+  goal.yaw = request.yaw;
+  rclcpp_action::Client<GotoAction>::SendGoalOptions options;
+  options.goal_response_callback = [this, id](const GotoGoalHandle::SharedPtr& handle)
+  {
+    auto it = goto_active_.find(id);
+    if (it == goto_active_.end())
+    {
+      return;
+    }
+    mqtt_goto::GotoEvent event;
+    event.request_id = id;
+    event.seq = ++it->second.seq;
+    if (!handle)
+    {
+      event.phase = "REFUSED";
+      event.error_code = "REFUSED";
+      event.error_msg = "goal_rejected";
+      publish_goto_event(event, true);
+      goto_active_.erase(it);
+      return;
+    }
+    it->second.handle = handle;
+    it->second.phase = "ACCEPTED";
+    // Accepted by the action server; its admission (REFUSED or running) follows.
+    event.phase = "ACCEPTED";
+    event.current = current_wgs84_pose();
+    publish_goto_event(std::move(event), true);
+    if (it->second.cancel_requested)
+    {
+      cancel_goto_goal(id, it->second);
+    }
+  };
+  options.feedback_callback =
+      [this, id](GotoGoalHandle::SharedPtr, const std::shared_ptr<const GotoAction::Feedback> fb)
+  {
+    auto it = goto_active_.find(id);
+    if (it == goto_active_.end())
+    {
+      return;
+    }
+    const std::string phase = fb->phase == GotoAction::Feedback::PHASE_PAUSED ? "PAUSED" : "ACTIVE";
+    const bool changed = phase != it->second.phase;
+    it->second.phase = phase;
+    mqtt_goto::GotoEvent event;
+    event.request_id = id;
+    event.seq = ++it->second.seq;
+    event.phase = phase;
+    event.state_name = fb->state_name;
+    event.current = to_wgs84(fb->current_pose, fb->current_pose_valid);
+    if (fb->current_pose_valid)
+    {
+      event.distance_remaining_m = fb->distance_remaining;
+    }
+    publish_goto_event(std::move(event), changed);
+  };
+  options.result_callback = [this, id](const GotoGoalHandle::WrappedResult& wrapped)
+  {
+    auto it = goto_active_.find(id);
+    if (it == goto_active_.end())
+    {
+      return;  // already ended (lost) by check_goto_requests
+    }
+    mqtt_goto::GotoEvent event;
+    event.request_id = id;
+    event.seq = it->second.seq + 1;
+    event.current = current_wgs84_pose();
+    if (!wrapped.result || (wrapped.code != rclcpp_action::ResultCode::SUCCEEDED &&
+                            wrapped.result->error_code == GotoAction::Result::NONE))
+    {
+      // No result, or an unsuccessful goal without an error code: the action
+      // server ended it while going away, not the GOTO logic.
+      event.phase = "ABORTED";
+      event.error_code = "LOST";
+      event.error_msg = "no_result";
+    }
+    else
+    {
+      const auto& result = *wrapped.result;
+      switch (wrapped.code)
+      {
+        case rclcpp_action::ResultCode::SUCCEEDED:
+          event.phase = "SUCCEEDED";
+          break;
+        case rclcpp_action::ResultCode::CANCELED:
+          event.phase = "CANCELED";
+          break;
+        default:
+          event.phase = result.error_code == GotoAction::Result::REFUSED ? "REFUSED" : "ABORTED";
+          break;
+      }
+      event.error_code = goto_error_code_name(result.error_code);
+      event.error_msg = result.error_msg;
+      event.final_pose = to_wgs84(result.final_pose, result.final_pose_valid);
+      event.settled = result.settled;
+    }
+    publish_goto_event(event, true);
+    goto_active_.erase(it);
+  };
+  goto_client_->set_next_goal_id(goal_uuid);
+  goto_client_->async_send_goal(goal, options);
+}
+
+void MqttBridgeNode::cancel_goto_goal(const std::string& request_id, const ActiveGoto& active)
+{
+  try
+  {
+    goto_client_->async_cancel_goal(active.handle);
+  }
+  catch (const std::exception& ex)
+  {
+    // The client no longer knows the handle: cancel the goal by its ID, with
+    // the retries and confirmation of a goal left by a previous run.
+    RCLCPP_WARN(get_logger(), "GOTO: cancel through the handle failed (%s).", ex.what());
+    goto_cancels_[active.goal_id] = make_pending_cancel(request_id);
+  }
+}
+
+void MqttBridgeNode::on_mqtt_goto_cancel(const std::string& /*topic*/,
+                                         const std::string& payload,
+                                         bool retained)
+{
+  // A retained cancel would stop whatever runs whenever the bridge reconnects:
+  // ignored like every other operator command. A fresh one is never refused
+  // for the clock, its age or the store. It only ever acts on its own request:
+  // stopping everything is <prefix>/command 8.
+  if (!is_fresh_control_message(retained))
+  {
+    RCLCPP_WARN(get_logger(), "Retained MQTT goto/cancel ignored as stale operator intent.");
+    return;
+  }
+  const std::string id = mqtt_goto::parse_cancel_request_id(payload);
+  if (id.empty())
+  {
+    reply_goto_cancel("", "invalid_payload");
+    return;
+  }
+  const auto it = goto_active_.find(id);
+  if (it == goto_active_.end())
+  {
+    reply_goto_cancel(id, goto_store_.find(id) ? "already_ended" : "not_found");
+    return;
+  }
+  if (it->second.handle)
+  {
+    cancel_goto_goal(id, it->second);
+  }
+  else
+  {
+    it->second.cancel_requested = true;  // applied when the goal response arrives
+  }
+  reply_goto_cancel(id, "canceling");
+  RCLCPP_INFO(get_logger(), "GOTO request %s: cancel requested.", id.c_str());
 }
 
 void MqttBridgeNode::on_home_assistant_status(const std::string& /*topic*/,
@@ -1508,6 +2337,20 @@ void MqttBridgeNode::on_timer()
                serialise_pose,
                odometry_motion_sample,
                pose_gate_);
+  flush_motion(
+      pending_pose_wgs84_,
+      last_pose_wgs84_publish_,
+      "pose_wgs84",
+      [this](const nav_msgs::msg::Odometry& odom)
+      {
+        const double age = (now() - rclcpp::Time(odom.header.stamp, RCL_ROS_TIME)).seconds();
+        const bool datum_set = datum_lat_ != 0.0 || datum_lon_ != 0.0;
+        return serialise_pose_wgs84(
+            odom, datum_lat_, datum_lon_, age, datum_set && age <= kGotoPoseMaxAgeS);
+      },
+      odometry_motion_sample,
+      pose_wgs84_gate_);
+  check_goto_requests();
   flush_state(pending_status_, last_status_publish_, "status", serialise_status, status_gate_);
   flush_state(
       pending_power_,
