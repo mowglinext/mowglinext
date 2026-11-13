@@ -327,6 +327,8 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
   )
 
+  # Opt-in benchmark, not part of the default build or CI:
+  #   colcon build --packages-select mowgli_localization --cmake-target scan_deskew_bench
   add_executable(scan_deskew_bench EXCLUDE_FROM_ALL
     test/bench/scan_deskew_bench.cpp
   )
