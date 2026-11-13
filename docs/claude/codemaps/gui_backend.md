@@ -130,6 +130,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | **pkg/foxglove/** | | |
 | `gui/pkg/foxglove/client.go` | 952 | foxglove ws-protocol client (`foxglove.sdk.v1`): channels, subscribe/unsubscribe, binary publish, CDR service calls, decimators, reconnect |
 | `gui/pkg/foxglove/cdr.go` | 651 | `.msg` schema parser (multi-block, dependency-order-safe) + CDR deserializer |
+| `gui/pkg/foxglove/cdr_json.go` | ~150 | CDR→JSON byte-array path for arrays of at least 4096 cells; preserves the public decoder and sanitizer/JSON output contract |
 | `gui/pkg/foxglove/cdr_write.go` | 263 | JSON→CDR serializer (XCDR1 LE, 8-byte max align, empty-body padding) |
 | `gui/pkg/foxglove/protocol.go` | 156 | Opcodes + JSON envelope structs of the protocol |
 | `gui/pkg/foxglove/parameters.go` | 124 | `getParameters` / `setParameters` request/response routing |

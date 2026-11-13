@@ -290,15 +290,20 @@ func primitiveSize(t string) int {
 
 // cdrReader reads CDR-encoded data using a parsed schema.
 type cdrReader struct {
-	data     []byte
-	offset   int
-	le       bool // little-endian
-	maxAlign int  // max alignment (4 for XCDR2/PLAIN_CDR2, 8 for CDR1)
+	data           []byte
+	offset         int
+	le             bool // little-endian
+	maxAlign       int  // max alignment (4 for XCDR2/PLAIN_CDR2, 8 for CDR1)
+	jsonByteArrays *bool // non-nil enables numeric array markers and records their use
 }
 
 // DeserializeCDR deserializes CDR-encoded data using the given schema into a
 // JSON-friendly map. The data must include the 4-byte CDR encapsulation header.
 func DeserializeCDR(data []byte, schema *msgSchema) (map[string]interface{}, error) {
+	return deserializeCDR(data, schema, nil)
+}
+
+func deserializeCDR(data []byte, schema *msgSchema, jsonByteArrays *bool) (map[string]interface{}, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("cdr: data too short (%d bytes)", len(data))
 	}
@@ -316,7 +321,7 @@ func DeserializeCDR(data []byte, schema *msgSchema) (map[string]interface{}, err
 	if enc == 0x06 || enc == 0x07 {
 		maxAlign = 4 // PLAIN_CDR2: 4-byte max alignment
 	}
-	r := &cdrReader{data: data, offset: 4, le: le, maxAlign: maxAlign}
+	r := &cdrReader{data: data, offset: 4, le: le, maxAlign: maxAlign, jsonByteArrays: jsonByteArrays}
 
 	return r.readMessage(schema.Fields)
 }
@@ -393,6 +398,15 @@ func (r *cdrReader) readArray(f schemaField, count int) (interface{}, error) {
 func (r *cdrReader) readPrimitiveArray(typ string, count int) (interface{}, error) {
 	size := primitiveSize(typ)
 	r.align(size)
+	if r.jsonByteArrays != nil && count >= jsonByteArrayMinCells && (typ == "int8" || typ == "uint8" || typ == "byte") {
+		*r.jsonByteArrays = true
+		if count > len(r.data)-r.offset {
+			return nil, fmt.Errorf("cdr: unexpected end of data")
+		}
+		cells := r.data[r.offset : r.offset+count]
+		r.offset += count
+		return numericByteArray{cells: cells, signed: typ == "int8"}, nil
+	}
 
 	switch typ {
 	case "uint8", "byte":
