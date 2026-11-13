@@ -125,6 +125,17 @@ void ExpectSamePose(const gtsam::Pose2& a, const gtsam::Pose2& b)
       << ", " << pb[1] << ", " << pb[2] << ", " << pb[3] << ")";
 }
 
+// The rebase rebuilds the window from relative poses (odometry chain), which
+// round-trips through compose/between: equal to the last few ulp, not bit for bit.
+void ExpectNearPose(const gtsam::Pose2& a, const gtsam::Pose2& b)
+{
+  constexpr double kTol = 1e-12;
+  EXPECT_NEAR(a.x(), b.x(), kTol);
+  EXPECT_NEAR(a.y(), b.y(), kTol);
+  EXPECT_NEAR(a.rotation().c(), b.rotation().c(), kTol);
+  EXPECT_NEAR(a.rotation().s(), b.rotation().s(), kTol);
+}
+
 }  // namespace
 
 TEST(WindowPriorTree, LinkedPriorLinearisesExactlyLikeThePlainPrior)
@@ -266,7 +277,7 @@ TEST(WindowPriorTree, RebaseLinksTheWindowAndLeavesTheEstimateUnchanged)
   const auto after = fg::GraphManagerTestAccess::Estimate(gm);
   EXPECT_EQ(after.size(), 1000u);
   for (const auto& kv : after)
-    ExpectSamePose(kv.value.cast<gtsam::Pose2>(), before.at<gtsam::Pose2>(kv.key));
+    ExpectNearPose(kv.value.cast<gtsam::Pose2>(), before.at<gtsam::Pose2>(kv.key));
   const auto poses = gm.GetAllPoses();
   EXPECT_EQ(poses.size(), after.size());
   EXPECT_EQ(gm.LiveNodeCount(), after.size());
@@ -373,7 +384,7 @@ TEST(WindowPriorTree, EveryRebuildPathLinksTheWindowAndKeepsExactEstimates)
     const auto after = Access::Estimate(gm);
     EXPECT_EQ(after.size(), kept);
     for (const auto& kv : after)
-      ExpectSamePose(kv.value.cast<gtsam::Pose2>(), before.at<gtsam::Pose2>(kv.key));
+      ExpectNearPose(kv.value.cast<gtsam::Pose2>(), before.at<gtsam::Pose2>(kv.key));
   };
 
   // 1. Rebase, live chain grows on the tree, rebase again with the window
