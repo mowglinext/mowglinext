@@ -18,7 +18,7 @@ Untouched dev `687260fbd66cf64f689e472fd172fe16ede735b5` versus the grid-only im
 
 Delta measurements include JSON decoding and the unchanged-cell diff, before MessagePack encoding or I/O. Each 32-operation arm produced 2 full-frame decisions and 30 patches. Full-frame measurements include JSON→MessagePack encoding before compression/I/O. Fixtures are synthetic: LiDAR-like unchanged grids use seed 971; full-frame distributions use seed 42. These are not recorded robot map sizes.
 
-At the producer default of one mow-progress message per 2 seconds, the measured delta savings correspond to about 11.2 ms CPU/s per subscription for 300k cells (1.1 percentage points of one core on this host), or 38.4 ms CPU/s for 1M. That is a calculation from the component measurements, not measured robot CPU. Subscription count matters because each subscription has its own delta state.
+At the producer default of one mow-progress message per 2 seconds, the measured delta savings amortize to about 11.2 ms of component elapsed time per second and subscription for 300k cells, or 38.4 ms/s for 1M. This elapsed-time calculation is not a CPU-utilization measurement; the benchmark can include GC and scheduling effects with GOMAXPROCS=2. Subscription count matters because each subscription has its own delta state.
 
 ## Costs and compatibility
 
