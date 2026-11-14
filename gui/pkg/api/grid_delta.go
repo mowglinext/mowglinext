@@ -59,33 +59,36 @@ type gridFrame struct {
 	Header json.RawMessage // patches
 	Gaps   []int
 	Vals   []int
+	parsed *parsedGrid
 }
 
 // gridDelta is the per-subscription state of one delta-capable topic.
 type gridDelta struct {
-	mu        sync.Mutex
-	seq       uint64
-	cells     []int8
-	width     uint32
-	height    uint32
-	res       float64
-	origin    []byte
-	sinceFull int
-	last      []byte
+	mu         sync.Mutex
+	seq        uint64
+	cells      []int8
+	width      uint32
+	height     uint32
+	res        float64
+	origin     []byte
+	sinceFull  int
+	last       []byte
+	lastParsed *parsedGrid
 }
 
-func (g *gridDelta) remember(w *gridWire, raw []byte) {
+func (g *gridDelta) remember(w *gridWire, raw []byte, parsed *parsedGrid) {
 	g.cells = w.Data
 	g.width, g.height, g.res = w.Info.Width, w.Info.Height, w.Info.Resolution
 	g.origin = append(g.origin[:0], w.Info.Origin...)
 	g.last = raw
+	g.lastParsed = parsed
 }
 
 // next decides how to send msg. ok is false when msg is not a decodable grid; the caller then
 // sends it as an ordinary frame.
 func (g *gridDelta) next(msg []byte) (frame gridFrame, ok bool) {
-	var w gridWire
-	if err := json.Unmarshal(msg, &w); err != nil || len(w.Data) == 0 {
+	w, parsed, err := decodeGrid(msg)
+	if err != nil || len(w.Data) == 0 {
 		return gridFrame{}, false
 	}
 	g.mu.Lock()
@@ -108,14 +111,14 @@ func (g *gridDelta) next(msg []byte) (frame gridFrame, ok bool) {
 			base := g.seq
 			g.seq++
 			g.sinceFull++
-			g.remember(&w, msg)
+			g.remember(&w, msg, parsed)
 			return gridFrame{Seq: g.seq, Base: base, Header: w.Header, Gaps: gaps, Vals: vals}, true
 		}
 	}
 	g.seq++
 	g.sinceFull = 0
-	g.remember(&w, msg)
-	return gridFrame{Full: true, Seq: g.seq, Raw: msg}, true
+	g.remember(&w, msg, parsed)
+	return gridFrame{Full: true, Seq: g.seq, Raw: msg, parsed: parsed}, true
 }
 
 // resync re-sends the last grid in full, under a new seq, after the browser reported a gap.
@@ -127,5 +130,5 @@ func (g *gridDelta) resync() (frame gridFrame, ok bool) {
 	}
 	g.seq++
 	g.sinceFull = 0
-	return gridFrame{Full: true, Seq: g.seq, Raw: g.last}, true
+	return gridFrame{Full: true, Seq: g.seq, Raw: g.last, parsed: g.lastParsed}, true
 }
