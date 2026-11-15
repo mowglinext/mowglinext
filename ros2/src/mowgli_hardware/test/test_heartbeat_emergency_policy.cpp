@@ -4,89 +4,6 @@
 #include "heartbeat_emergency_policy.hpp"
 #include <gtest/gtest.h>
 
-TEST(HeartbeatEmergencyPolicy, NoFlagsLeaveEmergencyUnchanged)
-{
-  const auto decision = decide_heartbeat_emergency(false, false, false, false);
-  EXPECT_EQ(decision.action, HeartbeatEmergencyAction::Unchanged);
-  EXPECT_FALSE(decision.clear_heartbeat_only_latch);
-}
-
-TEST(HeartbeatEmergencyPolicy, StopAssertsEmergency)
-{
-  const auto decision = decide_heartbeat_emergency(true, false, false, false);
-  EXPECT_EQ(decision.action, HeartbeatEmergencyAction::Assert);
-  EXPECT_TRUE(decision.clear_heartbeat_only_latch);
-}
-
-TEST(HeartbeatEmergencyPolicy, ReleaseOnlyWithoutPhysicalEmergencyReleases)
-{
-  const auto decision = decide_heartbeat_emergency(false, true, false, false);
-  EXPECT_EQ(decision.action, HeartbeatEmergencyAction::Release);
-  EXPECT_TRUE(decision.clear_heartbeat_only_latch);
-}
-
-TEST(HeartbeatEmergencyPolicy, ReleaseOnlyWithPhysicalEmergencyIsRejected)
-{
-  const auto decision = decide_heartbeat_emergency(false, true, true, false);
-  EXPECT_EQ(decision.action, HeartbeatEmergencyAction::Unchanged);
-  EXPECT_FALSE(decision.clear_heartbeat_only_latch);
-}
-
-TEST(HeartbeatEmergencyPolicy, StopDominatesReleaseWithoutPhysicalEmergency)
-{
-  EXPECT_EQ(decide_heartbeat_emergency(true, true, false, false).action,
-            HeartbeatEmergencyAction::Assert);
-}
-
-TEST(HeartbeatEmergencyPolicy, StopDominatesReleaseWithPhysicalEmergency)
-{
-  EXPECT_EQ(decide_heartbeat_emergency(true, true, true, false).action,
-            HeartbeatEmergencyAction::Assert);
-}
-
-TEST(HeartbeatEmergencyPolicy, ReleaseWorksAfterPreviousStop)
-{
-  EXPECT_EQ(decide_heartbeat_emergency(true, false, false, false).action,
-            HeartbeatEmergencyAction::Assert);
-  EXPECT_EQ(decide_heartbeat_emergency(false, true, false, false).action,
-            HeartbeatEmergencyAction::Release);
-}
-
-TEST(HeartbeatEmergencyPolicy, NormalHeartbeatAutoClearsPureWatchdogLatch)
-{
-  const auto decision = decide_heartbeat_emergency(false, false, false, true);
-  EXPECT_EQ(decision.action, HeartbeatEmergencyAction::AutoClearWatchdog);
-  EXPECT_TRUE(decision.clear_heartbeat_only_latch);
-}
-
-TEST(HeartbeatEmergencyPolicy, PhysicalEmergencyPreventsWatchdogAutoClear)
-{
-  const auto decision = decide_heartbeat_emergency(false, false, true, true);
-  EXPECT_EQ(decision.action, HeartbeatEmergencyAction::Unchanged);
-  EXPECT_TRUE(decision.clear_heartbeat_only_latch);
-}
-
-TEST(HeartbeatEmergencyPolicy, WatchdogRecoveryPrecedesExplicitRelease)
-{
-  const auto decision = decide_heartbeat_emergency(false, true, false, true);
-  EXPECT_EQ(decision.action, HeartbeatEmergencyAction::AutoClearWatchdog);
-  EXPECT_TRUE(decision.clear_heartbeat_only_latch);
-}
-
-TEST(HeartbeatEmergencyPolicy, PhysicalEmergencyRejectsReleaseAfterWatchdogLatch)
-{
-  const auto decision = decide_heartbeat_emergency(false, true, true, true);
-  EXPECT_EQ(decision.action, HeartbeatEmergencyAction::Unchanged);
-  EXPECT_TRUE(decision.clear_heartbeat_only_latch);
-}
-
-TEST(HeartbeatEmergencyPolicy, WatchdogAutoClearCannotBypassExplicitStop)
-{
-  const auto decision = decide_heartbeat_emergency(true, true, false, true);
-  EXPECT_EQ(decision.action, HeartbeatEmergencyAction::Assert);
-  EXPECT_TRUE(decision.clear_heartbeat_only_latch);
-}
-
 TEST(HeartbeatEmergencyPolicy, CompleteTruthTable)
 {
   struct Case
@@ -120,6 +37,9 @@ TEST(HeartbeatEmergencyPolicy, CompleteTruthTable)
 
   for (const auto& test_case : cases)
   {
+    SCOPED_TRACE(::testing::Message()
+                 << "stop=" << test_case.stop << " release=" << test_case.release << " physical="
+                 << test_case.physical << " watchdog=" << test_case.watchdog_latch_active);
     const auto decision = decide_heartbeat_emergency(test_case.stop,
                                                      test_case.release,
                                                      test_case.physical,

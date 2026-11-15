@@ -37,7 +37,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | Map polling / dock pose shown on map | `gui/pkg/providers/ros.go:351-468` (`initDockPoseSubscription`, `pollMap` every 5 s → virtual `"map"` topic) |
 | Map save / replace / OpenMower import | `gui/pkg/api/map_replace.go` (`replaceMapInternal`: read-back snapshot → clear → add×N → `save_areas`, per-call deadline `mapServiceCallTimeout`, rollback to the snapshot on failure, `mapWriteBudget`; tests `map_replace_test.go` with an in-memory `fakeMapServer`), route `ReplaceMapRoute` in `gui/pkg/api/mowglinext.go`, `gui/pkg/api/openmower_import.go` (`postImportOpenMower` `:187`, reprojection `:497-596`, `gui/pkg/api/utm.go`) |
 | Container list / logs / restart | `gui/pkg/api/containers.go` (WS log stream `:128`, `StreamContainerLogLines` `:196`), `gui/pkg/providers/docker.go` |
-| Firmware flash (prebuilt / custom / Vermut) | `gui/pkg/providers/firmware.go` (`FlashFirmware` `:76` routing, `flashPrebuilt` `:258`, `postFlashProtocolCheck` `:322`), manifest `firmware_manifest.go:21`, template `gui/asserts/board.h.template`, SSE route `gui/pkg/api/setup.go:27` |
+| Firmware flash (prebuilt / custom / Vermut) | `gui/pkg/providers/firmware.go` (`FlashFirmware` `:76` routing, `flashPrebuilt` `:258`, `postFlashProtocolCheck` `:322`), manifest `firmware_manifest.go:21`, template `firmware/stm32/ros_usbnode/include/board.h.template`, SSE route `gui/pkg/api/setup.go:27` |
 | Drive PID / feed-forward tuning tool | `gui/pkg/api/drive_tuning.go` (`docker exec` into `mowgli-ros2` → `ros2 run mowgli_tools tune_drive_pid`, `:829-842`; reports under `/ros2_ws/config/drive_tuning`) |
 | Rosbag record / download | `gui/pkg/api/rosbag.go` (state on disk `/ros2_ws/maps/rosbags/<name>/.rosbag.pid`, `ROSBAG_DIR` override `:106`) |
 | DB key / env fallback / default | `gui/pkg/providers/db.go:21-57` (`EnvFallbacks`, `Defaults`), bitcask at `$DB_PATH` with corruption auto-recovery `:108` |
@@ -69,8 +69,6 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | **asserts/** | | |
 | `gui/asserts/mower_config.schema.json` | 838 | Settings JSON Schema = GUI's default source (12 groups: `sensor_extrinsics` plus `{hardware,gps,docking,mowing,battery,safety,obstacle,mapping,rain,led,nav}_settings`). No `x-yaml-node` entries → every key nests under `mowgli.ros__parameters` |
 | `gui/asserts/ros2_template_types.json` | 151 | GENERATED number types (`number`/`integer`) for all 145 numeric params in the ROS2 template — the settings writer's 2nd type source, so an integral float is never written as an int (Invariant 15 / 2026-09-15 incident) |
-| `gui/asserts/board.h.template` | 340 | Go `text/template` for the STM32 `board.h` (custom firmware build) |
-| `gui/asserts/board.h` | 330 | Rendered example of the template (not consumed by code) |
 | **pkg/api/** (gin handlers) | | |
 | `gui/pkg/api/api.go` | 64 | `NewAPI`: CORS allow-all, static UI, `/api` group, route registration order, swagger, tile proxy gate, `r.Run(system.api.addr)` |
 | `gui/pkg/api/mowglinext.go` | 724 | ROS-facing routes: service switch, map add/clear/replace/dock, WS subscribe/publish/multiplex (msgpack frames), `topicSubscribeInterval` |
