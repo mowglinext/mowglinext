@@ -10,13 +10,6 @@
 #   ./scripts/sync_workspace_packages.sh --print-base-paths
 #
 # Environment:
-#   INCLUDE_OPENNAV_COVERAGE_STACK=1
-#     Link every package from the upstream opennav_coverage submodule. By
-#     default only opennav_coverage_msgs is linked because the server packages
-#     are optional full-stack dependencies and require Fields2Cover. The
-#     linked server subpackages are still COLCON_IGNORE'd (source-inspection
-#     only) — they are pinned to F2C 1.2.1 and cannot build against this
-#     workspace's F2C v3; use mowgli_coverage instead (see CLAUDE.md).
 #   UNIVERSAL_GNSS_PATH=/path/to/universal-gnss
 #     Optional override for the Universal GNSS repo root. By default the
 #     vendored ros2/src/external/universal-gnss submodule is used; the legacy
@@ -35,7 +28,6 @@ WORKSPACE_SRC="${WORKSPACE_ROOT}/src"
 UNIVERSAL_GNSS_PATH="${UNIVERSAL_GNSS_PATH:-}"
 VENDORED_UNIVERSAL_GNSS_PATH="${MONOREPO_ROOT}/ros2/src/external/universal-gnss"
 LEGACY_MOUNTED_UNIVERSAL_GNSS_PATH="/workspaces/universal-gnss"
-INCLUDE_OPENNAV_COVERAGE_STACK="${INCLUDE_OPENNAV_COVERAGE_STACK:-0}"
 PRINT_BASE_PATHS="${1:-}"
 
 if [ "${PRINT_BASE_PATHS}" != "" ] && [ "${PRINT_BASE_PATHS}" != "--print-base-paths" ]; then
@@ -132,45 +124,18 @@ for pkg_dir in "${MONOREPO_ROOT}"/ros2/src/mowgli_*/; do
     link_workspace_package "${pkg_dir}" "${pkg_name}"
 done
 
-opennav_msgs_dir="${MONOREPO_ROOT}/ros2/src/opennav_coverage/opennav_coverage_msgs"
-if [ -f "${opennav_msgs_dir}/package.xml" ]; then
-    link_workspace_package "${opennav_msgs_dir}" "opennav_coverage_msgs"
-fi
-
-if [ "${INCLUDE_OPENNAV_COVERAGE_STACK}" = "1" ]; then
-    for pkg_dir in "${MONOREPO_ROOT}"/ros2/src/opennav_coverage/*/; do
-        if [ -f "${pkg_dir}/package.xml" ]; then
-            pkg_name="$(basename "${pkg_dir}")"
-            [ "${pkg_name}" = "opennav_coverage_msgs" ] && continue
-            link_workspace_package "${pkg_dir}" "${pkg_name}"
-            # The upstream server subpackages are pinned to F2C 1.2.1 (no
-            # TrapezoidalDecomp / generateHeadlandSwaths / planPathForConnection)
-            # and #include fields2cover.h from that v1 install — they cannot
-            # build against this workspace's F2C v3 (mowgli_coverage). Linking
-            # them under INCLUDE_OPENNAV_COVERAGE_STACK=1 is for source
-            # inspection only; COLCON_IGNORE them so `colcon build` doesn't
-            # try to actually compile them. The marker lands on the symlink
-            # target inside the submodule working tree, is untracked (can't be
-            # committed into an unforked upstream submodule without pinning
-            # this repo to a commit that doesn't exist on its origin remote —
-            # see ros2/Dockerfile and .github/workflows/ros2-ci.yml, which hit
-            # the same constraint and each `touch` their own copy of this
-            # marker), and is idempotent/harmless to recreate every sync.
-            touch "${pkg_dir}/COLCON_IGNORE" 2>/dev/null || true
-        fi
-    done
-else
-    for pkg_name in \
-        opennav_coverage \
-        opennav_coverage_bt \
-        opennav_coverage_demo \
-        opennav_coverage_navigator \
-        opennav_row_coverage
-    do
-        unlink_workspace_symlink "${pkg_name}"
-    done
-    log "  Skipped: opennav_coverage full stack (set INCLUDE_OPENNAV_COVERAGE_STACK=1 to link it)"
-fi
+# opennav_coverage was removed from the tree. Drop the symlinks an older sync
+# left in the workspace so colcon does not trip over dangling package roots.
+for pkg_name in \
+    opennav_coverage_msgs \
+    opennav_coverage \
+    opennav_coverage_bt \
+    opennav_coverage_demo \
+    opennav_coverage_navigator \
+    opennav_row_coverage
+do
+    unlink_workspace_symlink "${pkg_name}"
+done
 
 if [ -d "${MONOREPO_ROOT}/ros2/src/fusion_graph" ]; then
     link_workspace_package "${MONOREPO_ROOT}/ros2/src/fusion_graph" "fusion_graph"

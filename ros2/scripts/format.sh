@@ -41,7 +41,6 @@ fi
 # (git-clang-format --diff against the base), so excluding them here matches
 # what CI checks rather than diverging from it.
 FILES=$(find "${ROS2_DIR}/src/" \( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) \
-  -not -path "*/opennav_coverage/*" \
   -not -path "*/external/*")
 
 if [ -z "$FILES" ]; then

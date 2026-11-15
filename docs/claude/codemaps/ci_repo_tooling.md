@@ -186,7 +186,6 @@ Where the tests run in CI: `tools/motor` is symlinked to `ros2/src/mowgli_tools`
 
 - **Rename a job or add a matrix in `ros2-ci.yml`** → the `dev` branch-protection required-check name must change with it (`ros2-ci.yml` L115–127 spells out both past failure modes).
 - **GTSAM / Fields2Cover pins**: `ros2/Dockerfile` (GTSAM 4.3a1; F2C v3 @ `884d895` → `/opt/fields2cover-300` — the F2C v2 stage/`/opt/fields2cover-200` was removed entirely by the Lyrical migration, commit `7035a236`) ↔ `ros2-ci.yml` L191 `gtsam-4.3a1-…` and L245 `f2c-3.0.0-884d895-…` cache keys ↔ `.devcontainer/Dockerfile` L45 / L68 ↔ `ros2/src/mowgli_coverage/CMakeLists.txt:42` `find_package(Fields2Cover 3.0.0 CONFIG REQUIRED PATHS /opt/fields2cover-300)`.
-- **New `opennav_coverage` subpackage** → add it to the `COLCON_IGNORE` loop (`ros2-ci.yml` L302–307) AND the `rosdep --skip-keys` list (L321) AND the equivalent Dockerfile step (CLAUDE.md "Do NOT use the upstream `opennav_coverage` server").
 - **`.msg`/`.srv` change in `mowgli_interfaces`** → regenerate all three consumers or `msg-codegen-drift.yml` fails; regenerate with `LC_ALL=C` so macOS sort order does not fake drift.
 - **`pkt_*_t` / `PKT_ID_*` change** → bump `MOWGLI_PROTOCOL_VERSION` and the host mirror `kMowgliProtocolVersion`, then refresh `firmware/scripts/protocol_baseline.json` (`protocol-version-drift.yml`).
 - **New top-level directory** → add a `.github/labeler.yml` rule and a `CODEOWNERS` entry; add a `Component` option to both issue templates and `PULL_REQUEST_TEMPLATE.md` if it is user-visible.
@@ -206,7 +205,7 @@ Where the tests run in CI: `tools/motor` is symlinked to `ros2/src/mowgli_tools`
 - `static-analysis` is `continue-on-error: true` (`ros2-ci.yml` L472) — cppcheck findings never fail a PR; only the log/artifact records them.
 - `auto-label.yml` and `welcome.yml` use `pull_request_target`, which runs with repo write scope on fork PRs. Neither checks out PR head code — keep it that way.
 - `changes` reads `github.base_ref` through `env:` rather than inlining it (`ros2-ci.yml` L56–60) because a fork branch name is attacker-controlled; preserve that pattern in any new script step.
-- `ros2-ci.yml` checks out with `submodules: recursive` (L149) because `opennav_coverage_msgs` must be present for `rosdep --ignore-src`; a new workflow that builds the workspace needs the same.
+- `ros2-ci.yml` checks out with `submodules: recursive` (L149) because the `universal-gnss` and `mowglimavros` submodules must be present for the `COLCON_IGNORE` markers and `rosdep --ignore-src`; a new workflow that builds the workspace needs the same.
 - `wiki-sync.yml` copies with `cp main/wiki/*.md wiki/` — it never deletes, so a page removed from `wiki/` stays live on the GitHub wiki.
 - `pages.yml` deploys the entire `docs/` tree, including the Markdown design notes and `docs/claude/` — anything committed there becomes public at mowgli.garden.
 - The `.claude/memory/*.md` notes are historical snapshots: `project_e2e_status.md` is dated 2026-04-04 and still describes SLAM-era behaviour ("SLAM map grows", L14), an RPP-followed coverage path (L12) and F2C Dubins turn waypoints (L21); `feedback_sim_cleanup.md` L9, L15 talk about Gazebo processes and `pkill gz`, but the sim is Webots. Treat both as history; the root `CLAUDE.md` invariants win.

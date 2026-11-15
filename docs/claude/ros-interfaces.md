@@ -2,7 +2,7 @@
 
 > Every topic, service, action, twist_mux lane and TF frame the MowgliNext stack actually creates.
 > Index generated 2026-09-03 at f21729e9 — regenerate when nodes are added/removed or a topic is renamed.
-> Scope: `ros2/src/**` (excluding `ros2/src/opennav_coverage` and `ros2/src/external`), `ros2/src/mowgli_bringup/launch/*.py` remaps, `tools/motor` (`mowgli_tools`), `sensors/`, and the GUI (`gui/pkg/**`).
+> Scope: `ros2/src/**` (excluding `ros2/src/external`), `ros2/src/mowgli_bringup/launch/*.py` remaps, `tools/motor` (`mowgli_tools`), `sensors/`, and the GUI (`gui/pkg/**`).
 
 ## How to use this index
 

@@ -749,7 +749,7 @@ There are **no** mode-string params (`default_swath_type`, `default_route_type`,
 
 The result carries both an ordered list of discrete `segments` + `segment_types` (rings then swaths — kept for the GUI and resume bookkeeping) and one or more **hole-free `drivable_subpaths`**, which is what execution actually drives: `FollowStrip` dispatches each sub-path as one continuous `FollowCoveragePath` goal and bridges every sub-path boundary with a blade-off `NavigateToPose` transit. A straight fallback is kept inside a sub-path only when it is aligned with both adjoining segments; sharp fallbacks become explicit reorientations. `full_path` is their concatenation, for visualisation only.
 
-The BT side (`PlanCoverageArea`) feeds it the area outer ring + obstacle holes fetched from `/map_server_node/get_mowing_area`. The upstream `opennav_coverage` submodule is kept for its `_msgs` action definitions only — every server subpackage is `COLCON_IGNORE`'d.
+The BT side (`PlanCoverageArea`) feeds it the area outer ring + obstacle holes fetched from `/map_server_node/get_mowing_area`. The upstream `opennav_coverage` submodule was removed; nothing used it.
 
 ---
 

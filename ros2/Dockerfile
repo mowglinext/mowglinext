@@ -365,10 +365,6 @@ COPY ros2/src/fusion_graph/CMakeLists.txt      src/fusion_graph/CMakeLists.txt
 # fusion_graph is the sole localizer and uses the pinned source GTSAM install.
 COPY ros2/src/mowgli_coverage/package.xml      src/mowgli_coverage/package.xml
 COPY ros2/src/mowgli_coverage/CMakeLists.txt   src/mowgli_coverage/CMakeLists.txt
-# opennav_coverage submodule provides opennav_coverage_msgs (action types
-# consumed by mowgli_coverage). Pulled by checkout submodules: recursive.
-COPY ros2/src/opennav_coverage/opennav_coverage_msgs/package.xml    src/opennav_coverage/opennav_coverage_msgs/package.xml
-COPY ros2/src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt src/opennav_coverage/opennav_coverage_msgs/CMakeLists.txt
 # universal-gnss is vendored as a git submodule under ros2/src/external.
 # It is built separately as an interface-only overlay for foxglove_bridge.
 # operator-side drivetrain tools live outside ros2/src but must still be built
@@ -430,18 +426,6 @@ RUN touch src/external/universal-gnss/COLCON_IGNORE
 # MowgliMAVROS is vendored as an external sidecar submodule. Its ROS packages
 # are built in the dedicated MAVROS image, not in the MowgliNext ROS workspace.
 RUN touch src/external/mowglimavros/COLCON_IGNORE
-
-# Skip every opennav_coverage subpackage except _msgs. The upstream server
-# is pinned to F2C 1.2.1 (no TrapezoidalDecomp / generateHeadlandSwaths /
-# planPathForConnection); we use mowgli_coverage with F2C v3 instead, and
-# only need the action types from opennav_coverage_msgs. Marker files
-# aren't tracked in the submodule, so create them here.
-RUN touch \
-      src/opennav_coverage/opennav_coverage/COLCON_IGNORE \
-      src/opennav_coverage/opennav_coverage_bt/COLCON_IGNORE \
-      src/opennav_coverage/opennav_coverage_demo/COLCON_IGNORE \
-      src/opennav_coverage/opennav_coverage_navigator/COLCON_IGNORE \
-      src/opennav_coverage/opennav_row_coverage/COLCON_IGNORE
 
 RUN /bin/bash -c "\
     f2c_config=\$(find /opt/fields2cover-300 -type f \( -name 'Fields2CoverConfig.cmake' -o -name 'fields2cover-config.cmake' \) | head -n 1) && \

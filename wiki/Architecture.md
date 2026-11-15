@@ -1527,7 +1527,7 @@ The legacy on-demand strip planner (`~/get_next_strip` service and its `GetNextS
 
 **mowgli_coverage server (Fields2Cover 3.0.0):**
 
-- Action: `plan_coverage`, type `mowgli_interfaces/action/PlanCoverage` (an in-tree definition — the upstream `opennav_coverage_msgs/ComputeCoveragePath` interface is no longer used).
+- Action: `plan_coverage`, type `mowgli_interfaces/action/PlanCoverage` (an in-tree definition — the upstream `opennav_coverage_msgs/ComputeCoveragePath` interface is gone along with the removed submodule).
 - Backend pinned to **Fields2Cover 3.0.0** at `/opt/fields2cover-300` (`find_package(Fields2Cover 3.0.0 CONFIG REQUIRED PATHS /opt/fields2cover-300)`). A v2.0.0 tree is retained at `/opt/fields2cover-200` for the devcontainer but is not `ldconfig`'d, so nothing links it; the version pin alone rejects it.
 - F2C pipeline per `planBoustrophedon()` call — deliberately minimal, and what it does **not** do matters as much as what it does:
   1. **Robot setup** — `f2c::types::Robot`, `setCovWidth(operation_width)`, `setMinTurningRadius`. `operation_width` is injected at launch as `tool_width − swath_overlap`, so adjacent swaths deliberately overlap.
@@ -2086,7 +2086,7 @@ The one sim-only addition is `/sim/ground_truth_pose`, published by the `kinemat
    - **Simulation:** mowgli_simulation (Webots, perfect-IMU mode synthesised from `/cmd_vel`)
    - **Status:** mowgli_leds (optional WS2812 status ring over SPI, off by default)
    - **Infrastructure:** mowgli_bringup (launch files, the config template, Nav2 params, and the URDF/xacro — there is no separate `mowgli_description` package)
-   - **Third-party:** `opennav_coverage` git submodule for the `_msgs` action definitions only — that is the sole subpackage `ros2/scripts/sync_workspace_packages.sh` symlinks into the workspace, so colcon never sees the upstream servers (there are no `COLCON_IGNORE` files).
+   - **Third-party:** the `universal-gnss` and `mowglimavros` git submodules under `ros2/src/external/` (the `opennav_coverage` submodule was removed — nothing used its `_msgs`).
 
 2. **ROS2 Lyrical + Webots R2025a:** Modern robotics stack with lifecycle management, and a simulator that runs the identical ROS2 stack (see [§9](#9-mowgli_simulation)).
 

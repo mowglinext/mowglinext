@@ -44,7 +44,7 @@ fi
 
 # Kill ALL remaining ROS2 nodes (not just launch) to prevent stale DDS
 # participants. Includes the sim-side nodes (sim_navsat_rtk_fix,
-# sim_imu_noise, sim_wheel_slip), the new opennav_coverage server, and
+# sim_imu_noise, sim_wheel_slip), the coverage_server, and
 # the scan_deskew node.
 ROS_PIDS=$(ps -eo pid,args | grep -E '[r]os2|[p]arameter_bridge|[f]oxglove|[e]kf_node|[b]ehavior_tree|[c]overage_planner|[c]overage_server|[o]pennav_coverage|[m]ap_server|[n]avsat_to_pose|[n]avsat_to_absolute_pose|[d]iagnostics|[c]ontroller_server|[p]lanner_server|[s]moother_server|[b]t_navigator|[c]ollision_monitor|[v]elocity_smoother|[l]ifecycle_manager|[o]pennav_docking|[r]obot_state_publisher|[f]ake_hardware|[w]aypoint_follower|[b]ehavior_server|[s]im_navsat|[s]im_imu|[s]im_wheel|[c]og_to_imu|[d]ock_yaw|[c]ostmap_scan_filter|[s]can_deskew|[t]wist_mux|[o]bstacle_tracker|[m]ag_yaw_publisher|[s]tatic_transform_publisher|[w]heel_odometry_node|[c]alibrate_imu_yaw' | awk '{print $1}')
 if [ -n "$ROS_PIDS" ]; then

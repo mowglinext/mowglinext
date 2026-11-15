@@ -224,7 +224,7 @@ report_repository_sync_status() {
   warn "Repository has diverged from ${remote_ref} (ahead ${ahead}, behind ${behind}). Continuing with the current checkout."
 }
 
-# A robot needs NO submodule: both (universal-gnss, opennav_coverage) are ROS2
+# A robot needs NO submodule: universal-gnss and mowglimavros are ROS2
 # build inputs and the robot runs published images. So this never initialises
 # one — an initialised submodule is exactly what makes a later `git pull` fail
 # when its URL or pin moves. Submodules a developer DID initialise are
