@@ -9,12 +9,17 @@ Validates the full mowing cycle WITHOUT LiDAR:
   4. Dock back when complete
 
 No obstacle avoidance test — without LiDAR there is no obstacle detection.
-GPS-only localization: robot_localization dual EKF publishes map→odom→base_footprint using GPS+IMU+wheel odometry.
+GPS-only localization: fusion_graph_node publishes map→odom→base_footprint using GPS+IMU+wheel odometry.
+
+The test passes only when the whole cycle was observed: undock, plan, mow
+(BT reached MOWING_COMPLETE), and dock (IDLE_DOCKED with the charger engaged),
+with the path-tracking criterion met. A run that times out, is interrupted or
+is terminated early fails.
 
 Usage:
   # Launch simulation first:
   ros2 launch mowgli_bringup sim_full_system.launch.py \
-    headless:=true use_rviz:=false use_lidar:=false simulate_gps_degradation:=false
+    headless:=true use_rviz:=false use_lidar:=false
 
   # Then run the test:
   python3 /ros2_ws/src/e2e_test_no_lidar.py
@@ -34,10 +39,13 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
-from geometry_msgs.msg import PoseWithCovarianceStamped, Twist
+from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Path, Odometry
 from mowgli_interfaces.srv import HighLevelControl
 from mowgli_interfaces.msg import HighLevelStatus
+
+
+REQUIRED_PHASES = ("UNDOCKING", "PLANNING", "MOWING", "DOCKING")
 
 
 class TestPhase(Enum):
@@ -69,6 +77,26 @@ class Metrics:
     phase_results: list = field(default_factory=list)
 
 
+def _cycle_verdict(phase_results: list) -> tuple[bool, list[str]]:
+    """Return (passed, problems) for the undock→plan→mow→dock cycle.
+
+    Every required phase must have been recorded and its last result must be a
+    pass. Recorded phases alone are not enough: a run that timed out after
+    planning has only passing results and still did not complete the cycle.
+    """
+    last = {}
+    for result in phase_results:
+        last[result.name] = result
+    problems = []
+    for name in REQUIRED_PHASES:
+        result = last.get(name)
+        if result is None:
+            problems.append(f"{name} never completed")
+        elif not result.passed:
+            problems.append(f"{name} failed: {result.details}")
+    return not problems, problems
+
+
 class NoLidarE2ETestNode(Node):
     def __init__(self):
         super().__init__("e2e_test_no_lidar")
@@ -79,17 +107,24 @@ class NoLidarE2ETestNode(Node):
         self.current_bt_state = ""
         self.test_complete = False
         self.mowing_started = False
+        self.current_is_charging = False
 
         # Phase tracking
         self.current_phase = TestPhase.WAITING
         self.phase_start_time = time.time()
 
-        # Fused pose (odom frame, GPS-anchored) for path deviation
+        # Fused pose (map frame, GPS-anchored) for path deviation
         self.fusion_pose = None
 
         # QoS profiles
         sensor_qos = QoSProfile(depth=5, reliability=ReliabilityPolicy.BEST_EFFORT)
         reliable_qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
+        # /coverage/full_plan is published once per plan, transient-local.
+        transient_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
 
         # Subscribers
         self.create_subscription(
@@ -100,9 +135,9 @@ class NoLidarE2ETestNode(Node):
         )
         self.create_subscription(
             Path,
-            "/mowgli/coverage/path",
+            "/coverage/full_plan",
             self._on_coverage_path,
-            reliable_qos,
+            transient_qos,
         )
         self.create_subscription(
             Odometry, "/wheel_odom", self._on_odom, sensor_qos
@@ -113,8 +148,9 @@ class NoLidarE2ETestNode(Node):
             self._on_fusion_odom,
             sensor_qos,
         )
+        # twist_mux output, TwistStamped in production and in the Webots sim.
         self.create_subscription(
-            Twist, "/cmd_vel", self._on_cmd_vel, sensor_qos
+            TwistStamped, "/cmd_vel", self._on_cmd_vel, sensor_qos
         )
 
         # Service client
@@ -132,6 +168,7 @@ class NoLidarE2ETestNode(Node):
     def _on_bt_status(self, msg: HighLevelStatus):
         state_name = msg.state_name if hasattr(msg, "state_name") else str(msg.state)
         t = time.time() - self.metrics.start_time
+        self.current_is_charging = bool(getattr(msg, "is_charging", False))
 
         if not self.current_bt_state:
             self.current_bt_state = state_name
@@ -146,9 +183,26 @@ class NoLidarE2ETestNode(Node):
             self.metrics.bt_states.append((t, state_name))
             self._track_phase_transition(prev_state, state_name, t)
 
-        if state_name in ("MOWING_COMPLETE", "IDLE_DOCKED") and self.mowing_started:
-            if self.current_phase == TestPhase.DOCKING or state_name == "IDLE_DOCKED":
-                self._complete_phase(TestPhase.DOCKING, True, "Robot docked successfully")
+        # The cycle ends when the robot is back on the dock, not when mowing
+        # finishes: MOWING_COMPLETE is followed by the dock approach.
+        if (
+            state_name == "IDLE_DOCKED"
+            and self.mowing_started
+            and self.current_phase in (TestPhase.MOWING, TestPhase.DOCKING)
+        ):
+            if self.current_phase == TestPhase.MOWING:
+                self._complete_phase(
+                    TestPhase.MOWING, False, "Returned to the dock before mowing completed"
+                )
+                self.current_phase = TestPhase.DOCKING
+            if self.current_is_charging:
+                self._complete_phase(
+                    TestPhase.DOCKING, True, "Robot docked and charging"
+                )
+            else:
+                self._complete_phase(
+                    TestPhase.DOCKING, False, "Docking sequence ended without charging"
+                )
             self.test_complete = True
 
     def _track_phase_transition(self, prev: str, curr: str, t: float):
@@ -219,7 +273,7 @@ class NoLidarE2ETestNode(Node):
             self.metrics.robot_poses.append((t, x, y, yaw))
 
     def _on_fusion_odom(self, msg: Odometry):
-        """EKF map-frame pose — used for path deviation measurement."""
+        """fusion_graph map-frame pose — used for path deviation measurement."""
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         self.fusion_pose = (x, y)
@@ -233,12 +287,14 @@ class NoLidarE2ETestNode(Node):
             min_dist = self._min_distance_to_path(x, y)
             self.metrics.path_deviations.append((t, min_dist))
 
-    def _on_cmd_vel(self, msg: Twist):
+    def _on_cmd_vel(self, msg: TwistStamped):
         t = time.time() - self.metrics.start_time
         if not self.metrics.cmd_vels or (
             t - self.metrics.cmd_vels[-1][0] > 0.5
         ):
-            self.metrics.cmd_vels.append((t, msg.linear.x, msg.angular.z))
+            self.metrics.cmd_vels.append(
+                (t, msg.twist.linear.x, msg.twist.angular.z)
+            )
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -300,7 +356,7 @@ class NoLidarE2ETestNode(Node):
 
         if self.fusion_pose:
             mx, my = self.fusion_pose
-            report.append(f"EKF map pose: ({mx:.2f}, {my:.2f})")
+            report.append(f"Fused map pose: ({mx:.2f}, {my:.2f})")
 
         if devs:
             recent = [d for _, d in devs[-20:]]
@@ -339,18 +395,15 @@ class NoLidarE2ETestNode(Node):
 
         # ── Phase Results ──
         report.append("\n=== PHASE RESULTS ===")
-        all_phases_pass = True
         for pr in self.metrics.phase_results:
             status = "PASS" if pr.passed else "FAIL"
             report.append(
                 f"  {pr.name:20s} {status} ({pr.duration_sec:.1f}s) — {pr.details}"
             )
-            if not pr.passed:
-                all_phases_pass = False
 
-        if not self.metrics.phase_results:
-            report.append("  No phase transitions recorded!")
-            all_phases_pass = False
+        all_phases_pass, phase_problems = _cycle_verdict(self.metrics.phase_results)
+        for problem in phase_problems:
+            report.append(f"  FAIL: {problem}")
 
         # ── BT State History ──
         report.append("\n=== Behavior Tree State History ===")
@@ -426,6 +479,14 @@ class NoLidarE2ETestNode(Node):
         return overall_pass
 
 
+def _finish(node) -> int:
+    """Print the final report, shut down, and return the process exit code."""
+    overall = node.print_final_report()
+    node.destroy_node()
+    rclpy.shutdown()
+    return 0 if overall else 1
+
+
 def wait_for_tf(node, timeout=120.0):
     """Wait until the map→base_link TF chain is available."""
     import tf2_ros
@@ -456,7 +517,7 @@ def main():
     rclpy.init()
     node = NoLidarE2ETestNode()
 
-    # Wait for TF chain (robot_localization must be publishing map→odom→base_footprint)
+    # Wait for TF chain (fusion_graph_node must be publishing map→odom→base_footprint)
     if not wait_for_tf(node, timeout=120.0):
         node.get_logger().error("TF chain never became available. Aborting.")
         node.destroy_node()
@@ -481,10 +542,7 @@ def main():
 
     def _on_signal(sig, frame):
         node.get_logger().info(f"Received signal {sig}, printing final report...")
-        node.print_final_report()
-        node.destroy_node()
-        rclpy.shutdown()
-        sys.exit(0)
+        sys.exit(_finish(node))
 
     signal.signal(signal.SIGTERM, _on_signal)
 
@@ -497,10 +555,7 @@ def main():
     except KeyboardInterrupt:
         node.get_logger().info("Test interrupted by user")
 
-    overall = node.print_final_report()
-    node.destroy_node()
-    rclpy.shutdown()
-    sys.exit(0 if overall else 1)
+    sys.exit(_finish(node))
 
 
 if __name__ == "__main__":
