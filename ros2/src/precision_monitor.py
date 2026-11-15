@@ -15,11 +15,11 @@ Published topics:
   /precision/localization_quality — composite quality score 0–100
 
 Usage (inside the dev-sim container, after sourcing the workspace):
-  python3 /ros2_ws/scripts/precision_monitor.py
+  python3 /ros2_ws/src/precision_monitor.py
 
 Or from host:
   docker compose exec dev-sim bash -c \
-    "source /ros2_ws/install/setup.bash && python3 /ros2_ws/scripts/precision_monitor.py"
+    "source /ros2_ws/install/setup.bash && python3 /ros2_ws/src/precision_monitor.py"
 """
 
 import math

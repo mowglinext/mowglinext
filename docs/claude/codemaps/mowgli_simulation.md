@@ -84,7 +84,6 @@ and `test_wheel_odom_interval.cpp` (upstream odometry component).
 | `ros2/src/mowgli_bringup/launch/sim_full_system.launch.py` | 535 | Composes Webots + `navigation.launch.py` + BT + map_server + all sim helpers |
 | `ros2/src/e2e_test.py` | 1648 | E2E harness run by `make e2e-test` and mounted by compose `dev-sim` |
 | `ros2/src/e2e_test_no_lidar.py` | 505 | GPS-only E2E harness (`make e2e-test-no-lidar`) |
-| `ros2/scripts/e2e_test.py` | 690 | Older, shorter E2E copy; referenced by nothing (see Pitfalls) |
 | `ros2/Makefile` | 179 | `sim`, `sim-stop`, `e2e-test`, `e2e-test-no-lidar`, `docker-sim` targets (:78–141) |
 | `ros2/scripts/sim-stop.sh` | 66 | Kills ros2 launch + Webots + straggler nodes, wipes Cyclone shm and `/tmp/webots/*` |
 | `ros2/scripts/start_vnc.sh` | 64 | TigerVNC + noVNC + `sim_full_system.launch.py` (compose `simulation-gui` entrypoint) |

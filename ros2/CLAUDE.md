@@ -95,7 +95,7 @@ docker build -f ros2/Dockerfile --target runtime -t mowgli-ros2 .    # context M
 - Lifecycle nodes' `on_configure` can run twice (cleanup → configure): guard declarations with `has_parameter` or Nav2 bring-up bricks (`coverage_server.cpp`).
 - ROS2 cannot type an **empty YAML list** in a params file — lifecycle bring-up throws. Omit the key instead (`src/mowgli_map/config/map_server.yaml`).
 - The GUI/firmware generators **glob** `mowgli_interfaces/msg/`, not the `CMakeLists.txt` `msg_files` list: an unregistered `.msg` still produces Go/TS/firmware bindings while not existing at runtime (`CoveragePath.msg` today).
-- The E2E harnesses are gated by nothing and carry dead topics plus Gazebo `gz service` calls under a Webots sim — some criteria report "no data" or SKIP by design. `scripts/e2e_test.py` and `scripts/precision_monitor.py` are stale duplicates; edit the `src/` copies.
+- The E2E harnesses are gated by nothing and carry dead topics plus Gazebo `gz service` calls under a Webots sim — some criteria report "no data" or SKIP by design. The maintained harnesses and precision monitor live in `src/`.
 - Unit tests are built and gated by `ros2-ci.yml` → **`Build & Test (ROS2 kilted)`** (the protected legacy check name is retained while the build uses Lyrical). Docker production builds disable tests.
 
 ## Safety

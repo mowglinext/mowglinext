@@ -761,22 +761,6 @@ func firstValue(flat map[string]any, keys ...string) any {
 	return nil
 }
 
-func gnssConnectionFromDevice(serialDevice string) string {
-	switch {
-	case strings.HasPrefix(serialDevice, "/dev/serial/by-id/"),
-		strings.HasPrefix(serialDevice, "/dev/ttyUSB"),
-		strings.HasPrefix(serialDevice, "/dev/ttyACM"):
-		return "usb"
-	case strings.HasPrefix(serialDevice, "/dev/ttyAMA"),
-		strings.HasPrefix(serialDevice, "/dev/ttyS"),
-		strings.HasPrefix(serialDevice, "/dev/ttyTHS"),
-		strings.HasPrefix(serialDevice, "/dev/ttyHS"):
-		return "uart"
-	default:
-		return "uart"
-	}
-}
-
 // gnssSchemaDefaultString reads key's JSON-schema default (the GUI's
 // authoritative default source, see GetSettingsYAMLDefaults) as a string,
 // falling back to fallback only if the schema failed to load or genuinely
