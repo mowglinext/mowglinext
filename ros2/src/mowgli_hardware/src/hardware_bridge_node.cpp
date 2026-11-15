@@ -94,8 +94,9 @@
 #include "mowgli_interfaces/update_maintenance.hpp"
 
 // High-level mode constants — must match HighLevelStatus.msg and the
-// HL_MODE_* defines in firmware/mowgli_protocol.h. Declared locally to
-// avoid a brittle relative include of the firmware-shared header.
+// HL_MODE_* defines in firmware/stm32/ros_usbnode/include/mowgli_protocol.h.
+// Declared locally to avoid a brittle relative include of the firmware-shared
+// header.
 static constexpr uint8_t HL_MODE_NULL = 0u;  ///< Emergency / transitional
 static constexpr uint8_t HL_MODE_IDLE = 1u;  ///< Docked or between missions
 static constexpr uint8_t HL_MODE_AUTONOMOUS = 2u;  ///< Autonomous mowing

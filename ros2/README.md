@@ -987,7 +987,7 @@ Both the wheel-velocity loop **and** the yaw-rate loop run in STM32 firmware; RO
 | `heartbeat_rate` | `4.0` | Heartbeat frequency (Hz) |
 | `publish_rate` | `100.0` | Sensor data publish rate (Hz) |
 
-Reference C implementation for STM32 porting is in `src/mowgli_hardware/firmware/`.
+The maintained STM32 implementation is in `../firmware/stm32/ros_usbnode/`.
 
 ---
 
@@ -1045,4 +1045,4 @@ MowgliNext is **dual licensed** — GPLv3 for open source, personal, educational
 
 Within `ros2/`, every package declares `GPL-3.0` in its `package.xml` and carries the SPDX identifier in source file headers, with one exception: `mowgli_coverage` declares `BSD-3-Clause`.
 
-The firmware reference implementation in `src/mowgli_hardware/firmware/` is derived from the OpenMower STM32 firmware and is covered by the same GPL-3.0 license.
+The former firmware reference implementation was derived from the OpenMower STM32 firmware and is available in repository history under GPL-3.0.

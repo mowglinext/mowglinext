@@ -22,7 +22,7 @@ It must NOT own: any ROS topic/TF/pose (`ros2/src/mowgli_hardware`'s `hardware_b
 | [`README.md`](README.md) | tree layout + supported boards (partly stale — the codemap wins) |
 | [`stm32/ros_usbnode/README.md`](stm32/ros_usbnode/README.md) | ST-Link wiring, the J18 serial-debug tap, the `usbreset` trick (its ROS-noetic/rosserial half is dead) |
 | [`stm32/mainboard_firmware/README.md`](stm32/mainboard_firmware/README.md) · [`stm32/panel_firmware/README.md`](stm32/panel_firmware/README.md) | **before a first flash** — dump the stock image (mainboard README carries the known-good SHA256 table; the panel one is procedure only) |
-| [`../ros2/src/mowgli_hardware/firmware/README.md`](../ros2/src/mowgli_hardware/firmware/README.md) | the COBS framing narrative only — the code beside it is a stale v3 copy |
+| [`../ros2/src/mowgli_hardware/firmware/README.md`](../ros2/src/mowgli_hardware/firmware/README.md) | the COBS framing narrative only — the old C copy was removed; the host mirror is `ll_datatypes.hpp` |
 
 ## Build · test · run
 
@@ -72,7 +72,7 @@ Firmware tests are thin: `pio test -e native` runs `test/test_cmd_vel_safety.cpp
 - **Header comments lie about cadence.** `mowgli_protocol.h:302` says "~25 Hz" status (actual 4 Hz), `:123`/`:391` heartbeat "~250/500 ms" (actual timeout 2000 ms), `mowgli_comms.h:30` "pkt_imu_t = 40 bytes" (41). Trust `cpp_main.cpp:64-69` and the `_Static_assert`s.
 - Firmware `HEARTBEAT_TIMEOUT_MS` is 2000 vs the bridge's 4 Hz `heartbeat_rate` (`install/config/mowgli/hardware_bridge.yaml`) — lower that rate and the board e-stops itself.
 - `chargecontrol_is_charging` carries the `CHARGER_STATE_e` value (1 connected / 2 CC / 3 CV), not a bool; `STATUS_BIT_CHARGING` is set for any non-zero. `batt_percentage` is hard-coded 0 (`cpp_main.cpp:1318`) although `charger.c` maintains an RTC-persisted SOC.
-- `ros2/src/mowgli_hardware/firmware/` is a **stale v3 copy** of these C files (its `MAX_HANDLERS` is still 8) and is built by nothing. The real host mirror is `ll_datatypes.hpp`.
+- `ros2/src/mowgli_hardware/firmware/` now holds only the framing README (the stale v3 C copy was removed). The real host mirror is `ll_datatypes.hpp`.
 - Generated `src/ros/ros_lib/mower_msgs/*.h` are **excluded from the build** (`platformio.ini` `build_src_filter`) and no source includes them — the wire is `pkt_*_t` only. `sync_ros_lib.py` keeps that dead output in sync purely to satisfy the CI gate.
 - `patch_usb.py` runs pre-build and copies `CDC/` **over your PlatformIO package cache** (`~/.platformio/packages/framework-stm32cubef1`, F1 only) — a build mutates the host toolchain.
 - `DEBUG_TYPE_UART` is a `#error` on the 500B (`main.c:1277`) — SWO only there. On ORIG the debug UART is `MASTER_USART` (UART4 on J18), DMA, best-effort drop-if-busy.

@@ -41,7 +41,7 @@
 | Board reboot / firmware debug flag | `on_reboot_board()` (:2356), `on_set_firmware_debug()` (:2374), `LlReboot` magic `kLlRebootMagic` (`ll_datatypes.hpp` :83) |
 | Reset-cause / WWDG breadcrumb decoding | `handle_reset_cause()` (:1146), `reset_cause_name()` / `watchdog_stage_name()` tables (:149–299), constants in `ll_datatypes.hpp` (:89–182) |
 | Launch wiring, remaps, param pass-through | `ros2/src/mowgli_bringup/launch/mowgli.launch.py` (:184–268), `ros2/src/mowgli_bringup/config/hardware_bridge.yaml`, template `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` |
-| Firmware-side C reference of the protocol | `ros2/src/mowgli_hardware/firmware/README.md` — **stale mirror, see Pitfalls**; authoritative is `firmware/stm32/ros_usbnode/` |
+| Firmware-side protocol | `firmware/stm32/ros_usbnode/`; framing and host links are in `ros2/src/mowgli_hardware/firmware/README.md` |
 
 ## Files
 
@@ -87,12 +87,7 @@
 | `ros2/src/mowgli_hardware/test/test_firmware_interlock.cpp` | ~90 | Pure interlock: only a completed matching handshake allows actuation; zero / OFF / IDLE while denied; refusal + transition classification. Node-level cases (`BridgeFirmwareInterlock.*`) live in `test_hardware_bridge_parameters.cpp` over a pty |
 | `ros2/src/mowgli_hardware/test/test_cmd_vel_slew.cpp` | 44 | Ramp/deceleration limits, immediate stop, bounded reversal using the measured field sample, no overshoot |
 | `ros2/src/mowgli_hardware/test/test_drive_gain_sanity.cpp` | 73 | Template defaults pass, the old 0.2/15 set fails, inclusive boundary, integral-limit-only bridging, non-finite inputs never pass |
-| **`firmware/`** (C reference copy for the STM32 side — not built by colcon) | | |
-| `ros2/src/mowgli_hardware/firmware/mowgli_protocol.h` | 535 | `PKT_ID_*`, `HL_MODE_*`, `pkt_*_t` structs — **at `MOWGLI_PROTOCOL_VERSION 3`, stale vs v6** |
-| `ros2/src/mowgli_hardware/firmware/mowgli_comms.c` / `.h` | 312 / 249 | `mowgli_comms_init/process_rx/register_handler/send_*`, 512 B rx buf, 8 handlers |
-| `ros2/src/mowgli_hardware/firmware/cobs.c` / `.h` | 135 / 95 | C COBS |
-| `ros2/src/mowgli_hardware/firmware/crc16.c` / `.h` | 59 / 57 | C CRC-16 (table-free) |
-| `ros2/src/mowgli_hardware/firmware/README.md` | 181 | Integration steps for the C files |
+| `ros2/src/mowgli_hardware/firmware/README.md` | | Framing and links to maintained firmware and host implementations |
 
 ## Runtime surface
 
@@ -216,7 +211,7 @@ CI: `.github/workflows/ros2-ci.yml` (`colcon build` + `colcon test --return-code
 
 ## Change coupling — "if you change X, also update Y"
 
-- **Any `Ll*` struct / `PacketId` change** → bump `kMowgliProtocolVersion` (`ll_datatypes.hpp` :51) AND `MOWGLI_PROTOCOL_VERSION` (`firmware/stm32/ros_usbnode/include/mowgli_protocol.h` :59) in lockstep, update the `static_assert` sizes/offsets, `test/test_protocol.cpp`, `firmware/scripts/protocol_baseline.json` (via `protocol_version_guard.py`), and the C reference in `ros2/src/mowgli_hardware/firmware/` (currently already behind).
+- **Any `Ll*` struct / `PacketId` change** → bump `kMowgliProtocolVersion` (`ll_datatypes.hpp`) AND `MOWGLI_PROTOCOL_VERSION` (`firmware/stm32/ros_usbnode/include/mowgli_protocol.h`) in lockstep, update the `static_assert` sizes/offsets, `test/test_protocol.cpp`, and `firmware/scripts/protocol_baseline.json` (via `protocol_version_guard.py`).
 - **Protocol bump that reshapes a readiness-relevant packet (status, blade status, odometry)** → keep the PREVIOUS layout decodable for one version, like `include/mowgli_hardware/legacy_odometry.hpp` (`LlOdometryV8`, exact-length dispatch in `handle_odometry`, accepted only when the handshake reports `kLegacyOdometryProtocolVersion`; telemetry only, `fw_compatible_` untouched). Without it the update-first install (docs/UPDATES.md) cannot prove a stationary mower against the old firmware and rolls back (field 2026-10-25, v8 → v9). The `static_assert(kLegacyOdometryProtocolVersion + 1 == kMowgliProtocolVersion)` fails the build on the next bump: move the current `LlOdometry` into the legacy decoder then (or drop it if odometry did not change).
 - **`HL_MODE_*`** are triplicated: `HighLevelStatus.msg` ↔ `hardware_bridge_node.cpp` :75–79 (the copy the bridge actually compiles) ↔ firmware `mowgli_protocol.h`. `docs/claude/commands.md` step 4 names only the two `mowgli_protocol.h` files.
 - **New node parameter** → `declare_parameters()`; default in the template `mowgli_robot.yaml` (site/robot-level, Invariant 15) or `hardware_bridge.yaml` (node-local); pass-through dict in `mowgli.launch.py` (:194–254) if it comes from `robot_params`; GUI exposure needs `gui/asserts/mower_config.schema.json`, `gui/web/src/components/settings/paramCatalog.ts`, `gui/web/src/i18n/locales/{en,fr}.json` (today the catalog carries `imu_cal_*` and `yaw_*`; the schema carries `wheel_pid_*`, `mowing_enabled`, `ticks_per_meter`, `wheel_track`, `lift_*`).
@@ -245,10 +240,10 @@ CI: `.github/workflows/ros2-ci.yml` (`colcon build` + `colcon test --return-code
 - `blade_gate.hpp` suppresses ENABLE only. Never add a path that swallows a DISABLE, and never present `mowing_enabled` as a safety interlock (CLAUDE.md Safety, Invariant 9).
 - Serial: `write_all` retries EAGAIN briefly (`serial_port.cpp` :170–205); a short write or read error closes the port and the next read tick reopens it (`read_serial_tick` :990); reconnect re-arms `pid_resend_count_ = 5` and the version handshake, resets the firmware-parameter reports, and resets firmware debug to OFF.
 - Odometry: int32 ticks wrap at 16 bits (`unwrap_16bit` :80); |delta| > `kTickSpikeLimit` 100 is dropped (:96); `OdometryPublisher::reset()` does not zero `tyre_travelled_m_` or the WheelTick magnitudes (monotonic by design).
-- `ros2/src/mowgli_hardware/firmware/` is a hand-copied C mirror at protocol v3 (missing 0x05/0x51/0x52 and all of protocol v7); nothing compiles it and `protocol-version-drift.yml` does not check it. Use `firmware/stm32/ros_usbnode/` as truth.
+- Use `firmware/stm32/ros_usbnode/` as the firmware-side protocol source.
 
 ## Generated & vendored — do not hand-edit
 
-- Nothing in this package is generated. `ros2/src/mowgli_hardware/firmware/*.{c,h}` is a hand-maintained reference copy of the STM32 side (authoritative source: `firmware/stm32/ros_usbnode/include|src`); `ll_datatypes.hpp` is a port of OpenMower's `ll_datatypes.h`.
+- Nothing in this package is generated. `ll_datatypes.hpp` is a port of OpenMower's `ll_datatypes.h`; the firmware-side source is `firmware/stm32/ros_usbnode/include|src`.
 - Message/service types come from `ros2/src/mowgli_interfaces`; their GUI bindings (`gui/pkg/msgs/mowgli/types_generated.go`, `gui/web/src/types/ros.generated.ts`) are generated — see `docs/claude/commands.md`.
 - **Dig escalation latch exits:** charger (unchanged) OR displacement — `dig_escalation.hpp` `DigEscalationClearedByDisplacement` (2 × `dig_escalate_radius_m` from `dig_escalation_x_/y_`, checked in `on_filtered_map_odom`). Tests in `test/test_dig_escalation.cpp` (`*Clear*`).
