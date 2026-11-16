@@ -151,6 +151,7 @@
     "ticks_per_meter": "number",
     "tilt_emergency_ms": "integer",
     "tool_width": "number",
+    "transit_planning_timeout_sec": "number",
     "transit_speed": "number",
     "turn_speed_ratio": "number",
     "undock_distance": "number",

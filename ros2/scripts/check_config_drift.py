@@ -124,7 +124,7 @@ USER_OVERRIDE = {
     "max_obstacle_avoidance_distance", "coverage_xy_tolerance",
     "obstacle_inflation_radius", "obstacle_margin", "obstacle_slowdown_ratio",
     "xy_goal_tolerance", "yaw_goal_tolerance",
-    "progress_timeout_sec",
+    "progress_timeout_sec", "transit_planning_timeout_sec",
     "battery_full_voltage", "battery_low_voltage",
     "dock_approach_distance", "dock_max_retries", "dock_use_charger_detection",
 }

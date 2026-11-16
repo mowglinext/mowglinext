@@ -1486,6 +1486,14 @@
           "default": 30.0,
           "description": "Seconds without progress before recovery."
         },
+        "transit_planning_timeout_sec": {
+          "type": "number",
+          "title": "Transit Planning Timeout",
+          "default": 8.0,
+          "minimum": 1.0,
+          "maximum": 60.0,
+          "description": "Maximum time (seconds) allowed for the global transit planner (AuthorizedTransitPlanner) to compute a route across zones or back to the dock. Clamped to [1.0, 60.0] s at launch. Applied after ROS2 restart."
+        },
         "boundary_inner_margin_m": {
           "type": "number",
           "title": "Transit Boundary Margin",

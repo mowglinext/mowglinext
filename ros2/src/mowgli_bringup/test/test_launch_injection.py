@@ -715,3 +715,21 @@ def test_full_system_injects_coverage_entry_tolerance_into_behavior_tree() -> No
     values = _dict_values(tree, "coverage_entry_tolerance_m")
     assert values, "full_system.launch.py must pass coverage_entry_tolerance_m to the BT"
     assert all(_is_helper_call(v, "coverage_entry_tolerance") for v in values)
+
+
+def test_navigation_launch_injects_transit_planning_timeout() -> None:
+    """navigation.launch.py must read transit_planning_timeout_sec from the
+    robot config and write max_planning_time into planner_server's GridBased
+    (AuthorizedTransitPlanner) block."""
+    tree = _parse("navigation.launch.py")
+    assert _reads_robot_param(
+        tree, "transit_planning_timeout_sec", "transit_planning_timeout_sec"
+    ), (
+        "navigation.launch.py no longer reads transit_planning_timeout_sec "
+        "from the robot config (rt_rp.get)."
+    )
+    values = _subscript_assign_values(tree, "grid_based", "max_planning_time")
+    assert values, (
+        'navigation.launch.py must assign grid_based["max_planning_time"] — '
+        "without it planner_server keeps its static 8.0 s value."
+    )
