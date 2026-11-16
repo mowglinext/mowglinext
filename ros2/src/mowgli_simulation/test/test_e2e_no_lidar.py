@@ -199,6 +199,7 @@ def test_exit_code_follows_the_verdict(monkeypatch):
     monkeypatch.setattr(e2e.rclpy, 'shutdown', lambda: None)
 
     class _FakeNode:
+
         def __init__(self, verdict):
             self.verdict = verdict
 
