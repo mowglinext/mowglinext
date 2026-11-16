@@ -369,15 +369,17 @@ void GraphManager::RigidTransformAll(const gtsam::Pose2& correction,
   // ResetLocked wipes the graph). Bias is re-estimated live, so drop it here —
   // mirroring what Load() does.
   gtsam::Values pose_values;
+  std::vector<gtsam::PriorFactor<gtsam::Pose2>> pose_priors;
   for (const auto& kv : transformed)
   {
     gtsam::Symbol s(kv.key);
     if (s.chr() != 'x')
       continue;
     const auto noise = (kv.key == latest_key) ? tight_noise : loose_noise;
-    fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, kv.value.cast<gtsam::Pose2>(), noise));
+    pose_priors.emplace_back(kv.key, kv.value.cast<gtsam::Pose2>(), noise);
     pose_values.insert(kv.key, kv.value);
   }
+  AddPosePriorTree(fg, pose_priors, kWindowPlainPriors);
   // SAFETY (SAFETY_REVIEW_2026-07-23 G-H4): this runs in the executor thread
   // via SeedFromDockPose — an unguarded GTSAM throw would propagate out of
   // the callback and kill the node. A degenerate rebuild self-heals into a
