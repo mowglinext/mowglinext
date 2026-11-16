@@ -290,7 +290,6 @@ Tests (what each pins):
 - `gui/pkg/msgs/{geometry,nav,sensor,std,visualization,mowgli}/types_generated.go`, `gui/pkg/msgs/mowgli/services_generated.go` — from `gui/generate_go_msgs.sh` ("Code generated … DO NOT EDIT"); CI-gated by `msg-codegen-drift.yml`.
 - `gui/web/src/types/ros.generated.ts` — from `gui/generate_ts_types.sh` (frontend area, same gate).
 - `gui/docs/{docs.go,swagger.json,swagger.yaml}` — swaggo/swag output from `// @…` annotations; served at `/swagger/`.
-- `gui/asserts/board.h` — rendered sample of `board.h.template`; the template is the source.
 - `gui/openmower-gui` — build artifact (binary) checked into git; `gui/go.sum` — Go module checksums.
 
 External release components: `gui/cmd/publish-deployment/definition.go` reads built/external entries in `install/deployment.json`. The workflow builds only built entries; publisher resolves external Docker Hub/GHCR index digests and both platforms. Deployment schema 3 and journal schema 5 preserve external provenance; existing storage, health, installer-selection and core-image guards still apply. See `docs/UPDATES.md`, External images in standard deployments.
