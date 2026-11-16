@@ -15,4 +15,3 @@ unusedFunction:src/usb_device.c
 unusedFunction:src/usbd_conf.c
 unusedFunction:src/usbd_cdc_if.c
 unusedFunction:src/ros/ros_custom/cpp_main.cpp
-unusedFunction:src/ros/ros_lib/examples/*

@@ -9,8 +9,6 @@ on:
       - 'gui/generate_ts_types.sh'
       - 'gui/pkg/msgs/**'
       - 'gui/web/src/types/ros.generated.ts'
-      - 'firmware/scripts/sync_ros_lib.py'
-      - 'firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/**'
       - '.github/workflows/msg-codegen-drift.yml'
   pull_request:
     branches: [main, dev]
@@ -20,8 +18,6 @@ on:
       - 'gui/generate_ts_types.sh'
       - 'gui/pkg/msgs/**'
       - 'gui/web/src/types/ros.generated.ts'
-      - 'firmware/scripts/sync_ros_lib.py'
-      - 'firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/**'
       - '.github/workflows/msg-codegen-drift.yml'
 
 concurrency:
@@ -31,23 +27,19 @@ concurrency:
 jobs:
   # ─── Codegen Drift Gate ───────────────────────────────────────────────────────
   # The GUI's Go/TS message types (gui/pkg/msgs, gui/web/src/types/ros.generated.ts)
-  # and the STM32 firmware's generated COBS message structs (firmware/.../ros_lib/mower_msgs)
-  # are all generated from ros2/src/mowgli_interfaces/msg — but none of the three
-  # regenerate automatically. A .msg field added/renamed/retyped without re-running
-  # the generators leaves the GUI silently reading/writing the wrong JSON keys, or
-  # the firmware silently (de)serializing a message with the wrong field layout
-  # (offsets shift, byte-for-byte, past the divergence point) — the same class of
-  # silent drift ros2/scripts/check_config_drift.py guards for mowgli_robot.yaml.
-  # No ROS2/Go/Node toolchain needed for any of the three checks; runs in seconds.
+  # are generated from ros2/src/mowgli_interfaces/msg, but neither regenerates
+  # automatically. A .msg field added/renamed/retyped without re-running the
+  # generators leaves the GUI silently reading/writing the wrong JSON keys — the same
+  # class of silent drift ros2/scripts/check_config_drift.py guards for
+  # mowgli_robot.yaml. (The firmware does not consume the .msg files: its wire format
+  # is include/mowgli_protocol.h, guarded by protocol-version-drift.yml.)
+  # No ROS2/Go/Node toolchain needed for either check; runs in seconds.
   codegen-drift:
-    name: Codegen Drift (Go / TS / firmware msg types)
+    name: Codegen Drift (Go / TS msg types)
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Check firmware ros_lib headers (sync_ros_lib.py --check)
-        run: python3 firmware/scripts/sync_ros_lib.py --check
 
       - name: Regenerate Go msg types and check for drift
         run: |

@@ -16,7 +16,7 @@ Complete deployment image metadata/versioning: `.github/workflows/deployment-rel
 | clang-format version pin / "changed lines only" formatting gate | `ros2-ci.yml` job `format-check` L404–445 — installs `clang-format-18`, runs `git-clang-format-18 --style=file:ros2/.clang-format --diff $(git merge-base origin/main HEAD) -- ros2/src` |
 | cppcheck findings in CI | `ros2-ci.yml` job `static-analysis` L448–515 — `continue-on-error: true`, changed files only, flags at L497–505 |
 | `mowgli_robot.yaml` drift / padded-default failure | `ros2-ci.yml` job `config-drift` L96–113 → `ros2/scripts/check_config_drift.py` (CLAUDE.md Invariant 15) |
-| Go/TS/firmware message types out of sync after a `.msg` change | `.github/workflows/msg-codegen-drift.yml` L49–69 — `firmware/scripts/sync_ros_lib.py --check`, then regenerates and `git diff --exit-code` on `gui/pkg/msgs` and `gui/web/src/types/ros.generated.ts` |
+| Go/TS message types out of sync after a `.msg` change | `.github/workflows/msg-codegen-drift.yml` — regenerates and `git diff --exit-code` on `gui/pkg/msgs` and `gui/web/src/types/ros.generated.ts` |
 | COBS wire changed but `MOWGLI_PROTOCOL_VERSION` not bumped | `.github/workflows/protocol-version-drift.yml` L42–43 → `firmware/scripts/protocol_version_guard.py --check` |
 | GUI tests / lint / typecheck gate | `.github/workflows/gui-ci.yml` L58–76 (`npx tsc --noEmit`, `yarn lint`, `yarn test`); node 22 pinned L45–50 |
 | Firmware build matrix + prebuilt release binaries | `.github/workflows/firmware-ci.yml` jobs `defaults-parity` L25–34, `build` L36–62 (`Yardforce500`, `Yardforce500B`), `release` L71–123 (tag `v*.*.*`) |
@@ -45,7 +45,7 @@ Complete deployment image metadata/versioning: `.github/workflows/deployment-rel
 | `gui-docker.yml` | 166 | GHCR `mowglinext-gui` image; PR builds are `type=cacheonly` (no push) |
 | `firmware-ci.yml` | 123 | `board_defaults_parity.py` guard, PlatformIO build matrix, tagged prebuilt-binary release |
 | `gui-ci.yml` | 76 | vitest + `tsc --noEmit` + eslint on `gui/web/**` (node 22) |
-| `msg-codegen-drift.yml` | 70 | Firmware `ros_lib` + Go + TS message-type drift gate |
+| `msg-codegen-drift.yml` | 70 | Go + TS message-type drift gate |
 | `sensors-gps.yml` | — | **No image build any more** (removed 2026-09-19, `bfd44f1a`, "#625"): GNSS ships via the external `UNIVERSAL_GNSS_IMAGE`, not a local build. Just compiles + `colcon test`s `mowgli_gnss_bridge`'s gtests |
 | `wiki-sync.yml` | 50 | Copies `wiki/*.md` into the GitHub wiki repo and commits as `github-actions[bot]` |
 | `pages.yml` | 43 | Uploads `docs/` and deploys to GitHub Pages (env `github-pages`) |
@@ -113,7 +113,7 @@ Also deployed by `pages.yml` but not part of the composer logic: `docs/CNAME` (`
 | `gui-ci.yml` | same set | `gui/web/**`, self | `[main, dev]`, same paths | `workflow_dispatch` |
 | `gui-docker.yml` | same set | `gui/**`, self | same branch set + paths | `workflow_dispatch` input `no-cache` |
 | `firmware-ci.yml` | same set + tags `v*.*.*` | `firmware/**`, self | any base, `firmware/**` | — |
-| `msg-codegen-drift.yml` | same set | `mowgli_interfaces/**`, `gui/generate_*`, `gui/pkg/msgs/**`, `gui/web/src/types/ros.generated.ts`, `firmware/scripts/sync_ros_lib.py`, firmware `mower_msgs/**` | `[main, dev]` | — |
+| `msg-codegen-drift.yml` | same set | `mowgli_interfaces/**`, `gui/generate_*`, `gui/pkg/msgs/**`, `gui/web/src/types/ros.generated.ts` | `[main, dev]` | — |
 | `protocol-version-drift.yml` | same set | `mowgli_protocol.h`, `ll_datatypes.hpp`, `protocol_version_guard.py`, `protocol_baseline.json` | `[main, dev]` | — |
 | `sensors-*.yml` | same set | that sensor's dir + self + `_sensor-docker.yml` (gps also `ros2/src/mowgli_interfaces/**`, `ros2/src/external/universal-gnss/**`) | — | `workflow_dispatch` |
 | `pages.yml` | main | `docs/**` | — | `workflow_dispatch`; `concurrency: pages` |
@@ -122,7 +122,7 @@ Also deployed by `pages.yml` but not part of the composer logic: `docs/CNAME` (`
 
 ### Required / named checks
 - `Build & Test (ROS2 kilted)` — required on `dev`. Do NOT rename the job, add a `strategy.matrix`, or move path filtering back onto the `pull_request` trigger (`ros2-ci.yml` L11–23, L115–127).
-- Other job display names: `Detect ROS2 changes`, `Config Drift (mowgli_robot.yaml)`, `Formatting (clang-format)`, `Static Analysis (cppcheck)`, `Codegen Drift (Go / TS / firmware msg types)`, `Protocol Version Drift (COBS wire vs MOWGLI_PROTOCOL_VERSION)`, `board_defaults single-source guard`, `Publish prebuilt firmware`, `Unit Tests (vitest + tsc)`, `Notify on failure`.
+- Other job display names: `Detect ROS2 changes`, `Config Drift (mowgli_robot.yaml)`, `Formatting (clang-format)`, `Static Analysis (cppcheck)`, `Codegen Drift (Go / TS msg types)`, `Protocol Version Drift (COBS wire vs MOWGLI_PROTOCOL_VERSION)`, `board_defaults single-source guard`, `Publish prebuilt firmware`, `Unit Tests (vitest + tsc)`, `Notify on failure`.
 
 ### Published artifacts
 | Target | Produced by | Tags |
@@ -157,7 +157,6 @@ Image names are lowercased into `GITHUB_ENV` in every image job (fork owners wit
 # CI gates you can run locally (no ROS2 toolchain needed)
 python3 ros2/scripts/check_config_drift.py                     # config-drift job
 python3 -m pytest -q ros2/scripts/test_check_config_drift.py
-python3 firmware/scripts/sync_ros_lib.py --check               # msg-codegen-drift, step 1
 (cd gui && ./generate_go_msgs.sh && ./generate_ts_types.sh) && git diff --exit-code -- gui/pkg/msgs gui/web/src/types/ros.generated.ts
 python3 firmware/scripts/protocol_version_guard.py --check     # protocol-version-drift
 python3 firmware/scripts/board_defaults_parity.py              # firmware-ci defaults-parity
@@ -187,7 +186,7 @@ Where the tests run in CI: `tools/motor` is symlinked to `ros2/src/mowgli_tools`
 - **Rename a job or add a matrix in `ros2-ci.yml`** → the `dev` branch-protection required-check name must change with it (`ros2-ci.yml` L115–127 spells out both past failure modes).
 - **GTSAM / Fields2Cover pins**: `ros2/Dockerfile` (GTSAM 4.3a1; F2C v3 @ `884d895` → `/opt/fields2cover-300` — the F2C v2 stage/`/opt/fields2cover-200` was removed entirely by the Lyrical migration, commit `7035a236`) ↔ `ros2-ci.yml` L191 `gtsam-4.3a1-…` and L245 `f2c-3.0.0-884d895-…` cache keys ↔ `.devcontainer/Dockerfile` L45 / L68 ↔ `ros2/src/mowgli_coverage/CMakeLists.txt:42` `find_package(Fields2Cover 3.0.0 CONFIG REQUIRED PATHS /opt/fields2cover-300)`.
 - **New `opennav_coverage` subpackage** → add it to the `COLCON_IGNORE` loop (`ros2-ci.yml` L302–307) AND the `rosdep --skip-keys` list (L321) AND the equivalent Dockerfile step (CLAUDE.md "Do NOT use the upstream `opennav_coverage` server").
-- **`.msg`/`.srv` change in `mowgli_interfaces`** → regenerate all three consumers or `msg-codegen-drift.yml` fails; regenerate with `LC_ALL=C` so macOS sort order does not fake drift.
+- **`.msg`/`.srv` change in `mowgli_interfaces`** → regenerate both GUI consumers (Go + TS) or `msg-codegen-drift.yml` fails; regenerate with `LC_ALL=C` so macOS sort order does not fake drift.
 - **`pkt_*_t` / `PKT_ID_*` change** → bump `MOWGLI_PROTOCOL_VERSION` and the host mirror `kMowgliProtocolVersion`, then refresh `firmware/scripts/protocol_baseline.json` (`protocol-version-drift.yml`).
 - **New top-level directory** → add a `.github/labeler.yml` rule and a `CODEOWNERS` entry; add a `Component` option to both issue templates and `PULL_REQUEST_TEMPLATE.md` if it is user-visible.
 - **New installer flag** → `docs/index.html` composer state + `updateCommand` → `docs/install.sh` parse + forward → `install/mowglinext.sh` argument contract → assertions in `docs/test_install.sh` / `docs/test_web_composer.sh`.
@@ -213,7 +212,7 @@ Where the tests run in CI: `tools/motor` is symlinked to `ros2/src/mowgli_tools`
 
 ## Generated & vendored — do not hand-edit
 
-- Nothing in this area is code-generated. The drift gates in `msg-codegen-drift.yml` police generated files that live in *other* areas (`gui/pkg/msgs/**`, `gui/web/src/types/ros.generated.ts`, `firmware/.../ros_lib/mower_msgs/**`) — regenerate with the `gui/generate_*.sh` scripts and `firmware/scripts/sync_ros_lib.py`, never by hand.
+- Nothing in this area is code-generated. The drift gates in `msg-codegen-drift.yml` police generated files that live in *other* areas (`gui/pkg/msgs/**`, `gui/web/src/types/ros.generated.ts`) — regenerate with the `gui/generate_*.sh` scripts, never by hand.
 - `.github/scripts/install-ros-apt-source.sh` downloads a third-party `.deb` from the `ros-infrastructure/ros-apt-source` releases; the asset is resolved at run time, not pinned in-tree.
 - `/tmp/digests/*`, `cppcheck-report.xml`, `dist/` (firmware release packaging) are CI scratch — never committed.
 
