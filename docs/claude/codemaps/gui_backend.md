@@ -249,7 +249,7 @@ Tests (what each pins):
 - `gui/pkg/foxglove/cdr_test.go`, `realwire_test.go`, `obstacle_wire_test.go`, `client_test.go` — XCDR1/CDR2 alignment, real captured Imu/ObstacleArray frames, NaN sanitising. `gui/pkg/msgs/mowgli/mower_control_bind_test.go` — snake_case JSON binding. `gui/pkg/types/mocks_test.go`.
 
 ## Change coupling — "if you change X, also update Y"
-- `.msg`/`.srv` in `ros2/src/mowgli_interfaces` → run `gui/generate_go_msgs.sh` **and** `gui/generate_ts_types.sh`, commit both (`msg-codegen-drift.yml` fails otherwise); also `firmware/scripts/sync_ros_lib.py` (see `docs/claude/commands.md`).
+- `.msg`/`.srv` in `ros2/src/mowgli_interfaces` → run `gui/generate_go_msgs.sh` **and** `gui/generate_ts_types.sh`, commit both (`msg-codegen-drift.yml` fails otherwise) (see `docs/claude/commands.md`).
 - New parameter default in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` → add the same `default` to `gui/asserts/mower_config.schema.json` (or allowlist it in `schema_template_parity_test.go`), else `TestSchemaDefaultsMatchTemplate` fails and the GUI's "at default" dot lies (Invariant 15).
 - Adding/removing/retyping a NUMBER in `ros2/src/mowgli_bringup/config/mowgli_robot.yaml` → `cd gui && go run ./cmd/gen-template-types` and commit `asserts/ros2_template_types.json`, else `TestTemplateTypesAssetMatchesTemplate` fails. The GUI image cannot read the template (build `context: ./gui`), so this asset is how the settings writer knows a key is a `double`.
 - New browser topic → `topicMap` (`ros.go`) + `topicSubscribeInterval` (`mowglinext.go`) + `TestTopicSubscribeInterval_CoversKnownSubscriberRouteTopics` + the frontend hook.

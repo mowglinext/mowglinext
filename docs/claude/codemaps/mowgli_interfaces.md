@@ -3,8 +3,8 @@
 > The rosidl package that owns every MowgliNext `.msg` / `.srv` / `.action` definition plus five
 > header-only helpers shared by several packages (WGS84↔ENU projection, `mowgli_robot.yaml`
 > scalar splicing, GNSS status helpers, GPS motion-yaw fit, and coverage-path constants).
-> Ten ROS packages depend on it, and three out-of-tree generators (firmware `sync_ros_lib.py`,
-> GUI `generate_go_msgs.sh` / `generate_ts_types.sh`) read its `msg/` and `srv/` directories.
+> Ten ROS packages depend on it, and two out-of-tree generators (GUI
+> `generate_go_msgs.sh` / `generate_ts_types.sh`) read its `msg/` and `srv/` directories.
 > Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
@@ -30,7 +30,6 @@
 | Dock pose set semantics (`PRESERVE` / `REQUEST` / `MOTION` yaw source) | `srv/SetDockingPoint.srv`; server `ros2/src/mowgli_map/src/map_server_node.cpp:330` |
 | Firmware version handshake fields | `msg/Status.msg:36-45` (`firmware_version`, `firmware_protocol_version`, `firmware_compatible`); filled at `ros2/src/mowgli_hardware/src/hardware_bridge_node.cpp:1297-1299` |
 | GUI Go / TS type regeneration + drift gate | `gui/generate_go_msgs.sh`, `gui/generate_ts_types.sh`, `.github/workflows/msg-codegen-drift.yml` |
-| Firmware header regeneration | `firmware/scripts/sync_ros_lib.py` (`--check` in CI) |
 | COBS protocol version lockstep (NOT a rosidl concern, but adjacent) | `.github/workflows/protocol-version-drift.yml`, `firmware/scripts/protocol_version_guard.py` |
 | Which interfaces are dead (defined but nobody serves/publishes) | *Pitfalls* → "Orphan definitions" |
 
@@ -144,7 +143,6 @@ colcon build --packages-select mowgli_interfaces
 colcon build --packages-up-to mowgli_behavior mowgli_map mowgli_localization mowgli_hardware
 colcon test  --packages-select mowgli_behavior mowgli_map mowgli_localization mowgli_hardware && colcon test-result --verbose
 # Out-of-tree generators (repo root); CI runs the same three
-python3 firmware/scripts/sync_ros_lib.py --check
 ( cd gui && ./generate_go_msgs.sh && ./generate_ts_types.sh ) && git diff --exit-code -- gui/pkg/msgs gui/web/src/types/ros.generated.ts
 ```
 Tests (all gtest, in consumer packages; run by `.github/workflows/ros2-ci.yml` "Build & Test" via `colcon test`):
@@ -165,7 +163,7 @@ Tests (all gtest, in consumer packages; run by `.github/workflows/ros2-ci.yml` "
 CI gates outside colcon: `.github/workflows/msg-codegen-drift.yml` (firmware `--check`, Go + TS regen diff) and `.github/workflows/sensors-gps.yml` (builds `mowgli_interfaces` into the GPS sidecar image and imports `GnssStatus` in the smoke test, lines 37-64).
 
 ## Change coupling — "if you change X, also update Y"
-- **Any `msg/*.msg` edit** → run all three generators and commit their output: `firmware/scripts/sync_ros_lib.py` → `firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/*.h`; `gui/generate_go_msgs.sh` → `gui/pkg/msgs/mowgli/types_generated.go`; `gui/generate_ts_types.sh` → `gui/web/src/types/ros.generated.ts`. `msg-codegen-drift.yml` fails otherwise. Run the Go/TS scripts with `LC_ALL=C` (sort order differs on macOS).
+- **Any `msg/*.msg` edit** → run both generators and commit their output: `gui/generate_go_msgs.sh` → `gui/pkg/msgs/mowgli/types_generated.go`; `gui/generate_ts_types.sh` → `gui/web/src/types/ros.generated.ts`. `msg-codegen-drift.yml` fails otherwise. Run the Go/TS scripts with `LC_ALL=C` (sort order differs on macOS).
 - **Any `srv/*.srv` edit** → `gui/generate_go_msgs.sh` also emits `gui/pkg/msgs/mowgli/services_generated.go` (`generate_go_msgs.sh:554`). TS and firmware generators ignore `srv/`.
 - **`action/*.action`** has NO generator consumer. The GUI never calls an action (foxglove bridge has no action support — `msg/DockCalibrationStatus.msg:1-8`); expose new action progress through a msg façade + `std_srvs/Trigger` the way `CalibrateDock` does.
 - **New `.msg`/`.srv`/`.action` file** → add it to the matching list in `CMakeLists.txt:17-58`, or rosidl silently skips it while the generators still emit Go/TS/firmware types for it (this is `CoveragePath.msg`'s current state).
@@ -180,8 +178,8 @@ CI gates outside colcon: `.github/workflows/msg-codegen-drift.yml` (firmware `--
 
 ## Pitfalls
 - **Orphan definitions** (built, generated into Go/TS/firmware, but no ROS server/publisher anywhere in `ros2/src`): `msg/ESCStatus.msg`, `msg/ImuRaw.msg`, `srv/AreaRecording.srv`, `srv/ClearMap.srv` (map_server's `~/clear_map` is `std_srvs/Trigger`, `map_server_node.cpp:306-307`), `srv/TriggerReplan.srv` (replan is the `~/replan_needed` Bool topic, `map_server_node.cpp:363`), `action/CoverageTask.action`. Do not build new features on them without first wiring a server.
-- **`msg/CoveragePath.msg` is not registered** in `CMakeLists.txt` `msg_files` (lines 17-33) so `mowgli_interfaces/msg/CoveragePath` does not exist at runtime, yet `gui/pkg/msgs/mowgli/types_generated.go:26`, `gui/web/src/types/ros.generated.ts:157` and `firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/CoveragePath.h` carry it — the generators glob the directory, not the CMake list.
-- **Firmware never compiles the generated `mower_msgs/*.h`**: `firmware/stm32/ros_usbnode/platformio.ini:15-17` excludes `ros/ros_lib/**` from `build_src_filter` and nothing under `firmware/` includes `mower_msgs/`. The wire is COBS (`mowgli_protocol.h`), not rosserial. `sync_ros_lib.py --check` still gates CI, so keep regenerating, but do not expect a `.msg` change to reach the STM32 — change `mowgli_protocol.h` + `ll_datatypes.hpp` and bump `MOWGLI_PROTOCOL_VERSION` instead.
+- **`msg/CoveragePath.msg` is not registered** in `CMakeLists.txt` `msg_files` (lines 17-33) so `mowgli_interfaces/msg/CoveragePath` does not exist at runtime, yet `gui/pkg/msgs/mowgli/types_generated.go:26` and `gui/web/src/types/ros.generated.ts:157` carry it — the generators glob the directory, not the CMake list.
+- **The firmware does not consume these `.msg` files.** The wire is COBS (`mowgli_protocol.h`), so a `.msg` change never reaches the STM32 — change `mowgli_protocol.h` + `ll_datatypes.hpp` and bump `MOWGLI_PROTOCOL_VERSION` instead.
 - **`ros2/src/mowgli_hardware/firmware/mowgli_protocol.h` is a stale copy** (`MOWGLI_PROTOCOL_VERSION 3u` at line 60 vs `6u` in `firmware/stm32/ros_usbnode/include/mowgli_protocol.h:59`) and is outside the `protocol_version_guard.py` fingerprint (which reads only the firmware header + `ll_datatypes.hpp`). The host truth is `ll_datatypes.hpp`.
 - **`ClearObstacle.srv` is served twice** with different meanings: `obstacle_tracker/clear_obstacle` drops a tracker observation, `map_server_node/discard_obstacle` rejects a pending dig/tracker proposal (`PromoteObstacle.srv:10-15`). The GUI calls the latter (`mowglinext.go:654`).
 - **`PromoteObstacle` lookup precedence** is `pending_id` > `polygon` > `obstacle_id` (`PromoteObstacle.srv:25-38`); re-sending a pending obstacle's polygon hits the centroid dedup guard and is a silent no-op — use `pending_id`.
@@ -199,6 +197,5 @@ CI gates outside colcon: `.github/workflows/msg-codegen-drift.yml` (firmware `--
 ## Generated & vendored — do not hand-edit
 - `gui/pkg/msgs/mowgli/types_generated.go`, `gui/pkg/msgs/mowgli/services_generated.go` — from `gui/generate_go_msgs.sh` (hand-maintained companions: `types.go`, `services.go`).
 - `gui/web/src/types/ros.generated.ts` — from `gui/generate_ts_types.sh` (`gui/web/src/types/ros.ts` is a hand-written `export *` re-export).
-- `firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/*.h` — from `firmware/scripts/sync_ros_lib.py` (MD5-stamped; excluded from the firmware build).
 - `ros2/src/external/universal-gnss/` — git submodule that defines the upstream `universal_gnss_ros2/GnssStatus` this package's `GnssStatus.msg` is bridged from.
 - `build/`, `install/` under `ros2/` — rosidl output (`mowgli_interfaces/msg/*.hpp`, Python bindings).

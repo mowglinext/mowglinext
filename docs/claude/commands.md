@@ -43,10 +43,6 @@ cd gui/web && yarn install && yarn dev    # vite :5173, /api proxied to the back
 # Prefix the two GUI generators with LC_ALL=C on macOS: they iterate `*.msg` shell globs,
 # and a different collation order fabricates ~20 lines of phantom drift.
 
-# Regenerate firmware rosserial C++ headers from ROS2 .msg files
-python3 firmware/scripts/sync_ros_lib.py          # writes to firmware/stm32/ros_usbnode/src/ros/ros_lib/mower_msgs/
-python3 firmware/scripts/sync_ros_lib.py --check   # diff-only, no writes (CI)
-
 # Regenerate Go message/service structs from ROS2 .msg/.srv files
 cd gui && LC_ALL=C ./generate_go_msgs.sh           # writes gui/pkg/msgs/*/types_generated.go + mowgli/services_generated.go
 
@@ -57,12 +53,11 @@ cd gui && LC_ALL=C ./generate_ts_types.sh          # writes to gui/web/src/types
 ## Code Generation Workflow
 
 When you modify `ros2/src/mowgli_interfaces/msg/*.msg` or `srv/*.srv`:
-1. **Firmware headers:** `python3 firmware/scripts/sync_ros_lib.py` — regenerates rosserial C++ headers
-2. **Go types:** `cd gui && LC_ALL=C ./generate_go_msgs.sh` — regenerates Go structs with JSON tags for rosbridge
-3. **TypeScript types:** `cd gui && LC_ALL=C ./generate_ts_types.sh` — regenerates `gui/web/src/types/ros.generated.ts` with snake_case fields matching rosbridge JSON (`ros.ts` is a hand-written one-line re-export of it — leave it alone)
-4. **Protocol constants:** the high-level mode numbers are hand-mirrored in THREE live places — `HighLevelStatus.msg` (`HIGH_LEVEL_STATE_*`), `firmware/stm32/ros_usbnode/include/mowgli_protocol.h:418-422` (`HL_MODE_*`, authoritative) and the local `static constexpr HL_MODE_*` block in `ros2/src/mowgli_hardware/src/hardware_bridge_node.cpp:75-79` (the copy the bridge actually compiles). `ros2/src/mowgli_hardware/firmware/mowgli_protocol.h` is a non-built C reference copy stuck at `MOWGLI_PROTOCOL_VERSION 3` — do not treat it as the host mirror.
-5. **Wire protocol:** if a `pkt_*_t` struct or a `PKT_ID_*` id changed, bump `MOWGLI_PROTOCOL_VERSION` (`firmware/stm32/ros_usbnode/include/mowgli_protocol.h:59`) AND `kMowgliProtocolVersion` (`ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp:51`) in lockstep, then refresh the baseline with `python3 firmware/scripts/protocol_version_guard.py` (no `--check`).
+1. **Go types:** `cd gui && LC_ALL=C ./generate_go_msgs.sh` — regenerates Go structs with JSON tags for rosbridge
+2. **TypeScript types:** `cd gui && LC_ALL=C ./generate_ts_types.sh` — regenerates `gui/web/src/types/ros.generated.ts` with snake_case fields matching rosbridge JSON (`ros.ts` is a hand-written one-line re-export of it — leave it alone)
+3. **Protocol constants:** the high-level mode numbers are hand-mirrored in THREE live places — `HighLevelStatus.msg` (`HIGH_LEVEL_STATE_*`), `firmware/stm32/ros_usbnode/include/mowgli_protocol.h:418-422` (`HL_MODE_*`, authoritative) and the local `static constexpr HL_MODE_*` block in `ros2/src/mowgli_hardware/src/hardware_bridge_node.cpp:75-79` (the copy the bridge actually compiles). `ros2/src/mowgli_hardware/firmware/mowgli_protocol.h` is a non-built C reference copy stuck at `MOWGLI_PROTOCOL_VERSION 3` — do not treat it as the host mirror.
+4. **Wire protocol:** if a `pkt_*_t` struct or a `PKT_ID_*` id changed, bump `MOWGLI_PROTOCOL_VERSION` (`firmware/stm32/ros_usbnode/include/mowgli_protocol.h:59`) AND `kMowgliProtocolVersion` (`ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp:51`) in lockstep, then refresh the baseline with `python3 firmware/scripts/protocol_version_guard.py` (no `--check`).
 
-CI gates both: `msg-codegen-drift.yml` runs `sync_ros_lib.py --check` and re-runs the two GUI generators with `git diff --exit-code`; `protocol-version-drift.yml` runs `protocol_version_guard.py --check`. Commit every generated file in the same change. Both run for pull requests targeting `main` or `dev`, subject to their existing `paths` filters; their push triggers cover `feat|fix|refactor|chore|perf/**` branch names.
+CI gates both: `msg-codegen-drift.yml` re-runs the two GUI generators with `git diff --exit-code`; `protocol-version-drift.yml` runs `protocol_version_guard.py --check`. Commit every generated file in the same change. Both run for pull requests targeting `main` or `dev`, subject to their existing `paths` filters; their push triggers cover `feat|fix|refactor|chore|perf/**` branch names.
 
-Do NOT hand-edit `*_generated.go`, `ros_lib/mower_msgs/*.h`, or `gui/web/src/types/ros.generated.ts` — re-run the scripts instead.
+Do NOT hand-edit `*_generated.go` or `gui/web/src/types/ros.generated.ts` — re-run the scripts instead.

@@ -171,7 +171,7 @@ the other.
 ```
 firmware/
 ├── scripts/                        # protocol_version_guard.py, board_defaults_parity.py,
-│                                   # package_release.py, sync_ros_lib.py
+│                                   # package_release.py
 └── stm32/
     ├── ros_usbnode/                # ← the live firmware (PlatformIO)
     │   ├── platformio.ini          # envs: Yardforce500, Yardforce500B (+ ST-Link v3 variants)
