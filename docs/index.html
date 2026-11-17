@@ -53,7 +53,7 @@
 
 <!-- ─── Hero ────────────────────────────────────────── -->
 <section class="wrap hero" id="top">
-  <a class="release-pill" href="https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0"><span>v1.6.0</span>See the plan, know why it stopped →</a>
+  <a class="release-pill" href="https://github.com/mowglinext/mowglinext/releases/tag/v1.7.0"><span>v1.7.0</span>Around the obstacle, straight onto the dock →</a>
   <h1 class="display h-xl">The robot mower, <em class="nowrap">re-engineered.</em></h1>
   <p class="lede">Open-source autonomy for the mower you already own. Centimetre positioning, LiDAR vision, stripes as straight as a survey line.</p>
   <div class="btn-row">
@@ -92,20 +92,20 @@
 <!-- ─── What's new ──────────────────────────────────── -->
 <section class="wrap release" id="whats-new">
   <div class="release-head">
-    <h2 class="display h-md">v1.6.0 — <em>see the plan, know why it stopped.</em></h2>
-    <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0">Release notes · October 2026 →</a>
+    <h2 class="display h-md">v1.7.0 — <em>around the obstacle, straight onto the dock.</em></h2>
+    <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.7.0">Release notes · November 2026 →</a>
   </div>
   <div class="release-grid">
-    <div><strong>See the mowing lines</strong><p>Preview the real plan on the map; set angle, direction and start point per area.</p></div>
-    <div><strong>Know why it stopped</strong><p>The dashboard names the reason, from a blocked area to a failed dock.</p></div>
-    <div><strong>Corners actually mowed</strong><p>Sharp tips pivot instead of being rounded off; headlands are finished first.</p></div>
-    <div><strong>OpenMower &amp; Pixhawk, in beta</strong><p>Run MowgliNext on stock OpenMower v1 electronics or an ArduRover Pixhawk.</p></div>
-    <div><strong>Rain from your weather station</strong><p>Home Assistant or a roof station can tell the mower it is raining.</p></div>
-    <div><strong>Your mower, drawn to scale</strong><p>Shells, colours and model presets; fleet peers on the map; an incident blackbox.</p></div>
+    <div><strong>Gets round what's in the way</strong><p>When it cannot skirt an obstacle, it follows the outline and rejoins its plan beyond it.</p></div>
+    <div><strong>Docks straight</strong><p>The final approach steers on the GPS track; a failed low-battery dock is retried.</p></div>
+    <div><strong>Keeps mowing through RTK Float</strong><p>With the LiDAR map anchor, a few seconds of Float no longer pause the blade.</p></div>
+    <div><strong>Smoother transits</strong><p>Neighbouring areas join up and the spin at the start of an area is gone.</p></div>
+    <div><strong>GOTO</strong><p>Send the mower to a point from ROS 2 or over MQTT, e.g. Home Assistant.</p></div>
+    <div><strong>Test a fix from the GUI</strong><p>The updater can install a pull request marked for preview.</p></div>
   </div>
   <div class="upgrade-note">
-    <p><strong>Already running MowgliNext?</strong> v1.6.0 changes the mainboard firmware protocol again (v9). In <strong>Settings → Updates</strong>: <em>Update the update service</em>, then <em>Review update</em> → <em>Install</em>, then <strong>Flash firmware</strong> when the new interface asks for it. From v1.6.0 on, the update service updates itself before each update.</p>
-    <p>Schedules now fire on the robot's local time instead of UTC — check them after the update, and read the <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0">release notes</a>. Installed before v1.4.0? Rerun the installer once: <code>curl -sSL https://mowgli.garden/install.sh | bash</code></p>
+    <p><strong>Already running MowgliNext?</strong> No firmware reflash this time. In <strong>Settings → Updates</strong>: <em>Review update</em> → <em>Install</em>. Watch your first mow: the contour bypass is on by default and collision_monitor lets the robot get closer to hedges. Details in the <a href="https://github.com/mowglinext/mowglinext/releases/tag/v1.7.0">release notes</a>.</p>
+    <p>Installed before v1.4.0? Rerun the installer once: <code>curl -sSL https://mowgli.garden/install.sh | bash</code></p>
   </div>
 </section>
 
