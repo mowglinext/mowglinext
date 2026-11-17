@@ -26,6 +26,8 @@ on:
       # exist to catch).
       - 'ros2/src/mowgli_bringup/config/mowgli_robot.yaml'
       - 'ros2/src/mowgli_bringup/config/backends/**'
+      # TestBuildBoard renders the firmware's own board.h.template.
+      - 'firmware/stm32/ros_usbnode/include/board.h.template'
       - '.github/workflows/gui-ci.yml'
   pull_request:
     branches: [main, dev]
@@ -43,6 +45,8 @@ on:
       # exist to catch).
       - 'ros2/src/mowgli_bringup/config/mowgli_robot.yaml'
       - 'ros2/src/mowgli_bringup/config/backends/**'
+      # TestBuildBoard renders the firmware's own board.h.template.
+      - 'firmware/stm32/ros_usbnode/include/board.h.template'
       - '.github/workflows/gui-ci.yml'
   workflow_dispatch:
 
