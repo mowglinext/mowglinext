@@ -26,8 +26,9 @@
  * DockRobot count starts and halts).
  *
  * What is pinned:
- *   - a GOTO request is accepted only from a settled, undocked rest state, and
- *     a refusal changes nothing; the target never outlives its GOTO;
+ *   - a GOTO request is accepted only from a settled rest state, on the dock
+ *     or off it, and a refusal changes nothing; the target never outlives its
+ *     GOTO;
  *   - one Nav2 attempt per request: success or failure both end the mission
  *     (current_command back to 0) and a failed goal is never re-sent;
  *   - low battery, or the critical percentage/voltage test, during the transit
@@ -168,6 +169,16 @@ std::string wrapTree(const std::string& body)
   return "<root BTCPP_format=\"4\"><BehaviorTree ID=\"T\">" + body + "</BehaviorTree></root>";
 }
 
+/// wrapTree plus a StartFromRest subtree (the undock GotoSequence shares with
+/// MowingSequence) stood in for by StubStartFromRest; the production subtree is
+/// checked separately (GotoStartFromRestTest).
+std::string wrapTreeWithStartFromRest(const std::string& body)
+{
+  return "<root BTCPP_format=\"4\" main_tree_to_execute=\"T\"><BehaviorTree ID=\"T\">" + body +
+         "</BehaviorTree><BehaviorTree ID=\"StartFromRest\"><StubStartFromRest/></BehaviorTree>"
+         "</root>";
+}
+
 // ---------------------------------------------------------------------------
 // Recording stand-ins
 // ---------------------------------------------------------------------------
@@ -186,6 +197,13 @@ struct Recorder
   /// DockRobot stays RUNNING while this is RUNNING, then returns it.
   BT::NodeStatus dock_result{BT::NodeStatus::SUCCESS};
   int backups{0};
+  /// Read by the IsCharging / IsUndockInterrupted / IsAtDockStation stand-ins.
+  bool charging{false};
+  bool undock_interrupted{false};
+  bool at_dock_station{false};
+  /// StubStartFromRest: ticks, and what it returns.
+  int start_from_rest{0};
+  BT::NodeStatus start_from_rest_result{BT::NodeStatus::SUCCESS};
 
   bool published(const std::string& name) const
   {
@@ -340,6 +358,42 @@ public:
   {
     ++g_rec->backups;
     return BT::NodeStatus::SUCCESS;
+  }
+};
+
+template <bool Recorder::*Flag>
+class StubFlag : public BT::ConditionNode
+{
+public:
+  StubFlag(const std::string& name, const BT::NodeConfig& config) : BT::ConditionNode(name, config)
+  {
+  }
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+  BT::NodeStatus tick() override
+  {
+    return g_rec->*Flag ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  }
+};
+
+class StubStartFromRest : public BT::SyncActionNode
+{
+public:
+  StubStartFromRest(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+  static BT::PortsList providedPorts()
+  {
+    return {};
+  }
+  BT::NodeStatus tick() override
+  {
+    ++g_rec->start_from_rest;
+    g_rec->events.push_back("start_from_rest");
+    return g_rec->start_from_rest_result;
   }
 };
 
@@ -659,25 +713,57 @@ TEST(GotoRequestTest, PendingBatteryChargeRefusesAndIsKept)
   EXPECT_TRUE(ctx.battery_charge_pending);
 }
 
-// GOTO has no undock sequence: refused on the charger and mid-undock.
-TEST(GotoRequestTest, RefusedWhenDocked)
+// On the charger, or with an undock reverse unfinished, the GOTO first leaves
+// through StartFromRest, whose undock calibrates the heading: accepted without a
+// heading seed.
+TEST(GotoRequestTest, AcceptedOnTheDockOrMidUndockWithoutHeadingSeed)
 {
   BTContext ctx;
   makeAvailable(ctx);
   ctx.latest_power.charger_enabled = true;
-  expectRefusedUnchanged(ctx, "docked");
+  ctx.yaw_seeded_this_session = false;
+  EXPECT_TRUE(request(ctx, 1.0, 2.0, 0.0).accepted);
+  EXPECT_EQ(ctx.current_command, kCommandGoto);
 
-  makeAvailable(ctx);
-  ctx.undock_start_recorded = true;
-  expectRefusedUnchanged(ctx, "docked");
+  BTContext mid_undock;
+  makeAvailable(mid_undock);
+  mid_undock.undock_start_recorded = true;
+  mid_undock.yaw_seeded_this_session = false;
+  EXPECT_TRUE(request(mid_undock, 1.0, 2.0, 0.0).accepted);
+  EXPECT_EQ(mid_undock.current_command, kCommandGoto);
 }
 
+// On the station without charge, with no undock started, the request carries
+// nothing that tells it apart from any other spot: without a heading seed the
+// station cannot be recognised either (IsAtDockStation reads the fused yaw), so
+// it is refused like any unseeded start off the charger.
+TEST(GotoRequestTest, OnTheStationWithoutChargeAndWithoutHeadingSeedIsRefused)
+{
+  BTContext ctx;
+  makeAvailable(ctx);
+  ctx.latest_power.charger_enabled = false;
+  ctx.undock_start_recorded = false;
+  ctx.yaw_seeded_this_session = false;
+  expectRefusedUnchanged(ctx, "heading_not_calibrated");
+}
+
+// Off the dock the GOTO starts in place and never drives the forward seed.
 TEST(GotoRequestTest, RefusedWithoutHeadingSeed)
 {
   BTContext ctx;
   makeAvailable(ctx);
   ctx.yaw_seeded_this_session = false;
   expectRefusedUnchanged(ctx, "heading_not_calibrated");
+}
+
+// Leaving the dock does not bypass the battery checks.
+TEST(GotoRequestTest, OnTheDockStillRefusedOnLowBattery)
+{
+  BTContext ctx;
+  makeAvailable(ctx);
+  ctx.latest_power.charger_enabled = true;
+  ctx.battery_percent = 20.0f;
+  expectRefusedUnchanged(ctx, "battery_low");
 }
 
 TEST(GotoRequestTest, RefusedOnLowOrCriticalBattery)
@@ -996,6 +1082,10 @@ protected:
     factory.registerNodeType<StubBackUp>("BackUp");
     factory.registerNodeType<StubStopMoving>("StopMoving");
     factory.registerNodeType<StubSucceed>("ClearCostmap");
+    factory.registerNodeType<StubFlag<&Recorder::charging>>("IsCharging");
+    factory.registerNodeType<StubFlag<&Recorder::undock_interrupted>>("IsUndockInterrupted");
+    factory.registerNodeType<StubFlag<&Recorder::at_dock_station>>("IsAtDockStation");
+    factory.registerNodeType<StubStartFromRest>("StubStartFromRest");
 
     tree_xml = stripComments(readMainTree());
   }
@@ -1010,7 +1100,8 @@ protected:
   {
     const std::string body = extractElement(tree_xml, tag, name);
     ASSERT_FALSE(body.empty()) << name << " not found in main_tree.xml";
-    tree = std::make_unique<BT::Tree>(factory.createTreeFromText(wrapTree(body), blackboard));
+    tree = std::make_unique<BT::Tree>(
+        factory.createTreeFromText(wrapTreeWithStartFromRest(body), blackboard));
   }
 
   bool bladeEverEnabled() const
@@ -1434,7 +1525,8 @@ TEST(GotoTreeStructureTest, EveryTerminalGotoStatusRecordsItsOutcome)
                                              "FAILED",
                                              "LOW_BATTERY_DOCKED",
                                              "LOW_BATTERY_DOCK_FAILED",
-                                             "REACHED"};
+                                             "REACHED",
+                                             "UNDOCK_FAILED"};
   EXPECT_EQ(paired, expected);
   // Every GOTO status other than the two in-progress ones is terminal.
   const std::regex status_re("state_name=\"GOTO_([A-Z_]+)\"");
@@ -1454,7 +1546,7 @@ TEST(GotoTreeStructureTest, EveryTerminalGotoStatusRecordsItsOutcome)
   const std::regex any_re("<SetGotoOutcome ");
   EXPECT_EQ(std::distance(std::sregex_iterator(xml.begin(), xml.end(), any_re),
                           std::sregex_iterator()),
-            5);
+            6);
 }
 
 // GotoRestObserver (and so ~/goto_pose) relies on these three branch names.
@@ -1491,4 +1583,437 @@ TEST(GotoTreeStructureTest, GotoBranchDoesNotTouchBoundaryRecovery)
   ASSERT_FALSE(goto_seq.empty());
   EXPECT_EQ(goto_seq.find("NavigateInsideBoundary"), std::string::npos);
   EXPECT_EQ(goto_seq.find("BoundaryRecovery"), std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// GOTO from the dock: StartFromRest, shared with the mowing start
+// ---------------------------------------------------------------------------
+
+// On the charger, on the station without charge, or with an undock reverse
+// unfinished, the GOTO leaves through StartFromRest before any navigation.
+TEST_F(GotoTreeTest, GotoFromTheDockLeavesThroughStartFromRestFirst)
+{
+  for (bool Recorder::*flag :
+       {&Recorder::charging, &Recorder::at_dock_station, &Recorder::undock_interrupted})
+  {
+    rec = Recorder{};
+    rec.*flag = true;
+    ctx->current_command = kCommandGoto;
+    ctx->goto_outcome.clear();
+    loadSubtree("ReactiveSequence", "GotoSequence");
+
+    EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+    rec.nav_result = BT::NodeStatus::SUCCESS;
+    EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::SUCCESS);
+
+    EXPECT_EQ(rec.start_from_rest, 1);
+    const auto start = std::find(rec.events.begin(), rec.events.end(), "start_from_rest");
+    const auto nav = std::find(rec.events.begin(), rec.events.end(), "nav_start");
+    ASSERT_NE(start, rec.events.end());
+    ASSERT_NE(nav, rec.events.end());
+    EXPECT_LT(std::distance(rec.events.begin(), start), std::distance(rec.events.begin(), nav))
+        << "the undock comes before the transit";
+    EXPECT_EQ(ctx->goto_outcome, "REACHED");
+    EXPECT_FALSE(bladeEverEnabled());
+  }
+}
+
+// Off the dock the GOTO starts in place: StartFromRest (and its forward
+// heading seed) never runs.
+TEST_F(GotoTreeTest, GotoAwayFromTheDockNeverEntersStartFromRest)
+{
+  loadSubtree("ReactiveSequence", "GotoSequence");
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(rec.start_from_rest, 0);
+  EXPECT_EQ(rec.nav_starts, 1);
+}
+
+// A failed undock ends the GOTO with UNDOCK_FAILED, without any transit and
+// without re-entering the branch.
+TEST_F(GotoTreeTest, UndockFailureEndsTheGotoWithoutTransit)
+{
+  rec.charging = true;
+  rec.start_from_rest_result = BT::NodeStatus::FAILURE;
+  loadSubtree("ReactiveSequence", "GotoSequence");
+
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(ctx->goto_outcome, "UNDOCK_FAILED");
+  EXPECT_EQ(rec.statuses.back(), "GOTO_UNDOCK_FAILED");
+  EXPECT_EQ(ctx->current_command, 0);
+  EXPECT_EQ(rec.nav_starts, 0);
+  EXPECT_FALSE(rec.published("GOTO_ACTIVE"));
+}
+
+// The mowing start and the GOTO use the one production StartFromRest, which
+// holds the whole UndockOrSkip decision.
+TEST(GotoStartFromRestTest, MowingAndGotoShareTheProductionUndock)
+{
+  const std::string xml = stripComments(readMainTree());
+  const std::string mowing = extractElement(xml, "ReactiveSequence", "MowingSequence");
+  const std::string goto_seq = extractElement(xml, "ReactiveSequence", "GotoSequence");
+  const std::string start = extractElement(xml, "Sequence", "StartFromRest");
+  ASSERT_FALSE(mowing.empty());
+  ASSERT_FALSE(goto_seq.empty());
+  ASSERT_FALSE(start.empty());
+  const std::string call = "<SubTree ID=\"StartFromRest\" _autoremap=\"true\"/>";
+  EXPECT_NE(mowing.find(call), std::string::npos);
+  EXPECT_NE(goto_seq.find(call), std::string::npos);
+  EXPECT_EQ(mowing.find("name=\"UndockOrSkip\""), std::string::npos) << "no second copy";
+  for (const char* part : {"name=\"UndockOrSkip\"",
+                           "name=\"UndockSequence\"",
+                           "name=\"ResumeInterruptedUndock\"",
+                           "name=\"BackOutOfStation\"",
+                           "name=\"UndockFailed\"",
+                           "<CalibrateHeadingFromUndock"})
+  {
+    EXPECT_NE(start.find(part), std::string::npos) << part;
+  }
+}
+
+// The production StartFromRest, every leaf but IsCommand / ClearCommand /
+// SetStopReason replaced by a probe, with the robot neither charging, at the
+// station nor mid-undock: what a GOTO meets if the charging bit drops while the
+// subtree waits for Nav2. Under command 9 it must end in UndockFailed, never in
+// NotDockedBranch's forward heading seed; the mowing start keeps that seed.
+class StartFromRestProductionTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    ctx = std::make_shared<BTContext>();
+    ctx->node = rclcpp::Node::make_shared("test_start_from_rest");
+    blackboard = BT::Blackboard::create();
+    blackboard->set("context", ctx);
+    blackboard->set("undock_distance", 1.0);
+    blackboard->set("undock_speed", 0.15);
+    factory.registerNodeType<IsCommand>("IsCommand");
+    factory.registerNodeType<ClearCommand>("ClearCommand");
+    factory.registerNodeType<SetStopReason>("SetStopReason");
+
+    const std::string xml = stripComments(readMainTree());
+    const auto begin = xml.find("<BehaviorTree ID=\"StartFromRest\">");
+    ASSERT_NE(begin, std::string::npos);
+    const auto end = xml.find("</BehaviorTree>", begin);
+    ASSERT_NE(end, std::string::npos);
+    subtree = xml.substr(begin, end + std::string("</BehaviorTree>").size() - begin);
+
+    const std::regex leaf(
+        "<([A-Za-z][A-Za-z0-9_]*)((?:\\s+[A-Za-z_][A-Za-z0-9_]*=\"[^\"]*\")*)\\s*/>");
+    const std::regex attribute("([A-Za-z_][A-Za-z0-9_]*)=\"");
+    for (auto it = std::sregex_iterator(subtree.begin(), subtree.end(), leaf);
+         it != std::sregex_iterator();
+         ++it)
+    {
+      const std::string tag = (*it)[1].str();
+      const std::string attributes = (*it)[2].str();
+      if (factory.builders().count(tag) || tag == "AlwaysFailure" || tag == "AlwaysSuccess")
+      {
+        continue;
+      }
+      BT::PortsList ports;
+      for (auto a = std::sregex_iterator(attributes.begin(), attributes.end(), attribute);
+           a != std::sregex_iterator();
+           ++a)
+      {
+        if ((*a)[1].str() != "name")
+        {
+          // Untyped: the probed nodes take doubles ({undock_speed}) as well as strings.
+          ports.emplace(BT::InputPort((*a)[1].str()));
+        }
+      }
+      factory.registerSimpleAction(
+          tag,
+          [this, tag](BT::TreeNode& node)
+          {
+            if (tag == "SeedYawFromMotion")
+            {
+              ++seed_drives;
+            }
+            if (tag == "PublishHighLevelStatus")
+            {
+              statuses.push_back(node.getInput<std::string>("state_name").value());
+            }
+            const bool condition_false =
+                tag == "IsCharging" || tag == "IsUndockInterrupted" || tag == "IsAtDockStation";
+            return condition_false ? BT::NodeStatus::FAILURE : BT::NodeStatus::SUCCESS;
+          },
+          ports);
+    }
+  }
+
+  BT::NodeStatus run(uint8_t command)
+  {
+    ctx->current_command = command;
+    tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+        "<root BTCPP_format=\"4\" main_tree_to_execute=\"StartFromRest\">" + subtree + "</root>",
+        blackboard));
+    return tree->tickOnce();
+  }
+
+  std::shared_ptr<BTContext> ctx;
+  BT::Blackboard::Ptr blackboard;
+  BT::BehaviorTreeFactory factory;
+  std::unique_ptr<BT::Tree> tree;
+  std::string subtree;
+  int seed_drives{0};
+  std::vector<std::string> statuses;
+};
+
+TEST_F(StartFromRestProductionTest, AGotoThatLostItsChargingBitFailsInsteadOfDrivingForward)
+{
+  EXPECT_EQ(run(kCommandGoto), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(seed_drives, 0);
+  EXPECT_NE(std::find(statuses.begin(), statuses.end(), "UNDOCK_FAILED"), statuses.end());
+  EXPECT_EQ(ctx->current_command, 0);
+}
+
+TEST_F(StartFromRestProductionTest, TheMowingStartStillSeedsItsHeadingOffTheDock)
+{
+  EXPECT_EQ(run(1), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(seed_drives, 1);
+  EXPECT_EQ(std::find(statuses.begin(), statuses.end(), "UNDOCK_FAILED"), statuses.end());
+}
+
+// ---------------------------------------------------------------------------
+// The production GotoSequence calling the production StartFromRest through
+// the real <SubTree _autoremap="true"> boundary (no inlining). Undock leaves
+// are probes; GOTO leaves are the stubs above.
+// ---------------------------------------------------------------------------
+
+struct UndockProbes
+{
+  bool nav2_ready{true};
+  bool wait_done{true};
+  BT::NodeStatus backup_result{BT::NodeStatus::RUNNING};
+  std::vector<double> backup_distances;
+  int backup_halts{0};
+  double remaining{0.4};
+  int seed_drives{0};
+};
+
+UndockProbes* g_undock = nullptr;
+
+class ProbeBackUp : public BT::StatefulActionNode
+{
+public:
+  ProbeBackUp(const std::string& name, const BT::NodeConfig& config)
+      : BT::StatefulActionNode(name, config)
+  {
+  }
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<double>("backup_dist"), BT::InputPort<double>("backup_speed")};
+  }
+  BT::NodeStatus onStart() override
+  {
+    g_undock->backup_distances.push_back(getInput<double>("backup_dist").value());
+    return BT::NodeStatus::RUNNING;
+  }
+  BT::NodeStatus onRunning() override
+  {
+    return g_undock->backup_result;
+  }
+  void onHalted() override
+  {
+    ++g_undock->backup_halts;
+  }
+};
+
+class ProbeWait : public BT::StatefulActionNode
+{
+public:
+  ProbeWait(const std::string& name, const BT::NodeConfig& config)
+      : BT::StatefulActionNode(name, config)
+  {
+  }
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<double>("duration_sec")};
+  }
+  BT::NodeStatus onStart() override
+  {
+    return g_undock->wait_done ? BT::NodeStatus::SUCCESS : BT::NodeStatus::RUNNING;
+  }
+  BT::NodeStatus onRunning() override
+  {
+    return g_undock->wait_done ? BT::NodeStatus::SUCCESS : BT::NodeStatus::RUNNING;
+  }
+  void onHalted() override
+  {
+  }
+};
+
+class ProbeRemaining : public BT::SyncActionNode
+{
+public:
+  ProbeRemaining(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<double>("undock_distance"), BT::OutputPort<double>("remaining")};
+  }
+  BT::NodeStatus tick() override
+  {
+    setOutput("remaining", g_undock->remaining);
+    return BT::NodeStatus::SUCCESS;
+  }
+};
+
+class GotoUndockSubTreeTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    g_rec = &rec;
+    g_undock = &probes;
+    ctx = std::make_shared<BTContext>();
+    ctx->node = rclcpp::Node::make_shared("test_goto_undock_subtree");
+    ctx->battery_percent = 80.0f;
+    ctx->current_command = kCommandGoto;
+    blackboard = BT::Blackboard::create();
+    blackboard->set("context", ctx);
+    blackboard->set("battery_low_pct", 20.0f);
+    blackboard->set("battery_critical_pct", 10.0f);
+    blackboard->set("battery_critical_voltage", 0.0f);
+    blackboard->set("goto_timeout_sec", 300.0);
+    blackboard->set("undock_distance", 1.0);
+    blackboard->set("undock_speed", 0.15);
+
+    factory.registerNodeType<IsCommand>("IsCommand");
+    factory.registerNodeType<ClearCommand>("ClearCommand");
+    factory.registerNodeType<NeedsDocking>("NeedsDocking");
+    factory.registerNodeType<IsBatteryLow>("IsBatteryLow");
+    factory.registerNodeType<IsLastDockSucceeded>("IsLastDockSucceeded");
+    factory.registerNodeType<SetStopReason>("SetStopReason");
+    factory.registerNodeType<SetGotoOutcome>("SetGotoOutcome");
+    factory.registerNodeType<StubNavigateToPose>("NavigateToPose");
+    factory.registerNodeType<StubDockRobot>("DockRobot");
+    factory.registerNodeType<StubSetMowerEnabled>("SetMowerEnabled");
+    factory.registerNodeType<StubPublishHighLevelStatus>("PublishHighLevelStatus");
+    factory.registerNodeType<StubStopMoving>("StopMoving");
+    factory.registerNodeType<StubSucceed>("ClearCostmap");
+    factory.registerNodeType<StubFlag<&Recorder::charging>>("IsCharging");
+    factory.registerNodeType<StubFlag<&Recorder::undock_interrupted>>("IsUndockInterrupted");
+    factory.registerNodeType<StubFlag<&Recorder::at_dock_station>>("IsAtDockStation");
+    factory.registerNodeType<ProbeBackUp>("BackUp");
+    factory.registerNodeType<ProbeWait>("WaitForDuration");
+    factory.registerNodeType<ProbeRemaining>("RemainingUndockDistance");
+    factory.registerSimpleCondition("Nav2Active",
+                                    [](BT::TreeNode&)
+                                    {
+                                      return g_undock->nav2_ready ? BT::NodeStatus::SUCCESS
+                                                                  : BT::NodeStatus::FAILURE;
+                                    },
+                                    {BT::InputPort<double>("timeout_sec")});
+    factory.registerSimpleAction("SeedYawFromMotion",
+                                 [](BT::TreeNode&)
+                                 {
+                                   ++g_undock->seed_drives;
+                                   return BT::NodeStatus::SUCCESS;
+                                 },
+                                 {BT::InputPort<double>("distance_m"),
+                                  BT::InputPort<double>("speed_ms"),
+                                  BT::InputPort<double>("timeout_sec")});
+    const auto succeed = [](BT::TreeNode&)
+    {
+      return BT::NodeStatus::SUCCESS;
+    };
+    factory.registerSimpleAction("PreFlightCheck",
+                                 succeed,
+                                 {BT::InputPort<double>("min_battery"),
+                                  BT::InputPort<int>("min_gps_fix_type"),
+                                  BT::InputPort<double>("tf_timeout_sec")});
+    factory.registerSimpleAction("RecordUndockStart", succeed);
+    factory.registerSimpleAction("WaitForGpsFix",
+                                 succeed,
+                                 {BT::InputPort<double>("timeout_sec"),
+                                  BT::InputPort<int>("min_fix_type")});
+    factory.registerSimpleAction("CalibrateHeadingFromUndock",
+                                 succeed,
+                                 {BT::InputPort<double>("min_displacement_m")});
+
+    const std::string xml = stripComments(readMainTree());
+    const auto begin = xml.find("<BehaviorTree ID=\"StartFromRest\">");
+    ASSERT_NE(begin, std::string::npos);
+    const auto end = xml.find("</BehaviorTree>", begin) + std::string("</BehaviorTree>").size();
+    const std::string goto_seq = extractElement(xml, "ReactiveSequence", "GotoSequence");
+    ASSERT_FALSE(goto_seq.empty());
+    tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+        "<root BTCPP_format=\"4\" main_tree_to_execute=\"T\"><BehaviorTree ID=\"T\">" + goto_seq +
+            "</BehaviorTree>" + xml.substr(begin, end - begin) + "</root>",
+        blackboard));
+  }
+
+  void TearDown() override
+  {
+    tree.reset();
+    g_rec = nullptr;
+    g_undock = nullptr;
+  }
+
+  Recorder rec;
+  UndockProbes probes;
+  std::shared_ptr<BTContext> ctx;
+  BT::Blackboard::Ptr blackboard;
+  BT::BehaviorTreeFactory factory;
+  std::unique_ptr<BT::Tree> tree;
+};
+
+// A STOP in the middle of the undock reverse halts it through the subtree
+// boundary; the next GOTO resumes only what is left (an output written inside
+// the subtree reaches the root blackboard), then transits. Never the forward seed.
+TEST_F(GotoUndockSubTreeTest, StopMidReverseThenResumeOnlyTheRemainder)
+{
+  rec.charging = true;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_EQ(probes.backup_distances.size(), 1U);
+  EXPECT_DOUBLE_EQ(probes.backup_distances[0], 1.0) << "{undock_distance} from the root";
+
+  ctx->current_command = 8;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(probes.backup_halts, 1);
+  EXPECT_EQ(rec.nav_starts, 0);
+
+  rec.charging = false;
+  rec.undock_interrupted = true;
+  ctx->current_command = kCommandGoto;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_EQ(probes.backup_distances.size(), 2U);
+  EXPECT_DOUBLE_EQ(probes.backup_distances[1], 0.4) << "only the remainder";
+  EXPECT_DOUBLE_EQ(blackboard->get<double>("undock_remaining"), 0.4);
+
+  probes.backup_result = BT::NodeStatus::SUCCESS;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+  EXPECT_EQ(rec.nav_starts, 1);
+  EXPECT_EQ(probes.seed_drives, 0);
+  EXPECT_EQ(std::find(rec.blade_requests.begin(), rec.blade_requests.end(), true),
+            rec.blade_requests.end());
+}
+
+// The charging bit drops while the undock waits for Nav2: the GOTO ends in
+// GOTO_UNDOCK_FAILED, with neither the forward seed nor a transit.
+TEST_F(GotoUndockSubTreeTest, ChargingBitLostDuringTheNav2WaitEndsTheGoto)
+{
+  rec.charging = true;
+  probes.nav2_ready = false;
+  probes.wait_done = false;
+  EXPECT_EQ(tree->tickOnce(), BT::NodeStatus::RUNNING);
+
+  rec.charging = false;
+  probes.nav2_ready = true;
+  probes.wait_done = true;
+  BT::NodeStatus status = BT::NodeStatus::RUNNING;
+  for (int i = 0; i < 5 && status == BT::NodeStatus::RUNNING; ++i)
+  {
+    status = tree->tickOnce();
+  }
+  EXPECT_EQ(status, BT::NodeStatus::FAILURE);
+  EXPECT_EQ(probes.seed_drives, 0);
+  EXPECT_EQ(rec.nav_starts, 0);
+  EXPECT_TRUE(probes.backup_distances.empty());
+  EXPECT_EQ(ctx->goto_outcome, "UNDOCK_FAILED");
+  EXPECT_EQ(rec.statuses.back(), "GOTO_UNDOCK_FAILED");
+  EXPECT_EQ(ctx->current_command, 0);
 }
