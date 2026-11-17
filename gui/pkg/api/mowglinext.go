@@ -439,7 +439,7 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 
 		var writeMu sync.Mutex
 		// seq is set (one value) only on the full frames of a delta subscription.
-		writeFrame := func(topic string, data []byte, seq ...uint64) {
+		writeParsedFrame := func(topic string, data []byte, parsed *parsedGrid, seq ...uint64) {
 			// Re-encode the frame as MessagePack and send it as a BINARY frame.
 			// `data` is the per-message snake_case JSON produced upstream; we
 			// decode it to a generic value and msgpack-encode {topic, data:obj}
@@ -448,12 +448,18 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			// thread. Field names (snake_case) are preserved, so the frontend
 			// TS interfaces are unchanged. The JSON→obj cost moves to Go (fast,
 			// off the browser's single thread).
-			var obj interface{}
-			if err := json.Unmarshal(data, &obj); err != nil {
+			var obj any
+			var err error
+			if parsed != nil {
+				obj, err = parsed.object()
+			} else {
+				obj, err = multiplexObject(topic, data)
+			}
+			if err != nil {
 				return
 			}
-			// JSON numbers arrive as float64, including each OccupancyGrid
-			// cell. Only compact numbers that the browser decodes as Number:
+			// Generic JSON numbers arrive as float64. Parsed grid cells are
+			// already compact arrays. Only compact browser Number values:
 			// MessagePack int64/uint64 decode as BigInt in msgpackr.
 			// Keep the compact plan's coordinate array as MessagePack float32
 			// (generic JSON decoding otherwise widens every number to float64).
@@ -470,7 +476,7 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			if len(seq) > 0 {
 				frame["seq"] = seq[0]
 			}
-			err := encoder.Encode(frame)
+			err = encoder.Encode(frame)
 			if err != nil {
 				return
 			}
@@ -487,6 +493,10 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			if err := conn.WriteMessage(websocket.BinaryMessage, payload.Bytes()); err != nil {
 				_ = conn.Close()
 			}
+		}
+
+		writeFrame := func(topic string, data []byte, seq ...uint64) {
+			writeParsedFrame(topic, data, nil, seq...)
 		}
 
 		writePatch := func(topic string, f gridFrame) {
@@ -524,7 +534,7 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			case !ok:
 				writeFrame(topic, msg)
 			case f.Full:
-				writeFrame(topic, f.Raw, f.Seq)
+				writeParsedFrame(topic, f.Raw, f.parsed, f.Seq)
 			default:
 				writePatch(topic, f)
 			}
@@ -624,7 +634,7 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				stateMu.Unlock()
 				if sub != nil && sub.delta != nil {
 					if f, ok := sub.delta.resync(); ok {
-						writeFrame(m.Topic, f.Raw, f.Seq)
+						writeParsedFrame(m.Topic, f.Raw, f.parsed, f.Seq)
 					}
 				}
 			}
