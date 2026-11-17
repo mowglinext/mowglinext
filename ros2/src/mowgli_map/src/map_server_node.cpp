@@ -1155,6 +1155,26 @@ void MapServerNode::on_publish_timer()
         RCLCPP_WARN(get_logger(), "Corridor publication still pending: %s", e.what());
       }
     }
+    if (recorded_areas_publication_pending_ && area_replace_in_progress_ &&
+        std::chrono::steady_clock::now() >=
+            area_list_publish_not_before_ + std::chrono::seconds(10) &&
+        [this]
+        {
+          std::lock_guard<std::mutex> lock(map_mutex_);
+          return !areas_.empty();
+        }())
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           30000,
+                           "LiDAR-ignore corridors are OFF: a map replace (clear_map) was "
+                           "never committed with ~/save_areas or ~/load_areas");
+    }
+    if (recorded_areas_publication_pending_ && !area_replace_in_progress_ &&
+        std::chrono::steady_clock::now() >= area_list_publish_not_before_)
+    {
+      publish_recorded_area_list();
+    }
   }
 
   {
