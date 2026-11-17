@@ -147,7 +147,9 @@ bool regionBlocked(const nav2_costmap_2d::Costmap2D& local,
                    const ObstacleDeviation::Footprint& footprint,
                    const ObstacleDeviation::BoundaryGuard& g)
 {
-  if (!footprint.empty())
+  // A polygon needs three vertices; fewer would rasterise to nothing and read
+  // every pose as clear, so fall back to the line model instead.
+  if (footprint.size() >= 3)
   {
     return ObstacleDeviation::footprintBlocked(
         local, pose, center_dev, footprint, g, ObstacleDeviation::kLethalOnlyThreshold);
@@ -159,6 +161,10 @@ bool regionBlocked(const nav2_costmap_2d::Costmap2D& local,
 
 bool BoundaryGuard::isLethalAt(double x, double y) const
 {
+  if (deny_all)
+  {
+    return true;
+  }
   if (costmap == nullptr)
   {
     return false;
@@ -244,7 +250,8 @@ bool ObstacleDeviation::footprintBlocked(const nav2_costmap_2d::Costmap2D& costm
       double cx = 0.0;
       double cy = 0.0;
       costmap.mapToWorld(static_cast<unsigned int>(mx), static_cast<unsigned int>(my), cx, cy);
-      if (pointInPolygon(world_poly, cx, cy) && cellBlocked(costmap, cx, cy, guard, threshold))
+      // Cost first: on an empty lawn it is 0 and the polygon test never runs.
+      if (cellBlocked(costmap, cx, cy, guard, threshold) && pointInPolygon(world_poly, cx, cy))
       {
         return true;
       }
@@ -274,7 +281,10 @@ ObstacleDeviation::Footprint ObstacleDeviation::expandFootprintLateral(const Foo
   for (const auto& v : footprint)
   {
     geometry_msgs::msg::Point p = v;
-    p.y += (v.y >= cy) ? margin : -margin;
+    // A vertex ON the centre line (a nose point) widens neither way: pushing it
+    // to one side would skew a symmetric polygon.
+    constexpr double kOnAxisM = 1e-9;
+    p.y += (v.y > cy + kOnAxisM) ? margin : ((v.y < cy - kOnAxisM) ? -margin : 0.0);
     out.push_back(p);
   }
   return out;
@@ -389,8 +399,12 @@ double ObstacleDeviation::chooseDeviationSide(const nav2_costmap_2d::Costmap2D& 
   // the whole BODY (footprint, else ±half_width) on clear, in-zone cells. Bias
   // to the LEFT on ties (avoids zigzag flicker when both sides are equally clear
   // at the first sample distance).
-  for (double d = step; d <= max_search; d += step)
+  // Integer steps: accumulating `d += step` drifts past max_search (0.05 x 30
+  // ends at 1.5000000000000007) and silently drops the last candidate.
+  const int steps = static_cast<int>(std::floor(max_search / step + 1e-9));
+  for (int n = 1; n <= steps; ++n)
   {
+    const double d = n * step;
     const bool left_clear = !regionBlocked(costmap, obstacle_pose, d, half_width, footprint, guard);
     const bool right_clear =
         !regionBlocked(costmap, obstacle_pose, -d, half_width, footprint, guard);
@@ -458,16 +472,19 @@ double ObstacleDeviation::growDeviationUntilClear(
   const double sign = (initial_deviation == 0.0) ? 1.0 : ((initial_deviation > 0.0) ? 1.0 : -1.0);
 
   // Start from at least |initial| (already-active deviation), grow upward.
-  double mag = std::max(std::abs(initial_deviation), step);
-  while (mag <= max_deviation)
+  // Integer steps from the start magnitude, so the cap itself is tested (a
+  // floating-point `mag += step` overshot it and reported WEDGED when only the
+  // full max_deviation cleared).
+  const double start = std::max(std::abs(initial_deviation), step);
+  const int steps = static_cast<int>(std::floor((max_deviation - start) / step + 1e-9));
+  for (int n = 0; n <= steps; ++n)
   {
-    const double candidate = sign * mag;
+    const double candidate = sign * (start + n * step);
     if (isPathClearWithDeviation(
             costmap, path, start_idx, lookahead_count, candidate, guard, half_width, footprint))
     {
       return candidate;
     }
-    mag += step;
   }
   // Failed to find clearance within max_deviation; signal by returning a
   // value past the cap. Caller checks |result| > max_deviation.

@@ -58,6 +58,25 @@ TEST(UnitResume, RealProgressClearsTheCounter)
   EXPECT_EQ(d.consecutive, 1u);
 }
 
+TEST(UnitResume, DrivingAMetreIsRealProgress)
+{
+  // Five aborts along a hedge, each after driving a couple of metres, are not a re-abort loop:
+  // this used to drop the rest of the unit, which on a hole-free area is the zone.
+  const auto d = DecideUnitResume(30000, 34, 61, 5);
+  EXPECT_TRUE(d.resume);
+  EXPECT_EQ(d.consecutive, 1u);
+}
+
+TEST(UnitResume, ASpentBudgetIsToldApartFromTheEndOfTheUnit)
+{
+  const UnitResumeCfg cfg;
+  EXPECT_TRUE(mowgli_behavior::UnitResumeBudgetSpent(DecideUnitResume(5000, 3, 30, 5, cfg), cfg));
+  EXPECT_FALSE(mowgli_behavior::UnitResumeBudgetSpent(DecideUnitResume(5000, 3, 30, 4, cfg), cfg))
+      << "still inside the budget";
+  EXPECT_FALSE(mowgli_behavior::UnitResumeBudgetSpent(DecideUnitResume(100, 70, 90, 0, cfg), cfg))
+      << "nothing left to leap over";
+}
+
 TEST(UnitResume, ATinyRemainderIsNotWorthATransit)
 {
   EXPECT_FALSE(DecideUnitResume(100, 70, 90, 0).resume);

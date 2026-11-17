@@ -18,6 +18,7 @@
 // at our graph sizes (a few thousand nodes max per session).
 
 #pragma once
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <iosfwd>
@@ -55,13 +56,23 @@ struct TickOutput
   gtsam::Pose2 pose;
   Eigen::Matrix3d covariance;  // (x, y, theta) marginal
   uint64_t node_index;  // monotonically increasing
-  double timestamp;  // ROS time, seconds
+  double timestamp;  // ROS time of the pose node, seconds
+  uint64_t estimate_revision = 0;  // changes even when node_index does not
+  uint64_t graph_epoch = 0;
+  uint64_t applied_gnss_token = 0;
+  uint64_t applied_gnss_revision = 0;
 };
 
 // Lightweight stats snapshot for diagnostics.
 struct GraphStats
 {
   uint64_t total_nodes = 0;  // # nodes created since boot
+  uint64_t successful_updates = 0;  // monotonic, including measurement-only updates
+  uint64_t updates_since_rebase = 0;
+  uint64_t successful_rebases = 0;
+  size_t factor_slots = 0;
+  size_t live_factors = 0;
+  bool rebase_in_progress = false;
 
   // Health counters (incremented by graph_manager; reset to 0 only on
   // process restart). Each counter buckets a specific rejection cause
@@ -81,6 +92,8 @@ struct GraphStats
   // DEAD_RECKONING verdict never fired for the exact freeze this counter
   // catches, so the two counters tell you which mechanism actually acted.
   uint64_t gps_rejects_stuck_value = 0;
+  // iSAM2 updates that threw and forced a graph reset + re-seed.
+  uint64_t isam_resets = 0;
   uint64_t stationary_hand_push = 0;  // wheel stationary but gyro disagrees
   uint64_t slip_veto = 0;  // ticks where wheel translation was vetoed by gyro
   // Adaptive process-noise telemetry. residual_ema_rad is the
@@ -107,8 +120,10 @@ public:
   // Wheel twist between samples — body-frame vx, vy, wz, dt.
   void AddWheelTwist(double vx, double vy, double wz, double dt);
 
-  // Gyro yaw rate (rad/s) integrated with given dt.
-  void AddGyroDelta(double wz, double dt);
+  // Gyro yaw rate (rad/s) integrated with given dt. Returns the rate with the
+  // graph's current bias estimate removed — the same value the graph
+  // integrates — so dead reckoning can integrate it too.
+  double AddGyroDelta(double wz, double dt);
 
   // GPS measurement (in map frame, datum-anchored). Cached and consumed
   // at next tick. sigma is per-axis; pass < 0 to use floor. When
@@ -117,12 +132,21 @@ public:
   // outliers can lie outside the reported covariance. When `target_node`
   // is set, the factor is attached to that existing pose instead of the
   // node created by the next Tick(). Returns false if the requested node
-  // is no longer present in the live graph.
+  // is no longer present in the live graph. `antenna_in_node` retimes the fix
+  // to its acquisition instant: the antenna position at that instant expressed
+  // in the target node's body frame (node→acquisition odometry ∘ lever arm).
+  // Unset = the configured lever arm (fix taken at the node itself).
   bool QueueGnss(double x,
                  double y,
                  double sigma_xy,
                  bool robust = false,
-                 std::optional<uint64_t> target_node = std::nullopt);
+                 std::optional<uint64_t> target_node = std::nullopt,
+                 uint64_t ingestion_token = 0,
+                 std::optional<gtsam::Vector2> antenna_in_node = std::nullopt);
+
+  // Invalidate provenance without changing the numerical graph.
+  void InvalidateGnssSupport();
+  uint64_t GraphEpoch() const;
 
   // Yaw observation (COG or mag). sigma_yaw is rad. `robust` should be
   // true for magnetometer yaw (uncalibrated / heading-dependent bias),
@@ -166,7 +190,8 @@ public:
 
   // Tick: if at least node_period_s has elapsed since the last node,
   // create a new node + factors and run iSAM2. Returns the new tick
-  // output, or nullopt if no node was created this call.
+  // output, or nullopt if no node was created this call. Accepted stamped GNSS
+  // can still revise LatestSnapshot without creating a node or consuming motion.
   std::optional<TickOutput> Tick(double now_s);
 
   // Read-only accessors (snapshot of current state).
@@ -213,12 +238,23 @@ public:
                    double sigma_xy,
                    double sigma_theta);
 
-  // Reset iSAM2 with the current optimized values as tight priors,
-  // dropping every accumulated factor. Bounds the
-  // per-tick update cost on long sessions where factor count grows
-  // unbounded. Call periodically (e.g. every 2000 nodes); pose
-  // estimates and the variable set are preserved.
+  // Yaw-only anchor on a live node (YawUnaryFactor): corrects the heading
+  // without pinning XY to a position estimated under the wrong heading. Used by
+  // the 180° COG flip recovery.
+  void AnchorYaw(uint64_t node_index, double yaw, double sigma_theta);
+
+  // Rebuild iSAM2 from the current estimate, dropping every accumulated
+  // factor so per-tick cost stays bounded on long sessions. The kept window is
+  // re-linked by odometry-strength between-factors reconstructed from the
+  // estimate, and only the newest node carries an absolute prior — its full
+  // marginal covariance — so the published uncertainty is preserved and a
+  // delayed fix on an older node still reaches the head. Pose estimates and
+  // the variable set inside the window are preserved.
   void RebaseISAM2();
+
+  // Existing node budget also bounds successful measurement updates. Markers
+  // advance only after a successful rebuild; failure remains eligible to retry.
+  bool RebaseDue(uint64_t budget) const;
 
   // Apply a map-frame correction to every live pose and rebuild their priors.
   // Used at dock arrival to align the trajectory with the calibrated dock pose.
@@ -254,6 +290,7 @@ public:
   void Reset();
 
 private:
+  friend struct GraphManagerTestAccess;
   // Reset() body without taking mu_ — for callers that already hold the lock
   // (e.g. the iSAM2 indeterminate-system catch inside ApplyIsamUpdateLocked).
   void ResetLocked();
@@ -295,6 +332,8 @@ private:
       double sigma;
       bool robust;
       std::optional<uint64_t> target_node;
+      uint64_t ingestion_token = 0;
+      std::optional<gtsam::Vector2> antenna_in_node;
     };
     struct Yaw
     {
@@ -361,6 +400,16 @@ private:
   // throttle that O(N) call without losing covariance freshness on
   // the diagnostics + odom outputs.
   int ticks_since_cov_ = 0;
+  std::atomic<uint64_t> graph_epoch_{0};
+  uint64_t applied_gnss_token_ = 0;
+  uint64_t applied_gnss_revision_ = 0;
+  void InvalidateGnssSupportLocked();
+  void AcknowledgeGnssLocked(uint64_t token);
+  uint64_t estimate_revision_ = 0;  // never reset: distinguish re-seeded node IDs
+  uint64_t successful_updates_ = 0;  // never reset
+  uint64_t rebased_updates_ = 0;
+  uint64_t rebased_nodes_ = 0;
+  uint64_t successful_rebases_ = 0;
 
   // Health counters surfaced via Stats(). All bumps go through the
   // Record*() mutators below so mu_ wraps them — Stats() makes a
@@ -415,6 +464,7 @@ private:
   // rebase_pending_factors_ / rebase_pending_values_ when
   // rebase_in_progress_ is true.
   bool rebase_in_progress_ = false;
+  uint64_t rebase_generation_ = 0;  // invalidate workers on reset / rigid transform
   gtsam::NonlinearFactorGraph rebase_pending_factors_;
   gtsam::Values rebase_pending_values_;
 
@@ -427,6 +477,22 @@ private:
   // ResetLocked() mid-node — the caller (Tick) must NOT publish a node
   // (the graph is empty; a node would carry the datum-origin pose).
   std::optional<TickOutput> CreateNodeLocked(double now_s);
+
+  // Rebase graph from an estimate snapshot (see RebaseISAM2). Pure w.r.t.
+  // the live graph: reads only params_ and its arguments.
+  void BuildRebaseGraph(const gtsam::Values& estimate,
+                        uint64_t cutoff_index,
+                        std::optional<uint64_t> head_index,
+                        const std::optional<Eigen::Matrix3d>& head_cov,
+                        gtsam::NonlinearFactorGraph& fg,
+                        gtsam::Values& kept) const;
+
+  bool WheelStationaryLocked() const;
+  bool TrulyStationaryLocked() const;
+  bool AddQueuedGnssFactorLocked(gtsam::NonlinearFactorGraph& factors,
+                                 std::optional<uint64_t> new_node = std::nullopt);
+  void ApplyQueuedGnssLocked();
+  void RefreshLatestLocked(uint64_t node_index, double timestamp);
 
   // Internal — wrap isam_.update so any factors/values added while an
   // async rebase is in progress are also captured in the pending

@@ -192,9 +192,13 @@ ARG DEBIAN_FRONTEND=noninteractive
 COPY ros2/lyrical-vendor-packages.txt /tmp/vendor-packages.txt
 RUN apt-get update && xargs apt-get install -y --no-install-recommends < /tmp/vendor-packages.txt
 COPY --from=lyrical-vendor /opt/lyrical_vendor /opt/lyrical_vendor
-ENV AMENT_PREFIX_PATH=/opt/lyrical_vendor
-ENV CMAKE_PREFIX_PATH=/opt/lyrical_vendor
-ENV LD_LIBRARY_PATH=/opt/lyrical_vendor/lib
+# Do NOT preset AMENT_PREFIX_PATH / CMAKE_PREFIX_PATH / LD_LIBRARY_PATH to the
+# overlay here (issue #1121). Sourcing /opt/ros/lyrical/setup.bash afterwards
+# PREPENDS the stock paths, and the overlay's local_setup.bash will not move an
+# entry that is already present, so the stock libnav2_costmap_2d_core.so won
+# and #1058's patched copy was never loaded. Every consumer (entrypoint, build
+# stage, the workspace setup.bash chain) sources the overlay AFTER ROS instead,
+# which puts it first; check_vendor_overlay.sh in the runtime stage pins that.
 
 # LOCAL-ONLY (do not commit): this Docker host has no IPv6 route, so apt's
 # default IPv6-first to ports.ubuntu.com times out. Force IPv4 for all apt in
@@ -510,6 +514,12 @@ ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 COPY ros2/scripts/ros2_entrypoint.sh /ros2_entrypoint.sh
 RUN chmod +x /ros2_entrypoint.sh
 
+# Fail the image build if, in the entrypoint's environment, a Nav2 consumer
+# resolves an overlay-overridden library to the stock /opt/ros copy (#1121).
+COPY ros2/scripts/check_vendor_overlay.sh /ros2_ws/scripts/check_vendor_overlay.sh
+RUN chmod +x /ros2_ws/scripts/check_vendor_overlay.sh \
+ && /ros2_entrypoint.sh /ros2_ws/scripts/check_vendor_overlay.sh
+
 # Mow-session monitor — runs alongside the live stack to record a full
 # state timeline per mowing test (see CLAUDE.md "Mowing Session Monitoring").
 COPY ros2/scripts/mow_session_monitor.py /ros2_ws/scripts/mow_session_monitor.py
@@ -527,11 +537,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-lyrical-controller-manager
 WORKDIR /webots_ws
 RUN mkdir src && chown -R ubuntu:ubuntu /webots_ws
+# Round the upstream simulation epoch to nanoseconds; float-second truncation
+# can leave TF exactly 1 ns behind the next clock tick and cause false stops.
+COPY --chown=ubuntu:ubuntu ros2/patches/webots-supervisor-clock.patch /tmp/webots-supervisor-clock.patch
 USER ubuntu
 RUN git init -q src/webots_ros2 \
  && git -C src/webots_ros2 fetch --depth 1 https://github.com/cyberbotics/webots_ros2.git db4a77c84ee91445d39de9a631e5b57a888814e2 \
  && git -C src/webots_ros2 checkout -q --detach FETCH_HEAD \
  && git -C src/webots_ros2 submodule update --init --recursive \
+ && git -C src/webots_ros2 apply /tmp/webots-supervisor-clock.patch \
  && sed -i 's/CMAKE_CXX_STANDARD 17/CMAKE_CXX_STANDARD 20/' src/webots_ros2/webots_ros2_driver/CMakeLists.txt
 RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash && MAKEFLAGS=-j3 colcon build \
     --merge-install --packages-up-to webots_ros2_control --parallel-workers 2 \
@@ -548,7 +562,7 @@ RUN /bin/bash -c 'source /opt/ros/lyrical/setup.bash && MAKEFLAGS=-j3 colcon bui
 # target remains architecture-neutral, while this simulator target fails early
 # and clearly on unsupported Linux architectures.
 # =============================================================================
-FROM runtime AS simulation
+FROM runtime AS simulation-base
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
@@ -626,3 +640,16 @@ EXPOSE 8765
 EXPOSE 6080
 
 CMD ["ros2", "launch", "mowgli_bringup", "sim_full_system.launch.py", "headless:=true", "use_rviz:=false"]
+
+# Test the installed module AND executable from the complete simulator image.
+# Keep pytest and regression sources out of the distributed simulation target.
+FROM simulation-base AS simulation-clock-test
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pytest \
+ && rm -rf /var/lib/apt/lists/*
+COPY --chown=ubuntu:ubuntu ros2/src/mowgli_simulation/test/test_webots_supervisor_clock.py /opt/mowgli-tests/test_webots_supervisor_clock.py
+ENV MOWGLI_REQUIRE_WEBOTS_DRIVER=1 PYTHONDONTWRITEBYTECODE=1 USER=ubuntu
+USER ubuntu
+CMD ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "/opt/mowgli-tests/test_webots_supervisor_clock.py", "--junitxml=/results/webots-clock.xml"]
+
+# Preserve the public build target and default image, including its launch CMD.
+FROM simulation-base AS simulation

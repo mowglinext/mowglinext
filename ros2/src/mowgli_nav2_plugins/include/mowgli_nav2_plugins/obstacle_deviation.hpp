@@ -54,11 +54,22 @@ struct BoundaryGuard
   double ty{0.0};
   double cos_yaw{1.0};
   double sin_yaw{0.0};
+  /// The zone is UNKNOWN (no global costmap yet, or no transform to it): every
+  /// point counts as out of zone, so no candidate may leave the planned line.
+  /// Obstacle detection on the line itself is unaffected.
+  bool deny_all{false};
 
-  /// Is the sample-frame point (x, y) lethal-or-inscribed in this costmap
-  /// (i.e. out-of-zone)? Applies the affine above, then thresholds at
-  /// ObstacleDeviation::kLethalThreshold (zone cells are stamped LETHAL).
-  /// Always false when `costmap == nullptr` or the point is off the grid.
+  /// Does this guard constrain anything at all?
+  bool active() const
+  {
+    return deny_all || costmap != nullptr;
+  }
+
+  /// Is the sample-frame point (x, y) out of zone? Applies the affine above,
+  /// then thresholds at ObstacleDeviation::kLethalThreshold (the controller
+  /// binarises the global costmap: OccupancyGrid >= 99 -> lethal). Always true
+  /// with `deny_all`; false when `costmap == nullptr` or the point is off the
+  /// grid.
   bool isLethalAt(double x, double y) const;
 };
 
@@ -212,8 +223,8 @@ public:
   /// from `initial_deviation` and growing in `step` increments up to
   /// `max_deviation`. Sign is preserved from `initial_deviation` (or chosen
   /// fresh by chooseDeviationSide if 0). Returns the chosen deviation, or
-  /// the unchanged max-magnitude value if no clearance found (caller checks
-  /// |result| > max_deviation - step). `guard` and `footprint` are forwarded
+  /// sign * (max_deviation + step) if no clearance is found (caller checks
+  /// |result| > max_deviation). `guard` and `footprint` are forwarded
   /// to the offset clearance checks.
   static double growDeviationUntilClear(const nav2_costmap_2d::Costmap2D& costmap,
                                         const std::vector<geometry_msgs::msg::PoseStamped>& path,

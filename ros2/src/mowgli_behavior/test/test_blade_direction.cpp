@@ -21,16 +21,29 @@
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "mowgli_behavior/blade_control_service.hpp"
 #include "mowgli_behavior/blade_direction.hpp"
+#include "mowgli_behavior/coverage_entry.hpp"
 #include "mowgli_behavior/coverage_nodes.hpp"
 #include "mowgli_behavior/status_nodes.hpp"
 #include "mowgli_behavior/utility_nodes.hpp"
 #include "mowgli_interfaces/srv/blade_control.hpp"
 #include "tf2_ros/buffer.hpp"
+#include "visualization_msgs/msg/marker_array.hpp"
 #include <gtest/gtest.h>
 
 using namespace mowgli_behavior;
 using MowerControl = mowgli_interfaces::srv::MowerControl;
 using BladeControl = mowgli_interfaces::srv::BladeControl;
+namespace mowgli_behavior
+{
+struct FollowStripOutcomeTestAccess
+{
+  static bool entryComplete(const FollowStrip& strip)
+  {
+    return !strip.transit_active_ && strip.transit_outcome_ &&
+           strip.transit_outcome_->Get() == GoalOutcome::kSucceeded;
+  }
+};
+}  // namespace mowgli_behavior
 
 TEST(BladeDirection, DisabledAlwaysRequestsDefaultAcrossSessions)
 {
@@ -84,9 +97,12 @@ protected:
   std::shared_ptr<BTContext> ctx;
   BT::Blackboard::Ptr blackboard;
   BT::BehaviorTreeFactory factory;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr geometry_pub;
   rclcpp::Node::SharedPtr server;
   rclcpp::Service<MowerControl>::SharedPtr blade_service;
   rclcpp_action::Server<FollowStrip::Nav2FollowPath>::SharedPtr follow_server;
+  rclcpp_action::Server<FollowStrip::Nav2Navigate>::SharedPtr navigate_server;
+  std::size_t entry_goals{0};
   rclcpp::executors::SingleThreadedExecutor executor;
   std::vector<MowerControl::Request> requests;
   std::unique_ptr<BladeControlService> operator_service;
@@ -115,6 +131,10 @@ protected:
   void SetUp() override
   {
     ctx = std::make_shared<BTContext>();
+    ctx->coverage_precision_ready = []
+    {
+      return true;
+    };  // mocked precision-support module
     ctx->node = rclcpp::Node::make_shared("blade_direction_test");
     // FollowStrip::onStart measures the gap to the first unit through the TF
     // buffer (blade spin-up deferral, ae6d5780) and dereferences it without a
@@ -128,6 +148,16 @@ protected:
     map_to_base.child_frame_id = "base_footprint";
     map_to_base.transform.rotation.w = 1.0;
     ctx->tf_buffer->setTransform(map_to_base, "blade_direction_test", /*is_static=*/true);
+    for (const auto [x, y] : {std::pair{-5.0f, -5.0f},
+                              std::pair{30.0f, -5.0f},
+                              std::pair{30.0f, 30.0f},
+                              std::pair{-5.0f, 30.0f}})
+    {
+      geometry_msgs::msg::Point32 point;
+      point.x = x;
+      point.y = y;
+      ctx->current_area_polygon.points.push_back(point);
+    }
     ctx->blade_auto_reverse = true;
     ctx->blade_direction = BladeDirection(42);
     // Start in a reverse session so a silently-defaulted direction field fails.
@@ -142,6 +172,25 @@ protected:
     factory.registerNodeType<EndSession>("EndSession");
     factory.registerNodeType<ClearCommand>("ClearCommand");
     server = rclcpp::Node::make_shared("fake_blade_hardware");
+    geometry_pub = server->create_publisher<visualization_msgs::msg::MarkerArray>(
+        "/map_server_node/transit_geometry", rclcpp::QoS(1).reliable().transient_local());
+    visualization_msgs::msg::MarkerArray geometry;
+    visualization_msgs::msg::Marker ring;
+    ring.header.frame_id = "map";
+    ring.ns = "area";
+    ring.text = "mowing";
+    ring.type = ring.LINE_STRIP;
+    ring.action = ring.ADD;
+    ring.pose.orientation.w = 1;
+    for (const auto& point : ctx->current_area_polygon.points)
+    {
+      geometry_msgs::msg::Point p;
+      p.x = point.x;
+      p.y = point.y;
+      ring.points.push_back(p);
+    }
+    geometry.markers.push_back(ring);
+    geometry_pub->publish(geometry);
     blade_service = server->create_service<MowerControl>(
         "/hardware_bridge/mower_control",
         [this](const std::shared_ptr<MowerControl::Request> req,
@@ -162,6 +211,24 @@ protected:
           return rclcpp_action::CancelResponse::ACCEPT;
         },
         [](const auto&) {});
+    navigate_server = rclcpp_action::create_server<FollowStrip::Nav2Navigate>(
+        server,
+        "/navigate_to_pose",
+        [](const auto&, const auto&)
+        {
+          return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+        },
+        [](const auto&)
+        {
+          return rclcpp_action::CancelResponse::ACCEPT;
+        },
+        [this](const auto& handle)
+        {
+          ++entry_goals;
+          EXPECT_DOUBLE_EQ(handle->get_goal()->pose.pose.position.x, 0.0);
+          EXPECT_DOUBLE_EQ(handle->get_goal()->pose.pose.position.y, 0.0);
+          handle->succeed(std::make_shared<FollowStrip::Nav2Navigate::Result>());
+        });
     operator_service = std::make_unique<BladeControlService>(*ctx->node, ctx);
     operator_client = server->create_client<BladeControl>("/blade_direction_test/blade_control");
     ASSERT_TRUE(operator_client->wait_for_service(std::chrono::seconds(5)));
@@ -176,6 +243,52 @@ protected:
     return factory.createTreeFromText("<root BTCPP_format=\"4\"><BehaviorTree ID=\"Test\">" + body +
                                           "</BehaviorTree></root>",
                                       blackboard);
+  }
+
+  // Start coverage up to its first mowing-intent request, checking the setup
+  // OFFs carry the selected direction, and leave that request for the direction
+  // assertions below.
+  void startCheckedCoverage(BT::Tree& coverage, uint8_t direction)
+  {
+    // Direction is under test here, not entry (test_follow_strip_dig covers
+    // that). Consume the permission snapshot BEFORE the first tick so the axle
+    // (map origin) is contained: FollowStrip then takes the nearby first unit
+    // directly, with no blade-off entry transit (as before #1084).
+    std::shared_ptr<CoverageEntryGeometry> geometry;
+    if (!blackboard->get("_coverage_entry_geometry", geometry) || !geometry)
+    {
+      geometry = CoverageEntryGeometry::create(ctx->node);
+      blackboard->set("_coverage_entry_geometry", geometry);
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!geometry->contains(0.0, 0.0) && std::chrono::steady_clock::now() < deadline)
+    {
+      executor.spin_some();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(geometry->contains(0.0, 0.0));
+    const auto before = entry_goals;
+    // Tick until the request after the setup OFFs (the ON, or its operator-OFF
+    // override) is out; stop there, before the legacy readiness timer dispatches
+    // to the rejecting fake follow server.
+    const auto off_then_next = [&]
+    {
+      return requests.size() >= 2;
+    };
+    while (!off_then_next() && std::chrono::steady_clock::now() < deadline)
+    {
+      ASSERT_EQ(coverage.tickOnce(), BT::NodeStatus::RUNNING);
+      executor.spin_some();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_TRUE(off_then_next());
+    EXPECT_EQ(entry_goals, before);  // contained nearby first unit: no entry transit
+    for (std::size_t i = 0; i + 1 < requests.size(); ++i)
+    {
+      EXPECT_EQ(requests[i].mow_enabled, 0u);
+      EXPECT_EQ(requests[i].mow_direction, direction);
+    }
+    requests.erase(requests.begin(), requests.end() - 1);
   }
 
   void expectRequest(uint8_t enabled, uint8_t direction)
@@ -205,12 +318,12 @@ TEST_F(BladeDirectionNodes, ManualCoverageAndStopRequestsShareDirection)
   ctx->current_strip_path.poses.resize(2);
   ctx->current_strip_path.poses[1].pose.position.x = 1.0;
   auto coverage = tree("<FollowStrip/>");
-  EXPECT_EQ(coverage.tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_NO_FATAL_FAILURE(startCheckedCoverage(coverage, 1u));
   expectRequest(1u, 1u);
   coverage.haltTree();
   expectRequest(0u, 1u);
   // Re-entering after a pause/recharge must retain direction.
-  EXPECT_EQ(coverage.tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_NO_FATAL_FAILURE(startCheckedCoverage(coverage, 1u));
   expectRequest(1u, 1u);
   coverage.haltTree();
   expectRequest(0u, 1u);
@@ -245,7 +358,7 @@ TEST_F(BladeDirectionNodes, MenuOverridesRandomChoiceAndOffSurvivesTicksAndCover
   ctx->current_strip_path.poses.resize(2);
   ctx->current_strip_path.poses[1].pose.position.x = 1.0;
   auto coverage = tree("<FollowStrip/>");
-  EXPECT_EQ(coverage.tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_NO_FATAL_FAILURE(startCheckedCoverage(coverage, 0u));
   expectRequest(0u, 0u);
   operatorCommand(1u, 1u);
   expectRequest(1u, 1u);
@@ -254,7 +367,7 @@ TEST_F(BladeDirectionNodes, MenuOverridesRandomChoiceAndOffSurvivesTicksAndCover
   // An explicit ON cannot override the tree's transit/guard OFF.
   operatorCommand(1u, 0u);
   expectRequest(0u, 0u);
-  EXPECT_EQ(coverage.tickOnce(), BT::NodeStatus::RUNNING);
+  ASSERT_NO_FATAL_FAILURE(startCheckedCoverage(coverage, 0u));
   expectRequest(1u, 0u);
   coverage.haltTree();
   expectRequest(0u, 0u);

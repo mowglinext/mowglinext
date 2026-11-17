@@ -141,6 +141,31 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// SetGotoOutcome
+// ---------------------------------------------------------------------------
+/// Records how the running GOTO ended (BTContext::goto_outcome), for the ~/goto
+/// action result. Placed right before each terminal GOTO status in main_tree.xml,
+/// so the result does not depend on which status was published last. Port:
+/// outcome — REACHED, FAILED, LOW_BATTERY_DOCKED, LOW_BATTERY_DOCK_FAILED or
+/// CRITICAL_BATTERY_DOCKED. Always SUCCESS: an unknown value is logged and
+/// ignored, so reporting never changes the outcome of the branch it sits in.
+class SetGotoOutcome : public BT::SyncActionNode
+{
+public:
+  SetGotoOutcome(const std::string& name, const BT::NodeConfig& config)
+      : BT::SyncActionNode(name, config)
+  {
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<std::string>("outcome", "how the GOTO ended")};
+  }
+
+  BT::NodeStatus tick() override;
+};
+
+// ---------------------------------------------------------------------------
 // MarkGuardHalt
 // ---------------------------------------------------------------------------
 

@@ -116,36 +116,12 @@ services:
         if __name__ == "__main__":
             main()
     healthcheck:
+      # Process liveness only — a periodic rclpy probe joins the DDS graph every
+      # 30 s and its discovery burst stalls the LiDAR stream (see
+      # docker-compose.gps.yml). Idle (no NTRIP) runs `sleep infinity`: healthy.
       test:
-        - CMD
-        - /usr/local/bin/universal-gnss-entrypoint
-        - python3
-        - -c
-        - |
-          import pathlib
-          import sys
-          import rclpy
-          from std_srvs.srv import Trigger
-
-          flag = pathlib.Path("/run/universal_gnss/ntrip_enabled")
-          if not flag.exists():
-              raise SystemExit(0)
-
-          rclpy.init()
-          node = rclpy.create_node("mowgli_gnss_mavros_healthcheck")
-          client = node.create_client(Trigger, "/universal_gnss_ntrip/get_health")
-          try:
-              if not client.wait_for_service(timeout_sec=2.0):
-                  raise SystemExit(1)
-              future = client.call_async(Trigger.Request())
-              rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
-              ok = (future.done() and future.exception() is None
-                    and future.result() is not None and future.result().success)
-              raise SystemExit(0 if ok else 1)
-          finally:
-              node.destroy_client(client)
-              node.destroy_node()
-              rclpy.shutdown()
+        - CMD-SHELL
+        - '[ ! -e /run/universal_gnss/ntrip_enabled ] || pgrep -x ntrip_node >/dev/null'
       interval: 30s
       timeout: 12s
       start_period: 20s

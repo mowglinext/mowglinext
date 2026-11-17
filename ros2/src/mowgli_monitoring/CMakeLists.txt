@@ -19,6 +19,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(action_msgs REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -83,6 +85,8 @@ target_include_directories(mowgli_monitoring_core
 
 target_link_libraries(mowgli_monitoring_core
   ${rclcpp_TARGETS}
+  ${rclcpp_action_TARGETS}
+  ${action_msgs_TARGETS}
   ${diagnostic_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   ${std_msgs_TARGETS}
@@ -226,6 +230,13 @@ if(BUILD_TESTING)
   target_link_libraries(test_mqtt_publish_policy
     ${diagnostic_msgs_TARGETS}
   )
+  # MQTT GOTO: the mqtt_goto.hpp helpers, then the bridge against a fake ~/goto server.
+  ament_add_ros_isolated_gtest(test_mqtt_goto
+    test/test_mqtt_goto.cpp
+    TIMEOUT 120
+  )
+  target_link_libraries(test_mqtt_goto mowgli_monitoring_core ${rclcpp_action_TARGETS})
+
   ament_add_ros_isolated_gtest(test_mqtt_map_poll
     test/test_mqtt_map_poll.cpp
   )

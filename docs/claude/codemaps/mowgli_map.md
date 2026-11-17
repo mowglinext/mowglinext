@@ -17,6 +17,12 @@ Map edits publish an empty keepout mask until the settled raster is ready; the l
 Transit geometry snapshots and dock/obstacle rings are published by
 `costmap_filters.cpp::publish_transit_geometry` after the complete keepout mask.
 `area_manager.cpp` invalidates snapshots while recorded geometry is edited.
+Each ring goes through `ring_repair.hpp::repair_ring` first: its consumers
+(`MowingGeometry::parse` in the BT entry check, the entry goal checker, FTC) reject the
+WHOLE snapshot on one invalid ring, so a few-cm recording zigzag (a self-crossing loop
+with perimeter <= 0.5 m) is removed before publishing; a larger crossing is published
+as recorded with an ERROR (field 2026-11-09: one zigzag made every transit spin until
+its bound). Only the published snapshot is repaired, never `areas.dat`.
 | Task | Start here |
 |------|------------|
 | Add / rename a `map_server_node` publisher, subscriber, service or parameter | `ros2/src/mowgli_map/src/map_server_node.cpp` constructor `MapServerNode::MapServerNode` (L51-493); members in `include/mowgli_map/map_server_node.hpp` (L515-889) |
@@ -106,6 +112,7 @@ Transit geometry snapshots and dock/obstacle rings are published by
 | `~/replan_needed` | `std_msgs/Bool` | pub | depth 1 | `mowgli_behavior/src/behavior_tree_node.cpp` L233 |
 | `~/boundary_violation` | `std_msgs/Bool` | pub (every odom tick) | depth 1 | `behavior_tree_node.cpp` L248; `ros2/src/e2e_test.py` L209 |
 | `~/lethal_boundary_violation` | `std_msgs/Bool` | pub (every odom tick) | depth 1 | `behavior_tree_node.cpp` L262 |
+| `~/outside_area` | `std_msgs/Bool` | pub (every odom tick, `check_boundary_violation`) | depth 1 | raw "outside every area" for the reverse gates (`FTCController`, `hardware_bridge_node` dig escape) |
 | `~/docking_pose` | `geometry_msgs/PoseStamped` | pub | depth 1, transient_local | GUI `gui/pkg/providers/ros.go` L360 |
 | `/map` | `nav_msgs/OccupancyGrid` | sub → occupancy layer | depth 1 | **no publisher in `ros2/src`** (dead input; see Pitfalls) |
 | `/hardware_bridge/status` | `mowgli_interfaces/Status` | sub | depth 1 | `mow_enabled`, `mower_esc_status`, `mower_motor_rpm`, `blade_status_stamp`, `is_charging` |
@@ -216,7 +223,7 @@ All node tests call handlers directly through the `*_for_test` accessors (`map_s
 - `/map` is subscribed by both nodes but nothing in `ros2/src` publishes it (only `/no_lidar_static_map` from `mowgli_bringup/scripts/empty_static_map_pub.py`). The occupancy layer stays 0 and `obstacle_tracker::on_map` never runs; the tracker's live source is `/global_costmap/costmap` + `_updates`.
 - `speed_mask_pub_`, `speed_filter_info_pub_`, `grid_map_pub_` are declared (`map_server_node.hpp` L819-827) but never created; `publish_speed_mask` is declared (L473) with **no definition** — calling it is a link error. No speed mask or `~/grid_map` topic exists.
 - `keepout_nav_margin` is dead while `lethal_outside_areas=true` (default); the outside band is `enforce_boundary_margin_m` at cost 50 (`costmap_filters.cpp` L44, L97-98). Since 2026-09-17 that width is floored at the chassis circumscribed radius (0.597 m shipped, was effectively the 0.40 launch fallback), so the traversable band now extends PAST `lethal_boundary_margin_m` (0.5 m): a plan that actually puts the robot centre in the outer 0.1 m of the band would trip `/lethal_boundary_violation` and `BoundaryGuard`'s emergency stop. Only `kSoftPenaltyMaskCost` (mid-cost, never free) keeps the planner out of there — watch it in the field. Setting `lethal_outside_areas=false` only swaps the band WIDTH to `keepout_nav_margin`; the band cost stays 50 in both branches, never free (the "free band" wording in `map_server.yaml` L76/L93 and `costmap_filters.cpp` L96 is stale).
-- Dock corridor carve-out forces cells to 0 AFTER obstacle/no-go passes (`costmap_filters.cpp` L340-364). The dock body is `OBSTACLE_PERMANENT` in the classification layer (`area_manager.cpp` L1761-1773) but the mask overlay only lifts `NO_GO_ZONE` (L318-332) — the body is not lethal in `/keepout_mask` by itself. It IS a forbidden ring in `/map_server_node/transit_geometry` (`publish_transit_geometry`), under its own marker namespace `dock_body` (margin 0) so the transit planner can let a START inside it plan its way out while goals and paths keep it forbidden (field 2026-10-16: a unit ended 0.5 m in front of the dock and every transit was `START_OCCUPIED`).
+- The dock body lies ON the station: `-dock_body_rear_m` to `length - rear` along +x of the dock pose (`rebuild_dock_polygons`, extents injected from `robot_config_util.dock_body_extents`). Until 2026-11 it lay BEHIND the docked robot, on the lawn. It is lethal in `/keepout_mask` with the obstacle body band (stamped just before the corridor carve-out, which then reopens the corridor; the `OBSTACLE_PERMANENT` classification is only a label, the mask overlay reads `NO_GO_ZONE`), and a forbidden ring in `/map_server_node/transit_geometry` under its own marker namespace `dock_body` (margin = `keepout_obstacle_margin_m_`, `scale.y` = dock pose ahead of the rear edge), so the transit planner can let a START in the zone plan its way out while goals and paths keep it forbidden (field 2026-10-16: START_OCCUPIED after a stop near the dock). `coverage_server` reads the same ring. It never appears in `get_mowing_area` obstacles: the GUI saves those back into `areas.dat`.
 - `resize_map_to_areas` reallocates and wipes CLASSIFICATION (`area_manager.cpp` L243-253); always follow with `apply_area_classifications` (as `on_add_area` does, L534-539).
 - `apply_promoted_obstacle` and `apply_area_classifications` take `map_mutex_` themselves (`progress_tracker.cpp` L278-283) — calling either with the lock held deadlocks. `on_obstacles` collects under lock then applies outside (`map_server_node.cpp` L779-790).
 - Centroid dedup ε 0.10 m (`internal_helpers.hpp` L41) makes promotion / reload idempotent but also collapses two genuinely distinct keepouts closer than 10 cm.

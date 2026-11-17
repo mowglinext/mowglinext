@@ -296,8 +296,19 @@ TEST(IncompleteResumeTree, OnlyTheUnfinishedEndingsKeepTheProgress)
   {
     ++keep;
   }
-  // FailedCoverageDock and HomeSequence.
-  EXPECT_EQ(keep, 2u);
+  // FailedCoverageDock, HomeSequence and BatteryGuard's LowBatteryDockFailed (#866).
+  EXPECT_EQ(keep, 3u);
+
+  // A low-battery dock that fails twice did not finish the mow either: it keeps the progress.
+  const auto low_battery_failed = tree.find("name=\"LowBatteryDockFailed\"");
+  ASSERT_NE(low_battery_failed, std::string::npos);
+  const auto low_battery_end = tree.find("<EndSession", low_battery_failed);
+  ASSERT_NE(low_battery_end, std::string::npos);
+  EXPECT_LT(low_battery_end, tree.find("</Sequence>", low_battery_failed));
+  EXPECT_EQ(tree.compare(low_battery_end,
+                         std::string("<EndSession keep_incomplete=\"true\"/>").size(),
+                         "<EndSession keep_incomplete=\"true\"/>"),
+            0);
 
   // The normal-completion ending must keep wiping: find CoverageCompleteDock's EndSession.
   const auto complete = tree.find("name=\"CoverageCompleteDock\"");

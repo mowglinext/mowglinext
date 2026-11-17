@@ -183,9 +183,45 @@ def test_a_charging_peer_on_our_way_out_is_never_dock_infrastructure() -> None:
     assert fleet.classify_docked_peer(behind_us, DOCK, DOCK, GEO) is fleet.DockNeighbour.BLOCKS_RAIL
 
 
-def test_bodies_about_to_touch_bring_the_neighbour_back() -> None:
+def test_bodies_about_to_touch_bring_the_neighbour_back_driving_in() -> None:
     drifted = fleet.Pose2D(0.0, 0.07, 0.0)  # 6 mm left between the chassis
-    assert fleet.classify_docked_peer(NEIGHBOUR, drifted, DOCK, GEO) is fleet.DockNeighbour.TOO_CLOSE
+    assert (
+        fleet.classify_docked_peer(NEIGHBOUR, drifted, DOCK, GEO, driving_forward=True)
+        is fleet.DockNeighbour.TOO_CLOSE
+    )
+
+
+def test_bodies_about_to_touch_never_refuse_a_straight_reverse_out() -> None:
+    drifted = fleet.Pose2D(0.0, 0.07, 0.0)
+    assert fleet.classify_docked_peer(NEIGHBOUR, drifted, DOCK, GEO) is fleet.DockNeighbour.DOCK_INFRASTRUCTURE
+
+
+def _pose_on_dock_axes(dock: "fleet.Pose2D", along: float, left: float, yaw_error: float) -> "fleet.Pose2D":
+    c, s = math.cos(dock.yaw), math.sin(dock.yaw)
+    return fleet.Pose2D(dock.x + c * along - s * left, dock.y + s * along + c * left, dock.yaw + yaw_error)
+
+
+def test_field_2026_11_03_a_swerved_reverse_keeps_going() -> None:
+    # Recorded: docks 0.526 m apart, the peer on our right; reversing 0.18 m swung the heading
+    # 7.3 deg, nose toward it. The bare chassis then read < 2 cm, the block came back into our
+    # footprint: collision_monitor stopped the BackUp and every retry was refused.
+    dock = fleet.Pose2D(-3.463, 1.422, -1.3439)
+    peer = _pose_on_dock_axes(dock, 0.107, -0.526, 0.0)
+    swerved = fleet.Pose2D(-3.516, 1.568, dock.yaw - math.radians(7.3))
+    body = fleet.polygon_clearance(
+        fleet.footprint_corners(peer, GEO.body), fleet.footprint_corners(swerved, GEO.body)
+    )
+    assert body < 0.02
+    assert fleet.classify_docked_peer(peer, swerved, dock, GEO) is fleet.DockNeighbour.DOCK_INFRASTRUCTURE
+
+
+def test_a_reverse_that_would_close_on_the_neighbour_is_still_refused() -> None:
+    # Same site, heading swung the other way: reversing swings the tail into the peer.
+    dock = fleet.Pose2D(0.0, 0.0, 0.0)
+    peer = _pose_on_dock_axes(dock, 0.0, -0.48, 0.0)
+    tail_in = fleet.Pose2D(0.0, 0.0, math.radians(10.0))
+    assert fleet.reversing_closes_on(peer, tail_in, GEO.body)
+    assert fleet.classify_docked_peer(peer, tail_in, dock, GEO) is fleet.DockNeighbour.TOO_CLOSE
 
 
 def test_off_our_dock_rail_the_neighbour_is_a_full_obstacle() -> None:
@@ -216,3 +252,17 @@ def test_is_listed_docked_matches_the_same_pose_only() -> None:
     assert fleet.is_listed_docked(peer, [fleet.Pose2D(1.02, 2.0, 0.52)])
     assert not fleet.is_listed_docked(peer, [fleet.Pose2D(1.2, 2.0, 0.5)])  # another robot
     assert not fleet.is_listed_docked(peer, [fleet.Pose2D(1.0, 2.0, 0.9)])  # same spot, other heading
+
+
+def test_a_reverse_straight_at_a_peer_behind_us_is_still_refused() -> None:
+    # Same heading, peer right behind: its axis distance never changes, the gap does.
+    dock = fleet.Pose2D(0.0, 0.0, 0.0)
+    close_behind = fleet.Pose2D(-0.61, 0.0, 0.0)
+    assert fleet.reversing_closes_on(close_behind, dock, GEO.body)
+
+
+def test_the_too_close_guard_needs_fresh_odometry_to_stand_down() -> None:
+    assert not fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=9.9, hold_until=5.0)
+    assert fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=9.9, hold_until=12.0), "held after motion"
+    assert fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=8.0, hold_until=5.0), "stale"
+    assert fleet.not_reversing_out(now=10.0, wheel_odom_seen_at=-math.inf, hold_until=-math.inf), "never seen"

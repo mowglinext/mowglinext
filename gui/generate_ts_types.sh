@@ -91,6 +91,19 @@ float32 range_max
 float32[] ranges
 float32[] intensities
 MSG
+cat > "$STD_MSGS/sensor_msgs/NavSatStatus.msg" <<'MSG'
+int8 status
+uint16 service
+MSG
+cat > "$STD_MSGS/sensor_msgs/NavSatFix.msg" <<'MSG'
+std_msgs/Header header
+NavSatStatus status
+float64 latitude
+float64 longitude
+float64 altitude
+float64[9] position_covariance
+uint8 position_covariance_type
+MSG
 cat > "$STD_MSGS/sensor_msgs/Imu.msg" <<'MSG'
 Quaternion orientation
 float64[9] orientation_covariance

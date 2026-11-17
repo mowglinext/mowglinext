@@ -64,7 +64,13 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_gnss_launch_config test/test_gnss_launch_config.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_sim_gps_quality_launch test/test_sim_gps_quality_launch.py
+    TIMEOUT 30
+  )
   ament_add_pytest_test(test_foxglove_launch_config test/test_foxglove_launch_config.py
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_sim_localization_geometry test/test_sim_localization_geometry.py
     TIMEOUT 30
   )
   # The GNSS sidecar's embedded launcher (install/compose/docker-compose.gps.yml)

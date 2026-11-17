@@ -40,6 +40,7 @@ void FusionGraphNode::SeedFromDockPose()
   if (!graph_->IsInitialized())
   {
     graph_->Initialize(pose, this->now().seconds());
+    SynchronizeSupportEpoch();
     t_map_odom_anchor_valid_ = false;
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: bootstrap init from dock pose "
@@ -75,22 +76,30 @@ void FusionGraphNode::SeedFromDockPose()
   const double dx = pose.x() - snap->pose.x();
   const double dy = pose.y() - snap->pose.y();
   const double offset = std::hypot(dx, dy);
+  // A pure yaw disagreement (e.g. the dock yaw was just re-calibrated) needs
+  // the rebuild too: the loose ForceAnchor below barely moves a chain-held yaw.
+  const double yaw_offset =
+      std::abs(gtsam::Rot2::fromAngle(pose.theta() - snap->pose.theta()).theta());
   constexpr double kRigidTransformThresholdM = 0.05;
-  if (offset > kRigidTransformThresholdM)
+  constexpr double kRigidTransformThresholdRad = 2.0 * M_PI / 180.0;
+  if (offset > kRigidTransformThresholdM || yaw_offset > kRigidTransformThresholdRad)
   {
     const gtsam::Pose2 correction = pose.compose(snap->pose.inverse());
     graph_->RigidTransformAll(correction, sigma_xy, sigma_theta);
+    SynchronizeSupportEpoch();
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: gauge reset to dock (%.2f, %.2f, %.1f°) — "
-                "rigid-transformed %.2f m offset",
+                "rigid-transformed %.2f m / %.1f° offset",
                 pose.x(),
                 pose.y(),
                 pose.theta() * 180.0 / M_PI,
-                offset);
+                offset,
+                yaw_offset * 180.0 / M_PI);
   }
   else
   {
     graph_->ForceAnchor(snap->node_index, pose, sigma_xy, sigma_theta);
+    SynchronizeSupportEpoch();
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: re-anchored at dock (%.2f, %.2f, %.1f°)",
                 pose.x(),

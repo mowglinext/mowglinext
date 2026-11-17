@@ -23,6 +23,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+
 namespace fusion_graph
 {
 
@@ -40,6 +43,26 @@ inline bool GpsJumpImplausible(double jump_m,
   const double expected_pivot_jump_m = lever_arm_radius_m * abs_dtheta_rad;
   const double jump_budget_m = max_jump_m + expected_pivot_jump_m + wheel_dist_m;
   return jump_m > jump_budget_m;
+}
+
+// Slack for GpsJumpImplausible: the fixed budget, or k times the combined
+// reported σ of the two fixes being compared, whichever is larger. Under
+// RTK-Fixed (σ ≈ 1 cm → 3·√2·0.01 ≈ 0.04 m) the fixed budget wins and nothing
+// changes; under RTK-Float (σ 5-30 cm) the epoch-to-epoch jitter of a parked
+// robot would otherwise exceed a fixed 8 cm and reject almost every sample.
+// A non-finite or non-positive σ contributes nothing.
+inline double WrongFixSlackM(double max_jump_m,
+                             double sigma_k,
+                             double sigma_prev_m,
+                             double sigma_now_m)
+{
+  const auto valid = [](double s)
+  {
+    return std::isfinite(s) && s > 0.0 ? s : 0.0;
+  };
+  const double k = std::isfinite(sigma_k) && sigma_k > 0.0 ? sigma_k : 0.0;
+  const double combined = std::hypot(valid(sigma_prev_m), valid(sigma_now_m));
+  return std::max(max_jump_m, k * combined);
 }
 
 // Unconditional post-fix reset of the bounded motion accumulators. Call this

@@ -165,3 +165,28 @@ TEST(RtkWrongFixGate, AccumulatorRunsAwayIfResetOnlyOnAccept)
   EXPECT_DOUBLE_EQ(runaway_wheel_dist_m, per_interval_wheel_travel_m * kNumFixes);
   EXPECT_GT(runaway_wheel_dist_m, bounded_wheel_dist_m);
 }
+
+// ── WrongFixSlackM ──────────────────────────────────────────────────────
+TEST(WrongFixSlackM, RtkFixedKeepsTheFixedBudget)
+{
+  // σ ≈ 1 cm on both fixes: 3·√2·0.01 ≈ 0.042 m < 0.08 m.
+  EXPECT_DOUBLE_EQ(fg::WrongFixSlackM(0.08, 3.0, 0.01, 0.01), 0.08);
+}
+
+TEST(WrongFixSlackM, RtkFloatScalesWithTheReportedPrecision)
+{
+  // σ 10 cm → 3·hypot(0.1, 0.1) ≈ 0.424 m: ordinary Float jitter on a parked
+  // robot (a 0.15 m epoch-to-epoch step) is no longer a "wrong-fix".
+  const double slack = fg::WrongFixSlackM(0.08, 3.0, 0.10, 0.10);
+  EXPECT_NEAR(slack, 3.0 * std::hypot(0.10, 0.10), 1e-12);
+  EXPECT_FALSE(fg::GpsJumpImplausible(0.15, slack, 0.2, 0.0, 0.0));
+  // A metre-scale jump is still refused.
+  EXPECT_TRUE(fg::GpsJumpImplausible(1.0, slack, 0.2, 0.0, 0.0));
+}
+
+TEST(WrongFixSlackM, InvalidSigmaOrGainFallsBackToTheFixedBudget)
+{
+  EXPECT_DOUBLE_EQ(fg::WrongFixSlackM(0.08, 0.0, 1.0, 1.0), 0.08);
+  EXPECT_DOUBLE_EQ(fg::WrongFixSlackM(0.08, 3.0, std::nan(""), -1.0), 0.08);
+  EXPECT_DOUBLE_EQ(fg::WrongFixSlackM(0.08, std::nan(""), 1.0, 1.0), 0.08);
+}

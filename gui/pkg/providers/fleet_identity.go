@@ -27,6 +27,13 @@ const (
 	defaultAPIPort = 4006
 )
 
+// RobotDockPose is a robot's charging station, in that robot's own map frame.
+type RobotDockPose struct {
+	X   float64 `json:"x"`
+	Y   float64 `json:"y"`
+	Yaw float64 `json:"yaw"`
+}
+
 // RobotIdentity is what a robot tells its peers about itself.
 type RobotIdentity struct {
 	ID         string  `json:"id"`
@@ -36,6 +43,9 @@ type RobotIdentity struct {
 	DatumLat   float64 `json:"datum_lat"`
 	DatumLon   float64 `json:"datum_lon"`
 	APIVersion int     `json:"api_version"`
+	// Dock lets peers keep off this robot's station, also while it is away from
+	// it. Additive: a peer that predates it simply has no station to avoid.
+	Dock *RobotDockPose `json:"dock,omitempty"`
 }
 
 // EnsureRobotID returns the stable per-robot UUID, generating and persisting
@@ -95,6 +105,19 @@ func ReadDatum(db types.IDBProvider) (lat, lon float64) {
 	return lat, lon
 }
 
+// ReadDockPose returns dock_pose_x/y/yaw from the installed yaml, nil while it
+// is all zero, which is map_server's own "no dock" convention.
+func ReadDockPose(db types.IDBProvider) *RobotDockPose {
+	params := robotYamlScalars(db)
+	x, _ := floatOf(params["dock_pose_x"])
+	y, _ := floatOf(params["dock_pose_y"])
+	yaw, _ := floatOf(params["dock_pose_yaw"])
+	if x == 0 && y == 0 && yaw == 0 {
+		return nil
+	}
+	return &RobotDockPose{X: x, Y: y, Yaw: yaw}
+}
+
 // CurrentIdentity assembles this robot's identity from the DB (id), the
 // yaml (name, datum) and the binary build info (version).
 func CurrentIdentity(db types.IDBProvider) (RobotIdentity, error) {
@@ -112,6 +135,7 @@ func CurrentIdentity(db types.IDBProvider) (RobotIdentity, error) {
 		DatumLat:   lat,
 		DatumLon:   lon,
 		APIVersion: FleetAPIVersion,
+		Dock:       ReadDockPose(db),
 	}, nil
 }
 

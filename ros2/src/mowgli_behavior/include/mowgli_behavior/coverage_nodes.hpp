@@ -30,9 +30,12 @@
 #include <string>
 #include <vector>
 
+#include <geometry_msgs/msg/twist_stamped.hpp>
+
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/bt_factory.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "map_msgs/msg/occupancy_grid_update.hpp"
 #include "mowgli_behavior/action_outcome.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/cancel_goal.hpp"
@@ -346,6 +349,14 @@ public:
   FollowStrip(const std::string& name, const BT::NodeConfig& config)
       : BT::StatefulActionNode(name, config)
   {
+    // Subscribe to the global costmap when the tree is built (stack start),
+    // not at the first strip: in delta mode a late subscriber gets the latched
+    // FIRST full grid and none of the deltas published before it subscribed.
+    std::shared_ptr<BTContext> ctx;
+    if (config.blackboard && config.blackboard->get("context", ctx) && ctx && ctx->node)
+    {
+      ensureCostmapSubscriptions(ctx);
+    }
   }
 
   static BT::PortsList providedPorts()
@@ -372,7 +383,15 @@ public:
   void onHalted() override;
 
 private:
+  friend struct FollowStripOutcomeTestAccess;
   void setBladeEnabled(bool enabled);
+  bool stepPrecisionPause(const std::shared_ptr<BTContext>& ctx);
+  void publishPrecisionStop(const std::shared_ptr<BTContext>& ctx);
+  void requestPrecisionBladeOff();
+  bool precision_paused_ = false;
+  bool precision_had_goal_ = false;
+  std::chrono::steady_clock::time_point precision_last_blade_off_{};
+  rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr precision_stop_pub_;
   bool bladeReadyForDispatch(const std::shared_ptr<BTContext>& ctx);
   void beginBladeReadyWait(const std::shared_ptr<BTContext>& ctx);
   // Cancel every in-flight follow / transit goal, reset the transit state
@@ -606,8 +625,13 @@ private:
   // (transient_local) subscription; updated on the node's single MutuallyExclusive
   // callback group so it is serialized against the BT tick (no extra mutex — see
   // bt_context.hpp). Null until the first costmap arrives → detour falls back.
+  // The global costmap publishes in delta mode: the full grid arrives on
+  // connect / resize only, later changes on costmap_updates, applied to this
+  // copy (mowgli_nav2_plugins/occupancy_grid_update.hpp).
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_sub_;
+  rclcpp::Subscription<map_msgs::msg::OccupancyGridUpdate>::SharedPtr costmap_update_sub_;
   nav_msgs::msg::OccupancyGrid::SharedPtr latest_costmap_;
+  void ensureCostmapSubscriptions(const std::shared_ptr<BTContext>& ctx);
 
   // --- Coverage controller rejoin (FTC turn fallback) ------------------------
   // FTC republishes the rest of the unit on the goal checker's plan topic when
@@ -790,6 +814,7 @@ public:
   void onHalted() override;
 
 private:
+  friend struct FollowStripOutcomeTestAccess;
   /// The transit ended ABORTED/CANCELED. Waits (bounded) for nav2's error code,
   /// then records the destination in BTContext::transit_to_strip_failed_at so
   /// FollowStrip does not send the identical transit again — unless the planner
@@ -859,6 +884,7 @@ public:
   void onHalted() override;
 
 private:
+  friend struct FollowStripOutcomeTestAccess;
   rclcpp_action::Client<Nav2Navigate>::SharedPtr nav_client_;
   std::shared_future<NavGoalHandle::SharedPtr> nav_future_;
   NavGoalHandle::SharedPtr nav_handle_;

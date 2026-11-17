@@ -718,4 +718,15 @@ TEST(FtcTurnFallback, RecordedKinkIntoTheHedgeIsImprovised)
                                      fb.rejoin_pose.y));
 }
 
+TEST(FtcTurnFallback, AFailedAttemptIsNotRepeatedFromTheSameSpot)
+{
+  // Same spot, a moment later: the planners would only return the same verdict.
+  EXPECT_TRUE(mn::FallbackRetryTooSoon(0.0, 0.1));
+  EXPECT_TRUE(mn::FallbackRetryTooSoon(mn::kFallbackRetryMoveM - 0.01, mn::kFallbackRetryS - 0.1));
+  // A reverse-escape (0.30 m) moved the robot: plan again from there.
+  EXPECT_FALSE(mn::FallbackRetryTooSoon(0.30, 0.1));
+  // The costmap may have changed meanwhile.
+  EXPECT_FALSE(mn::FallbackRetryTooSoon(0.0, mn::kFallbackRetryS));
+}
+
 }  // namespace

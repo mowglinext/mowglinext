@@ -55,6 +55,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<IsLethalBoundaryViolation>("IsLethalBoundaryViolation");
   factory.registerNodeType<IsDigEscalated>("IsDigEscalated");
   factory.registerNodeType<IsDocking>("IsDocking");
+  factory.registerNodeType<IsAtDockStation>("IsAtDockStation");
   factory.registerNodeType<IsNewRain>("IsNewRain");
   factory.registerNodeType<IsRainModeAtLeast>("IsRainModeAtLeast");
   factory.registerNodeType<IsResumeUndockAllowed>("IsResumeUndockAllowed");
@@ -83,6 +84,7 @@ void registerAllNodes(BT::BehaviorTreeFactory& factory)
   factory.registerNodeType<NavigateInsideBoundary>("NavigateInsideBoundary");
   factory.registerNodeType<BackUp>("BackUp");
   factory.registerNodeType<ClearCommand>("ClearCommand");
+  factory.registerNodeType<SetGotoOutcome>("SetGotoOutcome");
   factory.registerNodeType<SetStopReason>("SetStopReason");
   // Guard-halt marker: a guard handler that halts the Root mid-mow must tick
   // this, or its pauses are charged to GetNextUnmowedArea's no-progress budget

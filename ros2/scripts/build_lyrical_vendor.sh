@@ -26,6 +26,35 @@ checkout grid_map https://github.com/ANYbotics/grid_map.git 7ae24725d7effa0c22a2
 checkout beluga https://github.com/Ekumen-OS/beluga.git 22adc90e08cc7229cde042a756f044b908600fed
 checkout sophus https://github.com/strasdat/Sophus.git de0f8d3d92bf776271e16de56d1803940ebccab9
 checkout navigation2 https://github.com/ros-navigation/navigation2.git a6354f3f39d12c6e5c3e323f8021c831752edb23
+checkout navigation2_costmap https://github.com/ros-navigation/navigation2.git 7b9be248a652224a19305469fd5e854d50512341
+
+# Keep the costmap overlay ABI identical to the installed Nav2 clients. The
+# older Smac source pin has different class layouts and cannot supply this DSO.
+python3 - "$work/src/navigation2_costmap/nav2_costmap_2d" <<'PY'
+from pathlib import Path
+import sys
+package = Path(sys.argv[1])
+headers = package / 'include/nav2_costmap_2d'
+installed = Path('/opt/ros/lyrical/include/nav2_costmap_2d/nav2_costmap_2d')
+for header in headers.rglob('*.hpp'):
+    peer = installed / header.relative_to(headers)
+    assert peer.is_file() and header.read_bytes() == peer.read_bytes(), (
+        f'Nav2 costmap source/header mismatch: {peer}; update the reviewed source pin')
+
+# Selective clearing erases the complete combined grid, so it must invalidate
+# filter output too. Otherwise a bounded update can leave distant mask cells free.
+p = package / 'src/clear_costmap_service.cpp'
+s = p.read_text()
+old = '''      costmap_.getCostmap()->resetMap(0, 0,
+        costmap_.getCostmap()->getSizeInCellsX(),
+        costmap_.getCostmap()->getSizeInCellsY());'''
+new = old + '''
+      for (auto & filter : *costmap_.getLayeredCostmap()->getFilters()) {
+        filter->reset();
+      }'''
+assert s.count(old) == 1, 'Nav2 selective-clear patch no longer matches the source pin'
+p.write_text(s.replace(old, new))
+PY
 
 # grid_map_ros still uses the ament macro removed in Lyrical. Patch only the
 # pinned build copy, linking exported targets and the legacy grid_map_cv export.
@@ -71,7 +100,8 @@ cd "$work"
 #    grid_map already gets through its SYSTEM include export.
 MAKEFLAGS="-j${BUILD_JOBS:-3}" colcon build --merge-install --install-base "$prefix" \
   --base-paths src/grid_map src/beluga/beluga src/beluga/beluga_ros src/navigation2/nav2_smac_planner \
-  --packages-up-to grid_map_ros beluga_ros nav2_smac_planner --parallel-workers 2 \
+    src/navigation2_costmap/nav2_costmap_2d \
+  --packages-up-to grid_map_ros beluga_ros nav2_smac_planner nav2_costmap_2d --parallel-workers 2 \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=20 -DBUILD_TESTING=OFF \
   -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   "-DCMAKE_CXX_FLAGS=-Wno-error=array-bounds -isystem /usr/include/eigen3"

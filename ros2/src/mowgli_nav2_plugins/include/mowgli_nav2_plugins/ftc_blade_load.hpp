@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace mowgli_nav2_plugins
 {
@@ -93,6 +94,43 @@ inline FtcBladeLoadResult BladeLoadDecision(double target_speed,
   const double floor = std::min(std::max(speed_floor, 0.0), target_speed);
   const double scaled = std::max(target_speed * scale, floor);
   return {scaled, scale, scaled < target_speed};
+}
+
+/// Spin-up gate. A blade coming back on (start, or after a LiDAR scan pause
+/// turned it off) climbs from 0 rpm for 1-3 s; the load ramp read that as a
+/// stalled blade and crawled at stall_crawl_speed every time (field 2026-11-09:
+/// 48 episodes, 176 s of crawl in a 23 min mow, ENGAGED at 0-211 rpm). The
+/// slowdown is armed only once the blade has reached rpm_full since it became
+/// active, or kBladeSpinUpGraceS after that — so a blade genuinely held down by
+/// thick grass still slows the robot, after the grace.
+inline constexpr double kBladeSpinUpGraceS = 4.0;
+
+struct FtcBladeSpinUp
+{
+  bool armed{false};
+  std::optional<double> active_since_s;
+};
+
+/// Update @p state and return whether the load slowdown may act. Inactive blade
+/// or stale/absent telemetry resets the gate (the next activation is a spin-up).
+inline bool BladeLoadArmed(FtcBladeSpinUp& state,
+                           bool blade_active,
+                           bool telemetry_fresh,
+                           double rpm,
+                           double now_s,
+                           const FtcBladeLoadCfg& cfg)
+{
+  if (!blade_active || !telemetry_fresh || !std::isfinite(now_s))
+  {
+    state = FtcBladeSpinUp{};
+    return false;
+  }
+  if (!state.active_since_s)
+    state.active_since_s = now_s;
+  if ((std::isfinite(rpm) && rpm >= cfg.rpm_full) ||
+      now_s - *state.active_since_s >= kBladeSpinUpGraceS)
+    state.armed = true;
+  return state.armed;
 }
 
 }  // namespace mowgli_nav2_plugins

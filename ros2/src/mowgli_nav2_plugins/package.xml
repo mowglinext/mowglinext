@@ -13,16 +13,21 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <build_depend>boost</build_depend>
+  <build_export_depend>boost</build_export_depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>rclcpp_action</depend>
   <depend>nav2_core</depend>
   <depend>nav2_costmap_2d</depend>
   <depend>nav2_util</depend>
   <depend>nav2_ros_common</depend>
   <depend>nav2_smac_planner</depend>
   <depend>nav_msgs</depend>
+  <depend>map_msgs</depend>
   <depend>nav2_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>pluginlib</depend>
   <depend>tf2</depend>
@@ -37,6 +42,9 @@
   <test_depend>ament_lint_common</test_depend>
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>nav2_smac_planner</test_depend>
+  <test_depend>nav2_controller</test_depend>
+  <test_depend>nav2_rotation_shim_controller</test_depend>
+  <test_depend>nav2_regulated_pure_pursuit_controller</test_depend>
   <test_depend>ament_cmake_ros</test_depend>
 
   <export>

@@ -54,6 +54,11 @@ EXPECTED_TF_BROADCASTER_FILES = {
     "fusion_graph/src/fusion_graph_node_setup_comms.cpp",
     "mowgli_localization/src/wheel_odometry_node.cpp",
     "mowgli_localization/include/mowgli_localization/wheel_odometry_node.hpp",
+    # Test-only, never installed: a StaticTransformBroadcaster that publishes
+    # one probe frame disconnected from map/odom/base_footprint, to prove a
+    # costmap's TF listener thread is spinning before the test cleans it up
+    # (Lyrical's lost-cancel join hang). Not a node, not an Inv 2 edge.
+    "mowgli_nav2_plugins/test/costmap_test_support.hpp",
 }
 
 

@@ -69,6 +69,8 @@ public:
   ~OpenMowerBridgeNode() override;
 
 private:
+  friend struct OpenMowerPrecisionTestPeer;
+
   // ---- setup (openmower_bridge_node.cpp) ----
   void declare_parameters();
   void create_interfaces();
@@ -202,6 +204,9 @@ private:
   std::string blade_requested_direction_{"unknown"};
   rclcpp::Time blade_status_stamp_{0, 0, RCL_ROS_TIME};
   uint8_t current_mode_{HL_MODE_NULL};
+  // BT evidence is independent of the NULL->AUTONOMOUS firmware fallback.
+  uint8_t bt_reported_mode_{HL_MODE_NULL};
+  std::int64_t bt_status_receipt_ns_{0};
   rclcpp::Time hl_status_stamp_{0, 0, RCL_ROS_TIME};
   uint8_t last_sent_mode_{0xFFu};
   uint8_t gps_quality_percent_{0u};

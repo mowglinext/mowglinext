@@ -74,7 +74,7 @@ bool AxisInZone(const BoundaryGuard& guard,
                 double y,
                 double yaw)
 {
-  if (guard.costmap == nullptr)
+  if (!guard.active())
   {
     return false;
   }
@@ -193,32 +193,6 @@ struct MotionShapes
   ObstacleDeviation::Footprint body;
 };
 
-/// `fp` grown by `margin` in every direction (vertices pushed away from the
-/// centroid along both axes: exact for the rectangular chassis).
-ObstacleDeviation::Footprint GrowFootprint(const ObstacleDeviation::Footprint& fp, double margin)
-{
-  if (margin <= 0.0 || fp.empty())
-  {
-    return fp;
-  }
-  double cx = 0.0;
-  double cy = 0.0;
-  for (const auto& v : fp)
-  {
-    cx += v.x;
-    cy += v.y;
-  }
-  cx /= static_cast<double>(fp.size());
-  cy /= static_cast<double>(fp.size());
-  ObstacleDeviation::Footprint out = fp;
-  for (auto& v : out)
-  {
-    v.x += (v.x >= cx) ? margin : -margin;
-    v.y += (v.y >= cy) ? margin : -margin;
-  }
-  return out;
-}
-
 /// A planned rotation the executing PIVOT will accept whatever direction it
 /// takes: up to unambiguous_rotation_rad the short way is certain and only that
 /// sweep is checked; beyond it (up to 180 deg) the robot's real heading on
@@ -231,9 +205,17 @@ bool PlannedRotationClear(const TurnFallbackProblem& p,
                           double from_yaw,
                           double to_yaw)
 {
-  if (std::abs(WrapPivotAngle(to_yaw - from_yaw)) <= cfg.unambiguous_rotation_rad)
+  const double turn = WrapPivotAngle(to_yaw - from_yaw);
+  // The robot reaches a corner up to the pivot tolerance off the planned
+  // heading and stops up to it past the target: sweep that whole arc, the one
+  // the executing gate will check from the real heading. An arc that widening
+  // would push past a half turn is no longer unambiguous: check the full turn.
+  const double tol = std::max(0.0, cfg.heading_tolerance_rad);
+  if (std::abs(turn) <= cfg.unambiguous_rotation_rad && std::abs(turn) + 2.0 * tol < M_PI - 1e-3)
   {
-    return RotationSweepClear(*p.costmap, p.guard, shapes.footprint, x, y, from_yaw, to_yaw);
+    const double dir = turn >= 0.0 ? 1.0 : -1.0;
+    return RotationSweepClear(
+        *p.costmap, p.guard, shapes.footprint, x, y, from_yaw - dir * tol, to_yaw + dir * tol);
   }
   return FullTurnClear(*p.costmap, p.guard, shapes.footprint, x, y, from_yaw);
 }
@@ -305,6 +287,32 @@ FallbackPose BackedUp(const FallbackPose& pose, double distance_m)
   return {pose.x - distance_m * std::cos(pose.yaw),
           pose.y - distance_m * std::sin(pose.yaw),
           pose.yaw};
+}
+
+// `fp` grown by `margin` in every direction (vertices pushed away from the
+/// centroid along both axes: exact for the rectangular chassis).
+ObstacleDeviation::Footprint GrowFootprint(const ObstacleDeviation::Footprint& fp, double margin)
+{
+  if (margin <= 0.0 || fp.empty())
+  {
+    return fp;
+  }
+  double cx = 0.0;
+  double cy = 0.0;
+  for (const auto& v : fp)
+  {
+    cx += v.x;
+    cy += v.y;
+  }
+  cx /= static_cast<double>(fp.size());
+  cy /= static_cast<double>(fp.size());
+  ObstacleDeviation::Footprint out = fp;
+  for (auto& v : out)
+  {
+    v.x += (v.x >= cx) ? margin : -margin;
+    v.y += (v.y >= cy) ? margin : -margin;
+  }
+  return out;
 }
 
 double PlanHeadingSweep(const std::vector<geometry_msgs::msg::PoseStamped>& plan,

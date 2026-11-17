@@ -24,6 +24,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -38,6 +39,7 @@
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -46,12 +48,16 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_nav2_plugins/ftc_blade_load.hpp"
 #include "mowgli_nav2_plugins/ftc_collision_monitor_hold.hpp"
+#include "mowgli_nav2_plugins/ftc_contour_bypass.hpp"
+#include "mowgli_nav2_plugins/ftc_corner_geometry.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
 #include "mowgli_nav2_plugins/obstacle_deviation.hpp"
 #include "mowgli_nav2_plugins/oscillation_detector.hpp"
+#include "mowgli_nav2_plugins/retrace.hpp"
 #include <Eigen/Geometry>
+#include <map_msgs/msg/occupancy_grid_update.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 
 namespace mowgli_nav2_plugins
@@ -123,6 +129,10 @@ private:
 
   PlannerState current_state_{PlannerState::PRE_ROTATE};
   rclcpp::Time state_entered_time_;
+  /// Incremented with every state_entered_time_ assignment (one state episode).
+  uint64_t state_entry_seq_{0};
+  /// The state episode in which PRE_ROTATE/PIVOT last measured settled translation.
+  std::optional<uint64_t> rotation_settled_entry_;
   bool is_crashed_{false};
 
   /// Seconds elapsed since the current state was entered.
@@ -137,6 +147,14 @@ private:
 
   /// Compute the look-ahead distance along the remaining straight path.
   double distanceLookahead() const;
+
+  // Local point approach for a forward-monotone prefix ending at an explicit
+  // corner. Recovery/deviation keep their existing output ownership.
+  std::optional<std::size_t> stopCornerApproach(bool starting = false) const;
+  double stopCornerTravel(std::size_t corner, double x, double y, double yaw) const;
+  std::optional<double> pivot_approach_speed_limit_;
+  std::optional<double> pivot_approach_response_limit_;
+  std::optional<std::pair<std::size_t, rclcpp::Time>> pivot_approach_start_;
 
   // ── Pivot corners (ftc_pivot.hpp) ─────────────────────────────────────────
 
@@ -155,14 +173,25 @@ private:
   /// PIVOT -> FOLLOWING from the corner's outgoing pose.
   void leavePivot();
 
-  /// True when the chassis footprint, rotated in place from the current
-  /// heading to the pivot target, overlaps a TRUE-lethal local-costmap cell.
-  bool pivotSweepBlocked();
-
-  /// Obstacle gate of a pivot: holds (and eventually aborts, like every other
-  /// obstacle hold) while pivotSweepBlocked(); returns true when the pivot may
-  /// rotate this tick.
-  bool pivotSweepGate(double dt);
+  // Per-compute rotation/departure checks. Map and filled local-body queries
+  // use the same supported epoch; no certificate survives into another call.
+  bool rotationDeparturePermitted(const CornerGeometry& geometry);
+  bool rotationRestartPermitted(const geometry_msgs::msg::Pose& pose,
+                                const CornerGeometry& geometry) const;
+  bool cornerRotationGate(double dt);
+  bool localRotationBlocked(double turn);
+  geometry_msgs::msg::Pose pivotMapPose() const;
+  std::optional<rclcpp::Time> pivot_pose_epoch_;
+  std::mutex corner_geometry_mutex_;
+  /// corner_geometry_ as of the start of the current computeVelocityCommands
+  /// tick, for code that must not lock corner_geometry_mutex_ (finalizeSplice).
+  std::shared_ptr<const CornerGeometry> tick_corner_geometry_;
+  std::shared_ptr<const CornerGeometry> corner_geometry_;
+  std::shared_ptr<const CornerGeometry> checked_corner_geometry_;
+  // Per-tick directed permission; separate from the geometric error used by
+  // handoff tolerances and I/D bookkeeping. Never reused after a new check.
+  std::optional<double> checked_corner_turn_;
+  rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr corner_geometry_sub_;
 
   std::vector<geometry_msgs::msg::PoseStamped> global_plan_;
   Eigen::Affine3d current_control_point_;  ///< Carrot pose in map frame.
@@ -187,6 +216,11 @@ private:
   double last_cmd_fwd_speed_{0.0};
   double cm_held_s_{0.0};
   double cm_stalled_s_{0.0};
+  // Plan arc length of the carrot at the last confirmed hold: a confirmation
+  // without kCmHoldRepeatProgressM of progress since is the same blockage.
+  std::optional<double> last_cm_hold_arc_;
+  /// Plan arc length (m) from pose 0 to `index`.
+  double planArcLength(std::size_t index) const;
   // True while the blade-load slowdown is holding the carrot's target speed
   // below the path speed: set in update_control_point, read in
   // calculate_velocity_commands to let the commanded speed follow the slowed
@@ -195,6 +229,8 @@ private:
   // Last applied blade-load scale (1.0 = not limiting); kept for the
   // limit-engaged/released log lines.
   double blade_load_scale_{1.0};
+  /// Blade spin-up gate (ftc_blade_load.hpp); tracks the blade, not the goal.
+  FtcBladeSpinUp blade_spin_up_;
 
   /// Apply the blade-load slowdown (Config::blade_load_*) to a carrot target
   /// speed, reading the latest blade telemetry under blade_mutex_.
@@ -331,6 +367,22 @@ private:
     /// last rejoin), so a turn that stays blocked cannot loop.
     std::optional<std::size_t> rearm_idx;
     std::size_t count{0};
+    /// Deadline of the running manoeuvre (s): turn_fallback_timeout_s, or
+    /// contour_bypass_timeout_s for a contour bypass.
+    double timeout_s{45.0};
+    /// The running manoeuvre is a contour bypass (log wording only).
+    bool contour{false};
+    /// Where (costmap frame) and when the last attempt found nothing
+    /// (FallbackRetryTooSoon).
+    struct Miss
+    {
+      double x{0.0};
+      double y{0.0};
+      rclcpp::Time when{0, 0, RCL_ROS_TIME};
+    };
+    std::optional<Miss> last_miss;
+    /// Set by engageFallback once it actually planned (past its gates).
+    bool attempted{false};
   };
 
   TurnFallbackState turn_fallback_;
@@ -351,6 +403,10 @@ private:
   bool tryTurnFallback(std::size_t carrot_idx,
                        const BoundaryGuard& guard,
                        const ObstacleDeviation::Footprint& body);
+  /// tryTurnFallback without the retry throttle.
+  bool engageFallback(std::size_t carrot_idx,
+                      const BoundaryGuard& guard,
+                      const ObstacleDeviation::Footprint& body);
 
   /// Plan a fallback from the robot's current pose, reversing at most
   /// `max_reverse_m`. `window_first` receives the plan index of the window's
@@ -362,10 +418,57 @@ private:
                                     std::size_t& window_first,
                                     TurnFallbackProblem* problem_out = nullptr);
 
+  /// The inputs both manoeuvres are planned from: the plan window around the
+  /// robot (`window_ahead_m` past the carrot) in the costmap frame, the robot
+  /// pose, the shapes, and a `followable` predicate that captures `guard` and
+  /// `body` by reference (valid while the caller's arguments are). False with
+  /// `why` set when an input is missing.
+  bool buildFallbackProblem(std::size_t carrot_idx,
+                            const BoundaryGuard& guard,
+                            const ObstacleDeviation::Footprint& body,
+                            double window_ahead_m,
+                            std::size_t& window_first,
+                            TurnFallbackProblem& problem,
+                            std::string& why);
+
   /// Replace the skipped part of global_plan_ by the fallback's runtime pivot
   /// corners and connector, and start driving them. False when the robot pose
   /// is unavailable (nothing changed).
   bool spliceTurnFallback(const TurnFallbackPlan& plan, std::size_t window_first);
+
+  // ── Contour bypass (ftc_contour_bypass.hpp) ───────────────────────────────
+  //
+  // Third stage after the lattice and the turn fallback: where neither can
+  // drive past the blockage (an obstacle on a STRAIGHT, or a turn with no
+  // single-connector rejoin), a Bug2-style walk round the obstacle's contour
+  // is planned, simplified into straight legs joined by pivots, and spliced
+  // into global_plan_ exactly like the turn fallback (runtime pivot corners,
+  // executed by PIVOT / FOLLOWING, re-checked every cycle, completion and
+  // deadline in turnFallbackProgress). No reverse of its own: a robot too close
+  // to turn takes the WEDGED reverse-escape and tries again from there.
+
+  /// Plan and engage a contour bypass. Same contract as tryTurnFallback.
+  bool tryContourBypass(std::size_t carrot_idx,
+                        const BoundaryGuard& guard,
+                        const ObstacleDeviation::Footprint& body);
+
+  /// Splice the chosen side's legs (costmap frame) into global_plan_.
+  bool spliceContourBypass(const ContourSide& side, std::size_t window_first);
+
+  /// Make a spliced plan executable or refuse it: merge chained pivot corners
+  /// (ChainedPivotKeep, `rejoin_idx` remapped) and check every pivot up to the
+  /// rejoin against the mowing geometry the PIVOT state will check it against
+  /// (SpliceAuthorityViolation). False, with a log line, = do not adopt.
+  bool finalizeSplice(std::vector<geometry_msgs::msg::PoseStamped>& spliced,
+                      std::size_t& rejoin_idx,
+                      const char* what);
+
+  /// Adopt `spliced` as the working plan (rejoin at `rejoin_idx`), reset the
+  /// deviation / hold / reverse state, recompute the pivot corners, and start
+  /// driving it (PIVOT when it opens on a corner). Returns whether it does.
+  bool adoptFallbackPlan(std::vector<geometry_msgs::msg::PoseStamped>&& spliced,
+                         std::size_t rejoin_idx,
+                         double skipped_arc_m);
 
   /// One tick of the fallback's straight reverse; emits into cmd_vel.
   void turnFallbackReverseTick(double dt, geometry_msgs::msg::TwistStamped& cmd_vel);
@@ -422,6 +525,8 @@ private:
   /// Odom-integrated reversed distance for the current escape (m), hard-capped
   /// at config_.obstacle_reverse_max_dist_m. Reset when the wedge clears.
   double reverse_distance_done_{0.0};
+  /// Time spent reversing on the current budget (ReverseEscapeTimeLimitS).
+  double reverse_elapsed_s_{0.0};
   /// Time the planner has kept a usable profile since the last infeasible tick,
   /// while a reverse-escape is engaged (ReverseEscapeShouldRelease).
   double reverse_followable_time_{0.0};
@@ -494,6 +599,14 @@ private:
   rclcpp::Time time_last_oscillation_;
   bool oscillation_detected_{false};
   bool oscillation_warning_{false};
+  /// Forget the oscillation history: it is only fed during rotations, so
+  /// without this a new plan or pivot inherited samples (and an elapsed
+  /// "oscillating since") from an earlier one, and could start saturated.
+  void resetOscillation();
+  /// Why PRE_ROTATE / PIVOT is holding at zero (empty = not held): logged on
+  /// change and quoted by the timeout, which otherwise said only "timeout".
+  std::string rotation_hold_reason_;
+  void noteRotationHold(const std::string& reason);
 
   // ── ROS2 infrastructure ───────────────────────────────────────────────────
 
@@ -511,11 +624,27 @@ private:
   // (obstacle layer only) so near-edge coverage swaths don't read as blocked.
   // The mowing-zone boundary lives as LETHAL cells in the GLOBAL costmap (map
   // frame, keepout / lethal_outside_areas filter). We subscribe to it (latched)
-  // and rebuild boundary_costmap_ from each OccupancyGrid; updateLateralDeviation
+  // and rebuild boundary_costmap_ from each full OccupancyGrid, then keep it
+  // current from /global_costmap/costmap_updates — the global costmap publishes
+  // in delta mode, so the full topic alone is a snapshot frozen at the first
+  // connection (occupancy_grid_update.hpp). updateLateralDeviation
   // feeds it as an ObstacleDeviation::BoundaryGuard to the lateral-OFFSET checks
   // ONLY, so a skirt never leaves the zone. (The offset samples are in the LOCAL
   // costmap / odom frame here, so the guard affine is boundary(map) <- odom.)
   rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr boundary_costmap_sub_;
+  rclcpp::Subscription<map_msgs::msg::OccupancyGridUpdate>::SharedPtr boundary_update_sub_;
+
+  // ── Boundary-safe reverse (retrace.hpp) ───────────────────────────────────
+  // Every reverse FTC performs (the reverse-escape and the turn fallback's reverse) is blind to the
+  // recorded boundary: the local costmap has none. Field 2026-10-26 a 0.30 m reverse-escape took
+  // the mower from 0.00 m to 0.33 m outside the area. A reverse is therefore only allowed when the
+  // robot is inside every recorded area (outside_area_) AND the piece it would undo is a straight
+  // forward drive it just made (reverse_crumbs_), i.e. ground that is known to be inside.
+  retrace::Breadcrumbs reverse_crumbs_;
+  std::atomic<bool> outside_area_{false};
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr outside_area_sub_;
+  /// The longest reverse (<= `wanted`) that is allowed here, 0 when none is.
+  double reverseAllowedDistance(double wanted);
   std::unique_ptr<nav2_costmap_2d::Costmap2D> boundary_costmap_;
   std::string boundary_frame_;  ///< frame_id of the global costmap (e.g. "map").
   std::mutex boundary_mutex_;
@@ -656,6 +785,16 @@ private:
     /// straight after a corner is one swath spacing long, too short for the
     /// lateral loop to absorb a large heading error before the next pivot.
     double pivot_angle_tolerance_deg{10.0};
+    /// Lateral arrival band (m) for a pivot corner lying ABEAM of base_link
+    /// (PivotArrived): forward motion cannot close a sideways offset, so the
+    /// 2 cm disc alone timed out with the robot already on the corner.
+    double pivot_arrival_lateral_tolerance_m{0.08};
+    /// Declared upper bound on residual forward travel / speed after STOP.
+    /// This is a response assumption, not a calibrated physical stopping time.
+    double pivot_coast_time_bound_s{0.5};
+    /// How far outside the recorded line the axle keeps mowing authority in
+    /// the rotation gates (robot_config_util.coverage_entry_tolerance).
+    double coverage_entry_tolerance_m{0.0};
     double goal_timeout{5.0};
     double max_follow_distance{1.0};
     /// Max longitudinal carrot lead (m); <= 0 derives it (ftc_carrot_lead.hpp).
@@ -810,6 +949,10 @@ private:
     /// enable only after a supervised field test. When false the wedged case
     /// holds/aborts exactly as before.
     bool obstacle_reverse_enabled{false};
+    /// Boundary-safe reverse (retrace.hpp, reverseAllowedDistance): a reverse only runs while the
+    /// robot is inside every recorded area, over a straight forward piece it just drove. False in
+    /// the struct (unit tests build the controller directly), true in nav2_params_base.yaml.
+    bool reverse_boundary_safe{false};
     /// Hard cap on total reversed distance (m) per escape. Never exceeded.
     double obstacle_reverse_max_dist_m{0.30};
     /// Straight reverse speed (m/s). Must clear the firmware deadband (~0.05).
@@ -830,9 +973,30 @@ private:
     /// The whole fallback (reverse, pivots, connector) must reach its rejoin
     /// within this time (s), else the goal is aborted.
     double turn_fallback_timeout_s{45.0};
+
+    /// Contour bypass (ftc_contour_bypass.hpp): Bug2-style walk round an
+    /// obstacle neither the lattice nor the turn fallback can pass.
+    bool contour_bypass_enabled{true};
+    /// Longest contour walked per side (m).
+    double contour_bypass_max_contour_m{8.0};
+    /// Furthest plan arc past the blockage the rejoin may be (m).
+    double contour_bypass_max_rejoin_arc_m{8.0};
+    /// base_link distance to the obstacle the contour keeps (m).
+    double contour_bypass_follow_distance_m{0.65};
+    /// The whole bypass must reach its rejoin within this time (s).
+    double contour_bypass_timeout_s{90.0};
   };
 
   Config config_;
+  /// Parameter changes are validated into staged_config_ on the executor
+  /// thread and adopted by the control thread at the start of its next cycle
+  /// (applyPendingConfig), so config_ is only written by the thread reading it.
+  std::mutex staged_config_mutex_;
+  Config staged_config_;
+  bool staged_config_dirty_{false};
+  void applyPendingConfig();
+  /// One control interval (s): 1 / controller_server's controller_frequency.
+  double command_horizon_s_{0.1};
 
   /// Half-width used by the CLEARANCE checks (which side to skirt, and how far
   /// out the offset path must sit) — the body half-width plus the operator's

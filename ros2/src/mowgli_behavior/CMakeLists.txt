@@ -18,6 +18,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ---------------------------------------------------------------------------
 
 find_package(ament_cmake REQUIRED)
+find_package(Boost REQUIRED)
+include_directories(SYSTEM ${Boost_INCLUDE_DIRS})
 find_package(ament_index_cpp REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
@@ -28,11 +30,19 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(nav2_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(map_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(action_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(mowgli_interfaces REQUIRED)
+find_package(mowgli_nav2_plugins REQUIRED)
+find_package(visualization_msgs REQUIRED)
+# Use only the exported pure geometry headers, without linking the Nav2 plugin DSO.
+include_directories(SYSTEM ${mowgli_nav2_plugins_INCLUDE_DIRS})
+find_package(mowgli_localization REQUIRED)
+find_library(NAVSAT_STATUS_ASSOCIATION_LIBRARY navsat_status_association
+  PATHS "${mowgli_localization_DIR}/../../../lib" NO_DEFAULT_PATH REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 
 
@@ -60,9 +70,11 @@ add_executable(behavior_tree_node
 target_include_directories(behavior_tree_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${mowgli_localization_INCLUDE_DIRS}
 )
 
 target_link_libraries(behavior_tree_node
+  ${visualization_msgs_TARGETS}
   ${ament_index_cpp_TARGETS}
   ${rclcpp_TARGETS}
   ${rclcpp_action_TARGETS}
@@ -73,11 +85,13 @@ target_link_libraries(behavior_tree_node
   ${nav2_msgs_TARGETS}
   ${sensor_msgs_TARGETS}
   ${nav_msgs_TARGETS}
+  ${map_msgs_TARGETS}
   ${geometry_msgs_TARGETS}
   ${action_msgs_TARGETS}
   ${std_msgs_TARGETS}
   ${std_srvs_TARGETS}
   ${mowgli_interfaces_TARGETS}
+  ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
   ${rcl_interfaces_TARGETS}
 )
 
@@ -147,8 +161,12 @@ if(BUILD_TESTING)
     test/test_blade_services.cpp
     ${blade_service_sources}
   )
-  target_include_directories(test_blade_services PUBLIC include)
+  target_include_directories(test_blade_services PUBLIC
+    include
+    ${mowgli_localization_INCLUDE_DIRS}
+  )
   target_link_libraries(test_blade_services
+    ${visualization_msgs_TARGETS}
     ${ament_index_cpp_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
@@ -156,6 +174,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
     ${std_msgs_TARGETS}
@@ -163,6 +182,7 @@ if(BUILD_TESTING)
     ${tf2_TARGETS}
     ${tf2_ros_TARGETS}
     ${tf2_geometry_msgs_TARGETS}
+    ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
     ${rcl_interfaces_TARGETS}
     ${action_msgs_TARGETS}
   )
@@ -171,8 +191,12 @@ if(BUILD_TESTING)
     test/test_fleet_yield_services.cpp
     ${blade_service_sources}
   )
-  target_include_directories(test_fleet_yield_services PUBLIC include)
+  target_include_directories(test_fleet_yield_services PUBLIC
+    include
+    ${mowgli_localization_INCLUDE_DIRS}
+  )
   target_link_libraries(test_fleet_yield_services
+    ${visualization_msgs_TARGETS}
     ${ament_index_cpp_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
@@ -180,6 +204,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${sensor_msgs_TARGETS}
     ${std_msgs_TARGETS}
@@ -187,6 +212,7 @@ if(BUILD_TESTING)
     ${tf2_TARGETS}
     ${tf2_ros_TARGETS}
     ${tf2_geometry_msgs_TARGETS}
+    ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
     ${rcl_interfaces_TARGETS}
     ${action_msgs_TARGETS}
   )
@@ -201,12 +227,14 @@ if(BUILD_TESTING)
   )
   target_include_directories(test_blade_direction PUBLIC include)
   target_link_libraries(test_blade_direction
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -234,6 +262,7 @@ if(BUILD_TESTING)
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${tf2_TARGETS}
     ${tf2_ros_TARGETS}
   )
@@ -258,6 +287,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -273,6 +303,7 @@ if(BUILD_TESTING)
   ament_add_ros_isolated_gtest(test_cancel_on_halt
     test/test_cancel_on_halt.cpp
     src/docking_nodes.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
     TIMEOUT 120
   )
 
@@ -281,13 +312,20 @@ if(BUILD_TESTING)
     $<INSTALL_INTERFACE:include>
   )
 
+  # The GOTO dock-transit exemption is read from the shipped tree.
+  target_compile_definitions(test_cancel_on_halt PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+
   target_link_libraries(test_cancel_on_halt
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
+    ${rcl_interfaces_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -318,6 +356,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -347,6 +386,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -377,6 +417,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -410,12 +451,14 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_get_next_unmowed_area
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -454,6 +497,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -482,6 +526,7 @@ if(BUILD_TESTING)
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${tf2_ros_TARGETS}
   )
@@ -540,6 +585,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -568,12 +614,14 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_coverage_resume_location
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -602,12 +650,14 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_swath_progress
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -698,12 +748,14 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_follow_strip_dig
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -733,12 +785,14 @@ if(BUILD_TESTING)
   )
 
   target_link_libraries(test_transit_non_blocking
+    ${visualization_msgs_TARGETS}
     ${rclcpp_TARGETS}
     ${rclcpp_action_TARGETS}
     ${behaviortree_cpp_TARGETS}
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -763,6 +817,18 @@ if(BUILD_TESTING)
 
   target_link_libraries(test_strip_progress
     ${geometry_msgs_TARGETS}
+  )
+
+  # ---- test_dock_stall ----
+  # DockRobot cancels a dock approach that stands still (the garage edge over
+  # the dock, 2026-10-06); the detector is pure and ROS-free.
+  ament_add_gtest(test_dock_stall
+    test/test_dock_stall.cpp
+  )
+
+  target_include_directories(test_dock_stall PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
   )
 
   # ---- test_blocked_stretch ----
@@ -877,6 +943,103 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
   )
 
+  # ---- test_goto_tree ----
+  # COMMAND_GOTO (9): every ~/goto_pose refusal reason, and the real
+  # GotoSequence / CriticalBatteryDock GOTO exit cut out of main_tree.xml — one
+  # Nav2 attempt, low-battery interruption and dock, no resume, blade never
+  # enabled.
+  ament_add_ros_isolated_gtest(test_goto_tree
+    test/test_goto_tree.cpp
+    $<TARGET_OBJECTS:mowgli_behavior_condition_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_nodes>
+    $<TARGET_OBJECTS:mowgli_behavior_status_snapshot>
+    $<TARGET_OBJECTS:mowgli_behavior_coverage_persistence>
+  )
+
+  target_include_directories(test_goto_tree PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_compile_definitions(test_goto_tree PRIVATE
+    MOWGLI_MAIN_TREE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/trees/main_tree.xml"
+  )
+
+  target_link_libraries(test_goto_tree
+    ${rclcpp_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
+  # ---- test_goto_action ----
+  # The ~/goto action server: the end-of-goal decision, and a real action
+  # client against GotoActionServer (refusal, settled success, busy, cancel,
+  # interruption, critical-battery takeover, pause, deadline, one result).
+  ament_add_ros_isolated_gtest(test_goto_action
+    test/test_goto_action.cpp
+    TIMEOUT 120
+  )
+
+  target_include_directories(test_goto_action PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_goto_action
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
+  # ---- test_goto_navigate_to_pose ----
+  # NavigateToPose as used by GOTO, against a fake /navigate_to_pose server:
+  # the GOTO target goes through bt_navigator's default tree, and a goal halted
+  # before the server answers is cancelled on acceptance (PR #972 class, #943).
+  ament_add_ros_isolated_gtest(test_goto_navigate_to_pose
+    test/test_goto_navigate_to_pose.cpp
+    src/navigation_nodes.cpp
+    TIMEOUT 120
+  )
+
+  target_include_directories(test_goto_navigate_to_pose PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+  )
+
+  target_link_libraries(test_goto_navigate_to_pose
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
+  )
+
   # ---- test_battery_critical_resume ----
   # Regression for "robot stuck after a critical-battery charge": the
   # CriticalBatteryDock tail must AUTO-CONTINUE on recovery (undock, keep
@@ -906,6 +1069,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -940,6 +1104,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -968,6 +1133,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1006,6 +1172,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1044,6 +1211,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1084,6 +1252,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1114,6 +1283,7 @@ if(BUILD_TESTING)
     ${mowgli_interfaces_TARGETS}
     ${nav2_msgs_TARGETS}
     ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
     ${geometry_msgs_TARGETS}
     ${std_msgs_TARGETS}
     ${std_srvs_TARGETS}
@@ -1139,6 +1309,11 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
   )
+
+  ament_add_gtest(test_precision_coverage_support test/test_precision_coverage_support.cpp)
+  target_include_directories(test_precision_coverage_support PRIVATE include ${mowgli_localization_INCLUDE_DIRS})
+  target_link_libraries(test_precision_coverage_support ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
+    ${mowgli_interfaces_TARGETS} ${sensor_msgs_TARGETS})
 
   ament_add_gtest(test_blade_ready test/test_blade_ready.cpp)
   target_include_directories(test_blade_ready PRIVATE include)

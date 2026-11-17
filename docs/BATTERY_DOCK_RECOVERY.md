@@ -145,11 +145,15 @@ be able to take the mower back. The rules:
   overrides manual driving and recording, as it did before this PR.
 - **EndSession** clears the pending flag. Its keep-progress exit re-saves the
   snapshot, and a finished session removes it.
-- **One failed low-battery dock.** BatteryGuard's DockRobot failure ends the
-  run through `FailedCoverageDock`, which tries a second time and reports
-  `NAV_TO_DOCK_FAILED` / `DOCK_NAV_FAILED` (unchanged since before this PR).
-  Its `EndSession` now clears the pending flag, so the critical branch no longer
-  makes a third attempt straight away. It comes back only once the pack is
+- **One failed low-battery dock.** BatteryGuard tries a second DockRobot
+  itself (issue #866). A success enters the normal `CHARGING` hold and resumes
+  the mow. A second failure reports `NAV_TO_DOCK_FAILED` / `DOCK_NAV_FAILED`,
+  runs `EndSession keep_incomplete` (which clears the pending flag) and holds
+  RUNNING until MowingCommandGuard sees the cleared command. Before #866 the
+  failure fell into `FailedCoverageDock`: it reported `COVERAGE_FAILED_DOCKING`
+  and, when its own second goal seated the robot, still ended the session in
+  IDLE instead of charging and resuming. Either way there are still exactly two
+  automatic dock goals, and the critical branch comes back only once the pack is
   genuinely critical.
 
 Residual: on a restart that continues a mow with a pending charge while off the

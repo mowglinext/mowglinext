@@ -7,6 +7,7 @@ import {useNavigate} from 'react-router-dom';
 import {type Deployment, type UpdatePlan, type UpdatePolicy, componentCompatibility, sameUpdaterBuild, updaterRequest, useHostUpdater} from '../../hooks/useHostUpdater';
 import {agentUpgradeFor, upgradeAgentAndWait} from "../../utils/updaterAgent.ts";
 import {UpdateChangelog} from './UpdateChangelog';
+import {PullRequestPicker} from './PullRequestPicker';
 
 const FIRMWARE_MISMATCH_ERROR = 'different mainboard firmware protocol';
 const FIRMWARE_FLASH_ROUTE = '/onboarding?step=firmware&flash=1';
@@ -264,6 +265,8 @@ export function HostUpdaterPanel({advanced = false, inventory = [], firmwareProt
                         <Select aria-label={t('hostUpdater.repository')} value={policy.source.repository} disabled={pending || busy}
                             options={data.trusted_repositories.map(value => ({value, label: value}))} onChange={repository => setPolicy({...policy, source: {...policy.source, repository}})}/>
                     </Form.Item>
+                    {policy.source.track === 'custom' && <PullRequestPicker repository={policy.source.repository} branch={policy.source.branch} disabled={pending || busy}
+                        onSelect={branch => setPolicy({...policy, source: {...policy.source, branch}})}/>}
                     {policy.source.track === 'custom' && <Form.Item label={t('hostUpdater.branch')}>
                         <Input aria-label={t('hostUpdater.branch')} placeholder="feat/my-branch" value={policy.source.branch} disabled={pending || busy}
                             onChange={e => setPolicy({...policy, source: {...policy.source, branch: e.target.value}})}/>

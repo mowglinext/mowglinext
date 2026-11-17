@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 
 namespace mowgli_nav2_plugins
 {
@@ -81,6 +82,26 @@ inline bool CmHoldStep(bool cm_holds,
   const bool cm_confirmed = cfg.hold_s > 0.0 && held_s + kTimeEps >= cfg.hold_s;
   const bool stall_confirmed = cfg.stall_only_s > 0.0 && stalled_s + kTimeEps >= cfg.stall_only_s;
   return cm_confirmed || stall_confirmed;
+}
+
+/// Plan progress (carrot arc length, m) the robot must make after a confirmed
+/// hold before another confirmation counts as a NEW blockage.
+inline constexpr double kCmHoldRepeatProgressM = 1.0;
+
+/// The second confirmation of the same blockage. After the first one FTC backs
+/// off (bounded reverse) and waits for the path to read clear — which it always
+/// does, since the local costmap never saw what collision_monitor sees — so the
+/// wait released, its deadline was reset after the probation, and every later
+/// confirmation started a fresh wait: a stop / go cycle every ~5 s until the
+/// progress checker aborted without the obstacle marker (FollowStrip then never
+/// detours). A confirmation within `min_progress_m` of the previous one is the
+/// same blockage and must end the goal as an obstacle abort instead.
+inline bool CmHoldRepeats(std::optional<double> previous_arc_m,
+                          double arc_m,
+                          double min_progress_m = kCmHoldRepeatProgressM)
+{
+  return previous_arc_m.has_value() && std::isfinite(arc_m) &&
+         arc_m - *previous_arc_m < min_progress_m;
 }
 
 }  // namespace mowgli_nav2_plugins

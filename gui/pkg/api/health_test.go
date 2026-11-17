@@ -75,7 +75,7 @@ func TestGUILivenessDoesNotDependOnROSTransport(t *testing.T) {
 func TestDiagnosticsAndUpdaterSeparateTransportFromMowerReadiness(t *testing.T) {
 	ros := &healthROSProvider{MockRosProvider: types.NewMockRosProvider(), health: foxglove.TransportHealth{Connected: true, HeartbeatOK: true}}
 	r := gin.New()
-	UpdaterRoutes(r.Group("/api"), ros, types.NewMockDBProvider())
+	UpdaterRoutes(r.Group("/api"), ros, types.NewMockDBProvider(), nil)
 	r.GET("/snapshot", getDiagnosticsSnapshot(&versionDocker{}, ros, types.NewMockDBProvider()))
 	for _, connected := range []bool{true, false} {
 		ros.health.Connected = connected

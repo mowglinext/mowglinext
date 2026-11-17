@@ -16,6 +16,7 @@
 #include "mowgli_behavior/status_nodes.hpp"
 
 #include "mowgli_behavior/coverage_persistence.hpp"
+#include "mowgli_behavior/goto_outcome.hpp"
 #include "mowgli_behavior/status_snapshot.hpp"
 #include "mowgli_behavior/stop_reason.hpp"
 
@@ -181,6 +182,26 @@ BT::NodeStatus SetStopReason::tick()
 }
 
 // ---------------------------------------------------------------------------
+// SetGotoOutcome
+// ---------------------------------------------------------------------------
+
+BT::NodeStatus SetGotoOutcome::tick()
+{
+  auto ctx = config().blackboard->get<std::shared_ptr<BTContext>>("context");
+  auto outcome = getInput<std::string>("outcome");
+  if (!outcome || !isGotoOutcome(*outcome))
+  {
+    RCLCPP_ERROR(ctx->node->get_logger(),
+                 "SetGotoOutcome: invalid outcome '%s'",
+                 outcome ? outcome->c_str() : outcome.error().c_str());
+    return BT::NodeStatus::SUCCESS;
+  }
+  std::lock_guard<std::mutex> lock(ctx->context_mutex);
+  ctx->goto_outcome = *outcome;
+  return BT::NodeStatus::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
 // MarkGuardHalt
 // ---------------------------------------------------------------------------
 
@@ -329,6 +350,7 @@ BT::NodeStatus EndSession::tick()
     return BT::NodeStatus::SUCCESS;
   }
   ctx->resume_after_incomplete_end = false;
+  ctx->resume_preferred_start.reset();
 
   // Swath-completion model (replaces the cell coverage grid): clear the
   // per-area completed-swath sets, swath counts, and the completed-area set so

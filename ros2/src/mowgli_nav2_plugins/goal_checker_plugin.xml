@@ -13,4 +13,7 @@
       with under 2 percent coverage.
     </description>
   </class>
+  <class name="mowgli_nav2_plugins/CoverageEntryGoalChecker" type="mowgli_nav2_plugins::CoverageEntryGoalChecker" base_class_type="nav2_core::GoalChecker">
+    <description>Blade-off coverage arrival inside mowing geometry with settled translation.</description>
+  </class>
 </library>

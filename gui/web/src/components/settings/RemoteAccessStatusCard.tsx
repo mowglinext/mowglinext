@@ -11,6 +11,7 @@ const VERDICT_COLOR: Record<RemoteAccessVerdict, string> = {
     needsLogin: "warning",
     connected: "success",
     error: "error",
+    offline: "warning",
 };
 
 interface RemoteAccessStatusCardProps {
@@ -27,9 +28,17 @@ interface RemoteAccessStatusCardProps {
  * operator, then the URLs that reach the GUI once connected.
  */
 export function RemoteAccessStatusCard({status, fetchError, onRefresh, onRetry, onLogout, busy}: RemoteAccessStatusCardProps) {
-    const {t} = useTranslation();
+    const {t, i18n} = useTranslation();
     const verdict = remoteAccessVerdict(status);
     const phaseLabel = status ? t(`settingsRemoteAccess.phase.${status.phase}`) : t("settingsRemoteAccess.phase.unknown");
+    const recoveryState = status?.recoveryState ?? (status?.enabled ? "monitoring" : "disabled");
+    const formatDate = (value: string) => {
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(
+            i18n.resolvedLanguage?.startsWith("fr") ? "fr-FR" : "en-US",
+            {dateStyle: "medium", timeStyle: "short"},
+        ).format(date);
+    };
 
     return (
         <Card
@@ -52,6 +61,35 @@ export function RemoteAccessStatusCard({status, fetchError, onRefresh, onRetry, 
             </Space>
 
             {fetchError && <Alert type="warning" showIcon style={{marginBottom: 8}} message={fetchError}/>}
+
+            {status?.enabled && (
+                <div data-testid="remote-access-recovery" style={{marginBottom: 8}}>
+                    <Paragraph type="secondary" style={{margin: "0 0 4px"}}>
+                        {t(`settingsRemoteAccess.recovery.${recoveryState}`, {
+                            count: status.recoveryAttempts ?? 0,
+                        })}
+                    </Paragraph>
+                    {status.lastSuccessAt && (
+                        <Text type="secondary" style={{fontSize: 12, display: "block"}}>
+                            {t("settingsRemoteAccess.lastSuccess", {value: formatDate(status.lastSuccessAt)})}
+                        </Text>
+                    )}
+                    {status.nextRecoveryAt && (recoveryState === "suspect" || recoveryState === "cooldown") && (
+                        <Text type="secondary" style={{fontSize: 12, display: "block"}}>
+                            {t("settingsRemoteAccess.nextRecovery", {value: formatDate(status.nextRecoveryAt)})}
+                        </Text>
+                    )}
+                </div>
+            )}
+
+            {status?.enabled && status.hostNetworkOnline === false && (
+                <Alert
+                    type="warning"
+                    showIcon
+                    style={{marginBottom: 8}}
+                    message={t("settingsRemoteAccess.networkUnavailable")}
+                />
+            )}
 
             {status?.error && (
                 <Alert
@@ -91,6 +129,35 @@ export function RemoteAccessStatusCard({status, fetchError, onRefresh, onRetry, 
 
             {verdict === "working" && (
                 <Paragraph type="secondary" style={{margin: "0 0 8px"}}>{t("settingsRemoteAccess.workingHint")}</Paragraph>
+            )}
+
+            {verdict === "offline" && (
+                <Alert
+                    type="warning"
+                    showIcon
+                    style={{marginBottom: 8}}
+                    message={t("settingsRemoteAccess.nodeOffline")}
+                />
+            )}
+
+            {recoveryState === "operator_action" && status?.backendState === "NeedsMachineAuth" && (
+                <Alert
+                    type="warning"
+                    showIcon
+                    style={{marginBottom: 8}}
+                    message={t("settingsRemoteAccess.machineAuthRequired")}
+                />
+            )}
+
+            {recoveryState === "degraded" && !status?.error && (
+                <Alert
+                    type="error"
+                    showIcon
+                    style={{marginBottom: 8}}
+                    message={t("settingsRemoteAccess.degradedTitle")}
+                    description={status?.recoveryError}
+                    action={<Button size="small" onClick={onRetry} loading={busy}>{t("settingsRemoteAccess.retry")}</Button>}
+                />
             )}
 
             {verdict === "connected" && status && (

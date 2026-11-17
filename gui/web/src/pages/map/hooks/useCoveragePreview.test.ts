@@ -80,6 +80,22 @@ describe('useCoveragePreview', () => {
             });
         });
 
+        it('keeps showing a chosen direction when the page commits it onto the same feature object', () => {
+            // MapPage's commit replaces `feature.area` on the SAME feature and hands the hook a new
+            // array: the choice must read back, not snap to "Robot-wide".
+            const feature = area();
+            const props = base({
+                areas: [feature],
+                onCommit: vi.fn((_id: string, overrides: Required<AreaOverrideFields>) => {
+                    feature.area = {...feature.area!, ...overrides};
+                }),
+            });
+            const {result, rerender} = renderHook((p) => useCoveragePreview(p), {initialProps: props});
+            act(() => result.current.setDirection(2));
+            rerender({...props, areas: [feature]});
+            expect(result.current.choices.direction).toBe(2);
+        });
+
         it('going back to robot-wide commits a cleared override', () => {
             const props = base({areas: [area({has_ring_direction: true, ring_direction: 2})]});
             const {result} = renderHook(() => useCoveragePreview(props));

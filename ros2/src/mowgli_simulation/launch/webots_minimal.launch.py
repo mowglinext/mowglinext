@@ -145,8 +145,8 @@ def generate_launch_description():
     # reproduces the per-wheel PWM stiction the ideal diff_drive cannot.
     # Set deadband_enabled:=false for an ideal-actuation baseline.
     # Wheel-model gains mirror firmware/stm32/ros_usbnode/{include/board.h,
-    # src/ros/ros_custom/cpp_main.cpp} and MUST stay in lockstep with
-    # mowgli_simulation/kinematic_drive.py's identical Python copy.
+    # src/ros/ros_custom/cpp_main.cpp}. KinematicDrive observes the actual
+    # wheel positions after ros2_control's limits and the native physics step.
     #
     # 2026-07-17 Option C (task #34): this used to ALSO insert a host-side
     # angular-rate PI (Option B, task #24) ahead of the per-wheel model —

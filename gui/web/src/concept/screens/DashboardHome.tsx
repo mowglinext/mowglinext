@@ -339,7 +339,7 @@ interface LiveGardenCardProps {
   height?: number;
 }
 
-function LiveGardenCard({coverage, robot, height = 200}: LiveGardenCardProps) {
+function LiveGardenCard({robot, height = 200}: LiveGardenCardProps) {
   const {t} = useTranslation();
   return (
     <GlassCard padding={0} style={{overflow: "hidden"}}>
@@ -370,7 +370,7 @@ function LiveGardenCard({coverage, robot, height = 200}: LiveGardenCardProps) {
           <ChevronRight size={14} strokeWidth={2.4}/>
         </button>
       </div>
-      <LiveMapMini coverage={coverage} robot={robot} height={height}/>
+      <LiveMapMini robot={robot} height={height}/>
     </GlassCard>
   );
 }

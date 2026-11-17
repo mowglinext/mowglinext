@@ -159,48 +159,15 @@ services:
         if __name__ == "__main__":
             main()
     healthcheck:
+      # Process liveness only. The previous probe started an rclpy node every
+      # 30 s to call get_health; each new DDS participant's discovery burst
+      # stalled the LD19 LiDAR stream ~2.4 s later (field 2026-11-09: every
+      # LiDAR dropout followed a probe by 2.4 +- 0.1 s), and each dropout
+      # stopped the mower (collision_monitor invalid source, blade off). Never
+      # join the ROS graph from a periodic probe.
       test:
-        - CMD
-        # Docker health probes do not inherit the entrypoint's ROS environment.
-        - /usr/local/bin/universal-gnss-entrypoint
-        - python3
-        - -c
-        - |
-          import pathlib
-          import sys
-          import rclpy
-          from std_srvs.srv import Trigger
-
-          def responsive(node, service):
-              client = node.create_client(Trigger, service)
-              try:
-                  if not client.wait_for_service(timeout_sec=2.0):
-                      return False
-                  future = client.call_async(Trigger.Request())
-                  rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
-                  return (future.done() and future.exception() is None
-                          and future.result() is not None and future.result().success)
-              finally:
-                  node.destroy_client(client)
-
-          def main():
-              services = ["/universal_gnss_receiver/get_health"]
-              if pathlib.Path("/run/universal_gnss/ntrip_enabled").exists():
-                  services.append("/universal_gnss_ntrip/get_health")
-              rclpy.init()
-              node = rclpy.create_node("mowgli_gnss_container_healthcheck")
-              try:
-                  for service in services:
-                      if not responsive(node, service):
-                          print("GNSS health check failed: " + service, file=sys.stderr)
-                          return 1
-                  return 0
-              finally:
-                  node.destroy_node()
-                  rclpy.shutdown()
-
-          if __name__ == "__main__":
-              sys.exit(main())
+        - CMD-SHELL
+        - pgrep -x receiver_node >/dev/null && { [ ! -e /run/universal_gnss/ntrip_enabled ] || pgrep -x ntrip_node >/dev/null; }
       interval: 30s
       timeout: 12s
       start_period: 20s

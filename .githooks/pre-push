@@ -6,10 +6,28 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 FORMAT_SCRIPT="${REPO_ROOT}/ros2/scripts/format.sh"
 
-if ! command -v clang-format &>/dev/null; then
-  echo "WARNING: clang-format not found, skipping format check."
+# Only clang-format 18 matches CI (git-clang-format-18). Any other major
+# reformats lines CI never checks and disagrees with 18 on others (e.g.
+# `struct rlimit original{};`), so auto-committing its output broke dev's
+# Formatting job repeatedly (PR #1025, #1090). Skip instead of guessing.
+if [ -z "${CLANG_FORMAT:-}" ]; then
+  if command -v clang-format-18 &>/dev/null; then
+    CLANG_FORMAT=clang-format-18
+  elif command -v clang-format &>/dev/null; then
+    CLANG_FORMAT=clang-format
+  else
+    echo "WARNING: clang-format not found, skipping format check."
+    exit 0
+  fi
+fi
+CF_MAJOR=$("$CLANG_FORMAT" --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
+CF_MAJOR=${CF_MAJOR%%.*}
+if [ "$CF_MAJOR" != "18" ]; then
+  echo "WARNING: $CLANG_FORMAT is v${CF_MAJOR}, CI uses 18 — skipping auto-format."
+  echo "         Install clang-format 18 (pip install clang-format==18.1.8) or set CLANG_FORMAT."
   exit 0
 fi
+export CLANG_FORMAT
 
 if [ ! -f "$FORMAT_SCRIPT" ]; then
   echo "WARNING: format.sh not found, skipping format check."

@@ -60,6 +60,9 @@ def test_transit_authorization_and_explicit_recovery_are_separate(overlay: str) 
     assert planner["GridBased"]["plugin"] == "mowgli_nav2_plugins/AuthorizedTransitPlanner"
     assert planner["GridBased"]["downsample_costmap"] is False
     assert planner["GridBased"]["tolerance"] == 0.0
+    # Bridges borders drawn twice a few centimetres apart; the planner refuses
+    # anything above the 0.15 m a terminal leg may already leave the union by.
+    assert 0.0 < planner["GridBased"]["seam_tolerance"] <= 0.15
     assert planner["BoundaryRecovery"]["plugin"] == "nav2_smac_planner::SmacPlanner2D"
     trees = os.path.join(os.path.dirname(__file__), "..", "..", "mowgli_behavior", "trees")
     for filename in ("navigate_to_pose.xml", "navigate_to_pose_transit.xml"):
@@ -67,6 +70,23 @@ def test_transit_authorization_and_explicit_recovery_are_separate(overlay: str) 
             assert "BoundaryRecovery" not in stream.read()
     with open(os.path.join(trees, "navigate_inside_boundary.xml"), encoding="utf-8") as stream:
         assert 'planner_id="BoundaryRecovery"' in stream.read()
+
+
+def test_navigate_recovery_never_uses_the_blind_backup() -> None:
+    """Nav2's BackUp reverses along the current heading and cannot see the boundary.
+
+    Field 2026-10-26: a 0.30 m recovery BackUp took the mower from 0.21 m to 0.57 m outside the
+    recorded area, a lethal boundary violation. Every BackUp in the two navigate trees must be
+    served by retrace_server (server_name="retrace"), which only undoes the last piece driven.
+    """
+    trees = os.path.join(os.path.dirname(__file__), "..", "..", "mowgli_behavior", "trees")
+    for filename in ("navigate_to_pose.xml", "navigate_to_pose_transit.xml"):
+        with open(os.path.join(trees, filename), encoding="utf-8") as stream:
+            xml = stream.read()
+        backups = re.findall(r"<BackUp\b[^>]*>", xml)
+        assert backups, f"{filename}: the recovery lost its BackUp step"
+        for tag in backups:
+            assert 'server_name="retrace"' in tag, f"{filename}: {tag} reverses blindly"
 
 
 # The coverage goal-checker was migrated off SimpleGoalChecker/StoppedGoalChecker
@@ -782,7 +802,7 @@ def test_overlays_select_disjoint_costmap_layers() -> None:
             assert not ("obstacle_layer" in params and "static_layer" in params), (
                 f"{variant}: {cm} merged config has BOTH obstacle_layer and static_layer"
             )
-            for layer in params["plugins"]:
+            for layer in params["plugins"] + params.get("filters", []):
                 assert layer in params, (
                     f"{variant}: {cm} plugins references undefined layer '{layer}'"
                 )
@@ -880,6 +900,32 @@ def test_ftc_turn_fallback_is_configured_and_bounded() -> None:
             "and still catch the 70 deg kinks of 2026-09-22"
         )
         assert 10.0 <= fcp["turn_fallback_timeout_s"] <= 120.0
+
+
+def test_ftc_contour_bypass_is_configured_and_bounded() -> None:
+    """FTC's contour bypass (ftc_contour_bypass.hpp) walks the bladed robot round
+    an obstacle neither the lattice nor the turn fallback can pass, off its plan
+    for metres. Every knob that bounds it must be set explicitly (a missing key
+    silently runs the C++ default) and stay inside the ranges FTCController
+    accepts: a contour of a few metres, a follow distance that keeps the body
+    (0.285 m + margins) off the obstacle without turning the skirt into a lawn
+    crossing, and a finite deadline long enough for the pivots it plans.
+    """
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        for key in ("contour_bypass_enabled", "contour_bypass_max_contour_m",
+                    "contour_bypass_max_rejoin_arc_m", "contour_bypass_follow_distance_m",
+                    "contour_bypass_timeout_s"):
+            assert key in fcp, f"FollowCoveragePath.{key} missing from merged config"
+        assert isinstance(fcp["contour_bypass_enabled"], bool)
+        assert 1.0 <= fcp["contour_bypass_max_contour_m"] <= 15.0
+        assert 0.5 <= fcp["contour_bypass_max_rejoin_arc_m"] <= 10.0
+        assert 0.35 <= fcp["contour_bypass_follow_distance_m"] <= 1.0, (
+            "the contour must keep the body off the obstacle and stay a skirt"
+        )
+        assert 30.0 <= fcp["contour_bypass_timeout_s"] <= 300.0, (
+            "an 8 m contour with several pivots takes ~30-60 s"
+        )
 
 
 def test_turn_fallback_reaches_both_variants() -> None:
@@ -1499,12 +1545,12 @@ def test_global_costmap_inflates_before_the_keepout_filter() -> None:
         # peers layer, which must be inflated like any obstacle), then
         # inflation, and the keepout filter LAST so the mask is never inflated.
         assert plugins[0] == first, f"global costmap plugin order is {plugins}"
-        assert plugins[-1] == "keepout_filter", f"global costmap plugin order is {plugins}"
-        assert plugins.index("inflation_layer") == len(plugins) - 2, (
-            f"inflation_layer must sit right before keepout_filter: {plugins}"
-        )
+        assert plugins[-1] == "inflation_layer", f"global costmap plugin order is {plugins}"
+        assert "keepout_filter" not in plugins
+        assert gc["filters"] == ["keepout_filter"]
         lc = loader()["local_costmap"]["local_costmap"]["ros__parameters"]
         assert "keepout_filter" not in lc["plugins"]  # Invariant 5
+        assert "keepout_filter" not in lc.get("filters", [])
 
 
 def test_global_grid_is_garden_sized_with_bounded_recent_sources() -> None:
@@ -1693,7 +1739,7 @@ def test_collision_monitor_polygons_follow_the_chassis() -> None:
             f"{polygon}.points must be DERIVED from the chassis footprint at "
             "launch, not left as a literal in the overlay yaml."
         )
-    assert re.search(r"_poly\(\s*fp_f \+ 0\.12,\s*fp_f - 0\.02,\s*fp_hw\)", src)
+    assert re.search(r"_poly\(\s*fp_f \+ 0\.05,\s*fp_f - 0\.02,\s*fp_hw\)", src)
     assert re.search(r"_poly\(\s*fp_f \+ 0\.05,\s*fp_r - 0\.05,\s*fp_hw\)", src)
     # The footprint triple must be bound unconditionally — reading it from the
     # injection closure when only an `if rp:` branch assigned it is the
@@ -1808,3 +1854,68 @@ def test_fleet_peer_node_is_respawned_and_gets_the_chassis_footprint() -> None:
     assert re.search(r"fleet_front_m, fleet_rear_m, fleet_half_width_m = chassis_footprint\(robot_params\)", src)
     for key in ("chassis_front_m", "chassis_rear_m", "chassis_half_width_m"):
         assert key in block, f"{key} must be injected into fleet_peer_obstacles"
+
+
+@pytest.mark.parametrize("overlay", ["nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"])
+def test_ftc_pivot_coast_assumption_is_loaded_in_both_overlays(overlay: str) -> None:
+    params = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml(overlay))
+    ftc = _controller_section(params)["FollowCoveragePath"]
+    assert ftc["pivot_coast_time_bound_s"] == 0.5
+    # Private Nav2 tuning is read from the merged params file; it needs no
+    # operator template / GUI projection or launch-time physics estimate.
+    assert ftc["plugin"] == "mowgli_nav2_plugins/FTCController"
+
+
+# FTC keys whose compiled declare_parameter default (ftc_controller.cpp) is far
+# looser than the shipped value: dropping one from the yaml would silently run
+# the robot on that default (2 m/s and 2 rad/s caps, 5x the acceleration, the
+# 0.12 m line body model, no lattice, a 0.25 m look-ahead, an undamped lateral
+# loop). Pin that the shipped value is stated, and bounded, in BOTH overlays.
+_FTC_SAFETY_CRITICAL = {
+    "max_cmd_vel_speed": (0.0, 0.5),
+    "max_cmd_vel_ang": (0.0, 1.5),
+    "acceleration": (0.0, 0.5),
+    "speed_fast": (0.0, 0.5),
+    "use_footprint_clearance": (True, True),
+    "use_offset_lattice": (True, True),
+    "obstacle_lookahead": (10, 200),
+    "obstacle_clearance_margin": (0.0, 0.5),
+    "kd_lat": (0.0, 5.0),
+    "derivative_filter_tau": (0.0, 1.0),
+    "max_goal_distance_error": (0.0, 0.5),
+    "goal_timeout": (5.0, 60.0),
+}
+
+
+@pytest.mark.parametrize("overlay", ["nav2_params_lidar.yaml", "nav2_params_no_lidar.yaml"])
+def test_ftc_safety_critical_keys_are_stated_explicitly(overlay: str) -> None:
+    params = _deep_merge(_load_yaml("nav2_params_base.yaml"), _load_yaml(overlay))
+    ftc = _controller_section(params)["FollowCoveragePath"]
+    for key, (low, high) in _FTC_SAFETY_CRITICAL.items():
+        assert key in ftc, (
+            f"FollowCoveragePath.{key} must be set explicitly: FTC's compiled default "
+            "is not a safe value for this robot"
+        )
+        assert low <= ftc[key] <= high, f"FollowCoveragePath.{key}={ftc[key]} outside [{low}, {high}]"
+
+
+def test_collision_monitor_transform_tolerance_is_top_level() -> None:
+    """collision_monitor declares a TOP-LEVEL `transform_tolerance`. The nested
+    `controller.transform_tolerance` spelling belongs to docking_server; under
+    collision_monitor it is never declared, so the node silently ran on the
+    0.1 s default (found live 2026-11-13)."""
+    base = _load_yaml("nav2_params_base.yaml")["collision_monitor"]["ros__parameters"]
+    assert "controller.transform_tolerance" not in base
+    assert "controller" not in base
+    assert float(base["transform_tolerance"]) == 0.5
+
+
+def test_lidar_collision_monitor_approach_horizon() -> None:
+    """Both LiDAR front approach gates share one look-ahead horizon, short
+    enough not to hold the robot where FTC already found clearance (0.8 s,
+    field 2026-11-13) and long enough to stop before contact."""
+    cmon = _load_yaml("nav2_params_lidar.yaml")["collision_monitor"]["ros__parameters"]
+    horizons = {name: float(cmon[name]["time_before_collision"])
+                for name in ("FootprintApproach", "PolygonStopNarrow")}
+    assert len(set(horizons.values())) == 1, horizons
+    assert 0.5 <= horizons["FootprintApproach"] <= 1.0, horizons

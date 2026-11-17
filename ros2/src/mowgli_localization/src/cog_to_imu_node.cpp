@@ -162,11 +162,16 @@ public:
     min_dt_ = declare_parameter<double>("min_sample_dt_s", 0.05);
     physical_gnss_observation_rate_hz_ =
         declare_parameter<double>("physical_gnss_observation_rate_hz", 5.0);
-    // A 1.5-period deadline admits up to half a receiver period of receipt
-    // jitter at every configured rate, while a genuinely missed full cycle
-    // (2 periods) still resets instead of spanning an unbounded baseline.
+    // A 2.5-period deadline rides through ONE missed receiver epoch (2 periods
+    // plus half a period of receipt jitter) and still resets on two in a row,
+    // so a baseline never spans an unbounded gap. It was 1.5: field 2026-11-13
+    // logged 50 reseeds in 10 min of mowing at a steady 5 Hz delivery — each a
+    // single skipped receiver epoch — and every reseed threw away a partly
+    // built 10 cm baseline, holding COG output near 0.8 Hz. The straight-
+    // baseline gate integrates the gyro between fixes, so a skipped epoch does
+    // not hide a turn.
     sample_period_tolerance_factor_ =
-        declare_parameter<double>("sample_period_tolerance_factor", 1.5);
+        declare_parameter<double>("sample_period_tolerance_factor", 2.5);
     const double expected_observation_period_s =
         DeriveMaximumCogObservationIntervalSeconds(physical_gnss_observation_rate_hz_, 1.0);
     const double derived_max_dt_s =

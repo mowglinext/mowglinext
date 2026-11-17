@@ -3,6 +3,8 @@
 //
 // Unit tests for FTC's anti-wheelspin stall decision. Pure logic, no ROS.
 
+#include <algorithm>
+
 #include "mowgli_nav2_plugins/ftc_stall.hpp"
 #include <gtest/gtest.h>
 
@@ -179,4 +181,55 @@ TEST(ForwardSpeedRamp, HonorsMovementCapAndLeavesNonPositiveCommandsUnchanged)
   EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(0.30, 0.18, 0.15), 0.18);
   EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(0.0, 0.20, 0.15), 0.0);
   EXPECT_DOUBLE_EQ(mnp::ClampForwardToMovementRamp(-0.05, 0.20, 0.15), -0.05);
+}
+
+// The controller ramps its commanded speed down to exactly the crawl speed
+// once the stall latches. With wheels that stay blocked the latch must hold:
+// re-testing "command above the crawl" released it on the next tick, sent the
+// target back to speed_fast and pushed 0.08 -> 0.20 m/s into the obstruction
+// every grace period.
+TEST(StallDecision, BlockedWheelsStayLatchedAtTheCrawlSpeed)
+{
+  mnp::FtcStallCfg cfg;  // ratio 0.35, grace 0.6 s, crawl 0.08
+  const double dt = 0.1;
+  const double acceleration = 0.2;  // nav2_params_base.yaml
+  double stall_time = 0.0;
+  double cmd = 0.20;
+  int released_ticks = 0;
+  for (int tick = 0; tick < 100; ++tick)
+  {
+    const auto out = mnp::StallDecision(0.20, cmd, /*measured=*/0.0, dt, cfg, stall_time);
+    if (tick > 7 && !out.in_stall)
+    {
+      ++released_ticks;
+    }
+    // The controller's acceleration-limited ramp towards the eased target.
+    cmd = out.target_speed < cmd ? std::max(out.target_speed, cmd - acceleration * dt)
+                                 : std::min(out.target_speed, cmd + acceleration * dt);
+  }
+  EXPECT_EQ(released_ticks, 0);
+  EXPECT_DOUBLE_EQ(cmd, cfg.stall_crawl_speed);
+}
+
+TEST(StallDecision, LatchedStallReleasesWhenTractionReturnsAtTheCrawl)
+{
+  mnp::FtcStallCfg cfg;
+  double stall_time = 1.0;  // latched, past the grace
+  ASSERT_TRUE(mnp::StallDecision(0.20, 0.08, 0.0, 0.1, cfg, stall_time).in_stall);
+  // The robot now really moves at the crawl speed.
+  const auto out = mnp::StallDecision(0.20, 0.08, 0.08, 0.1, cfg, stall_time);
+  EXPECT_FALSE(out.in_stall);
+  EXPECT_DOUBLE_EQ(out.target_speed, 0.20);
+  EXPECT_DOUBLE_EQ(stall_time, 0.0);
+}
+
+TEST(StallDecision, AnUnlatchedCrawlCommandIsStillNotAStall)
+{
+  mnp::FtcStallCfg cfg;
+  double stall_time = 0.0;
+  for (int i = 0; i < 20; ++i)
+  {
+    EXPECT_FALSE(mnp::StallDecision(0.08, 0.08, 0.0, 0.1, cfg, stall_time).in_stall);
+  }
+  EXPECT_DOUBLE_EQ(stall_time, 0.0);
 }

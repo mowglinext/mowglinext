@@ -370,14 +370,16 @@ TEST(SharpCornerPivot, GentleCornersAndArcsAreLeftAlone)
   EXPECT_EQ(pivotSharpCorners(pts, 60.0 * M_PI / 180.0, limits), pts);
 }
 
-TEST(SharpCornerPivot, NoPivotWhereTheSweepDoesNotFit)
+TEST(SharpCornerPivot, BlockedDiscStillRequiresAStoppedReorientation)
 {
   // The same spike, but 0.30 m from a drawn obstacle: the sweep would hit it.
   const auto limits =
       shippedLimits(rectRing(4.0, 3.0), {{{1.7, 0.9}, {1.9, 0.9}, {1.9, 1.1}, {1.7, 1.1}}});
   const Pts pts = {{0.5, 1.0}, {1.0, 1.0}, {1.5, 1.0}, {1.5 - 0.433, 1.25}, {1.5 - 0.866, 1.5}};
 
-  EXPECT_EQ(pivotSharpCorners(pts, 60.0 * M_PI / 180.0, limits), pts);
+  EXPECT_FALSE(pivotSweepFits(pts[2].first, pts[2].second, limits));
+  EXPECT_EQ(pivotSharpCorners(pts, 60.0 * M_PI / 180.0, limits),
+            (Pts{pts[0], pts[1], pts[2], pts[2], pts[3], pts[4]}));
   PivotJoinLimits disabled = shippedLimits(rectRing(4.0, 3.0), {});
   disabled.sweep_radius = 0.0;
   EXPECT_EQ(pivotSharpCorners(pts, 60.0 * M_PI / 180.0, disabled), pts);
@@ -389,6 +391,114 @@ TEST(SharpCornerPivot, ExistingTwinsAreNotDoubled)
   const Pts pts = {{0.5, 1.0}, {1.0, 1.0}, {1.0, 1.0}, {1.0, 1.5}, {1.0, 2.0}};
 
   EXPECT_EQ(pivotSharpCorners(pts, 60.0 * M_PI / 180.0, limits), pts);
+}
+
+// Exact map-frame corner from the 2 x 2 m ring at zero chassis inset. Two
+// roughly 45-degree turns share a 3.67 mm bevel; together they cannot be
+// followed at the configured 0.20 m minimum turning radius.
+TEST(SharpCornerPivot, MillimetreBevelIsAnAggregateCorner)
+{
+  const Pts boundary = {{-3, -1}, {-1, -1}, {-1, 1}, {-3, 1}};
+  const auto limits = shippedLimits(boundary, {});
+  const Pts pts = {{-1.0056921132681735, -0.8979386594257094},
+                   {-1.0059903240598143, -0.9973782762600764},
+                   {-1.0085859395727377, -0.9999738917729994},
+                   {-1.1080255564071049, -0.9996756809813586}};
+  std::vector<bool> twins(pts.size(), false);
+  const auto out = pivotSharpCorners(pts, M_PI / 3, limits, &twins, 0.20);
+  ASSERT_EQ(out.size(), pts.size() + 2);
+  EXPECT_EQ(out, (Pts{pts[0], pts[1], pts[1], pts[2], pts[2], pts[3]}));
+  EXPECT_EQ(twins, (std::vector<bool>{false, false, true, false, true, false}));
+  EXPECT_EQ(pivotSharpCorners(out, M_PI / 3, limits, nullptr, 0.20), out);
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, limits), pts) << "radius opt-in";
+  auto disabled = limits;
+  disabled.sweep_radius = 0;
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, disabled, nullptr, 0.20), pts);
+  auto blocked = limits;
+  blocked.recorded_obstacles = {{{-1.2, -1.2}, {-0.8, -1.2}, {-0.8, -0.8}, {-1.2, -0.8}}};
+  EXPECT_EQ(pivotSharpCorners(pts, M_PI / 3, blocked, nullptr, 0.20), out)
+      << "required-stop classification is not a full-disc clearance certificate";
+}
+
+TEST(SharpCornerPivot, MinimumRadiusArcsAndIsolated45DegreeTurnsStayUnchanged)
+{
+  const auto limits = shippedLimits(rectRing(4, 3), {});
+  const Pts isolated = {{1, 1}, {2, 1}, {2.5, 1.5}};
+  EXPECT_EQ(pivotSharpCorners(isolated, M_PI / 3, limits, nullptr, 0.20), isolated);
+  for (const double radius : {0.20, 0.30})
+  {
+    for (const int steps : {2, 3, 9, 90})
+    {
+      Pts arc;
+      for (int k = 0; k <= steps + 2; ++k)
+      {
+        const double angle = (k - 1) * (M_PI / 2) / steps;
+        arc.push_back({2 + radius * std::cos(angle), 1 + radius * std::sin(angle)});
+      }
+      EXPECT_EQ(pivotSharpCorners(arc, M_PI / 3, limits, nullptr, 0.20), arc);
+    }
+    Pts irregular;
+    for (const double degrees : {-80., 0., 10., 90.})
+    {
+      const double angle = degrees * M_PI / 180;
+      irregular.push_back({2 + radius * std::cos(angle), 1 + radius * std::sin(angle)});
+    }
+    EXPECT_EQ(pivotSharpCorners(irregular, M_PI / 3, limits, nullptr, 0.20), irregular);
+  }
+}
+
+TEST(SharpCornerPivot, ThreeConcentratedTurnsAreClassifiedWithoutJoiningOppositeTurns)
+{
+  const auto limits = shippedLimits(rectRing(4, 3), {});
+  Pts pts = {{1, 1}, {1.1, 1}};
+  for (int k = 1; k <= 3; ++k)
+  {
+    const double angle = k * M_PI / 6;
+    const double step = k == 3 ? 0.1 : 0.003;
+    pts.push_back(
+        {pts.back().first + step * std::cos(angle), pts.back().second + step * std::sin(angle)});
+  }
+  const auto out = pivotSharpCorners(pts, M_PI / 3, limits, nullptr, 0.20);
+  EXPECT_EQ(out, (Pts{pts[0], pts[1], pts[1], pts[2], pts[2], pts[3], pts[3], pts[4]}));
+  const Pts s_bend = {{1, 1}, {1.1, 1}, {1.102, 1.002}, {1.2, 1.002}};
+  EXPECT_EQ(pivotSharpCorners(s_bend, M_PI / 3, limits, nullptr, 0.20), s_bend);
+}
+
+TEST(SharpCornerPivot, WholeSquarePipelineEncodesEveryMillimetreBevel)
+{
+  const Pts boundary = {{-3, -1}, {-1, -1}, {-1, 1}, {-3, 1}};
+  const auto limits = shippedLimits(boundary, {});
+  const f2c::types::Cell cell(mowgli_coverage::dedupClosedRing(toRing(boundary)));
+  const auto plan = planBoustrophedon(
+      cell, 0.16, 0.18, 5, 0.0, -1, 0.10, 0, 0.20, false, 0, std::nullopt, 0, &limits);
+  const auto paths = buildContinuousSubPaths(
+      plan, clearanceOf(plan), 0.20, 0.20, 0.03, nullptr, plan.swath_turn_envelope, limits);
+  ASSERT_EQ(paths.size(), 1u);
+  ASSERT_FALSE(plan.rings.empty());
+  // The first ring retains every F2C position, in order. Each of its four
+  // bevels has two corners; both endpoints now carry exact safe pivot twins.
+  Pts ring;
+  std::size_t twins = 0;
+  for (std::size_t i = 0; i < paths.front().size(); ++i)
+  {
+    const auto& point = paths.front()[i];
+    if (i && point == paths.front()[i - 1])
+    {
+      ++twins;
+      EXPECT_TRUE(pivotSweepFits(point.first, point.second, limits));
+      continue;
+    }
+    ring.push_back(point);
+    if (ring.size() == plan.rings.front().size())
+    {
+      break;
+    }
+  }
+  EXPECT_EQ(ring, plan.rings.front());
+  EXPECT_EQ(twins, 8u);
+  const auto replay = buildContinuousSubPaths(
+      plan, clearanceOf(plan), 0.20, 0.20, 0.03, nullptr, plan.swath_turn_envelope, limits);
+  EXPECT_EQ(paths, replay);
 }
 
 TEST(PivotCorner, PathHeadingsGiveEachTwinItsOwnHeading)
@@ -617,6 +727,47 @@ TEST(SharpRingCorner, AnAcuteTipIsReachedAndPivotedInsteadOfRounded)
     pivots_at_tip = pivots_at_tip || std::hypot(p.first - tip.first, p.second - tip.second) < 0.25;
   }
   EXPECT_TRUE(pivots_at_tip) << "the robot must turn in place at the tip";
+}
+
+TEST(SharpRingCorner, RawHoleBlockedDiscMarksTheRetainedNotchWithoutChangingItsGeometry)
+{
+  for (const int reflection : {1, -1})
+    for (const int direction : {0, 1, 2})
+    {
+      auto transform = [reflection](Pts pts)
+      {
+        for (auto& p : pts)
+          p.first *= reflection;
+        return pts;
+      };
+      const Pts boundary = transform({{-3, -1}, {-1, -1}, {-1, 1}, {-3, 1}});
+      const Pts hole = transform({{-2.125, .375}, {-1.875, .375}, {-1.875, .625}, {-2.125, .625}});
+      f2c::types::Cell cell(toRing(boundary));
+      cell.addRing(mowgli_coverage::bufferRingOutward(toRing(hole), .389));
+      const auto limits = shippedLimits(boundary, {hole});
+      const auto plan = planBoustrophedon(
+          cell, .16, .18, 5, 0, 0, .1, direction, .2, false, 0, std::nullopt, .55, &limits);
+      const auto build = [&](const PivotJoinLimits& l)
+      {
+        return buildContinuousSubPaths(
+            plan, clearanceOf(plan), .2, .2, .03, nullptr, plan.swath_turn_envelope, l);
+      };
+      const auto paths = build(limits);
+      for (const auto& ring : plan.rings)
+      {
+        Pts marked = pivotSharpCorners(ring, M_PI / 3, limits, nullptr, .2);
+        marked.erase(std::unique(marked.begin(), marked.end()), marked.end());
+        EXPECT_EQ(marked, ring) << "classification preserves every XY position/segment in order";
+      }
+      expectCornerContract(paths);
+      bool blocked_disc_marker = false;
+      for (const auto& [s, i] : cornersOf(paths))
+      {
+        const auto& p = paths[s][i];
+        blocked_disc_marker |= !pivotSweepFits(p.first, p.second, limits);
+      }
+      EXPECT_TRUE(blocked_disc_marker) << "an unsafe nominal disc must not erase the stop";
+    }
 }
 
 TEST(SharpRingCorner, DisabledLimitsKeepTheArc)

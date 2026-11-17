@@ -6,7 +6,7 @@ import {StatusMowerIllustration} from "../components/dashboard/StatusMowerIllust
 import "../components/dashboard/healthCard.css";
 import {liveAreaLabel} from "../utils/areaLabel.ts";
 import type {ReactNode} from "react";
-import {useMemo} from "react";
+import {useMemo, useRef, useState} from "react";
 import {App, Button} from "antd";
 import {motion} from "framer-motion";
 import {useNavigate} from "react-router-dom";
@@ -32,6 +32,7 @@ import {useMowerAction} from "../components/MowerActions.tsx";
 import {computeBatteryPercent, hasBatteryReading} from "../utils/battery.ts";
 import {deriveGpsStatus} from "../utils/gpsStatus.ts";
 import {deriveIsMoving, isSessionActive} from "../utils/mowerMotion.ts";
+import {dashboardActivity} from "../utils/dashboardActivity";
 import {deriveChargeHold} from "../utils/chargeHold.ts";
 
 import {GlassCard} from "../concept/components/GlassCard.tsx";
@@ -128,11 +129,12 @@ function useMowerData(backend?: string) {
     rain: status.rain_detected ?? false,
     rainKnown: status.rain_detected !== undefined,
     isMoving,
+    activity: dashboardActivity(highLevelStatus),
     scanPaused,
     stopReason: highLevelStatus.stop_reason ?? "",
     sessionActive: isSessionActive(stateNum),
     stopDetail: highLevelStatus.stop_detail ?? "",
-    toolWidth: (settings?.tool_width as number | undefined) ?? 0.18,
+    toolWidth: settings?.tool_width as number | undefined,
     batteryFullPercent: (settings?.battery_full_percent as number | undefined) ?? 95,
     batteryManualResumePercent: (settings?.battery_manual_resume_percent as number | undefined) ?? 30,
     batteryLowPercent: (settings?.battery_low_percent as number | undefined) ?? 20,
@@ -151,6 +153,8 @@ function useMowerData(backend?: string) {
 
 export const MowgliNextPage = () => {
   const asyncHandler = useAsyncHandler();
+  const actionInFlight = useRef(false);
+  const [actionPending, setActionPending] = useState(false);
   const {t} = useTranslation();
   const isMobile = useIsMobile();
   const navigate = useNavigate();
@@ -166,8 +170,7 @@ export const MowgliNextPage = () => {
   const coverage = snapshot?.coverage ?? [];
   // Show the area the robot is ACTUALLY mowing, not always area 0 — otherwise
   // the progress bar / ETA report area 0's grid while it mows area 2.
-  const activeArea = coverage.find(c => c.area_index === (data.currentAreaIndex ?? 0))
-    ?? coverage.find(c => c.area_index === 0);
+  const activeArea = coverage.find(c => c.area_index === data.currentAreaIndex);
   const todayMowedM2 = activeArea ? activeArea.mowed_cells : 0;
   const totalArea = activeArea ? activeArea.total_cells : 0;
   const coveragePct = totalArea > 0 ? todayMowedM2 / totalArea : 0;
@@ -221,8 +224,8 @@ export const MowgliNextPage = () => {
     ? (Math.atan2(2 * (ori.w * ori.z + ori.x * ori.y),
                   1 - 2 * (ori.y * ori.y + ori.z * ori.z)) * 180) / Math.PI
     : 0;
-  const robotNormalised = (pose && bbox)
-    ? {...norm(pose.x ?? 0, pose.y ?? 0), heading: robotYawDeg}
+  const robotNormalised = (pose && Number.isFinite(pose.x) && Number.isFinite(pose.y) && bbox)
+    ? {...norm(pose.x, pose.y), heading: robotYawDeg}
     : undefined;
   const dockNormalised = dock && bbox ? norm(dock.x, dock.y) : undefined;
 
@@ -246,7 +249,7 @@ export const MowgliNextPage = () => {
 
   const phase: "idle" | "playing" | "returning" | "alert" =
     data.commandEmergency ? "alert" :
-    data.commandState === "RETURNING_HOME" ? "returning" :
+    data.activity === "returning" ? "returning" :
     data.isMoving ? "playing" : "idle";
   const chargeHold: ChargeHold | undefined = deriveChargeHold(
     data.commandState, data.battery, data.batteryManualResumePercent, data.batteryLowPercent,
@@ -256,20 +259,19 @@ export const MowgliNextPage = () => {
 
   // ── ETA estimate ──
   //
-  // remaining_cells × cell_size² = remaining m². Mowing rate = tool_width
-  // × forward_speed [m²/s]. Use live linear velocity when available, else
-  // fall back to the nominal cruise speed.
-  const cellResolutionM = 0.05;            // map_server publishes the grid at 5 cm
+  // A rough cutting-only estimate for the exact current area's summary.
+  // No nominal speed/width fallback: missing measurements cannot establish ETA.
+  // The summary API counts the map server's fixed 5 cm cells.
   const remainingCells = Math.max(0, totalArea - todayMowedM2);
-  const remainingM2 = remainingCells * cellResolutionM * cellResolutionM;
+  const remainingM2 = remainingCells * 0.05 * 0.05;
   const toolWidthM = data.toolWidth;
-  const liveVel = Math.abs(odom?.twist?.twist?.linear?.x ?? 0);
-  const nominalSpeed = 0.35;               // typical OpenMower cruise
-  const speedMs = liveVel > 0.05 ? liveVel : nominalSpeed;
-  const rateM2PerSec = toolWidthM * speedMs;
-  const remainingMin = data.isMoving && rateM2PerSec > 0 && remainingCells > 0
-    ? Math.max(1, Math.round(remainingM2 / rateM2PerSec / 60))
+  const speedMs = odom?.twist?.twist?.linear?.x;
+  const remainingMin = data.activity === "mowing" && data.isMoving && !data.scanPaused && !data.emergency
+    && typeof toolWidthM === "number" && Number.isFinite(toolWidthM) && toolWidthM > 0
+    && typeof speedMs === "number" && Number.isFinite(speedMs) && speedMs > 0.05 && remainingCells > 0
+    ? Math.max(1, Math.round(remainingM2 / (toolWidthM * speedMs) / 60))
     : 0;
+  const activityLabel = data.activity ? t(`mowgliNextPage.activity.${data.activity}`) : undefined;
 
   // Headline mirrors the subline's branch order: SCAN_PAUSED gets the operator
   // explanation first while the mission remains active; otherwise a moving mower
@@ -278,18 +280,16 @@ export const MowgliNextPage = () => {
     ? t("telemetry.emergencyClearanceUnverified")
     : !data.statusKnown && !data.emergency
     ? t("telemetry.statusUnknown")
+    : data.emergency
+    ? t('mowgliNextPage.emergencyStop')
     : data.scanPaused
     ? <>{t('mowgliNextPage.headlineScanPausedPrefix')}<em style={{fontStyle: 'italic', color: 'var(--amber, #FFB84D)'}}>{t('mowgliNextPage.headlineScanPausedEmphasis')}</em>{t('mowgliNextPage.headlineScanPausedSuffix')}</>
     : isResumingMowing
       ? t('mowgliNextPage.headlineResumingMowing')
     : data.isMoving
-    ? (remainingMin > 0
-        ? <>{t('mowgliNextPage.headlineUntilHomePrefix')}<span style={{
-            background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
-            WebkitBackgroundClip: 'text', backgroundClip: 'text',
-            WebkitTextFillColor: 'transparent', color: 'transparent',
-          }}>{t('mowgliNextPage.headlineMinutes', {value: remainingMin})}</span>{t('mowgliNextPage.headlineUntilHomeSuffix')}</>
-        : <>{t('mowgliNextPage.headlineMowingPrefix')}<em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>{t('mowgliNextPage.headlineMowingEmphasis')}</em>{t('mowgliNextPage.headlineMowingSuffix')}</>)
+      ? remainingMin > 0
+        ? t('mowgliNextPage.cuttingEstimate', {value: remainingMin})
+        : activityLabel
     : chargeHold
       ? <>{t('mowgliNextPage.headlineMowingPausedPrefix')}<span style={{
           background: 'var(--grad-primary, linear-gradient(135deg, #7CFFB2, #2BAA66))',
@@ -302,29 +302,29 @@ export const MowgliNextPage = () => {
           WebkitBackgroundClip: 'text', backgroundClip: 'text',
           WebkitTextFillColor: 'transparent', color: 'transparent',
         }}>{(data.batteryKnown ? t('mowgliNextPage.headlinePercent', {value: Math.round(data.battery)}) : '—')}</span></>
-      : data.emergency
-        ? <span style={{color: 'var(--rose, #FF6B7A)'}}>{t('mowgliNextPage.emergencyStop')}</span>
-        : <>{t('mowgliNextPage.headlineIdlePrefix')}<em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>{t('mowgliNextPage.headlineIdleEmphasis')}</em>{t('mowgliNextPage.headlineIdleSuffix')}</>;
+      : <>{t('mowgliNextPage.headlineIdlePrefix')}<em style={{fontStyle: 'italic', color: 'var(--lime, #7CFFB2)'}}>{t('mowgliNextPage.headlineIdleEmphasis')}</em>{t('mowgliNextPage.headlineIdleSuffix')}</>;
 
   const subline = data.clearanceUnverified
     ? t("telemetry.emergencyClearanceUnverified")
     : !data.statusKnown && !data.emergency
     ? t("telemetry.statusUnknown")
+    : data.emergency
+    ? t('mowgliNextPage.sublineEmergency')
     : data.scanPaused
     ? t('mowgliNextPage.sublineScanPaused')
     : isResumingMowing
       ? t('mowgliNextPage.sublineResumingMowing')
     : data.isMoving
-      ? t('mowgliNextPage.sublineMoving', {gps: data.gpsLabel.toLowerCase(), area: data.currentArea ?? t('mowgliNextPage.activeZone')})
+      ? remainingMin > 0
+        ? t('mowgliNextPage.cuttingEstimateScope', {area: data.currentArea ?? t('mowgliNextPage.activeZone')})
+        : t('mowgliNextPage.activityDetail', {activity: activityLabel, area: data.currentArea ?? t('mowgliNextPage.activeZone')})
       : chargeHold
         ? chargeHold.autoResume
           ? t('mowgliNextPage.sublineChargeHold')
           : t('mowgliNextPage.sublineManualChargeHold')
         : data.charging
       ? t('mowgliNextPage.sublineCharging', {current: data.current?.toFixed(1) ?? '—'})
-      : data.emergency
-        ? t('mowgliNextPage.sublineEmergency')
-        : t('mowgliNextPage.sublineIdle');
+      : t('mowgliNextPage.sublineIdle');
 
   // The hero "stop" affordance latches the firmware EMERGENCY — this is the
   // real e-stop, not a soft pause. Gate it behind an explicit confirm so a
@@ -341,13 +341,27 @@ export const MowgliNextPage = () => {
     });
   };
 
-  // mowerAction() returns a fn that THROWS on service error. ActionCluster
-  // invokes these from a plain onClick, so a rejection would be swallowed with
-  // zero feedback — a robot that "won't start" would look like a hardware
-  // fault. Wrap each so failures surface a notification.
-  const withFeedback = (fn: () => Promise<unknown>) => async () => {
+  // One lock for every normal Home command, including a banner flow that
+  // awaits operator acknowledgement and multiple service responses.
+  const runCommand = async (fn: () => Promise<unknown>) => {
+    // The ref also blocks a second click before React commits disabled controls.
+    // Emergency stop uses its independent confirmation/request path above.
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
+    setActionPending(true);
     try {
       await fn();
+    } finally {
+      actionInFlight.current = false;
+      setActionPending(false);
+    }
+  };
+
+  // ActionCluster uses plain onClick callbacks. The banner keeps its own
+  // AsyncButton error feedback while sharing runCommand's pending lifetime.
+  const withFeedback = (fn: () => Promise<unknown>) => async () => {
+    try {
+      await runCommand(fn);
     } catch (e: unknown) {
       notification.error({
         message: t('mowgliNextPage.actionFailed'),
@@ -401,19 +415,19 @@ export const MowgliNextPage = () => {
               color: 'var(--ink, #ECFFF4)', fontWeight: 400,
               letterSpacing: '-0.02em', lineHeight: 1.05, marginTop: 4,
             }}>
-              {data.scanPaused ? t('mowgliNextPage.mowgliScanPaused') : data.isMoving ? t('mowgliNextPage.mowgliMowing') : data.charging ? t('mowgliNextPage.mowgliCharging') : t('mowgliNextPage.welcomeBack')}
+              {data.emergency ? t('mowgliNextPage.emergencyStop') : data.scanPaused ? t('mowgliNextPage.mowgliScanPaused') : data.isMoving ? activityLabel : data.charging ? t('mowgliNextPage.mowgliCharging') : t('mowgliNextPage.welcomeBack')}
             </div>
           </div>
           <StatusOrb
             tone={data.emergency ? "alert" : data.isMoving ? "live" : data.charging ? "charging" : "resting"}
             size={10}
-            label={!data.statusKnown && !data.emergency ? t("telemetry.statusUnknown") : data.scanPaused ? t('mowgliNextPage.orbScanPaused') : data.isMoving ? t('mowgliNextPage.orbMowing') : data.charging ? t('mowgliNextPage.orbCharging') : data.emergency ? t('mowgliNextPage.orbAlert') : t('mowgliNextPage.orbIdle')}
+            label={data.emergency ? t('mowgliNextPage.orbAlert') : !data.statusKnown && !data.emergency ? t("telemetry.statusUnknown") : data.scanPaused ? t('mowgliNextPage.orbScanPaused') : data.isMoving ? activityLabel : data.charging ? t('mowgliNextPage.orbCharging') : t('mowgliNextPage.orbIdle')}
           />
         </motion.header>
 
         {/* Repeat-dig escalation: hardware_bridge halted the mission — the
             operator needs to know why nothing is moving and how to clear it */}
-        <DigEscalationBanner variants={riseFade}/>
+        <DigEscalationBanner variants={riseFade} commandPending={actionPending} runCommand={runCommand}/>
         <StopReasonBanner reason={data.stopReason} detail={data.stopDetail}
                           sessionActive={data.sessionActive} variants={riseFade}/>
 
@@ -425,13 +439,13 @@ export const MowgliNextPage = () => {
           <div style={{display: 'flex', flexDirection: 'column', gap: 14}}>
             <motion.div variants={popIn}>
               <HeroCard
-                data={data} phase={phase} actions={actions} chargeHold={chargeHold}
+                data={data} phase={phase} actions={actions} actionPending={actionPending} chargeHold={chargeHold}
                 headline={headline} subline={subline}
                 coveragePct={coveragePct}
                 todayMowedM2={todayMowedM2} totalArea={totalArea}
               />
             </motion.div>
-            <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} onViewMap={asyncHandler(() => navigate("/map"))}/></motion.div>
+            <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} onViewMap={asyncHandler(() => navigate("/map"))}/></motion.div>
             <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             <motion.div variants={riseFade}><HealthCard data={data} hardware={hardware} mavros={mavros}/></motion.div>
           </div>
@@ -440,7 +454,7 @@ export const MowgliNextPage = () => {
             <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
               <motion.div variants={popIn}>
                 <HeroCard
-                  data={data} phase={phase} actions={actions} chargeHold={chargeHold}
+                  data={data} phase={phase} actions={actions} actionPending={actionPending} chargeHold={chargeHold}
                   headline={headline} subline={subline}
                   coveragePct={coveragePct}
                   todayMowedM2={todayMowedM2} totalArea={totalArea}
@@ -450,7 +464,7 @@ export const MowgliNextPage = () => {
               <motion.div variants={riseFade}><HealthCard data={data} hardware={hardware} mavros={mavros}/></motion.div>
             </div>
             <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-              <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} coverage={coveragePct} height={300} onViewMap={asyncHandler(() => navigate("/map"))}/></motion.div>
+              <motion.div variants={riseFade}><LiveMapCard polygons={polygons} progress={progress} robot={robotNormalised} dock={dockNormalised} height={300} onViewMap={asyncHandler(() => navigate("/map"))}/></motion.div>
               <motion.div variants={riseFade}><TilesRow data={data}/></motion.div>
             </div>
           </div>
@@ -473,6 +487,7 @@ interface HeroCardProps {
     onResume: () => void; onCancelMowing: () => void;
   };
   chargeHold?: ChargeHold;
+  actionPending: boolean;
   headline: React.ReactNode;
   subline: string;
   coveragePct: number;
@@ -482,7 +497,7 @@ interface HeroCardProps {
 }
 
 function HeroCard({
-  data, phase, actions, chargeHold, headline, subline, coveragePct, todayMowedM2, totalArea, large,
+  data, phase, actions, chargeHold, actionPending, headline, subline, coveragePct, todayMowedM2, totalArea, large,
 }: HeroCardProps) {
   const {t} = useTranslation();
   return (
@@ -555,7 +570,7 @@ function HeroCard({
                   fontSize: 11, color: 'rgba(236,255,244,0.42)',
                   letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 600,
                 }}>
-                  {t('mowgliNextPage.coverageToday', {pct})}
+                  {t('mowgliNextPage.coverageProgress', {pct})}
                 </span>
                 <span style={{fontSize: 12, color: 'rgba(236,255,244,0.66)', fontWeight: 600, fontFamily: '"Space Grotesk", monospace'}}>
                   {mowedM2.toFixed(0)}<span style={{color: 'rgba(236,255,244,0.42)'}}> / {totalM2.toFixed(0)} m²</span>
@@ -567,7 +582,7 @@ function HeroCard({
         })()}
 
         <div style={{marginTop: large ? 28 : 22}}>
-          <ActionCluster phase={phase} chargeHold={chargeHold} {...actions}/>
+          <ActionCluster pending={actionPending} phase={phase} chargeHold={chargeHold} {...actions}/>
         </div>
       </div>
     </GlassCard>
@@ -579,12 +594,11 @@ interface LiveMapCardProps {
   progress: MiniProgress | null;
   robot?: {x: number; y: number; heading: number};
   dock?: {x: number; y: number};
-  coverage: number;
   height?: number;
   onViewMap?: () => void;
 }
 
-function LiveMapCard({polygons, progress, robot, dock, coverage, height = 220, onViewMap}: LiveMapCardProps) {
+function LiveMapCard({polygons, progress, robot, dock, height = 220, onViewMap}: LiveMapCardProps) {
   const {t} = useTranslation();
   const hasArea = polygons.length > 0;
   return (
@@ -604,7 +618,7 @@ function LiveMapCard({polygons, progress, robot, dock, coverage, height = 220, o
             fontSize: 18, fontWeight: 400, marginTop: 2,
             color: 'var(--ink, #ECFFF4)', letterSpacing: '-0.01em',
           }}>
-            {t('mowgliNextPage.livePath')}
+            {!robot ? t('liveMapMini.positionUnknown') : !progress ? t('liveMapMini.coverageUnavailable') : t('mowgliNextPage.livePath')}
           </div>
         </div>
         <button onClick={onViewMap} style={{
@@ -622,7 +636,6 @@ function LiveMapCard({polygons, progress, robot, dock, coverage, height = 220, o
           progress={progress}
           robot={robot}
           dock={dock}
-          coverage={coverage}
           height={height}
         />
       ) : (
@@ -658,9 +671,9 @@ function TilesRow({data}: {data: ReturnType<typeof useMowerData>}) {
                 hint={`ESC ${motorDisplayValue(data.escTemp)} °C`}
                 accent={data.motorTemp > 55 ? "amber" : "lime"}
                 icon={<Thermometer size={14}/>}/>
-      <StatTile label={t('mowgliNextPage.rain')} value={data.rain ? t('mowgliNextPage.rainDetected') : t('mowgliNextPage.dry')} unit=""
-                hint={data.rain ? t('mowgliNextPage.mowingPaused') : t('mowgliNextPage.goodConditions')}
-                accent={data.rain ? "amber" : "lime"}
+      <StatTile label={t('mowgliNextPage.rain')} value={!data.rainKnown ? '—' : data.rain ? t('mowgliNextPage.rainDetected') : t('mowgliNextPage.dry')} unit=""
+                hint={!data.rainKnown ? t('telemetry.statusUnknown') : data.rain ? t('mowgliNextPage.mowingPaused') : t('mowgliNextPage.goodConditions')}
+                accent={!data.rainKnown ? "cyan" : data.rain ? "amber" : "lime"}
                 icon={<Droplets size={14}/>}/>
     </div>
   );

@@ -111,6 +111,18 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 
   find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_ros REQUIRED)
+  ament_add_ros_isolated_gtest(test_precision_commands
+    test/test_precision_commands.cpp
+    src/openmower_bridge_node.cpp
+    src/openmower_bridge_lowlevel.cpp
+    src/openmower_bridge_actuation.cpp
+  )
+  target_link_libraries(test_precision_commands
+    mowgli_openmower_bridge_core ${rclcpp_TARGETS} ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS} ${sensor_msgs_TARGETS} ${geometry_msgs_TARGETS}
+    ${nav_msgs_TARGETS} ${mowgli_interfaces_TARGETS}
+  )
 
   foreach(test_name
       test_vesc_protocol

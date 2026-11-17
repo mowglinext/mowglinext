@@ -3,9 +3,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 
+#include "costmap_test_support.hpp"
 #include "mowgli_nav2_plugins/authorized_transit_planner.hpp"
 #include "mowgli_nav2_plugins/transit_raster.hpp"
+#include "mowgli_nav2_plugins/transit_seams.hpp"
 #include <gtest/gtest.h>
 
 namespace mowgli_nav2_plugins
@@ -27,6 +30,56 @@ TEST(TransitGeometry, ClosedUnionAcceptsSeamsButRejectsThinGapsAndDiagonalCuts)
   EXPECT_FALSE(geometry.segmentAuthorized({-0.8, 0}, {0.8, 0}));
   geometry.allowed = {rectangle(0, 0, 1, 0.4), rectangle(0.6, 0, 1, 1)};
   EXPECT_FALSE(geometry.segmentAuthorized({0.5, 0.35}, {0.65, 0.5}));
+}
+TEST(TransitGeometry, SeamRingsBridgeOnlyGapsWithinTolerance)
+{
+  const std::vector<Ring> drawn_twice{rectangle(-4, 0, -0.02, 10), rectangle(0.03, 0, 4, 10)};
+  Geometry geometry;
+  geometry.allowed = drawn_twice;
+  EXPECT_FALSE(geometry.segmentAuthorized({-0.8, 1}, {0.8, 1}));
+  const auto seams = transit::seamRings(drawn_twice, 0.10);
+  ASSERT_FALSE(seams.empty());
+  geometry.allowed.insert(geometry.allowed.end(), seams.begin(), seams.end());
+  EXPECT_TRUE(geometry.segmentAuthorized({-0.8, 1}, {0.8, 1}));
+  EXPECT_TRUE(geometry.segmentAuthorized({-0.8, 0.001}, {0.8, 9.99}));
+  // The seam does not grow past the ends of the shared border, on either side of the gap.
+  for (const double x : {-0.05, 0.0, 0.05})
+  {
+    EXPECT_FALSE(geometry.authorized({x, -0.01}));
+    EXPECT_FALSE(geometry.authorized({x, 10.01}));
+  }
+  // Never further than the tolerance from recorded ground.
+  for (const auto& seam : seams)
+    for (const auto& p : seam)
+      EXPECT_LE(std::min(transit::ringDistance(p, drawn_twice[0]),
+                         transit::ringDistance(p, drawn_twice[1])),
+                0.10 + 1e-12);
+  // One strip per border edge of ONE area, however densely the other one was recorded.
+  Ring dense;
+  for (int i = 0; i <= 100; ++i)
+    dense.push_back({0.03 + 0.01 * (i % 2), 0.1 * i});
+  dense.push_back({4, 10});
+  dense.push_back({4, 0});
+  EXPECT_EQ(transit::seamRings({drawn_twice[0], dense}, 0.10).size(), 1U);
+  // Overlapping areas need no seam at all.
+  EXPECT_TRUE(
+      transit::seamRings({rectangle(-4, 0, 0.5, 10), rectangle(-0.5, 0, 4, 10)}, 0.10).empty());
+
+  // A wider gap stays a wall; a true shared border and a zero tolerance add nothing.
+  EXPECT_TRUE(
+      transit::seamRings({rectangle(-4, 0, -0.1, 10), rectangle(0.1, 0, 4, 10)}, 0.10).empty());
+  EXPECT_TRUE(transit::seamRings({rectangle(-4, 0, 0, 10), rectangle(0, 0, 4, 10)}, 0.10).empty());
+  EXPECT_TRUE(transit::seamRings(drawn_twice, 0).empty());
+}
+TEST(TransitGeometry, SeamRingsStopWhereAnOpeningGapExceedsTolerance)
+{
+  // The borders meet at (0, 0) and open to 0.5 m over 10 m.
+  Geometry geometry;
+  geometry.allowed = {rectangle(-4, 0, 0, 10), {{0, 0}, {4, 0}, {4, 10}, {0.5, 10}}};
+  const auto seams = transit::seamRings(geometry.allowed, 0.10);
+  geometry.allowed.insert(geometry.allowed.end(), seams.begin(), seams.end());
+  EXPECT_TRUE(geometry.segmentAuthorized({-0.5, 1}, {0.5, 1}));
+  EXPECT_FALSE(geometry.segmentAuthorized({-0.5, 5}, {0.9, 5}));
 }
 TEST(TransitGeometry, TerminalExceptionsAreBoundedAndTiedToOneArea)
 {
@@ -82,6 +135,24 @@ TEST(TransitGeometry, ObstaclesRejectWholeSegmentsIncludingMargin)
   EXPECT_TRUE(geometry.segmentClear({-2, 1.2}, {2, 1.2}));
 }
 
+// Coverage entry only: the planner grows the outermost ring's field outward by
+// op_width/2, so its starts may sit just outside the recorded line.
+TEST(TransitGeometry, AuthorizedWithinExtendsOnlyTheAllowedRingAndNeverObstacles)
+{
+  Geometry geometry;
+  geometry.allowed = {rectangle(0, 0, 2, 2)};
+  geometry.blocked = {rectangle(0.9, 0.9, 1.1, 1.1)};
+  EXPECT_TRUE(geometry.authorizedWithin({1, 0.5}, 0.0));
+  EXPECT_FALSE(geometry.authorizedWithin({-0.05, 1}, 0.0));  // exact rule unchanged
+  EXPECT_FALSE(geometry.authorized({-0.05, 1}));
+  EXPECT_TRUE(geometry.authorizedWithin({-0.05, 1}, 0.13));
+  EXPECT_FALSE(geometry.authorizedWithin({-0.20, 1}, 0.13));
+  EXPECT_FALSE(geometry.authorizedWithin({-0.05, 1}, -1.0));
+  EXPECT_FALSE(geometry.authorizedWithin({-0.05, 1}, std::numeric_limits<double>::quiet_NaN()));
+  // Tolerance widens permission, never an obstacle: the hole stays forbidden.
+  EXPECT_FALSE(geometry.clear({1, 1}));
+}
+
 TEST(TransitGeometry, StartExemptRingsAreBlockedUntilTheyAreLeftOut)
 {
   Geometry geometry;
@@ -91,7 +162,7 @@ TEST(TransitGeometry, StartExemptRingsAreBlockedUntilTheyAreLeftOut)
   EXPECT_TRUE(geometry.insideStartExempt({0.5, 0.5}));
   EXPECT_FALSE(geometry.insideStartExempt({3.5, 0.5}));
   EXPECT_FALSE(geometry.clear({0.5, 0.5}));
-  const auto relaxed = geometry.withoutStartExempt();
+  const auto relaxed = geometry.relaxedForStart({0.5, 0.5});
   EXPECT_TRUE(relaxed.clear({0.5, 0.5}));
   EXPECT_FALSE(relaxed.clear({3.5, 0.5}));
   EXPECT_FALSE(relaxed.clear({3.05, 1.05}));  // the other ring keeps its own margin
@@ -100,8 +171,10 @@ TEST(TransitGeometry, StartExemptRingsAreBlockedUntilTheyAreLeftOut)
 }
 
 // The rings map_server_node::rebuild_dock_polygons builds around a dock pose: the body spans
-// [-0.80, 0] x +-0.275 and the approach corridor [-1.50, -0.80] x +-0.40 in the dock frame (+x
+// [-0.12, 0.68] x +-0.275 and the approach corridor [-1.50, -0.12] x +-0.40 in the dock frame (+x
 // toward the station), each closed by repeating its first point.
+constexpr double kDockBodyRear = 0.12;
+constexpr double kDockBodyMargin = 0.275;
 Ring dockRect(double x, double y, double yaw, double x_min, double x_max, double half_width)
 {
   Ring ring;
@@ -114,11 +187,11 @@ Ring dockRect(double x, double y, double yaw, double x_min, double x_max, double
 }
 Ring dockBody(double x, double y, double yaw)
 {
-  return dockRect(x, y, yaw, -0.80, 0, 0.275);
+  return dockRect(x, y, yaw, -kDockBodyRear, 0.68, 0.275);
 }
 Ring dockCorridor(double x, double y, double yaw)
 {
-  return dockRect(x, y, yaw, -1.50, -0.80, 0.40);
+  return dockRect(x, y, yaw, -1.50, -kDockBodyRear, 0.40);
 }
 Point dockPoint(double x, double y, double yaw, double local_x, double local_y)
 {
@@ -130,8 +203,12 @@ TEST(TransitGeometry, DockFrameIsRecoveredFromTheBodyAndItsCorridor)
 {
   for (double yaw : {0.0, 2.3, -1.2})
   {
-    const auto frame = transit::dockFrame(dockBody(1, 2, yaw), dockCorridor(1, 2, yaw));
+    const auto frame =
+        transit::dockFrame(dockBody(1, 2, yaw), dockCorridor(1, 2, yaw), kDockBodyRear);
     ASSERT_TRUE(frame.has_value()) << yaw;
+    EXPECT_NEAR(frame->body_rear, -kDockBodyRear, 1e-6);
+    EXPECT_NEAR(frame->body_front, 0.68, 1e-6);
+    EXPECT_NEAR(frame->body_half_width, 0.275, 1e-6);
     EXPECT_NEAR(frame->axis.x, std::cos(yaw), 1e-9);
     EXPECT_NEAR(frame->axis.y, std::sin(yaw), 1e-9);
     const auto origin = frame->local({1, 2});
@@ -142,8 +219,12 @@ TEST(TransitGeometry, DockFrameIsRecoveredFromTheBodyAndItsCorridor)
     EXPECT_NEAR(station.y, -0.1, 1e-9);
   }
   // A corridor that is not directly behind the body is not the map_server layout: no frame.
-  EXPECT_FALSE(transit::dockFrame(dockBody(1, 2, 0), dockCorridor(0.5, 2, 0)).has_value());
-  EXPECT_FALSE(transit::dockFrame(dockBody(1, 2, 0), dockBody(1, 2, 0)).has_value());
+  EXPECT_FALSE(
+      transit::dockFrame(dockBody(1, 2, 0), dockCorridor(0.5, 2, 0), kDockBodyRear).has_value());
+  EXPECT_FALSE(transit::dockFrame(dockBody(1, 2, 0), dockBody(1, 2, 0), kDockBodyRear).has_value());
+  // Nor without a usable dock pose offset.
+  EXPECT_FALSE(transit::dockFrame(dockBody(1, 2, 0), dockCorridor(1, 2, 0), -1).has_value());
+  EXPECT_FALSE(transit::dockFrame(dockBody(1, 2, 0), dockCorridor(1, 2, 0), NAN).has_value());
 }
 
 TEST(TransitGeometry, RasterMatchesOriginalCellClassifier)
@@ -308,6 +389,7 @@ protected:
     node_ = std::make_shared<nav2::LifecycleNode>("authorized_transit_test");
     node_->declare_parameter("GridBased.tolerance", 0.0);
     node_->declare_parameter("GridBased.max_planning_time", 2.0);
+    node_->declare_parameter("GridBased.seam_tolerance", seamTolerance());
     auto options = rclcpp::NodeOptions().parameter_overrides(
         {rclcpp::Parameter("plugins", std::vector<std::string>{}),
          rclcpp::Parameter("filters", std::vector<std::string>{}),
@@ -326,7 +408,13 @@ protected:
   {
     planner_.deactivate();
     planner_.cleanup();
+    mowgli_nav2_plugins_test::WaitForTfListenerSpinning(*map_);
     map_->on_cleanup(rclcpp_lifecycle::State());
+  }
+  // 0: the exact union, as compiled.
+  virtual double seamTolerance() const
+  {
+    return 0.0;
   }
   // Empty: the costmap's default radius footprint.
   virtual std::string footprint() const
@@ -337,15 +425,17 @@ protected:
                 const std::vector<Ring>& obstacles = {},
                 double obstacle_margin = 0,
                 const std::vector<Ring>& dock_bodies = {},
-                const std::vector<Ring>& dock_corridors = {})
+                const std::vector<Ring>& dock_corridors = {},
+                const std::vector<Ring>& peer_docks = {})
   {
     auto message = std::make_shared<visualization_msgs::msg::MarkerArray>();
-    const auto add = [&](const Ring& ring, const char* ns, double scale)
+    const auto add = [&](const Ring& ring, const char* ns, double scale, double scale_y = 0)
     {
       visualization_msgs::msg::Marker marker;
       marker.header.frame_id = "map";
       marker.ns = ns;
       marker.scale.x = scale;
+      marker.scale.y = scale_y;
       marker.action = marker.ADD;
       for (const auto& p : ring)
       {
@@ -363,7 +453,9 @@ protected:
     for (const auto& ring : dock_corridors)
       add(ring, "dock_corridor", 0.01);
     for (const auto& ring : dock_bodies)
-      add(ring, "dock_body", 0);
+      add(ring, "dock_body", kDockBodyMargin, kDockBodyRear);
+    for (const auto& ring : peer_docks)
+      add(ring, "peer_dock", kDockBodyMargin);
     planner_.onGeometry(message);
   }
   // A dock at (x, y, yaw) inside the 8 x 4 m test area, laid out as map_server publishes it.
@@ -519,6 +611,19 @@ protected:
   {
     return "[[0.53, 0.275], [0.53, -0.275], [-0.17, -0.275], [-0.17, 0.275]]";
   }
+  // What the keepout mask does to the dock body and its margin (an axis-aligned box is enough
+  // here).
+  void stampLethal(Point lo, Point hi)
+  {
+    for (unsigned y = 0; y < 160; ++y)
+      for (unsigned x = 0; x < 160; ++x)
+      {
+        double wx, wy;
+        map_->getCostmap()->mapToWorld(x, y, wx, wy);
+        if (wx >= lo.x && wx <= hi.x && wy >= lo.y && wy <= hi.y)
+          map_->getCostmap()->setCost(x, y, 254);
+      }
+  }
   // The leg from the real start to the exit cell is the only part that may touch the dock body;
   // everything after it is an ordinary authorized path that keeps the whole ring blocked.
   void expectLeavesTheBodyAwayFromTheStation(
@@ -530,8 +635,10 @@ protected:
     const Point exit{path.poses[1].pose.position.x, path.poses[1].pose.position.y};
     Geometry dock_only;
     dock_only.blocked = {dockBody(x, y, yaw)};
+    dock_only.blocked_margins = {kDockBodyMargin};
     EXPECT_TRUE(dock_only.clear(exit));
-    const auto frame = transit::dockFrame(dockBody(x, y, yaw), dockCorridor(x, y, yaw));
+    const auto frame =
+        transit::dockFrame(dockBody(x, y, yaw), dockCorridor(x, y, yaw), kDockBodyRear);
     ASSERT_TRUE(frame.has_value());
     EXPECT_LE(frame->local(exit).x, frame->local(start).x + 1e-9)
         << "the exit leg closes on the charging station";
@@ -541,28 +648,47 @@ protected:
   }
 };
 
-// Field 2026-10-16: a coverage unit ended 0.51 m in front of the dock, inside the dock body
-// rectangle, and every transit after it was refused with START_OCCUPIED until the operator pressed
-// Play (whose first act is driving 1 m out of the rectangle).
-TEST_F(DockedTransitPlannerTest, StartInsideTheDockBodyPlansItsWayOut)
+// Operator report 2026-11-03: the plan ran under the charging station, because the forbidden ring
+// lay on the lawn behind the docked robot. The ring is on the station now, and the body stays out
+// of it by the same margin as any obstacle.
+TEST_F(DockedTransitPlannerTest, TransitRoutesAroundTheStationNotUnderIt)
 {
   dockGeometry(1, 2, 0);
-  const Point start = dockPoint(1, 2, 0, -0.51, 0);
+  // Straight through the station's own footprint, between the pose and the head.
+  const auto path = plan(dockPoint(1, 2, 0, 0.3, -1.2), 0, dockPoint(1, 2, 0, 0.3, 1.2));
+  ASSERT_GE(path.poses.size(), 2U);
+  Geometry dock_only;
+  dock_only.blocked = {dockBody(1, 2, 0)};
+  dock_only.blocked_margins = {kDockBodyMargin};
+  for (const auto& pose : path.poses)
+    EXPECT_TRUE(dock_only.clear({pose.pose.position.x, pose.pose.position.y}))
+        << pose.pose.position.x << ", " << pose.pose.position.y;
+}
+// A failed docking stops next to the station, in the body's margin: the transit must plan its way
+// out instead of being refused (field 2026-10-16: every transit START_OCCUPIED, 55 minutes idle).
+TEST_F(DockedTransitPlannerTest, StartInTheDockBodyMarginPlansItsWayOut)
+{
+  dockGeometry(1, 2, 0);
+  const Point start = dockPoint(1, 2, 0, -0.3, 0);
   const auto path = plan(start, M_PI, {-3, 2});
   EXPECT_DOUBLE_EQ(path.poses.back().pose.position.x, -3);
   expectLeavesTheBodyAwayFromTheStation(path, 1, 2, 0, start);
 }
-// An oriented dock, the robot well inside its body: the nearest clear cell is just past the
-// body's station-side edge, i.e. under the charging station. It must leave sideways or backwards.
+// The keepout mask stamps the same zone lethal; those cells must not refuse the start or the leg.
+TEST_F(DockedTransitPlannerTest, StartInTheLethalMaskOfTheDockBodyPlansItsWayOut)
+{
+  dockGeometry(1, 2, 0);
+  stampLethal(dockPoint(1, 2, 0, -0.395, -0.55), dockPoint(1, 2, 0, 0.955, 0.55));
+  const Point start = dockPoint(1, 2, 0, -0.3, 0);
+  const auto path = plan(start, M_PI, {-3, 2});
+  EXPECT_DOUBLE_EQ(path.poses.back().pose.position.x, -3);
+  expectLeavesTheBodyAwayFromTheStation(path, 1, 2, 0, start);
+}
 TEST_F(DockedTransitPlannerTest, OrientedDockNeverExitsTowardTheStation)
 {
   const double yaw = 2.3;
   dockGeometry(1, 2, yaw);
   const Point start = dockPoint(1, 2, yaw, -0.2, 0);
-  // Precondition: a clear authorized cell lies 0.25 m ahead, nearer than any side (0.275 m) or
-  // rear (0.60 m) exit. The old nearest-in-any-direction search took it.
-  ASSERT_TRUE(plannerGeometry().authorized(dockPoint(1, 2, yaw, 0.05, 0)));
-  ASSERT_TRUE(plannerGeometry().clear(dockPoint(1, 2, yaw, 0.05, 0)));
   const auto path = plan(start, yaw, {-3, 1});
   expectLeavesTheBodyAwayFromTheStation(path, 1, 2, yaw, start);
 }
@@ -573,28 +699,98 @@ TEST_F(DockedTransitPlannerTest, StartTooCloseToTheStationToPivotIsStillOccupied
   dockGeometry(1, 2, yaw);
   EXPECT_THROW(plan(dockPoint(1, 2, yaw, -0.05, 0), yaw, {-3, 1}), nav2_core::StartOccupied);
   EXPECT_THROW(plan(dockPoint(1, 2, yaw, -0.15, 0.1), yaw, {-3, 1}), nav2_core::StartOccupied);
+  // On the tray itself, where the charger put it.
+  EXPECT_THROW(plan(dockPoint(1, 2, yaw, 0, 0), yaw, {-3, 1}), nav2_core::StartOccupied);
+}
+TEST_F(DockedTransitPlannerTest, ParkedBackwardsOnTheTrayDrivesStraightOut)
+{
+  dockGeometry(1, 2, 0);
+  const Point start = dockPoint(1, 2, 0, 0, 0);
+  const auto path = plan(start, M_PI, {-3, 2});
+  expectLeavesTheBodyAwayFromTheStation(path, 1, 2, 0, start);
+}
+TEST_F(DockedTransitPlannerTest, TrayOutsideEveryAreaStillLetsABackwardsRobotOut)
+{
+  geometry({rectangle(-4, 0, 0.5, 4)}, {}, 0, {dockBody(1, 2, 0)}, {dockCorridor(1, 2, 0)});
+  const Point start = dockPoint(1, 2, 0, 0, 0);
+  EXPECT_NO_THROW(plan(start, M_PI, {-3, 2}));
+}
+TEST_F(DockedTransitPlannerTest, TransitRoutesAroundAPeerStation)
+{
+  const Ring peer = dockBody(0, 2, 0);
+  geometry({rectangle(-4, 0, 4, 4)}, {}, 0, {}, {}, {peer});
+  const auto path = plan({-2, 2}, 0, {2.5, 2});
+  Geometry peer_only;
+  peer_only.blocked = {peer};
+  peer_only.blocked_margins = {kDockBodyMargin};
+  for (const auto& pose : path.poses)
+    EXPECT_TRUE(peer_only.clear({pose.pose.position.x, pose.pose.position.y}));
+  EXPECT_THROW(plan({-2, 2}, 0, dockPoint(0, 2, 0, 0.3, 0)), nav2_core::GoalOccupied);
+}
+// A lateral skirt can leave the robot in a peer station's margin: it must not be stranded there.
+TEST_F(DockedTransitPlannerTest, StartInAPeerStationMarginLeavesWithoutCrossingIt)
+{
+  const Ring peer = dockBody(0, 2, 0);
+  geometry({rectangle(-4, 0, 4, 4)}, {}, 0, {}, {}, {peer});
+  stampLethal(dockPoint(0, 2, 0, -0.395, -0.55), dockPoint(0, 2, 0, 0.955, 0.55));
+  const auto path = plan(dockPoint(0, 2, 0, 0.3, 0.4), 0, {-3, 1});
+  ASSERT_GE(path.poses.size(), 3U);
+  Geometry object_only;
+  object_only.blocked = {peer};
+  object_only.blocked_margins = {0.0};
+  for (std::size_t i = 1; i < path.poses.size(); ++i)
+    EXPECT_TRUE(
+        object_only.segmentClear({path.poses[i - 1].pose.position.x,
+                                  path.poses[i - 1].pose.position.y},
+                                 {path.poses[i].pose.position.x, path.poses[i].pose.position.y}));
+}
+// A start in our dock zone must not be released from a neighbour's object.
+TEST_F(DockedTransitPlannerTest, LeavingOurDockZoneStillAvoidsAPeerStationBeside)
+{
+  // The side-by-side site: map_server publishes such a neighbour with margin 0.
+  const std::vector<Ring> message{dockBody(1, 2.53, 0)};
+  geometry({rectangle(-4, 0, 4, 4)}, {}, 0, {dockBody(1, 2, 0)}, {dockCorridor(1, 2, 0)}, message);
+  const Point start = dockPoint(1, 2, 0, -0.3, 0);
+  const auto path = plan(start, M_PI, {-3, 2});
+  EXPECT_DOUBLE_EQ(path.poses.back().pose.position.x, -3);
+}
+// Beside the station is not on its approach line: refusing there would strand the robot.
+TEST_F(DockedTransitPlannerTest, StartBesideTheStationLeavesWithoutClosingOnIt)
+{
+  dockGeometry(1, 2, 0);
+  const Point start = dockPoint(1, 2, 0, 0.3, 0.4);
+  const auto path = plan(start, 0, {-3, 1});
+  expectLeavesTheBodyAwayFromTheStation(path, 1, 2, 0, start);
+}
+TEST_F(DockedTransitPlannerTest, StartBeyondTheStationHeadLeavesAwayFromIt)
+{
+  dockGeometry(1, 2, 0);
+  const Point start = dockPoint(1, 2, 0, 0.8, 0);
+  const auto path = plan(start, 0, {-3, 1});
+  ASSERT_GE(path.poses.size(), 3U);
+  EXPECT_GE(path.poses[1].pose.position.x, start.x - 1e-9);
 }
 TEST_F(DockedTransitPlannerTest, BlockedNearestExitFallsBackToTheNextOne)
 {
-  // From 0.15 m off the centre line the nearest exit is the +y side (0.125 m); a drawn obstacle
-  // along that whole side leaves the rear (0.29 m, into the approach corridor) as the next one.
-  const Ring side = rectangle(-0.2, 2.27, 1.2, 2.8);
-  dockGeometry(1, 2, 0, {side});
-  const Point start = dockPoint(1, 2, 0, -0.51, 0.15);
+  // From the margin behind the body the nearest exit is backwards; a drawn obstacle across the
+  // approach corridor leaves the +y side (past the body's own margin) as the next one.
+  dockGeometry(1, 2, 0, {rectangle(0.2, 1.4, 0.62, 2.6)});
+  const Point start = dockPoint(1, 2, 0, -0.3, 0.15);
   const auto path = plan(start, 0, {-3, 1});
   expectLeavesTheBodyAwayFromTheStation(path, 1, 2, 0, start);
   const Point exit{path.poses[1].pose.position.x, path.poses[1].pose.position.y};
-  EXPECT_LT(exit.y, 2.275) << "left through the blocked side";
-  EXPECT_LT(exit.x, 0.2) << "the rear exit is the next nearest";
+  EXPECT_GT(exit.x, 0.62) << "left through the blocked corridor";
+  EXPECT_GT(exit.y, 2.3) << "the side exit is the next nearest";
 }
 TEST_F(DockedTransitPlannerTest, DockBodyStaysForbiddenForGoalsAndForPathsAcrossIt)
 {
   dockGeometry(1, 2, 0);
-  EXPECT_THROW(plan({3, 2}, 0, dockPoint(1, 2, 0, -0.4, 0)), nav2_core::GoalOccupied);
+  EXPECT_THROW(plan({3, 2}, 0, dockPoint(1, 2, 0, 0.3, 0)), nav2_core::GoalOccupied);
+  EXPECT_THROW(plan({3, 2}, 0, dockPoint(1, 2, 0, -0.3, 0)), nav2_core::GoalOccupied);
   // A start OUTSIDE the body still routes around it, never through it.
   EXPECT_TRUE(authorized(plan({-2, 2}, 0, {3, 2})));
 }
-TEST_F(DockedTransitPlannerTest, StartInsideTheDockBodyWithoutAWayOutIsStillOccupied)
+TEST_F(DockedTransitPlannerTest, StartInTheDockBodyMarginWithoutAWayOutIsStillOccupied)
 {
   // Both sides and the rear are drawn obstacles, and the front is the station.
   dockGeometry(1,
@@ -602,14 +798,14 @@ TEST_F(DockedTransitPlannerTest, StartInsideTheDockBodyWithoutAWayOutIsStillOccu
                0,
                {rectangle(0, 2.27, 1.6, 2.9),
                 rectangle(0, 1.1, 1.6, 1.73),
-                rectangle(-0.6, 1.1, 0.21, 2.9)});
-  EXPECT_THROW(plan(dockPoint(1, 2, 0, -0.51, 0), M_PI, {-3, 1}), nav2_core::StartOccupied);
+                rectangle(-0.6, 1.1, 0.62, 2.9)});
+  EXPECT_THROW(plan(dockPoint(1, 2, 0, -0.3, 0), M_PI, {-3, 1}), nav2_core::StartOccupied);
 }
 TEST_F(DockedTransitPlannerTest, StartInsideADockBodyThatCannotBeOrientedIsStillOccupied)
 {
   // No approach corridor: nothing says which side the station is on.
   geometry({rectangle(-4, 0, 4, 4)}, {}, 0, {dockBody(1, 2, 0)});
-  EXPECT_THROW(plan(dockPoint(1, 2, 0, -0.51, 0), M_PI, {-3, 1}), nav2_core::StartOccupied);
+  EXPECT_THROW(plan(dockPoint(1, 2, 0, -0.3, 0), M_PI, {-3, 1}), nav2_core::StartOccupied);
 }
 TEST_F(AuthorizedTransitPlannerTest, StartInsideAnObstacleIsNotExempt)
 {
@@ -756,6 +952,59 @@ TEST_F(AuthorizedTransitPlannerTest, BothRingBoundaryTolerancesRemainCrossable)
   geometry({rectangle(0, 0, 1, 1), rectangle(1 + 1.5 * transit::kEpsilon, 0, 2, 1)});
   EXPECT_TRUE(authorized(plan(0.52, 0.52, 1.48, 0.52)));
   EXPECT_TRUE(authorized(plan(1.48, 0.52, 0.52, 0.52)));
+}
+
+TEST_F(AuthorizedTransitPlannerTest, BorderDrawnTwiceIsAWallWithoutSeamTolerance)
+{
+  geometry({rectangle(-4, 0, -0.02, 10), rectangle(0.03, 0, 4, 10)});
+  EXPECT_THROW(plan(-1.2, 1, 1.2, 1), nav2_core::NoValidPathCouldBeFound);
+}
+
+class SeamTransitPlannerTest : public AuthorizedTransitPlannerTest
+{
+protected:
+  double seamTolerance() const override
+  {
+    return 0.10;
+  }
+  static double length(const nav_msgs::msg::Path& path)
+  {
+    double result = 0;
+    for (std::size_t i = 1; i < path.poses.size(); ++i)
+      result += std::hypot(path.poses[i].pose.position.x - path.poses[i - 1].pose.position.x,
+                           path.poses[i].pose.position.y - path.poses[i - 1].pose.position.y);
+    return result;
+  }
+};
+
+// Operator report 2026-11-10: neighbouring areas whose borders were drawn a few centimetres apart
+// only communicated through the one corner where the rings touched, so a 2.4 m hop became a tour
+// of the garden.
+TEST_F(SeamTransitPlannerTest, BorderDrawnTwiceIsCrossedDirectly)
+{
+  geometry({rectangle(-4, 0, -0.02, 10), rectangle(0.03, 0, 4, 10)});
+  for (const auto& path : {plan(-1.2, 1, 1.2, 1), plan(1.2, 1, -1.2, 1)})
+  {
+    EXPECT_TRUE(authorized(path));
+    EXPECT_LT(length(path), 3.0);
+  }
+}
+TEST_F(SeamTransitPlannerTest, GapWiderThanTheToleranceStaysAWall)
+{
+  geometry({rectangle(-4, 0, -0.1, 10), rectangle(0.1, 0, 4, 10)});
+  EXPECT_THROW(plan(-1.2, 1, 1.2, 1), nav2_core::NoValidPathCouldBeFound);
+  // Joined elsewhere: the route takes the real junction, never the wide gap.
+  geometry({rectangle(-4, 0, -0.1, 10), rectangle(0.1, 0, 4, 10), rectangle(-1, 8, 1, 9)});
+  const auto path = plan(-1.2, 1, 1.2, 1);
+  EXPECT_TRUE(authorized(path));
+  EXPECT_GT(length(path), 14);
+}
+TEST_F(SeamTransitPlannerTest, ObstacleOnTheSeamStillBlocksIt)
+{
+  geometry({rectangle(-4, 0, -0.02, 4), rectangle(0.03, 0, 4, 4)},
+           {rectangle(-0.3, -0.5, 0.3, 4.5)},
+           0.1);
+  EXPECT_THROW(plan(-1.2, 1, 1.2, 1), nav2_core::NoValidPathCouldBeFound);
 }
 
 // Opt-in real-planner benchmark, excluded from ordinary test runs. Run with

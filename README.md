@@ -72,20 +72,18 @@
 
 ---
 
-## What's New in v1.6.0
+## What's New in v1.7.0
 
-See the plan, know why it stopped. Full notes: [v1.6.0 release](https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0).
+Around the obstacle, straight onto the dock. Full notes: [v1.7.0 release](https://github.com/mowglinext/mowglinext/releases/tag/v1.7.0).
 
 | | |
 |---|---|
-| 🗺️ **Mowing lines on the map** | Preview the rings and swaths the planner will really drive, and set the angle, the perimeter direction and the start point per area. |
-| 🛑 **Know why it stopped** | The dashboard names the reason the mower stopped (an area it could not start or make progress in, a failed dock, undock or charge) until your next command. |
-| 📐 **Corners actually mowed** | Sharp boundary tips are pivoted instead of rounded off, headlands are finished before the interior, and dead-end tongues narrower than the mower are no longer planned. |
-| 🔌 **OpenMower v1 and Pixhawk (beta)** | Run MowgliNext on stock OpenMower v1 electronics (LowLevel + xESC) or on an ArduRover Pixhawk through MAVROS. Bench-test first. |
-| 🌧️ **Rain from your weather station** | A roof station or a Home Assistant automation can report rain over MQTT, next to the mower's own sensor. |
-| 🧭 **Smarter transits** | The planning grid covers your whole garden, transits keep a soft berth around drawn obstacles, and a transit can start from inside the dock. |
-| 🤖 **Your mower, to scale** | A URDF-scaled mower with shells, colours and model presets, fleet peers on the map, and a RAM blackbox that saves the minute before an incident. |
-| 🔧 **Firmware protocol v9** | Stall-free USB recovery on F401 boards, the charge voltage ceiling honoured, firmware timing kept through dropped packets. Needs a reflash, which the GUI offers after the update. |
+| 🚧 **Gets round what's in the way** | When it cannot skirt an obstacle, FTC follows its outline and rejoins the plan beyond it. collision_monitor is tuned for work along hedges, and the LiDAR sees trunks on slopes. |
+| 🔌 **Docks straight** | The final approach steers on the GPS track toward a fixed target. A failed low-battery dock is retried, and the station is kept clear. |
+| 🛰️ **Keeps mowing through RTK Float** | With the LiDAR map anchor, a few seconds of Float no longer pause the blade. The localizer has been hardened after the November review. |
+| 🧭 **Smoother transits** | Neighbouring areas join up, the spin at the start of an area is gone, and one bad spot no longer costs the whole zone. |
+| 📍 **GOTO** | Send the mower to a point from ROS 2 or over MQTT (Home Assistant). |
+| 🔄 **Test a fix from the GUI** | The updater can install a pull request marked for preview. The LiDAR dropouts every 32 s caused by the GNSS healthcheck are gone. |
 
 ## What It Does
 
@@ -123,7 +121,7 @@ GUI at `http://<mower-ip>:4006` · See **[Getting Started](https://github.com/mo
 
 Since v1.4.0 the mower updates itself from the web interface. **Settings → Updates** checks for published releases every 24 hours, shows a notice in the bell, and installs the release you review with a backup, a health check and automatic rollback. Nothing is ever installed without your confirmation, and never while the robot is mowing.
 
-**Updating to v1.6.0 changes the mainboard firmware protocol (v9).** In **Settings → Updates**: *Update the update service* first, then *Review update* → *Install*, then use **Flash firmware** when the new interface asks for it. Until the board is reflashed the robot refuses to mow. From v1.6.0 on, *Review update* installs the release's own update service by itself first. Details in the [v1.6.0 release notes](https://github.com/mowglinext/mowglinext/releases/tag/v1.6.0).
+**Updating to v1.7.0 from v1.6.x needs no firmware reflash:** *Review update* → *Install* in **Settings → Updates**. Coming from an older release, the update changes the mainboard firmware protocol (v9): *Update the update service* first, then *Review update* → *Install*, then use **Flash firmware** when the new interface asks for it. Until the board is reflashed the robot refuses to mow. Details in the [v1.7.0 release notes](https://github.com/mowglinext/mowglinext/releases/tag/v1.7.0).
 
 Mowers installed before v1.4.0 enable it by rerunning the installer once (same answers as the first time):
 

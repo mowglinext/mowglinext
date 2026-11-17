@@ -854,4 +854,83 @@ TEST_F(ObstacleDeviationTest, HasClearExit_FalseWhenObstacleFillsWindow)
   EXPECT_FALSE(ObstacleDeviation::hasClearExit(costmap_, path, 0, 12, 0.20));
 }
 
+// ── Review fixes 2026-11-11 ───────────────────────────────────────────────────
+
+TEST_F(ObstacleDeviationTest, GrowDeviationTestsTheCapItself)
+{
+  // Only an offset of exactly max_deviation clears. `mag += step` reached
+  // 1.5000000000000007 after 29 steps, skipped the cap and reported WEDGED.
+  for (unsigned int mx = 0; mx < kSize; ++mx)
+  {
+    double wx = 0.0;
+    double wy = 0.0;
+    costmap_.mapToWorld(mx, 0, wx, wy);
+    if (wx < -0.2 || wx > 1.2)
+    {
+      continue;
+    }
+    for (unsigned int my = 0; my < kSize; ++my)
+    {
+      costmap_.mapToWorld(mx, my, wx, wy);
+      if (wy > 0.0 && wy < 1.49)
+      {
+        costmap_.setCost(mx, my, nav2_costmap_2d::LETHAL_OBSTACLE);
+      }
+    }
+  }
+  // The line sits on cell centres (y = 0.025) so every offset samples the
+  // middle of a cell: 1.45 lands in the last lethal row, 1.5 in the first
+  // free one.
+  const auto path = makeStraightPath(0.0, 0.025, 10, 0.1);
+  const double dev =
+      ObstacleDeviation::growDeviationUntilClear(costmap_, path, 0, 10, 0.05, 1.5, 0.05);
+  EXPECT_NEAR(dev, 1.5, 1e-9);
+}
+
+TEST_F(ObstacleDeviationTest, ADegenerateFootprintFallsBackToTheLineModel)
+{
+  stampBlock(1.0, 0.0, 0.05);
+  const auto path = makeStraightPath(0.0, 0.0, 20, 0.1);
+  ObstacleDeviation::Footprint two_points = makeChassisFootprint();
+  two_points.resize(2);  // not a polygon: it used to rasterise to nothing
+  EXPECT_FALSE(ObstacleDeviation::isPathClearWithDeviation(
+      costmap_, path, 0, 20, 0.0, ObstacleDeviation::BoundaryGuard{}, 0.2, two_points));
+}
+
+TEST_F(ObstacleDeviationTest, LateralExpansionLeavesAnOnAxisVertexInPlace)
+{
+  auto pt = [](double x, double y)
+  {
+    geometry_msgs::msg::Point p;
+    p.x = x;
+    p.y = y;
+    return p;
+  };
+  // A pointed nose on the centre line, symmetric about it.
+  const ObstacleDeviation::Footprint arrow = {
+      pt(0.6, 0.0), pt(0.3, 0.2), pt(-0.1, 0.2), pt(-0.1, -0.2), pt(0.3, -0.2)};
+  const auto wide = ObstacleDeviation::expandFootprintLateral(arrow, 0.05);
+  ASSERT_EQ(wide.size(), arrow.size());
+  EXPECT_DOUBLE_EQ(wide[0].y, 0.0);
+  EXPECT_DOUBLE_EQ(wide[1].y, 0.25);
+  EXPECT_DOUBLE_EQ(wide[3].y, -0.25);
+}
+
+TEST_F(ObstacleDeviationTest, AnUnknownZoneDeniesEveryOffsetButNotDetection)
+{
+  ObstacleDeviation::BoundaryGuard unknown;
+  unknown.deny_all = true;
+  EXPECT_TRUE(unknown.active());
+  EXPECT_TRUE(unknown.isLethalAt(0.0, 0.0));
+  EXPECT_FALSE(ObstacleDeviation::BoundaryGuard{}.active());
+
+  stampBlock(1.0, 0.0, 0.1);
+  const auto path = makeStraightPath(0.0, 0.0, 20, 0.1);
+  // Detection (no guard) still sees the obstacle...
+  EXPECT_GE(ObstacleDeviation::findFirstObstacleIndex(costmap_, path, 0, 20, 0.2), 0);
+  // ...but no side may be chosen to skirt it while the zone is unknown.
+  EXPECT_DOUBLE_EQ(
+      ObstacleDeviation::chooseDeviationSide(costmap_, path[10], 1.5, 0.05, unknown, 0.2), 0.0);
+}
+
 }  // namespace mowgli_nav2_plugins

@@ -118,6 +118,10 @@ void MapServerNode::check_boundary_violation(double x, double y)
   lethal_msg.data = classification.lethal;
   lethal_boundary_violation_pub_->publish(lethal_msg);
 
+  std_msgs::msg::Bool outside_msg;
+  outside_msg.data = !inside_any;
+  outside_area_pub_->publish(outside_msg);
+
   // Only escalate logging when the blade is actively running. When the blade
   // is off the robot is either idle on the dock or transiting between areas —
   // both states legitimately place the robot outside any defined polygon, so

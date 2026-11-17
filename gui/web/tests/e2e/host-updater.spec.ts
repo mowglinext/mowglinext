@@ -34,10 +34,14 @@ const inventory={docker_available:true,server:{version:'dev'},components:[
     ...['mowgli','gui','gps','lidar','camera'].map(name=>({name:`mowgli-${name}`,component:name==='mowgli'?'robot':name,version:'dev',revision:devPrevious,state:'running',image:`ghcr.io/${source.repository}/${familyMap[name as keyof typeof familyMap]}:dev`,image_id:`sha256:installed-${name}`})),
     {name:'mowgli-mqtt',component:'mqtt',version:'2.0.22',state:'running',image:'eclipse-mosquitto:2.0.22'},
 ]};
+const pullRequests={repository:'mowglinext/mowglinext',label:'deploy-preview',pull_requests:[
+    {number:1110,title:'No Nav2 transit to a strip start next to the robot',branch:'fix/near-start-no-rpp-transit',author:'dev',url:'https://github.com/mowglinext/mowglinext/pull/1110',updated_at:'2026-11-09T17:00:00Z',from_fork:false,labeled:true,installable:true,deployment:'deployment-e74b7ceda123-42-1'},
+    {number:1112,title:'Blade spin-up and Float speed',branch:'fix/blade-load-spinup-and-float-speed',author:'dev',url:'https://github.com/mowglinext/mowglinext/pull/1112',updated_at:'2026-11-09T17:10:00Z',from_fork:false,labeled:false,installable:false},
+]};
 async function open(page:Page, data:ReturnType<typeof fixture>, mobile=false, topics:Record<string,unknown>={}) {
     await page.setViewportSize(mobile?{width:390,height:844}:{width:1440,height:1800});
     const names=new Set(Object.values(data.runtime.components).map(c=>c.name));
-    await installMockBackend(page,{...SCENARIOS[0],topics:{...SCENARIOS[0].topics,...topics},rest:{'/api/system/updater/state':data,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version,revision:Object.values(data.runtime.components).find(r=>r.name===c.name)?.revision,built_at:data.state.active?.published_at ? new Date(Date.parse(data.state.active.published_at)-60000).toISOString() : undefined}))}}});
+    await installMockBackend(page,{...SCENARIOS[0],topics:{...SCENARIOS[0].topics,...topics},rest:{'/api/system/updater/state':data,'/api/system/updater/pull-requests':pullRequests,'/api/system/versions':{...inventory,components:inventory.components.filter(c=>c.component==='mqtt'||names.has(c.name)).map(c=>({...c,version:Object.values(data.runtime.components).find(r=>r.name===c.name)?.version??c.version,revision:Object.values(data.runtime.components).find(r=>r.name===c.name)?.revision,built_at:data.state.active?.published_at ? new Date(Date.parse(data.state.active.published_at)-60000).toISOString() : undefined}))}}});
     const posts:{path:string;body:Record<string,unknown>}[]=[];const errors:string[]=[];
     page.on('pageerror',e=>errors.push(e.message));
     page.on('request',r=>{if(r.method()==='POST'&&r.url().includes('/system/updater/'))posts.push({path:new URL(r.url()).pathname,body:r.postDataJSON()});});
@@ -240,6 +244,18 @@ test('missing platform and disabled sensors cannot be selected',async({page})=>{
     await expect(panel.getByRole('combobox',{name:'LiDAR version',exact:true})).toHaveCount(0);
     await panel.getByRole('combobox',{name:'GPS version',exact:true}).locator('..').locator('..').click();
     await expect(page.locator('.ant-select-dropdown:visible .ant-select-item-option-disabled').filter({hasText:'v1.2.1'})).toBeVisible();
+});
+
+test('advanced settings install an open pull request by its head branch',async({page})=>{
+    const data=fixture();const {panel,posts,errors}=await open(page,data);await advanced(page);
+    await panel.getByText('Update settings',{exact:true}).click();await choose(page,'Update source','Custom branch');
+    await choose(page,'Pull request','#1110');
+    await expect(panel.getByRole('textbox',{name:'Custom branch',exact:true})).toHaveValue('fix/near-start-no-rpp-transit');
+    await expect(panel.getByText('deployment-e74b7ceda123-42-1',{exact:false})).toBeVisible();
+    await page.route('**/api/system/updater/policy',r=>r.fulfill({json:{ok:true}}));await page.route('**/api/system/updater/check',r=>r.fulfill({status:202,body:''}));
+    await panel.getByRole('button',{name:'Save settings',exact:true}).click();await expect.poll(()=>posts.length).toBe(2);
+    expect(posts[0].body).toMatchObject({source:{repository:'mowglinext/mowglinext',track:'custom',branch:'fix/near-start-no-rpp-transit'}});
+    expect(errors).toEqual([]);
 });
 
 for(const mobile of [false,true])test(`upstream custom branch settings ${mobile?'mobile':'desktop'}`,async({page})=>{

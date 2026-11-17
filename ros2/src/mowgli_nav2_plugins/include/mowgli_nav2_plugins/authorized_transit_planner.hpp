@@ -87,6 +87,9 @@ private:
                                                  const std::function<void()>& check) const;
   bool costSegmentClear(transit::Point a, transit::Point b) const;
   bool costSegmentClear(transit::Point a, transit::Point b, std::vector<double>& cuts) const;
+  bool costClearOutsideStartExempt(transit::Point a,
+                                   transit::Point b,
+                                   const transit::Geometry& geometry) const;
   geometry_msgs::msg::PoseStamped anchor(const geometry_msgs::msg::PoseStamped& endpoint,
                                          const transit::Geometry& geometry) const;
   bool pathValid(const nav_msgs::msg::Path& path, const transit::Geometry& geometry) const;
@@ -96,6 +99,7 @@ private:
   std::mutex geometry_mutex_, planning_mutex_;
   transit::Geometry geometry_;
   bool geometry_valid_{false};
+  double seam_tolerance_{0};
   uint64_t geometry_revision_{0};
   nav2::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr geometry_sub_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr config_guard_;

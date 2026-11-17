@@ -14,7 +14,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
 // Structural pin for trees/navigate_to_pose_transit.xml (field 2026-09-12):
-// coverage transits must select transit_goal_checker (final heading ignored)
+// coverage transits must bind the MOW-aware entry checker without a selector override
 // while the default navigate_to_pose.xml keeps stopped_goal_checker for
 // opennav_docking's staging approach. The two files must otherwise match.
 #include <cmath>
@@ -41,13 +41,14 @@ std::string stripHeaderComment(std::string s)
 }
 }  // namespace
 
-TEST(TransitTree, SelectsTheTransitGoalChecker)
+TEST(TransitTree, BindsTheCoverageEntryGoalChecker)
 {
   const std::string transit = readFile(MOWGLI_TRANSIT_TREE_PATH);
   ASSERT_FALSE(transit.empty()) << MOWGLI_TRANSIT_TREE_PATH;
-  EXPECT_NE(transit.find("default_goal_checker=\"transit_goal_checker\""), std::string::npos);
+  EXPECT_NE(transit.find("goal_checker_id=\"coverage_entry_goal_checker\""), std::string::npos);
+  EXPECT_EQ(transit.find("<GoalCheckerSelector"), std::string::npos);
   EXPECT_EQ(transit.find("default_goal_checker=\"stopped_goal_checker\""), std::string::npos);
-  EXPECT_NE(transit.find("goal_checker_id=\"{selected_goal_checker}\""), std::string::npos);
+  EXPECT_EQ(transit.find("goal_checker_id=\"{selected_goal_checker}\""), std::string::npos);
 }
 
 TEST(TransitTree, DefaultTreeStillUsesStoppedGoalCheckerForDocking)
@@ -61,8 +62,10 @@ TEST(TransitTree, OnlyTheGoalCheckerDiffers)
 {
   std::string base = stripHeaderComment(readFile(MOWGLI_NAV_TREE_PATH));
   std::string transit = stripHeaderComment(readFile(MOWGLI_TRANSIT_TREE_PATH));
-  base = std::regex_replace(base, std::regex("default_goal_checker=\"[a-z_]+\""), "GC");
-  transit = std::regex_replace(transit, std::regex("default_goal_checker=\"[a-z_]+\""), "GC");
+  base = std::regex_replace(base, std::regex("[ ]*<GoalCheckerSelector[^\n]*\n"), "");
+  base = std::regex_replace(base,
+                            std::regex("goal_checker_id=\"\\{selected_goal_checker\\}\""),
+                            "goal_checker_id=\"coverage_entry_goal_checker\"");
   EXPECT_EQ(base, transit) << "navigate_to_pose_transit.xml drifted from navigate_to_pose.xml";
 }
 

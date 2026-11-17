@@ -5,10 +5,13 @@
 // implementation is split across several translation units to keep each file within the project's
 // 600-line budget; all share fusion_graph_node.hpp + fusion_graph_node_util.hpp.)
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <random>
+#include <sstream>
 #include <thread>
 
 #include <geometry_msgs/msg/quaternion.hpp>
@@ -37,6 +40,13 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
 
   // ── Pubs/subs ─────────────────────────────────────────────────────
   pub_odom_ = create_publisher<nav_msgs::msg::Odometry>("/odometry/filtered_map", 10);
+  pub_gnss_update_ = create_publisher<mowgli_interfaces::msg::GnssFusionUpdate>(
+      "/fusion_graph/gnss_update", rclcpp::QoS(10).reliable().transient_local());
+  std::random_device random;
+  std::ostringstream incarnation;
+  incarnation << std::hex << random() << random() << random() << random();
+  producer_incarnation_ = incarnation.str();
+  SynchronizeSupportEpoch();
   // /odometry/filtered + odom→base_footprint TF — replaces ekf_odom_node.
   // Continuous local-frame dead reckoning (wheel vx + gyro_z), never
   // sees GPS, never jumps. Nav2's odom_topic in nav2_params.yaml still
@@ -54,46 +64,56 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
     pub_odom_fast_ = create_publisher<nav_msgs::msg::Odometry>("/odometry/filtered_map_fast",
                                                                rclcpp::SensorDataQoS());
     const auto period = std::chrono::duration<double>(1.0 / fast_pose_publish_rate_hz_);
-    fast_pose_timer_ =
-        create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),
-                          [this]()
-                          {
-                            if (!pose_extrap_.HasFusionPose())
-                              return;
-                            const double now_s = this->now().seconds();
-                            auto extrap = pose_extrap_.Extrapolate(now_s);
-                            if (!extrap)
-                              return;
-                            nav_msgs::msg::Odometry msg;
-                            msg.header.stamp = this->now();
-                            msg.header.frame_id = map_frame_;
-                            msg.child_frame_id = base_frame_;
-                            msg.pose.pose.position.x = extrap->x();
-                            msg.pose.pose.position.y = extrap->y();
-                            msg.pose.pose.position.z = 0.0;
-                            msg.pose.pose.orientation = QuatFromYaw(extrap->theta());
-                            // Loose covariance — this is a display / latency-sensitive
-                            // feed, not a primary measurement. Consumers that need
-                            // tight σ should subscribe to /odometry/filtered_map.
-                            for (int i = 0; i < 36; ++i)
-                              msg.pose.covariance[i] = 0.0;
-                            msg.pose.covariance[0] = 0.10 * 0.10;
-                            msg.pose.covariance[7] = 0.10 * 0.10;
-                            msg.pose.covariance[35] = 0.10 * 0.10;
-                            pub_odom_fast_->publish(msg);
-                          });
+    fast_pose_timer_ = create_wall_timer(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(period),
+        [this]()
+        {
+          rclcpp::Time publication_time(int64_t{0}, get_clock()->get_clock_type());
+          {
+            std::lock_guard<std::mutex> lock(tf_state_mu_);
+            publication_time = this->now();
+            const auto now = publication_time.nanoseconds();
+            if (!MotionPublicationAllowedLocked(now, now))
+              return;
+          }
+          if (!pose_extrap_.HasFusionPose())
+            return;
+          const double now_s = this->now().seconds();
+          auto extrap = pose_extrap_.Extrapolate(now_s);
+          if (!extrap)
+            return;
+          nav_msgs::msg::Odometry msg;
+          msg.header.stamp = publication_time;
+          msg.header.frame_id = map_frame_;
+          msg.child_frame_id = base_frame_;
+          msg.pose.pose.position.x = extrap->x();
+          msg.pose.pose.position.y = extrap->y();
+          msg.pose.pose.position.z = 0.0;
+          msg.pose.pose.orientation = QuatFromYaw(extrap->theta());
+          // Loose covariance — this is a display / latency-sensitive
+          // feed, not a primary measurement. Consumers that need
+          // tight σ should subscribe to /odometry/filtered_map.
+          for (int i = 0; i < 36; ++i)
+            msg.pose.covariance[i] = 0.0;
+          msg.pose.covariance[0] = 0.10 * 0.10;
+          msg.pose.covariance[7] = 0.10 * 0.10;
+          msg.pose.covariance[35] = 0.10 * 0.10;
+          std::lock_guard<std::mutex> lock(tf_state_mu_);
+          const auto send_now = this->now().nanoseconds();
+          if (!MotionPublicationAllowedLocked(send_now,
+                                              std::max(send_now, publication_time.nanoseconds())))
+            return;
+          pub_odom_fast_->publish(msg);
+        });
     RCLCPP_INFO(get_logger(),
                 "fusion_graph: high-rate pose extrapolator enabled at %.1f Hz",
                 fast_pose_publish_rate_hz_);
   }
 
   // /imu/fg_yaw — yaw-only sensor_msgs/Imu published BEST_EFFORT to
-  // match cog_to_imu / mag_yaw_publisher conventions. Lets ekf_map_node
-  // (when running as primary in observer mode) subscribe as a yaw
-  // source, replacing the mag_yaw_publisher slot. fusion_graph yaw is
-  // typically σ ≈ 0.5° vs ekf's σ ≈ 13° in stationary, so this
-  // dramatically tightens the EKF map-frame yaw without changing the
-  // primary localizer.
+  // match cog_to_imu / mag_yaw_publisher conventions. The fused map-frame
+  // heading as a plain IMU message, for tooling and A/B comparison; no
+  // in-repo consumer today.
   pub_fg_yaw_ = create_publisher<sensor_msgs::msg::Imu>("/imu/fg_yaw", rclcpp::SensorDataQoS());
   pub_diag_ =
       create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/fusion_graph/diagnostics", 10);
@@ -332,6 +352,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
           return;
         }
         graph_->Reset();
+        SynchronizeSupportEpoch();
         // Drop the latched position seed so a pre-clear GPS fix cannot put the
         // new graph back at the position the operator was trying to escape.
         // Heading is safe to retain: a stationary robot cannot produce a new
@@ -344,6 +365,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         last_rtk_fixed_stamp_.reset();
         last_usable_gnss_stamp_.reset();
         last_gps_map_xy_.reset();
+        last_gps_sigma_m_.reset();
         ResetRtkWrongFixAccumulators(wheel_dist_since_last_gps_m_, abs_dtheta_since_last_gps_rad_);
         // Re-zero the dead-reckoning frame. Without this the odom→base
         // transform keeps whatever offset it had accumulated (observed
@@ -400,10 +422,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
       create_wall_timer(std::chrono::seconds(30),
                         [this]()
                         {
-                          if (!graph_->IsInitialized())
-                            return;
-                          const auto stats = graph_->Stats();
-                          if (stats.total_nodes - last_rebase_index_ < isam2_rebase_every_nodes_)
+                          if (!graph_->RebaseDue(isam2_rebase_every_nodes_))
                             return;
                           bool expected = false;
                           if (!rebase_in_flight_->compare_exchange_strong(expected, true))
@@ -412,19 +431,11 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
                             // at the next maintenance tick.
                             return;
                           }
-                          // Commit the bookkeeping NOW so the next 30 s maintenance
-                          // tick doesn't re-trigger while the worker is still building.
-                          last_rebase_index_ = stats.total_nodes;
                           std::thread(
-                              [graph = graph_,
-                               logger = get_logger(),
-                               total = stats.total_nodes,
-                               flag = rebase_in_flight_]()
+                              [graph = graph_, logger = get_logger(), flag = rebase_in_flight_]()
                               {
                                 graph->RebaseISAM2();
-                                RCLCPP_INFO(logger,
-                                            "fusion_graph: iSAM2 rebased at node %lu",
-                                            static_cast<unsigned long>(total));
+                                RCLCPP_INFO(logger, "fusion_graph: iSAM2 maintenance finished");
                                 flag->store(false);
                               })
                               .detach();
@@ -469,6 +480,7 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
             std::to_string(static_cast<int>(lidar_anchor_gate_ ? lidar_anchor_gate_->state()
                                                                : LidarAnchorState::kDisabled)));
         add("lidar_map_occupied_cells", std::to_string(lidar_map_occupied_cells_));
+        add("lidar_map_insert_skipped_yaw", std::to_string(lidar_map_insert_skipped_yaw_));
         add("lidar_filter_calls", std::to_string(lidar_filter_calls_));
         add("lidar_filter_compute_ms", std::to_string(lidar_filter_compute_ms_));
         add("lidar_filter_map_builds", std::to_string(lidar_filter_map_builds_));
@@ -515,6 +527,8 @@ void FusionGraphNode::SetupCommunications(double node_period_s)
         add("gps_rejects_wrongfix", std::to_string(stats.gps_rejects_wrongfix));
         add("gps_rejects_dead_reckoning", std::to_string(stats.gps_rejects_dead_reckoning));
         add("gps_rejects_stuck_value", std::to_string(stats.gps_rejects_stuck_value));
+        add("isam_resets", std::to_string(stats.isam_resets));
+        add("cog_flip_recoveries", std::to_string(cog_flip_recoveries_));
         add("stationary_hand_push", std::to_string(stats.stationary_hand_push));
         add("slip_veto", std::to_string(stats.slip_veto));
         add("live_nodes", std::to_string(graph_->LiveNodeCount()));

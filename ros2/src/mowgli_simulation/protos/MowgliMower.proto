@@ -2,18 +2,11 @@
 # license: GPL-3.0
 # Mowgli mower PROTO for Webots.
 #
-# **STATUS: Phase 2.2 — kinematic drivetrain.** The wheel-friction
-# pathology described below was bypassed (rather than fixed) by
-# switching to a kinematic body driver: a Python plugin loaded by
-# webots_ros2_driver teleports the Robot's translation/rotation
-# fields each tick from an integrated /cmd_vel, while the
-# diff_drive_controller still drives the wheel motors so wheel
-# encoders + /wheel_odom_raw + ekf_odom_node see realistic motion.
-# See ``mowgli_simulation/kinematic_drive.py`` for the full rationale
-# and tradeoffs. The PROTO is kept *physical* (mass, friction, hinge
-# joints, bounding boxes) so collisions with static obstacles still
-# register — but body translation is no longer derived from
-# wheel-floor friction.
+# Current plant: native motor/contact physics. ros2_control alone writes
+# wheel motors; the legacy KinematicDrive plugin only observes completed
+# native body pose intervals. It never teleports or sets body velocity.
+# Ground must include a collision boundingObject (see docs/WEBOTS_SIM.md).
+# The historical workarounds below predate the grounded native controls.
 #
 # ── Phase 2.1 history (left here as a record) ─────────────────────
 # Phase 2.1 PROTO replaced the inline Robot {} that was in
@@ -66,7 +59,7 @@
 #     a starting point (it's known-tuned and ROS2-ready).
 #
 # ──────────────────────────────────────────────────────────────────
-# Design (current):
+# Design snapshot from Phase 2.1 (historical; geometry below is authoritative):
 #   * 2 driving wheels at body x=0, y=±0.1625, z=0.093 (radius 0.093).
 #     Wheel-bottom rests at z=0 in robot frame.
 #   * 1 single caster at body (+0.20, 0, 0.04), sphere radius 0.04.
@@ -75,19 +68,13 @@
 #     (+0.05, 0, 0.25) — well above the wheels and casters.
 #   * Total mass 8.76 kg. Wheel mass 0.5 kg each (matches ROSbot).
 #   * COM at (0, 0, 0.05) — over wheel axis, just below it on z.
-#   * HingeJoint axis (0, -1, 0) — flipped from the natural (0, 1, 0)
-#     because diff_drive_controller commands positive ω for forward
-#     velocity, and the right-hand rule gives wheel-bottom motion in
-#     -X (= backward) for positive ω about +Y. With axis (0, -1, 0)
-#     positive ω = forward body motion. (Verified empirically: with
-#     axis (0, +1, 0) and `vx=+0.10` cmd_vel, the GPS reading moved
-#     westward (backward); flipping to (0, -1, 0) reversed this.)
-#
-# Reality vs simulation: real Mowgli has 2 driving wheels + 2 front
-# casters. The simulator only needs to reproduce the diff-drive
-# response, not the visual fidelity — Nav2 doesn't see the casters.
+#   * Both physical hinge axes are +Y, matching the ROS URDF: positive
+#     angular velocity gives a -X contact-point velocity relative to the
+#     axle, hence +X body rolling on stationary ground. The historical -Y
+#     rationale confused contact-point velocity with body translation.
+#     Grounded native motor controls confirm signed straight/pivot motion.
 
-EXTERNPROTO "webots://projects/appearances/protos/TireRubber.proto"
+EXTERNPROTO "webots/TireRubber.proto"
 
 PROTO MowgliMower [
   field SFVec3f    translation     0 0 0
@@ -143,7 +130,7 @@ PROTO MowgliMower [
       DEF LEFT_JOINT HingeJoint {
         jointParameters HingeJointParameters {
           # See the file header for the axis-sign rationale.
-          axis 0 -1 0
+          axis 0 1 0
           anchor 0 0.1625 0.093
           # Copied from ROSbot.proto — undocumented why these specific
           # values, but they are the canonical Webots+ROS2 settings.
@@ -201,7 +188,7 @@ PROTO MowgliMower [
       # ── Right drive wheel ────────────────────────────────────────────
       DEF RIGHT_JOINT HingeJoint {
         jointParameters HingeJointParameters {
-          axis 0 -1 0
+          axis 0 1 0
           anchor 0 -0.1625 0.093
           dampingConstant 5.0
           staticFriction 1.0

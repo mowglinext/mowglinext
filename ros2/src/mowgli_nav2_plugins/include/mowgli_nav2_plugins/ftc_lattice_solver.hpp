@@ -91,8 +91,9 @@ enum class LatticeBlock : signed char
 struct LatticeSolution
 {
   OffsetLatticeResult plan;
-  /// 1 = with reaction slack, 2 = without, 3 = ignoring the stations under the
-  /// body. Meaningful only when `plan.feasible`.
+  /// 1 = with reaction slack, 2 = without, 3 = the stations under the body are
+  /// tested with the BARE chassis (no clearance margin) instead of the widened
+  /// one. Meaningful only when `plan.feasible`.
   int level{0};
   /// Stations actually planned (the horizon may have been cut).
   std::size_t planned_stations{0};
@@ -110,13 +111,18 @@ public:
   /// @param poses    the window's poses in the costmap frame (LatticeWindow order)
   /// @param carrot_pos position of the carrot in `poses`
   /// @param corner_is_last_station the last pose is a pivot corner (zero offset)
+  /// @param contact_body base-frame footprint WITHOUT the clearance margin. The
+  ///        level-3 fallback tests the stations under the body with it: they
+  ///        may graze the margin, never a lethal cell. Empty = the widened
+  ///        `body` (level 3 then grants nothing over level 2).
   LatticeSolver(const nav2_costmap_2d::Costmap2D& costmap,
                 const BoundaryGuard& guard,
                 const ObstacleDeviation::Footprint& body,
                 std::vector<geometry_msgs::msg::PoseStamped> poses,
                 std::size_t carrot_pos,
                 bool corner_is_last_station,
-                const LatticeSolverCfg& cfg);
+                const LatticeSolverCfg& cfg,
+                const ObstacleDeviation::Footprint& contact_body = {});
 
   /// Cumulative arc length of each station; station 0 is the carrot.
   const std::vector<double>& Stations() const
@@ -140,8 +146,12 @@ public:
   /// Memoised node test on a single pose of the window.
   LatticeBlock PoseBlock(std::size_t pose, double offset);
 
-  /// Node test the DP uses: `station` at `offset` over its span of poses
-  /// (`ahead` stations of reaction slack; stations <= `grace` always free).
+  /// Node test on a single pose with the bare chassis (no clearance margin).
+  LatticeBlock ContactPoseBlock(std::size_t pose, double offset);
+
+  /// Node test the DP uses: `station` at `offset` over its span of poses — from
+  /// one carrot lead behind it (the trailing body) to `ahead` stations of
+  /// reaction slack. Stations <= `grace` are tested with the bare chassis only.
   LatticeBlock SpanBlock(std::size_t station, double offset, std::size_t ahead, std::size_t grace);
 
   const std::vector<geometry_msgs::msg::PoseStamped>& Poses() const
@@ -158,14 +168,22 @@ private:
   const nav2_costmap_2d::Costmap2D& costmap_;
   BoundaryGuard guard_;
   ObstacleDeviation::Footprint body_;
+  ObstacleDeviation::Footprint contact_body_;
   std::vector<geometry_msgs::msg::PoseStamped> poses_;
   std::size_t carrot_pos_;
   LatticeSolverCfg cfg_;
   std::vector<double> stations_;
   std::size_t corner_station_{std::numeric_limits<std::size_t>::max()};
+  /// Resampled poses one carrot lead covers (the trailing body span).
+  std::size_t lead_poses_{0};
   int half_{0};
   std::size_t width_{1};
   std::vector<signed char> memo_;
+  std::vector<signed char> contact_memo_;
+
+  std::size_t OffsetSlot(double offset) const;
+  bool ZoneBlocked(std::size_t pose, double offset) const;
+  bool SingleStationClear(double start_offset);
   double axis_rear_{0.0};
   double axis_front_{0.0};
 };

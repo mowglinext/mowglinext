@@ -46,6 +46,11 @@ type FleetPeer struct {
 	Name       string `json:"name"`
 	Address    string `json:"address"` // host:port of the peer's GUI backend
 	APIVersion int    `json:"api_version"`
+	// The peer's station and the datum it is expressed in. Persisted because the
+	// station stays on the lawn when its robot is away or offline.
+	Dock     *RobotDockPose `json:"dock,omitempty"`
+	DatumLat float64        `json:"datum_lat,omitempty"`
+	DatumLon float64        `json:"datum_lon,omitempty"`
 }
 
 // FleetRobot is one row of the fleet snapshot the GUI renders.
@@ -303,6 +308,7 @@ func (f *FleetProvider) startClientLocked(peer FleetPeer) {
 			return
 		}
 		f.updatePeerAPIVersion(peer.ID, peer.Address, c, identity.APIVersion)
+		f.updatePeerDock(peer.ID, peer.Address, c, identity)
 	}
 	f.clients[peer.ID] = c
 	c.start()
@@ -322,6 +328,26 @@ func (f *FleetProvider) updatePeerAPIVersion(id, address string, client *peerCli
 	f.peers[id] = peer
 	if err := f.savePeersLocked(); err != nil {
 		logrus.WithField("peer", address).Warnf("fleet: persist refreshed API version: %v", err)
+	}
+}
+
+// updatePeerDock remembers the station a peer advertises, with the same guards:
+// a stale client must not overwrite the registry of a re-registered peer.
+func (f *FleetProvider) updatePeerDock(id, address string, client *peerClient, identity RobotIdentity) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	peer, ok := f.peers[id]
+	if !ok || peer.Address != address || f.clients[id] != client {
+		return
+	}
+	sameDock := (peer.Dock == nil) == (identity.Dock == nil) && (peer.Dock == nil || *peer.Dock == *identity.Dock)
+	if sameDock && peer.DatumLat == identity.DatumLat && peer.DatumLon == identity.DatumLon {
+		return
+	}
+	peer.Dock, peer.DatumLat, peer.DatumLon = identity.Dock, identity.DatumLat, identity.DatumLon
+	f.peers[id] = peer
+	if err := f.savePeersLocked(); err != nil {
+		logrus.WithField("peer", address).Warnf("fleet: persist peer station: %v", err)
 	}
 }
 

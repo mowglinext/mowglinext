@@ -72,8 +72,9 @@ controller_server:
     # default gave both controllers ZERO velocity feedback — MPPI planned every
     # cycle as if stationary (circling on tight coverage) and RPP's lookahead
     # collapsed to its minimum (transit weaving). Use /wheel_odom (raw, carries
-    # angular velocity); the fused /odometry/filtered currently reports
-    # twist.angular.z = 0 (separate fusion gap, so it is NOT usable here yet).
+    # angular velocity). The fused /odometry/filtered also carries the
+    # bias-corrected gyro yaw rate in twist.angular.z (fusion_graph) and would
+    # do; /wheel_odom stays the live choice.
     odom_topic: /wheel_odom
     # 10 Hz: 0.3 m/s × 100 ms = 3 cm of motion between decisions, matches
     # the 5-10 Hz upstream costmap / GPS refresh. Dropped from 20 Hz
@@ -101,7 +102,7 @@ controller_server:
     failure_tolerance: 1.0
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["stopped_goal_checker", "coverage_goal_checker", "transit_goal_checker",
-                           "coverage_axis_goal_checker"]
+                           "coverage_axis_goal_checker", "coverage_entry_goal_checker"]
     controller_plugins: ["FollowPath", "FollowCoveragePath"]
     path_handler_plugins: ["PathHandler"]
     PathHandler:
@@ -149,6 +150,9 @@ controller_server:
     # the end of a path (use_rotate_to_heading: false) and the 1 Hz
     # replan-if-invalid loop made a 0.40 m transit with a ±0.10 rad yaw goal
     # spin on the spot for 164 s (field 2026-09-12).
+    coverage_entry_goal_checker:
+      plugin: "mowgli_nav2_plugins/CoverageEntryGoalChecker"
+
     transit_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       xy_goal_tolerance: 0.30
@@ -248,7 +252,7 @@ controller_server:
       is_overshoot_valid: true
 
     # FollowPath (transit / dock approach / home / undock recovery) —
-    # MPPI. FTC was the wrong tool for transit: it has a rigid state
+    # RotationShim + RPP (see below). FTC was the wrong tool for transit: it has a rigid state
     # machine (PRE_ROTATE / FOLLOWING / WAITING_FOR_GOAL_APPROACH /
     # POST_ROTATE), rejects plans with fewer than 3 poses, and aborts
     # the action when the lateral residual exceeds
@@ -280,8 +284,9 @@ controller_server:
     #     (RPP samples by distance, not pose index).
     #
     # Transit uses RPP (this slot); the coverage slot (FollowCoveragePath)
-    # uses MPPI — RPP's lookahead-carrot tracking doesn't hold the < 10 mm
-    # lateral precision the swath tiling needs.
+    # uses FTC — RPP's lookahead-carrot tracking doesn't hold the < 10 mm
+    # lateral precision the swath tiling needs (MPPI there was reverted
+    # 2026-06-19).
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
 
@@ -334,8 +339,9 @@ controller_server:
         # --- RegulatedPurePursuitController (primary) params ---
         max_linear_vel: 0.30            # transit speed cap (m/s)
         # 0.16 kept conservative. The old host clamp (kMinLinVel=0.15) is gone:
-        # hardware_bridge now floors |vx| at the RUNTIME param min_linear_vel
-        # (hardware_bridge_node.cpp, default 0.05), so this MAY be lowered.
+        # min_linear_vel (default 0.05) is a soft clamp outside fresh BT AUTONOMOUS;
+        # autonomous precision targets retain finite slew without that clamp.
+        # Keep this independent conservative RPP approach setting unchanged.
         min_approach_linear_velocity: 0.16
         approach_velocity_scaling_dist: 0.6
         # Lookahead: velocity-scaled = lookahead_time × v, clamped to
@@ -439,6 +445,16 @@ controller_server:
     # F2C route as one continuous goal — FTC tracks it; no per-swath feeding.
     FollowCoveragePath:
       plugin: "mowgli_nav2_plugins/FTCController"
+      # Private FTC approach assumption: residual forward travel / speed after
+      # STOP <= 0.5 s. Physical calibration is outstanding; no global deadband
+      # or angular-safety limits change. Only explicit pivot approaches use it.
+      pivot_coast_time_bound_s: 0.5
+      # Lateral arrival band at a pivot corner lying ABEAM of base_link (the
+      # 2 cm disc still governs a normal approach, so row ends are unchanged).
+      # Forward motion cannot close a sideways offset: with 2 cm alone FTC
+      # aborted "timeout approaching pivot corner" standing on the corner 4-7 cm
+      # to the side (field 2026-11-13). Live-tunable, [0.02, 0.15].
+      pivot_arrival_lateral_tolerance_m: 0.08
       # Carrot speed. BOTH are overridden at launch (navigation.launch.py):
       #   speed_fast = mowing_speed
       #   speed_slow = clamp(mowing_speed * turn_speed_ratio,
@@ -468,7 +484,10 @@ controller_server:
       # but the ACTUAL forward speed (odom) stays below stall_speed_ratio × the
       # command for stall_grace_s, the wheels are slipping / the chassis is
       # blocked. Ease the carrot to stall_crawl_speed instead of flooring it —
-      # which digs holes in soft turf (operator report). Set ratio ≤ 0 to disable.
+      # which digs holes in soft turf (operator report) — and STAY there until
+      # the robot really moves at the crawl again (ftc_stall.hpp: the latch is
+      # no longer released by the command itself reaching the crawl speed).
+      # Set ratio ≤ 0 to disable.
       stall_speed_ratio: 0.35
       stall_grace_s: 0.6
       stall_crawl_speed: 0.08
@@ -547,9 +566,10 @@ controller_server:
       # validated live 2026-06-21 (forward skirt, no reverse, no pirouette).
       forward_only: true
       # Obstacle avoidance by lateral path deviation. Reads the local
-      # obstacle_layer fed by /scan_costmap (nav2_params_lidar.yaml). Turned OFF
-      # in the no-LiDAR overlay (no obstacle_layer to read) — that variant tracks
-      # the path only and relies on collision_monitor + firmware for safety.
+      # obstacle_layer fed by /scan_costmap (nav2_params_lidar.yaml). Also ON in
+      # the no-LiDAR overlay since 2026-10-10, where the local costmap's only
+      # source is the fleet_layer (the other mowers' footprints): on a lawn
+      # without peers it sees nothing and the robot just tracks the path.
       check_obstacles: true
       # OVERRIDDEN AT LAUNCH (task #51) by mowgli_robot.yaml's
       # obstacle_detection_range_m (default 1.5 m), converted to poses —
@@ -717,7 +737,14 @@ controller_server:
       # Static default kept in sync with the template (true, 2026-07-23) so a
       # raw `ros2 launch` with no robot-config injection is behaviour-preserving.
       obstacle_reverse_enabled: true
+      # Boundary-safe reverse (retrace.hpp): FTC's reverse-escape and the turn fallback's reverse only
+      # run while the robot is inside every recorded area and only over a straight forward piece it just
+      # drove. Field 2026-10-26: a 0.30 m reverse-escape took the mower from 0.00 m to 0.33 m outside.
+      reverse_boundary_safe: true
       obstacle_reverse_max_dist_m: 0.30
+      # OVERRIDDEN AT LAUNCH by mowgli_robot.yaml's obstacle_reverse_speed_mps
+      # (navigation.launch.py, clamped to [0, 0.30]); this static value only
+      # governs a raw `ros2 launch` of this file with no robot-config injection.
       obstacle_reverse_speed_mps: 0.10   # must clear the firmware deadband (~0.05)
       # TURN FALLBACK (ftc_turn_fallback.hpp). Field 2026-09-22: all 8 WEDGED
       # of a 110-min mow were in TURNS (U-turns, omega loops, 70-107 deg kinks)
@@ -744,6 +771,26 @@ controller_server:
       turn_fallback_max_rejoin_arc_m: 3.0    # path a rejoin may skip, [0.2, 10.0]
       turn_fallback_min_turn_deg: 45.0       # a straight (post, wall) is not a turn, [10, 180]
       turn_fallback_timeout_s: 45.0          # whole manoeuvre, else the goal aborts, [5, 300]
+      # CONTOUR BYPASS (ftc_contour_bypass.hpp), Bug2-style, FIELD TEST. Third
+      # stage after the lattice and the turn fallback: where neither can pass
+      # (an obstacle on a STRAIGHT wider than the lattice's lateral reach, or a
+      # turn with no single-connector rejoin), FTC walks round the obstacle's
+      # contour — an iso-distance line contour_bypass_follow_distance_m from the
+      # LiDAR's true-lethal cells AND the zone band (the recorded boundary is a
+      # virtual wall), both sides tried, the faster kept — until it meets the
+      # plan again past the blockage (Bug2's leave rule), then drives it BLADE-ON
+      # as straight legs joined by pivots spliced into its plan: the turn
+      # fallback's execution path (PIVOT sweep gate, lattice and
+      # currentBodyInLethal every cycle, hold -> abort on anything new, deadline
+      # contour_bypass_timeout_s). Legs planned with a 0.10 m margin. No reverse
+      # of its own: too close to turn = the WEDGED reverse-escape, then retry.
+      # Before it: WEDGED -> reverse -> hold -> abort -> FollowStrip blade-off
+      # detour (the skirted stretch never mowed).
+      contour_bypass_enabled: true
+      contour_bypass_max_contour_m: 8.0        # contour walked per side, [1, 15]
+      contour_bypass_max_rejoin_arc_m: 8.0     # plan past the blockage, [0.5, 10]
+      contour_bypass_follow_distance_m: 0.65   # base_link to obstacle, [0.35, 1.0]
+      contour_bypass_timeout_s: 90.0           # whole manoeuvre, else the goal aborts, [5, 300]
 
 # ---------------------------------------------------------------------------
 # Planner server
@@ -766,6 +813,14 @@ planner_server:
     GridBased:
       plugin: "mowgli_nav2_plugins/AuthorizedTransitPlanner"
       tolerance: 0.0
+      # Transits stay inside the union of the recorded areas. Two areas drawn side
+      # by side rarely share their border exactly: a gap of a few centimetres runs
+      # along it, the exact union treats it as a wall, and the transit leaves through
+      # the one corner where the rings do touch, possibly at the far end of the garden
+      # (operator report 2026-11-10). Gaps up to this width are bridged
+      # (transit_seams.hpp); the path is then never further than this from BOTH areas.
+      # 0 restores the exact union. Accepted range 0..0.15 m; read at configure only.
+      seam_tolerance: 0.10
       downsample_costmap: false
       downsampling_factor: 2
       allow_unknown: false
@@ -950,10 +1005,9 @@ global_costmap:
       # filter-free (see local_costmap below) so coverage swaths near the edge
       # don't trip MPPI/RPP "collision ahead" and Nav2 local recoveries (spin,
       # backup) still function near edges.
-      # PLUGIN ORDER (set in the lidar / no-lidar overlays): inflation_layer is
-      # listed BEFORE keepout_filter, so the keepout mask is stamped onto an
-      # already-inflated master grid and is NOT inflated itself. Only real
-      # sensor marks (obstacle_layer) get the inflation band.
+      # The overlays inflate sensor marks in the primary grid, then apply
+      # keepout_filter to the separate final grid. This also prevents retained
+      # boundary cells from becoming inflation seeds during bounded updates.
       #
       # Why: SmacPlanner2D is a POINT check — a pose collides when its centre
       # cell cost is >= INSCRIBED. It never tests the footprint polygon, so its
@@ -1344,7 +1398,12 @@ collision_monitor:
     # straight to twist_mux on cmd_vel_monitored.
     cmd_vel_out_topic: cmd_vel_monitored
     state_topic: collision_monitor_state
-    controller.transform_tolerance: 0.5
+    # TOP-LEVEL key: collision_monitor declares `transform_tolerance` itself.
+    # It used to read `controller.transform_tolerance` (the docking_server
+    # spelling), which this node never declares, so it silently ran on Nav2's
+    # 0.1 s default — too tight for base_shift_correction against a LiDAR scan
+    # stamped up to ~0.2 s behind the forward-stamped TF on the Pi.
+    transform_tolerance: 0.5
     # Source timeout: how long before stale sensor data triggers a stop.
     # 1.5 s (was 5.0 — SAFETY_REVIEW_2026-07-23 A-C2): at the 0.20 m/s mow
     # speed a 5 s stale window let a dead LiDAR/scan-filter chain mow BLIND for

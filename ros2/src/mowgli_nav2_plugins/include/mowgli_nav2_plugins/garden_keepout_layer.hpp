@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <limits>
 #include <mutex>
 
 #include "nav2_costmap_2d/layer.hpp"
@@ -21,6 +22,10 @@ public:
   void updateBounds(double, double, double, double*, double*, double*, double*) override;
   void updateCosts(nav2_costmap_2d::Costmap2D&, int, int, int, int) override;
   void reset() override;
+  void matchSize() override
+  {
+    current_ = false;
+  }
   bool isClearable() override
   {
     return false;
@@ -35,6 +40,7 @@ private:
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr toggle_service_;
   double resolution_{0.08};
   int64_t max_cells_{4000000};
+  bool separate_filter_{false};
   bool geometry_changed_{false};
   bool filter_enabled_{true};
 };
@@ -47,5 +53,11 @@ class RecentObstacleLayer : public nav2_costmap_2d::ObstacleLayer
 {
 public:
   void updateBounds(double, double, double, double*, double*, double*, double*) override;
+
+private:
+  double previous_min_x_{std::numeric_limits<double>::max()};
+  double previous_min_y_{std::numeric_limits<double>::max()};
+  double previous_max_x_{std::numeric_limits<double>::lowest()};
+  double previous_max_y_{std::numeric_limits<double>::lowest()};
 };
 }  // namespace mowgli_nav2_plugins

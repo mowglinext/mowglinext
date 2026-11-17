@@ -11,6 +11,7 @@ datum and antenna lever-arm from install/config/mowgli/mowgli_robot.yaml
 
 import copy
 import os
+import sys
 
 import yaml
 from ament_index_python.packages import get_package_share_directory
@@ -19,6 +20,10 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from fusion_graph_simulation_geometry import simulation_geometry_parameters  # noqa: E402
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -119,6 +124,10 @@ def generate_launch_description() -> LaunchDescription:
         "use_sim_time", default_value="false",
         description="Use simulation clock when true.",
     )
+    simulation_geometry_arg = DeclareLaunchArgument(
+        "simulation_geometry", default_value="",
+        description="Internal complete simulator datum/antenna snapshot; requires simulation time.",
+    )
     use_magnetometer_arg = DeclareLaunchArgument(
         "use_magnetometer", default_value="false",
         description="Subscribe to /imu/mag_yaw and feed it into the graph (Huber-robustified). OFF by default; mag is corrupted by motor magnetic field on this chassis.",
@@ -174,10 +183,7 @@ def generate_launch_description() -> LaunchDescription:
         _map_geometry_params(cfg),
         {
             "use_sim_time": use_sim_time,
-            "datum_lat": datum_lat,
-            "datum_lon": datum_lon,
-            "lever_arm_x": lever_x,
-            "lever_arm_y": lever_y,
+            **simulation_geometry_parameters(datum_lat, datum_lon, lever_x, lever_y),
             "use_magnetometer": use_magnetometer,
             "use_lidar_map_anchor": use_lidar_map_anchor,
             "lidar_anchor_shadow_mode": lidar_anchor_shadow_mode,
@@ -217,6 +223,7 @@ def generate_launch_description() -> LaunchDescription:
 
     return LaunchDescription([
         use_sim_time_arg,
+        simulation_geometry_arg,
         use_magnetometer_arg,
         use_lidar_map_anchor_arg,
         lidar_anchor_shadow_mode_arg,

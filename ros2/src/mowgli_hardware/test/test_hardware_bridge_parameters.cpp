@@ -33,6 +33,48 @@ struct HardwareBridgeBladeStatusTestPeer
     float wz;
   };
 
+  static void input(HardwareBridgeNode& node, double vx, double wz = 0.0)
+  {
+    // Exercise the callback at its nominal first-step period without sleeps.
+    node.cmd_vel_pipeline_.last_shaped_ns_ = steadyNowNs() - 100'000'000;
+    auto msg = std::make_shared<geometry_msgs::msg::TwistStamped>();
+    msg->twist.linear.x = vx;
+    msg->twist.angular.z = wz;
+    node.on_cmd_vel(msg);
+  }
+  static void mode(HardwareBridgeNode& node, uint8_t mode, bool report = true)
+  {
+    if (report)
+    {
+      auto status = std::make_shared<mowgli_interfaces::msg::HighLevelStatus>();
+      status->state = mode;
+      node.on_high_level_status(status);
+    }
+    else
+    {
+      node.current_mode_ = mode;
+    }
+  }
+  static void staleStatus(HardwareBridgeNode& node)
+  {
+    node.last_high_level_status_steady_ns_ = steadyNowNs() - 3'000'000'000;
+  }
+  static uint8_t mode(const HardwareBridgeNode& node)
+  {
+    return node.current_mode_;
+  }
+  static double digCommand(const HardwareBridgeNode& node)
+  {
+    return node.last_cmd_vx_;
+  }
+  static void escaping(HardwareBridgeNode& node, bool active)
+  {
+    node.dig_escaping_ = active;
+  }
+  static void expireSlew(HardwareBridgeNode& node)
+  {
+    node.cmd_vel_pipeline_.last_shaped_ns_ = steadyNowNs() - 1'000'000'000;
+  }
   static std::string requested(const HardwareBridgeNode& node)
   {
     return node.blade_requested_direction_;
@@ -143,9 +185,70 @@ struct HardwareBridgeBladeStatusTestPeer
     node.on_emergency_stop(req,
                            std::make_shared<mowgli_interfaces::srv::EmergencyStop::Response>());
   }
+  static bool reopen(HardwareBridgeNode& node)
+  {
+    return node.serial_->open();
+  }
   static void disconnect(HardwareBridgeNode& node)
   {
     node.close_serial_for_reconnect();
+  }  // Feed a CONFIG_RSP as if the board had answered the version handshake.
+  static void handshake(HardwareBridgeNode& node, uint8_t protocol)
+  {
+    LlConfigRsp packet{};
+    packet.type = PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP;
+    packet.protocol_version = protocol;
+    packet.fw_version_major = 1;
+    node.handle_config_rsp(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
+  }
+  static void rearmHandshake(HardwareBridgeNode& node)
+  {
+    node.rearm_firmware_handshake();
+  }
+  static bool actuationAllowed(const HardwareBridgeNode& node)
+  {
+    return node.actuation_allowed();
+  }
+  static bool controlResult(HardwareBridgeNode& node, uint8_t on, uint8_t direction)
+  {
+    auto req = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
+    req->mow_enabled = on;
+    req->mow_direction = direction;
+    auto res = std::make_shared<mowgli_interfaces::srv::MowerControl::Response>();
+    node.on_mower_control(req, res);
+    return res->success;
+  }
+  static void cmdVel(HardwareBridgeNode& node, double vx, double wz)
+  {
+    auto msg = std::make_shared<geometry_msgs::msg::TwistStamped>();
+    msg->twist.linear.x = vx;
+    msg->twist.angular.z = wz;
+    node.on_cmd_vel(msg);
+  }
+  static void setMode(HardwareBridgeNode& node, uint8_t mode)
+  {
+    node.current_mode_ = mode;
+    node.send_high_level_state();
+  }
+  static uint8_t currentMode(const HardwareBridgeNode& node)
+  {
+    return node.current_mode_;
+  }
+  static bool mowEnabled(const HardwareBridgeNode& node)
+  {
+    return node.mow_enabled_;
+  }
+  static bool emergencyActive(const HardwareBridgeNode& node)
+  {
+    return node.emergency_active_;
+  }
+  static bool digEscapeAllowed(const HardwareBridgeNode& node)
+  {
+    return node.dig_escape_allowed();
+  }
+  static void setOutsideArea(HardwareBridgeNode& node, bool outside)
+  {
+    node.outside_area_.store(outside);
   }
 };
 
@@ -204,6 +307,7 @@ TEST_F(HardwareBridgeParametersTest, BladeDirectionTracksWrittenCommandsAndClear
   options.parameter_overrides({rclcpp::Parameter("serial_port", ptsname(master))});
   auto node = std::make_shared<HardwareBridgeNode>(options);
   using Peer = HardwareBridgeBladeStatusTestPeer;
+  Peer::handshake(*node, kMowgliProtocolVersion);
   EXPECT_EQ(Peer::requested(*node), "unknown");
   Peer::send(*node, 1, 1);
   EXPECT_EQ(Peer::requested(*node), "reverse");
@@ -233,7 +337,11 @@ protected:
     options.parameter_overrides({rclcpp::Parameter("serial_port", ptsname(master)),
                                  rclcpp::Parameter("lift_recovery_mode", true),
                                  rclcpp::Parameter("lift_blade_resume_delay_sec", 1.0)});
+    options.use_intra_process_comms(true);
     node = std::make_shared<HardwareBridgeNode>(options);
+    // The board under test speaks this image's protocol; the firmware
+    // interlock is exercised separately (FirmwareInterlock* below).
+    Peer::handshake(*node, kMowgliProtocolVersion);
     drain();
   }
   void TearDown() override
@@ -645,6 +753,355 @@ TEST_F(HardwareBridgeParametersTest, NonPositiveCmdVelSlewLimitFailsStartup)
                                rclcpp::Parameter("cmd_vel_angular_accel_limit", 0.0)});
 
   EXPECT_THROW(std::make_shared<HardwareBridgeNode>(options), std::invalid_argument);
+}
+
+class BridgePrecision : public BladeLiftRecovery
+{
+protected:
+  LlCmdVel input(double vx, uint8_t mode = HL_MODE_AUTONOMOUS, bool report = true)
+  {
+    Peer::mode(*node, mode, report);
+    Peer::input(*node, vx);
+    LlCmdVel result{};
+    unsigned count = 0;
+    for (const auto& bytes : drainPackets())
+    {
+      if (bytes.size() == sizeof(LlCmdVel) && bytes[0] == PACKET_ID_LL_CMD_VEL)
+      {
+        std::memcpy(&result, bytes.data(), sizeof(result));
+        ++count;
+      }
+    }
+    EXPECT_EQ(count, 1u);
+    EXPECT_FLOAT_EQ(Peer::digCommand(*node), result.linear_x);
+    return result;
+  }
+};
+
+TEST_F(BridgePrecision, AutonomousCreepStartsFromRestInBothDirections)
+{
+  for (double sign : {1.0, -1.0})
+  {
+    input(0.0);
+    const auto wire = input(sign * 0.03);
+    EXPECT_NEAR(wire.linear_x, sign * 0.03, 1e-6);
+  }
+}
+
+TEST_F(BridgePrecision, AutonomousNormalStartupKeepsFiniteAcceleration)
+{
+  EXPECT_NEAR(input(0.3).linear_x, 0.03, 1e-6);
+  EXPECT_NEAR(input(0.3).linear_x, 0.06, 1e-5);
+  EXPECT_FLOAT_EQ(input(0.0).linear_x, 0.0);
+  EXPECT_NEAR(input(0.3).linear_x, 0.03, 1e-6);
+}
+
+TEST_F(BridgePrecision, ManualModesKeepConfiguredInputAndWireDeadband)
+{
+  ASSERT_TRUE(node->set_parameter(rclcpp::Parameter("min_linear_vel", 0.08)).successful);
+  for (auto mode : {HL_MODE_IDLE, HL_MODE_RECORDING, HL_MODE_MANUAL_MOWING})
+  {
+    input(0.0, mode);
+    EXPECT_FLOAT_EQ(input(0.03, mode).linear_x, 0.0);
+    EXPECT_FLOAT_EQ(input(-0.03, mode).linear_x, 0.0);
+    EXPECT_FLOAT_EQ(input(0.3, mode).linear_x, 0.0);
+    EXPECT_FLOAT_EQ(input(0.3, mode).linear_x, 0.0);
+    EXPECT_NEAR(input(0.3, mode).linear_x, 0.09, 1e-5);
+  }
+}
+
+TEST_F(BridgePrecision, ModeHandoverCannotInheritSuppressedManualRamp)
+{
+  EXPECT_FLOAT_EQ(input(0.3, HL_MODE_RECORDING).linear_x, 0.0);
+  // This is a .03 internal ramp but an actual zero command on the wire.
+  EXPECT_NEAR(input(0.3).linear_x, 0.03, 1e-6);
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_MANUAL_MOWING).linear_x, 0.0);
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+}
+
+TEST_F(BridgePrecision, NullFallbackNeverGrantsPrecisionBeforeBtOrAfterBtNull)
+{
+  EXPECT_FLOAT_EQ(input(0.0, HL_MODE_NULL).linear_x, 0.0);
+  EXPECT_EQ(Peer::mode(*node), HL_MODE_NULL);
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_NULL, false).linear_x, 0.0);
+  EXPECT_EQ(Peer::mode(*node), HL_MODE_AUTONOMOUS);
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_NULL).linear_x, 0.0);
+  EXPECT_EQ(Peer::mode(*node), HL_MODE_AUTONOMOUS);
+  Peer::status(*node, EMERGENCY_BIT_LATCH);
+  drainPackets();
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_NULL).linear_x, 0.0);
+  EXPECT_EQ(Peer::mode(*node), HL_MODE_NULL);
+}
+
+TEST_F(BridgePrecision, StaleStatusAndReconnectRestoreInputDeadband)
+{
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+  Peer::staleStatus(*node);
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_AUTONOMOUS, false).linear_x, 0.0);
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+  Peer::disconnect(*node);
+  // Reopen only the existing PTY; no timers or physical serial device.
+  ASSERT_TRUE(Peer::reopen(*node));
+  EXPECT_FLOAT_EQ(input(0.03, HL_MODE_AUTONOMOUS, false).linear_x, 0.0);
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+}
+
+TEST_F(BridgePrecision, ReversalPassesThroughZeroAndExplicitStopIsImmediate)
+{
+  EXPECT_NEAR(input(0.03).linear_x, 0.03, 1e-6);
+  EXPECT_FLOAT_EQ(input(-0.03).linear_x, 0.0);
+  EXPECT_NEAR(input(-0.03).linear_x, -0.03, 1e-6);
+  EXPECT_FLOAT_EQ(input(0.0).linear_x, 0.0);
+}
+
+TEST_F(BridgePrecision, DigOwnsOutputAndResumptionStartsAtRest)
+{
+  for (int i = 0; i < 5; ++i)
+    input(0.3);
+  Peer::escaping(*node, true);
+  Peer::input(*node, 0.3);
+  EXPECT_TRUE(drainPackets().empty());
+  Peer::sendCmdVel(*node, 0.0, 0.0);
+  drainPackets();
+  Peer::escaping(*node, false);
+  EXPECT_NEAR(input(0.3).linear_x, 0.03, 1e-6);
+}
+
+TEST_F(BridgePrecision, AppliedTelemetryEqualsWrittenPacketAndFailedSendPublishesNothing)
+{
+  auto group = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
+  rclcpp::SubscriptionOptions options;
+  options.callback_group = group;
+  unsigned count = 0;
+  geometry_msgs::msg::TwistStamped applied;
+  auto sub = node->create_subscription<geometry_msgs::msg::TwistStamped>(
+      "/hardware_bridge/cmd_vel_applied",
+      rclcpp::QoS(10),
+      [&](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg)
+      {
+        applied = *msg;
+        ++count;
+      },
+      options);
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_callback_group(group, node->get_node_base_interface());
+  const auto wire = input(0.025);
+  executor.spin_some();
+  ASSERT_EQ(count, 1u);
+  EXPECT_DOUBLE_EQ(applied.twist.linear.x, wire.linear_x);
+  EXPECT_DOUBLE_EQ(applied.twist.angular.z, wire.angular_z);
+  closeMaster();
+  Peer::input(*node, 0.3);
+  executor.spin_some();
+  EXPECT_EQ(count, 1u);
+}
+
+TEST_F(BridgePrecision, FailedWriteDoesNotRecordAttemptedDigCommand)
+{
+  input(0.03);
+  const double before = Peer::digCommand(*node);
+  closeMaster();
+  Peer::input(*node, 0.3);
+  EXPECT_DOUBLE_EQ(Peer::digCommand(*node), before);
+}
+
+// ---------------------------------------------------------------------------
+// Firmware actuation interlock (firmware_interlock.hpp), on the real node.
+// ---------------------------------------------------------------------------
+
+class BridgeFirmwareInterlock : public BladeLiftRecovery
+{
+protected:
+  void SetUp() override
+  {
+    BladeLiftRecovery::SetUp();
+    // Start every case from an un-handshaken board, like a fresh boot.
+    Peer::rearmHandshake(*node);
+    drainPackets();
+  }
+
+  std::vector<LlCmdVel> cmdVels(const std::vector<std::vector<uint8_t>>& packets)
+  {
+    std::vector<LlCmdVel> out;
+    for (const auto& p : packets)
+    {
+      if (p.size() == sizeof(LlCmdVel) && p[0] == PACKET_ID_LL_CMD_VEL)
+      {
+        LlCmdVel v{};
+        std::memcpy(&v, p.data(), sizeof(v));
+        out.push_back(v);
+      }
+    }
+    return out;
+  }
+  std::vector<uint8_t> blades(const std::vector<std::vector<uint8_t>>& packets)
+  {
+    std::vector<uint8_t> out;
+    for (const auto& p : packets)
+      if (p.size() == sizeof(LlCmdBlade) && p[0] == PACKET_ID_LL_CMD_BLADE)
+        out.push_back(p[1]);
+    return out;
+  }
+  std::vector<uint8_t> modes(const std::vector<std::vector<uint8_t>>& packets)
+  {
+    std::vector<uint8_t> out;
+    for (const auto& p : packets)
+      if (p.size() == sizeof(LlHighLevelState) && p[0] == PACKET_ID_LL_HIGH_LEVEL_STATE)
+        out.push_back(p[1]);
+    return out;
+  }
+  std::vector<LlHeartbeat> heartbeats(const std::vector<std::vector<uint8_t>>& packets)
+  {
+    std::vector<LlHeartbeat> out;
+    for (const auto& p : packets)
+    {
+      if (p.size() == sizeof(LlHeartbeat) && p[0] == PACKET_ID_LL_HEARTBEAT)
+      {
+        LlHeartbeat h{};
+        std::memcpy(&h, p.data(), sizeof(h));
+        out.push_back(h);
+      }
+    }
+    return out;
+  }
+};
+
+TEST_F(BridgeFirmwareInterlock, NoHandshakeYetSendsZeroForEveryNonZeroCmdVel)
+{
+  ASSERT_FALSE(Peer::actuationAllowed(*node));
+  Peer::cmdVel(*node, 0.3, 0.5);
+  Peer::sendCmdVel(*node, -0.2, 0.0);  // the dig-escape / internal path
+
+  const auto sent = cmdVels(drainPackets());
+  ASSERT_EQ(sent.size(), 2u);
+  for (const auto& v : sent)
+  {
+    EXPECT_EQ(v.linear_x, 0.0f);
+    EXPECT_EQ(v.angular_z, 0.0f);
+  }
+}
+
+TEST_F(BridgeFirmwareInterlock, CmdVelCannotForceAModeChangeWhileIncompatible)
+{
+  ASSERT_EQ(Peer::currentMode(*node), HL_MODE_NULL);
+  Peer::cmdVel(*node, 0.3, 0.0);
+  EXPECT_EQ(Peer::currentMode(*node), HL_MODE_NULL);
+  EXPECT_TRUE(modes(drainPackets()).empty());
+}
+
+TEST_F(BridgeFirmwareInterlock, WrongProtocolRefusesBladeOnAndReportsFailure)
+{
+  Peer::handshake(*node, static_cast<uint8_t>(kMowgliProtocolVersion - 1u));
+  drainPackets();
+  ASSERT_FALSE(Peer::actuationAllowed(*node));
+
+  EXPECT_FALSE(Peer::controlResult(*node, 1, 0));
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+  const auto packets = drainPackets();
+  EXPECT_EQ(blades(packets), (std::vector<uint8_t>{0u}));
+  for (const auto& v : cmdVels(packets))
+    EXPECT_EQ(v.linear_x, 0.0f);
+
+  // A direct ON (re-assert / lift-resume path) is forced OFF too.
+  Peer::send(*node, 1, 0);
+  EXPECT_EQ(blades(drainPackets()), (std::vector<uint8_t>{0u}));
+  // An OFF request still succeeds.
+  EXPECT_TRUE(Peer::controlResult(*node, 0, 0));
+}
+
+TEST_F(BridgeFirmwareInterlock, NonIdleModeIsForwardedAsIdleWhileIncompatible)
+{
+  Peer::setMode(*node, HL_MODE_MANUAL_MOWING);
+  Peer::setMode(*node, HL_MODE_AUTONOMOUS);
+  EXPECT_EQ(modes(drainPackets()), (std::vector<uint8_t>{HL_MODE_IDLE, HL_MODE_IDLE}));
+}
+
+TEST_F(BridgeFirmwareInterlock, EmergencyStopAndReleaseStillReachTheFirmware)
+{
+  Peer::emergency(*node, 1);
+  Peer::emergency(*node, 0);
+  const auto beats = heartbeats(drainPackets());
+  ASSERT_EQ(beats.size(), 2u);
+  EXPECT_EQ(beats[0].emergency_requested, 1u);
+  EXPECT_EQ(beats[1].emergency_requested, 0u);
+  EXPECT_EQ(beats[1].emergency_release_requested, 1u);
+}
+
+TEST_F(BridgeFirmwareInterlock, DigEscapeIsNotAllowedWhileIncompatible)
+{
+  EXPECT_FALSE(Peer::digEscapeAllowed(*node));
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  EXPECT_TRUE(Peer::digEscapeAllowed(*node));
+}
+
+// Outside every recorded area the 0.30 m dig reverse only takes the mower further
+// out (field 2026-10-26). The #1022 merge replaced this term with the interlock
+// check instead of adding to it, and no test noticed.
+TEST_F(BridgeFirmwareInterlock, DigEscapeIsRefusedOutsideEveryRecordedArea)
+{
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  ASSERT_TRUE(Peer::digEscapeAllowed(*node));
+  Peer::setOutsideArea(*node, true);
+  EXPECT_FALSE(Peer::digEscapeAllowed(*node));
+  Peer::setOutsideArea(*node, false);
+  EXPECT_TRUE(Peer::digEscapeAllowed(*node));
+}
+
+TEST_F(BridgeFirmwareInterlock, MatchingHandshakeRestoresUnchangedBehaviour)
+{
+  Peer::setMode(*node, HL_MODE_AUTONOMOUS);
+  drainPackets();
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  ASSERT_TRUE(Peer::actuationAllowed(*node));
+  // Release re-sends the BT's real mode immediately.
+  EXPECT_EQ(modes(drainPackets()), (std::vector<uint8_t>{HL_MODE_AUTONOMOUS}));
+
+  Peer::sendCmdVel(*node, 0.25, -0.5);
+  const auto sent = cmdVels(drainPackets());
+  ASSERT_EQ(sent.size(), 1u);
+  EXPECT_EQ(sent[0].linear_x, 0.25f);
+  EXPECT_EQ(sent[0].angular_z, -0.5f);
+
+  EXPECT_TRUE(Peer::controlResult(*node, 1, 1));
+  EXPECT_EQ(blades(drainPackets()), (std::vector<uint8_t>{1u}));
+}
+
+TEST_F(BridgeFirmwareInterlock, CompatibleToIncompatibleForcesBladeOffZeroAndIdle)
+{
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  Peer::setMode(*node, HL_MODE_AUTONOMOUS);
+  ASSERT_TRUE(Peer::controlResult(*node, 1, 0));
+  Peer::sendCmdVel(*node, 0.3, 0.0);
+  drainPackets();
+
+  // The board re-handshakes with a different protocol (e.g. reflashed to an
+  // older image without a USB re-enumeration being noticed).
+  Peer::handshake(*node, static_cast<uint8_t>(kMowgliProtocolVersion + 1u));
+  ASSERT_FALSE(Peer::actuationAllowed(*node));
+  const auto packets = drainPackets();
+  EXPECT_EQ(blades(packets), (std::vector<uint8_t>{0u}));
+  const auto sent = cmdVels(packets);
+  ASSERT_EQ(sent.size(), 1u);
+  EXPECT_EQ(sent[0].linear_x, 0.0f);
+  EXPECT_EQ(modes(packets), (std::vector<uint8_t>{HL_MODE_IDLE}));
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+
+  // The re-assert path cannot spin it back up on its own.
+  Peer::bladeStatus(*node, 0);
+  Peer::ageBladeCommand(*node, 1'000'000'000);
+  Peer::makeCmdVelFresh(*node);
+  Peer::reassertTick(*node);
+  EXPECT_TRUE(blades(drainPackets()).empty());
+}
+
+TEST_F(BridgeFirmwareInterlock, RearmOnReconnectEngagesTheInterlock)
+{
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  ASSERT_TRUE(Peer::actuationAllowed(*node));
+  drainPackets();
+  Peer::rearmHandshake(*node);
+  EXPECT_FALSE(Peer::actuationAllowed(*node));
+  EXPECT_EQ(blades(drainPackets()), (std::vector<uint8_t>{0u}));
 }
 
 }  // namespace mowgli_hardware

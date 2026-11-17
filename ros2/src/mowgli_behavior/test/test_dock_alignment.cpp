@@ -15,6 +15,7 @@
 
 // SPDX-License-Identifier: GPL-3.0
 
+#include <array>
 #include <cmath>
 
 #include "mowgli_behavior/dock_alignment.hpp"
@@ -24,7 +25,9 @@ namespace
 {
 
 using mowgli_behavior::ComputeDockContactDelta;
+using mowgli_behavior::DockStationZone;
 using mowgli_behavior::EvaluateDockYawDrift;
+using mowgli_behavior::IsFacingStationInNoPivotZone;
 using mowgli_behavior::kDockStagingRunwayM;
 using mowgli_behavior::kDockYawDeclaredSigmaRad;
 
@@ -186,6 +189,31 @@ TEST(DockYawDrift, is_symmetric_in_the_sign_of_the_error)
   EXPECT_TRUE(neg.is_stale);
   EXPECT_NEAR(pos.delta_rad, -neg.delta_rad, 1e-9);
   EXPECT_NEAR(pos.staging_lateral_m, neg.staging_lateral_m, 1e-9);
+}
+
+TEST(DockStationZone, ContactWithoutChargeIsInTheZoneWhateverTheDockHeading)
+{
+  const DockStationZone zone;
+  for (const double yaw : {0.0, 2.3, -1.2})
+  {
+    const auto at = [&](double along, double cross)
+    {
+      return std::array<double, 2>{1.0 + along * std::cos(yaw) - cross * std::sin(yaw),
+                                   2.0 + along * std::sin(yaw) + cross * std::cos(yaw)};
+    };
+    const auto in_zone = [&](double along, double cross, double heading_error)
+    {
+      const auto p = at(along, cross);
+      return IsFacingStationInNoPivotZone(p[0], p[1], yaw + heading_error, 1.0, 2.0, yaw, zone);
+    };
+    EXPECT_TRUE(in_zone(0.0, 0.0, 0.0)) << "seated";
+    EXPECT_TRUE(in_zone(0.05, 0.02, 0.1)) << "pushed past the pose, no charge";
+    EXPECT_TRUE(in_zone(-0.15, 0.1, -0.3)) << "stopped just short";
+    EXPECT_FALSE(in_zone(-0.5, 0.0, 0.0)) << "far enough to pivot: the planner handles it";
+    EXPECT_FALSE(in_zone(0.0, 0.5, 0.0)) << "beside the station";
+    EXPECT_FALSE(in_zone(0.8, 0.0, 0.0)) << "beyond the station";
+    EXPECT_FALSE(in_zone(0.0, 0.0, M_PI)) << "facing away: forward is the way out";
+  }
 }
 
 }  // namespace

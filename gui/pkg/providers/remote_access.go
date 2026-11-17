@@ -31,6 +31,8 @@ import (
 // same way the GNSS configurator runs its throwaway containers. It carries no
 // `garden.mowgli.update.*` label, so the host updater treats it as unmanaged
 // (like MQTT) and never restarts or replaces it.
+var errRemoteAccessMaintenance = errors.New("update maintenance is active")
+
 const (
 	RemoteAccessContainerName = "mowgli-remote"
 
@@ -55,10 +57,13 @@ const (
 	RemoteAccessStarting RemoteAccessPhase = "starting"
 	RemoteAccessRunning  RemoteAccessPhase = "running"
 	RemoteAccessError    RemoteAccessPhase = "error"
+	RemoteAccessDegraded RemoteAccessPhase = "degraded"
 )
 
 // RemoteAccessStatus is what the settings page polls.
 type RemoteAccessStatus struct {
+	containerID string // observation provenance; never exposed over the API
+	RemoteAccessMonitorStatus
 	Enabled bool              `json:"enabled"`
 	Phase   RemoteAccessPhase `json:"phase"`
 	Error   string            `json:"error,omitempty"`
@@ -110,11 +115,18 @@ type RemoteAccessProvider struct {
 	phase     RemoteAccessPhase
 	lastError string
 
-	wake chan struct{}
+	// op serializes all Docker work and operator mutations. Waiting readers honor
+	// their request deadline instead of queuing indefinitely behind image pulls.
+	op            chan struct{}
+	monitor       remoteAccessMonitor
+	networkOnline func(context.Context) bool
+	maintenance   func() bool
+	wake          chan struct{}
 }
 
 // NewRemoteAccessProvider loads the settings and reconciles the sidecar in
-// the background, then again after every settings change.
+// the background, then again after every settings change; a lightweight health
+// monitor observes the enabled sidecar once a minute.
 func NewRemoteAccessProvider(db types.IDBProvider, docker types.IServiceContainerProvider) *RemoteAccessProvider {
 	p := newRemoteAccessProvider(db, docker, time.Now)
 	go p.run()
@@ -134,15 +146,20 @@ func newRemoteAccessProvider(db types.IDBProvider, docker types.IServiceContaine
 	if cfg.Enabled {
 		phase = RemoteAccessStarting
 	}
-	return &RemoteAccessProvider{
-		db:      db,
-		docker:  docker,
-		guiPort: guiPortFromDB(db),
-		now:     now,
-		cfg:     cfg,
-		phase:   phase,
-		wake:    make(chan struct{}, 1),
+	p := &RemoteAccessProvider{
+		db:            db,
+		docker:        docker,
+		guiPort:       guiPortFromDB(db),
+		now:           now,
+		cfg:           cfg,
+		phase:         phase,
+		wake:          make(chan struct{}, 1),
+		op:            make(chan struct{}, 1),
+		networkOnline: remoteAccessNetworkOnline,
+		maintenance:   UpdateMaintenanceActive,
 	}
+	p.loadRecoveryBudget()
+	return p
 }
 
 // guiPortFromDB reads the API listen port so the sidecar proxies to the real
@@ -157,12 +174,40 @@ func guiPortFromDB(db types.IDBProvider) string {
 }
 
 func (p *RemoteAccessProvider) run() {
-	for range p.wake {
-		ctx, cancel := context.WithTimeout(context.Background(), remoteAccessReconcileTimeout)
-		if err := p.Reconcile(ctx); err != nil {
-			logrus.Warnf("remote access: reconcile failed: %v", err)
+	p.runMonitor(context.Background(), time.NewTicker(remoteAccessMonitorInterval))
+}
+
+// runMonitor has a cancellable clock seam for deterministic scheduling tests.
+func (p *RemoteAccessProvider) runMonitor(ctx context.Context, ticker *time.Ticker) {
+	defer ticker.Stop()
+	p.runWithTicks(ctx, ticker.C)
+}
+
+func (p *RemoteAccessProvider) runWithTicks(ctx context.Context, ticks <-chan time.Time) {
+	pending := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.wake:
+			pending = true
+		case <-ticks:
+			p.checkHealth(ctx)
 		}
-		cancel()
+		// Retain requested work across update maintenance, without spinning or
+		// retrying failed image pulls on every health tick.
+		if pending && !p.maintenance() {
+			work, cancel := context.WithTimeout(ctx, remoteAccessReconcileTimeout)
+			err := p.Reconcile(work)
+			cancel()
+			if errors.Is(err, errRemoteAccessMaintenance) {
+				continue
+			}
+			pending = false
+			if err != nil {
+				logrus.Warnf("remote access: reconcile failed: %v", err)
+			}
+		}
 	}
 }
 
@@ -191,9 +236,17 @@ func (p *RemoteAccessProvider) UpdateConfig(cfg RemoteAccessConfig) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+	if err := p.acquire(context.Background()); err != nil {
+		return err
+	}
+	defer p.release()
+	if p.maintenance() {
+		return errRemoteAccessMaintenance
+	}
 	if err := SaveRemoteAccessConfig(p.db, cfg); err != nil {
 		return err
 	}
+	p.resetRecoveryBudget()
 	p.mu.Lock()
 	p.cfg = cfg
 	if cfg.Enabled {
@@ -209,6 +262,16 @@ func (p *RemoteAccessProvider) UpdateConfig(cfg RemoteAccessConfig) error {
 
 // Apply re-runs the reconcile in the background (the "Retry" button).
 func (p *RemoteAccessProvider) Apply() {
+	_ = p.acquire(context.Background())
+	defer p.release()
+	if p.maintenance() {
+		return
+	}
+	p.apply()
+}
+
+func (p *RemoteAccessProvider) apply() {
+	p.resetRecoveryBudget()
 	p.mu.Lock()
 	if p.cfg.Enabled {
 		p.phase = RemoteAccessStarting
@@ -228,6 +291,13 @@ func (p *RemoteAccessProvider) setPhase(phase RemoteAccessPhase, errMsg string) 
 // Reconcile makes the Docker state match the settings: absent when disabled,
 // running with the current spec when enabled. It is idempotent.
 func (p *RemoteAccessProvider) Reconcile(ctx context.Context) error {
+	if err := p.acquire(ctx); err != nil {
+		return err
+	}
+	defer p.release()
+	if p.maintenance() {
+		return errRemoteAccessMaintenance
+	}
 	cfg := p.Config()
 	if err := p.reconcile(ctx, cfg); err != nil {
 		p.setPhase(RemoteAccessError, err.Error())
@@ -401,41 +471,47 @@ func buildServeConfig(guiPort string) []byte {
 // Status reports the sidecar lifecycle plus, when the container runs, the
 // node's login state and the URLs the operator can use.
 func (p *RemoteAccessProvider) Status(ctx context.Context) RemoteAccessStatus {
+	ctx, cancel := context.WithTimeout(ctx, remoteAccessStatusTimeout)
+	defer cancel()
+	if err := p.acquire(ctx); err != nil {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return withStatusError(p.statusSnapshot(), err)
+	}
+	defer p.release()
+	st, _ := p.observe(ctx)
+	return st
+}
+
+// observe is shared by the UI and supervisor; caller owns op.
+func (p *RemoteAccessProvider) observe(ctx context.Context) (RemoteAccessStatus, bool) {
 	p.mu.Lock()
 	cfg := p.cfg
-	st := RemoteAccessStatus{
-		Enabled:      cfg.Enabled,
-		Phase:        p.phase,
-		Error:        p.lastError,
-		Hostname:     cfg.Hostname,
-		TailscaleIps: []string{},
-		HttpUrls:     []string{},
-		Health:       []string{},
-		CheckedAt:    p.now(),
-	}
+	st := p.statusSnapshot()
 	p.mu.Unlock()
 	if !cfg.Enabled {
-		return st
+		return st, false
 	}
 
 	details, found, err := p.docker.FindContainerByName(ctx, RemoteAccessContainerName)
 	if err != nil {
-		return withStatusError(st, fmt.Errorf("look up %s: %w", RemoteAccessContainerName, err))
+		return withStatusError(st, fmt.Errorf("look up %s: %w", RemoteAccessContainerName, err)), false
 	}
 	if !found {
 		st.ContainerState = "absent"
-		return st
+		return st, false
 	}
 	st.ContainerState = details.State
+	st.containerID = details.ID
 	if !details.Running {
-		return st
+		return st, false
 	}
 
 	res, err := p.docker.ContainerExec(ctx, details.ID, types.ContainerExecSpec{
-		Cmd: []string{"tailscale", "status", "--json"},
+		Cmd: []string{"timeout", "-s", "KILL", "8", "tailscale", "status", "--json"},
 	})
 	if err != nil {
-		return withStatusError(st, fmt.Errorf("tailscale status: %w", err))
+		return withStatusError(st, fmt.Errorf("tailscale status: %w", err)), false
 	}
 	var ts tailscaleStatus
 	if err := json.Unmarshal([]byte(res.Stdout), &ts); err != nil {
@@ -446,9 +522,24 @@ func (p *RemoteAccessProvider) Status(ctx context.Context) RemoteAccessStatus {
 		if msg == "" {
 			msg = "tailscaled not ready"
 		}
-		return withStatusError(st, errors.New(msg))
+		return withStatusError(st, errors.New(msg)), res.ExitCode == 137 ||
+			(res.ExitCode != 0 && strings.Contains(msg, "failed to connect to local tailscaled"))
 	}
-	return applyTailscaleStatus(st, ts, cfg.ServeHTTPS, p.guiPort)
+	if ts.BackendState == "" {
+		return withStatusError(st, errors.New("tailscaled returned no backend state")), false
+	}
+	// A nonzero exit with valid status (e.g. NeedsLogin) is still usable.
+	st.StatusUsable = true
+	if ts.Self != nil {
+		st.SelfOnline = &ts.Self.Online
+	}
+	p.mu.Lock()
+	now := p.now()
+	p.monitor.LastSuccessAt = &now
+	p.monitor.faultSince = time.Time{}
+	st.LastSuccessAt = &now
+	p.mu.Unlock()
+	return applyTailscaleStatus(st, ts, cfg.ServeHTTPS, p.guiPort), false
 }
 
 func withStatusError(st RemoteAccessStatus, err error) RemoteAccessStatus {
@@ -506,6 +597,13 @@ func remoteAccessHTTPURLs(ips []string, dnsName string, magicDNS bool, guiPort s
 // Logout forgets the node's tailnet identity and recreates the sidecar, so
 // the next start logs in afresh (interactively, or with the stored key).
 func (p *RemoteAccessProvider) Logout(ctx context.Context) error {
+	if err := p.acquire(ctx); err != nil {
+		return err
+	}
+	defer p.release()
+	if p.maintenance() {
+		return errors.New("update maintenance is active")
+	}
 	details, found, err := p.docker.FindContainerByName(ctx, RemoteAccessContainerName)
 	if err != nil {
 		return fmt.Errorf("look up %s: %w", RemoteAccessContainerName, err)
@@ -530,6 +628,6 @@ func (p *RemoteAccessProvider) Logout(ctx context.Context) error {
 		return fmt.Errorf("remove %s: %w", RemoteAccessContainerName, err)
 	}
 	logrus.Infof("remote access: logged %s out of the tailnet", RemoteAccessContainerName)
-	p.Apply()
+	p.apply()
 	return nil
 }

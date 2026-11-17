@@ -28,6 +28,7 @@
 | Bare-metal (non-Docker) robot deploy | `ros2/systemd/mowgli.service` + `make deploy` / `make backup-maps` (`ROBOT_HOST`, `ROBOT_USER`) |
 | Submodule pins | `.gitmodules` (`universal-gnss` → `https://github.com/Pepeuch/universal-gnss.git`, pinned by the MowgliNext gitlink to validated release commits; current pin `v0.7.4-rc5`; `opennav_coverage` → upstream `main`) |
 | Container startup env | `ros2/scripts/ros2_entrypoint.sh` (sources lyrical + `/opt/ublox_msgs` + `/ros2_ws/install`) |
+| Overlay library wins at runtime (#1121) | `ros2/scripts/check_vendor_overlay.sh` — run through the entrypoint in the runtime stage; fails the image build if a Nav2 consumer resolves an `/opt/lyrical_vendor`-overridden DSO (e.g. the #1058 `libnav2_costmap_2d_core.so`) to `/opt/ros/lyrical/lib`. Never preset `LD_LIBRARY_PATH`/`AMENT_PREFIX_PATH`/`CMAKE_PREFIX_PATH` to the overlay with `ENV` in `base`: ROS sourced afterwards then shadows it |
 
 ## Files
 | File | Lines | Purpose |

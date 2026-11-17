@@ -77,6 +77,7 @@ from robot_config_util import (
     chassis_circumscribed_radius,
     chassis_footprint,  # noqa: E402
     chassis_half_width,
+    coverage_entry_tolerance,
     DEFAULT_CHASSIS_WIDTH_M,
     DEFAULT_BLADE_LOAD_MIN_SPEED_RATIO,
     DEFAULT_BLADE_LOAD_RPM_FULL,
@@ -95,6 +96,11 @@ from robot_config_util import (
     resolve_lidar_enabled,
     warn_lidar_key_absent,
 )
+
+
+# bringup depends on fusion_graph; keep simulator snapshot validation shared.
+sys.path.insert(0, os.path.join(get_package_share_directory("fusion_graph"), "launch"))
+from fusion_graph_simulation_geometry import simulation_geometry_parameters  # noqa: E402
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -157,6 +163,10 @@ def generate_launch_description() -> LaunchDescription:
         "use_sim_time",
         default_value="false",
         description="Use simulation (Gazebo) clock when true.",
+    )
+    simulation_geometry_arg = DeclareLaunchArgument(
+        "simulation_geometry", default_value="",
+        description="Internal complete simulator datum/antenna snapshot; requires simulation time.",
     )
 
 
@@ -814,6 +824,11 @@ def generate_launch_description() -> LaunchDescription:
                   .setdefault("ros__parameters", {})
                   .setdefault("FollowCoveragePath", {}))
         fcp["speed_fast"] = mowing_speed
+        # Coverage-entry / blade / rotation-gate tolerance outside the recorded
+        # line (robot_config_util.coverage_entry_tolerance). FTC's gates and the
+        # transit tree's coverage_entry_goal_checker (which reads this key from
+        # controller_server) share it with behavior_tree_node.
+        fcp["coverage_entry_tolerance_m"] = coverage_entry_tolerance(rt_rp)
         # FTC hard-clamps its final longitudinal command to ±max_cmd_vel_speed
         # (ftc_controller.cpp). speed_fast only sets the carrot target, so any
         # mowing_speed above the base max_cmd_vel_speed (0.30) was silently
@@ -1004,9 +1019,12 @@ def generate_launch_description() -> LaunchDescription:
                     f"[{rear:.3f}, {-half:.3f}], [{rear:.3f}, {half:.3f}]]")
 
         if "PolygonStopNarrow" in cm_params:
-            # Band from just behind the front edge to 0.12 m ahead of it.
+            # Band from just behind the front edge to 0.05 m ahead of it
+            # (was 0.12 until 2026-11-13: swept over the approach horizon it
+            # reached ~0.36 m past the nose and held the robot beside the dock
+            # and the hedge where FTC's own footprint check found clearance).
             cm_params["PolygonStopNarrow"]["points"] = _poly(
-                fp_f + 0.12, fp_f - 0.02, fp_hw)
+                fp_f + 0.05, fp_f - 0.02, fp_hw)
         if "PolygonStop" in cm_params:
             # Whole body plus 0.05 m fore and aft.
             cm_params["PolygonStop"]["points"] = _poly(
@@ -1230,6 +1248,17 @@ def generate_launch_description() -> LaunchDescription:
                     "use_composition": "False",
                 }.items(),
             ),
+            # The recovery's "BackUp" in navigate_to_pose*.xml is served by this node
+            # (server_name="retrace"), NOT by Nav2's behavior_server: it only undoes the last
+            # piece the robot drove, straight back, so a recovery can never reverse the mower
+            # across the boundary (field 2026-10-26, 0.21 m -> 0.57 m outside, lethal).
+            Node(
+                package="mowgli_nav2_plugins",
+                executable="retrace_server_node",
+                name="retrace_server",
+                output="screen",
+                parameters=[{"use_sim_time": use_sim_time}],
+            ),
         ]
     )
 
@@ -1289,6 +1318,7 @@ def generate_launch_description() -> LaunchDescription:
         launch_arguments={
             "use_sim_time": use_sim_time,
             "use_magnetometer": use_magnetometer,
+            "simulation_geometry": LaunchConfiguration("simulation_geometry"),
             # LiDAR-gated: no scanner -> no scan factors, and no subscription to
             # a topic nothing publishes. See lidar_gated() above.
             "use_lidar_map_anchor": lidar_gated(use_lidar_map_anchor),
@@ -1326,14 +1356,11 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
         parameters=[
             {"use_sim_time": use_sim_time,
-             "datum_lat": datum_lat,
-             "datum_lon": datum_lon,
              # Lever arm from the same mowgli_robot.yaml source fusion_graph
              # reads (gps_x/gps_y). Without this cog_to_imu silently used its
              # hardcoded 0.30/0.0 default and de-biased COG with the wrong
              # lever arm on any non-default antenna mount.
-             "lever_arm_x": gps_x,
-             "lever_arm_y": gps_y,
+             **simulation_geometry_parameters(datum_lat, datum_lon, gps_x, gps_y),
              "enable_mag_cal": enable_mag_cal,
              "mag_calibration_path": mag_cal_path,
              "stationary_seed_rate_hz": cog_stationary_rate,
@@ -1486,6 +1513,11 @@ def generate_launch_description() -> LaunchDescription:
              "dock_pose_x": dock_pose_x,
              "dock_pose_y": dock_pose_y,
              "dock_pose_yaw": dock_pose_yaw,
+             # The same forward shift _inject_dock_pose_and_speeds adds to
+             # home_dock.pose: SimpleChargingDock stops docking_threshold short
+             # of the DETECTED pose, so without it the robot stopped short of
+             # the contacts (field 2026-11-11, issues #515/#661).
+             "approach_overshoot_m": float(dock_approach_overshoot),
              # MUST match docking_server.fixed_frame / .base_frame so the
              # detection lands in the frame getRefinedPose() expects (and skips
              # its internal TF) and isDocked() compares the right frames.
@@ -1511,6 +1543,7 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
             use_sim_time_arg,
+            simulation_geometry_arg,
             use_lidar_arg,
             use_magnetometer_arg,
             use_lidar_map_anchor_arg,
