@@ -19,6 +19,7 @@ Any 64-bit Linux board with Docker support (the installer supports `arm64` and `
 |-------|--------|
 | YardForce Classic 500 | Primary target |
 | YardForce 500B | Supported |
+| YardForce NX100i | Supported (firmware `YardforceNX100i`; same mainboard as the 500B — LCD panel and hood ultrasonics not yet) |
 | YardForce SA650 | Supported |
 | YardForce 900 ECO | Supported |
 | YardForce LUV1000RI | Supported |

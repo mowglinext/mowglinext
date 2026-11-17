@@ -162,6 +162,45 @@ func TestRM1000RequiresExplicitTarget(t *testing.T) {
 	assert.NoError(t, validateFirmwareTargetSelection("YardForce500B", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_500B_CLASSIC", ""))
 }
 
+func TestFirmwareEnvironmentSelectsNativeNX100iTarget(t *testing.T) {
+	got, err := firmwareEnvironment("BOARD_YARDFORCE500B", "YardforceNX100i")
+	require.NoError(t, err)
+	assert.Equal(t, "YardforceNX100i", got)
+
+	// A targetless 500B config keeps the plain 500B environment: the NX100i
+	// build pulls up the white stop-button contact (PC8), so its binary on a
+	// plain 500B reads that contact as permanently pressed. It is only ever
+	// reachable through the explicit target.
+	got, err = firmwareEnvironment("BOARD_YARDFORCE500B", "")
+	require.NoError(t, err)
+	assert.Equal(t, "Yardforce500B", got)
+
+	// The NX100i is an STM32F401 (500B profile); the F103 board must refuse it.
+	_, err = firmwareEnvironment("BOARD_YARDFORCE500", "YardforceNX100i")
+	assert.ErrorContains(t, err, `requires board "BOARD_YARDFORCE500B"`)
+	_, err = firmwareEnvironment("BOARD_LUV1000RI", "YardforceNX100i")
+	assert.ErrorContains(t, err, `requires board "BOARD_YARDFORCE500B"`)
+}
+
+func TestNX100iRequiresExplicitTarget(t *testing.T) {
+	const panel = "PANEL_TYPE_YARDFORCE_500B_CLASSIC"
+	assert.ErrorContains(t, validateFirmwareTargetSelection("YardForceNX100i", "BOARD_YARDFORCE500B", panel, ""), "exact YardforceNX100i")
+	assert.ErrorContains(t, validateFirmwareTargetSelection("YardForceNX100i", "BOARD_YARDFORCE500B", panel, "Yardforce500B"), "exact YardforceNX100i")
+	assert.ErrorContains(t, validateFirmwareTargetSelection("YardForceNX100i", "BOARD_YARDFORCE500B", panel, "BiltemaRM1000"), "exact YardforceNX100i")
+	assert.NoError(t, validateFirmwareTargetSelection("YardForceNX100i", "BOARD_YARDFORCE500B", panel, "YardforceNX100i"))
+	assert.ErrorContains(t, validateFirmwareTargetSelection("YardForceNX100i", "BOARD_YARDFORCE500B", "PANEL_TYPE_YARDFORCE_900_ECO", "YardforceNX100i"), "requires panel PANEL_TYPE_YARDFORCE_500B_CLASSIC")
+	assert.ErrorContains(t, validateFirmwareTargetSelection("YardForceNX100i", "BOARD_YARDFORCE500", panel, "YardforceNX100i"), "requires board BOARD_YARDFORCE500B")
+	// The NX100i binary on a plain 500B reads the white stop contact as
+	// permanently pressed, and the RM1000 has yet another panel: neither
+	// named model may route to NX100i firmware.
+	assert.ErrorContains(t, validateFirmwareTargetSelection("YardForce500B", "BOARD_YARDFORCE500B", panel, "YardforceNX100i"), "incompatible with mower model")
+	assert.ErrorContains(t, validateFirmwareTargetSelection("BiltemaRM1000", "BOARD_YARDFORCE500B", panel, "YardforceNX100i"), "exact BiltemaRM1000")
+	assert.NoError(t, validateFirmwareTargetSelection("CUSTOM", "BOARD_YARDFORCE500B", panel, "YardforceNX100i"))
+	assert.NoError(t, validateFirmwareTargetSelection("", "BOARD_YARDFORCE500B", panel, "YardforceNX100i"))
+	// A plain 500B keeps its targetless legacy routing.
+	assert.NoError(t, validateFirmwareTargetSelection("YardForce500B", "BOARD_YARDFORCE500B", panel, ""))
+}
+
 func TestRM1000OpenOCDUsesSTM32F4Target(t *testing.T) {
 	got := openocdProgramCmd("BOARD_YARDFORCE500B", "/tmp/rm1000.elf")
 	assert.Contains(t, got, "target/stm32f4x.cfg")

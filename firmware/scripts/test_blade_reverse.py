@@ -522,6 +522,7 @@ def main():
         for name, variant, extra in [('Yardforce500', 'BOARD_YARDFORCE500_VARIANT_ORIG', []),
                               ('Yardforce500B', 'BOARD_YARDFORCE500_VARIANT_B', []),
                               ('BiltemaRM1000', 'BOARD_YARDFORCE500_VARIANT_B', ['BOARD_BILTEMA_RM1000=1']),
+                              ('YardforceNX100i', 'BOARD_YARDFORCE500_VARIANT_B', ['BOARD_YARDFORCE_NX100I=1']),
                               ('Yardforce500_COASTDOWN_VALIDATION', 'BOARD_YARDFORCE500_VARIANT_ORIG', [])]:
             if Path(args.cc).stem.lower() == 'cl':
                 cmd = [args.cc, '/nologo', '/std:c11', '/utf-8', '/W3', f'/D{variant}=1']

@@ -62,7 +62,10 @@ Sous le capot vous trouvez :
 | **J3** | Battery input (after the power button) | 29 V tap for the DC-DC converter |
 | J6 | Panel ribbon | leave connected |
 
-Also note the MCU marking next to J9: **STM32F103** = Classic 500 (and SA650 / 900 ECO), **STM32F401** = 500B. This decides the firmware build.`,
+Also note the MCU marking next to J9: **STM32F103** = Classic 500 (and SA650 / 900 ECO), **STM32F401** = 500B and NX100i. This decides the firmware build.
+
+> [!NOTE] YardForce NX100i
+> Same board, different silkscreen: the SWD header is **J12** (4 pins near the top-left corner mounting screw, one labelled GND), and the USB data link is the **USB port in the battery compartment** (the factory update port), not a J14 header. The chip marking may be sanded off — count 25 pins per side. J18 pins **5 (SCL) and 6 (SDA)** are verified on this chassis; the factory hood harness fills all nine positions, so the IMU takes 5 V / GND from the neighbouring **J17** (see the IMU step).`,
         fr: `Retirez le cache plastique de la carte mère. Quatre connecteurs comptent pour ce montage — repérez-les et comparez avec la sérigraphie (le schéma à gauche est indicatif, pas à l'échelle) :
 
 | Connecteur | Nature | Usage |
@@ -73,7 +76,10 @@ Also note the MCU marking next to J9: **STM32F103** = Classic 500 (and SA650 / 9
 | **J3** | Entrée batterie (après le bouton) | Prise 29 V pour le convertisseur DC-DC |
 | J6 | Nappe du panneau | laisser branchée |
 
-Notez aussi le marquage du MCU à côté de J9 : **STM32F103** = Classic 500 (et SA650 / 900 ECO), **STM32F401** = 500B. C'est ce qui détermine le build firmware.`,
+Notez aussi le marquage du MCU à côté de J9 : **STM32F103** = Classic 500 (et SA650 / 900 ECO), **STM32F401** = 500B et NX100i. C'est ce qui détermine le build firmware.
+
+> [!NOTE] YardForce NX100i
+> Même carte, sérigraphie différente : le connecteur SWD est **J12** (4 broches près de la vis de fixation en haut à gauche, une marquée GND), et la liaison USB est le **port USB du compartiment batterie** (port de mise à jour usine), pas un connecteur J14. Le marquage de la puce peut être poncé — comptez 25 broches par côté. Les broches **5 (SCL) et 6 (SDA)** de J18 sont vérifiées sur ce châssis ; le faisceau d'origine du capot occupe les neuf positions, l'IMU prend donc son 5 V / GND sur le connecteur voisin **J17** (voir l'étape IMU).`,
       },
     },
     {
@@ -94,7 +100,10 @@ The repository ships scripts for this: [\`firmware/stm32/mainboard_firmware/\`](
 Simplest path: do it **from the Pi** once it is set up (chapter 8 wires the ST-Link and installs OpenOCD), before the GUI flashes Mowgli. Or do it now from a laptop with OpenOCD installed and the ST-Link on J9.
 
 > [!NOTE] YardForce 500 / 500B
-> Stock images for both are already archived by the community, so this step is optional for them. It stays recommended for any other chassis.`,
+> Stock images for both are already archived by the community, so this step is optional for them. It stays recommended for any other chassis.
+
+> [!WARNING] YardForce NX100i
+> Back it up **before** flashing: ST-Link on **J12**, main switch **off**, then \`dump_image <file> 0x08000000 0x40000\` in OpenOCD (256 KB). The stock image identifies as \`GRM V4.03_2021 / RobotMower_Server\` with a \`RM Boot_V1.00\` bootloader.`,
         fr: `Une sauvegarde permet de remettre la tondeuse d'origine (revente, garantie, ou simple curiosité). Cela prend cinq minutes une fois le ST-Link câblé, et vous le câblerez de toute façon au chapitre firmware.
 
 Le dépôt fournit les scripts : [\`firmware/stm32/mainboard_firmware/\`](https://github.com/mowglinext/mowglinext/tree/main/firmware/stm32/mainboard_firmware) (\`backup_firmware.sh\` / \`restore_firmware.sh\`, OpenOCD + ST-Link). Les SHA256 des images d'origine connues y sont listés pour vérifier que le dump est complet.
@@ -102,7 +111,10 @@ Le dépôt fournit les scripts : [\`firmware/stm32/mainboard_firmware/\`](https:
 Le plus simple : le faire **depuis le Pi** une fois configuré (le chapitre 8 câble le ST-Link et installe OpenOCD), avant que l'interface flashe Mowgli. Ou dès maintenant depuis un portable avec OpenOCD et le ST-Link sur J9.
 
 > [!NOTE] YardForce 500 / 500B
-> Les images d'origine des deux modèles sont déjà archivées par la communauté, l'étape est donc optionnelle pour elles. Elle reste recommandée pour tout autre châssis.`,
+> Les images d'origine des deux modèles sont déjà archivées par la communauté, l'étape est donc optionnelle pour elles. Elle reste recommandée pour tout autre châssis.
+
+> [!WARNING] YardForce NX100i
+> Sauvegardez **avant** de flasher : ST-Link sur **J12**, interrupteur principal **éteint**, puis \`dump_image <fichier> 0x08000000 0x40000\` dans OpenOCD (256 Ko). L'image d'origine s'identifie comme \`GRM V4.03_2021 / RobotMower_Server\` avec un bootloader \`RM Boot_V1.00\`.`,
       },
     },
   ],

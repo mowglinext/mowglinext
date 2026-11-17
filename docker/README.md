@@ -35,6 +35,7 @@ Set `mower_model` in `config/mowgli/mowgli_robot.yaml` to one of:
 
 - `YardForce500`
 - `YardForce500B`
+- `YardForceNX100i`
 - `YardForceSA650`
 - `YardForce900ECO`
 - `LUV1000RI`

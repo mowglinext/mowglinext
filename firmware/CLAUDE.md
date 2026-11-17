@@ -30,6 +30,7 @@ It must NOT own: any ROS topic/TF/pose (`ros2/src/mowgli_hardware`'s `hardware_b
 cd firmware/stm32/ros_usbnode
 pio run                                      # default_envs = Yardforce500 (STM32F103VC)
 pio run -e Yardforce500B                     # STM32F401VC
+pio run -e YardforceNX100i                   # STM32F401VC, NX100i (extends Yardforce500B, -DBOARD_YARDFORCE_NX100I=1)
 pio run -e Yardforce500 -t upload            # ST-Link v2 (upload_protocol = stlink)
 pio run -e Yardforce500_STLINK_V3 -t upload  # OpenOCD custom upload_command (also …500B_STLINK_V3)
 pio run -t swo_viewer                        # SWO/ITM trace target (add_swo_viewer.py)

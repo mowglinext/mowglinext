@@ -461,6 +461,43 @@ static void test_imu_mount_rotation_yaw_180_negates_x_y_only()
   TEST_ASSERT_FLOAT_WITHIN(0.0f, 3.0f, z);
 }
 
+static void test_imu_mount_rotation_roll_180_negates_y_z_only()
+{
+  float x = 1.0f;
+  float y = -2.0f;
+  float z = 3.0f;
+  IMU_ApplyMountRotation(IMU_MOUNT_ROTATION_ROLL_180, &x, &y, &z);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, 2.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -3.0f, z);
+}
+
+static void test_imu_mount_rotation_pitch_180_negates_x_z_only()
+{
+  float x = 1.0f;
+  float y = -2.0f;
+  float z = 3.0f;
+  IMU_ApplyMountRotation(IMU_MOUNT_ROTATION_PITCH_180, &x, &y, &z);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -1.0f, x);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -2.0f, y);
+  TEST_ASSERT_FLOAT_WITHIN(0.0f, -3.0f, z);
+}
+
+static void test_imu_mount_rotations_chip_down_restore_gravity_and_yaw_sign()
+{
+  // A chip-side-down module at rest reports gravity on -Z and a CCW turn as
+  // negative gyro Z; both flips must bring those back to +Z.
+  const uint8_t flips[] = {IMU_MOUNT_ROTATION_ROLL_180, IMU_MOUNT_ROTATION_PITCH_180};
+  for (size_t i = 0; i < sizeof(flips) / sizeof(flips[0]); ++i) {
+    float x = 0.0f, y = 0.0f, z = -9.81f;
+    IMU_ApplyMountRotation(flips[i], &x, &y, &z);
+    TEST_ASSERT_FLOAT_WITHIN(0.0f, 9.81f, z);
+    x = 0.0f; y = 0.0f; z = -1.0f;
+    IMU_ApplyMountRotation(flips[i], &x, &y, &z);
+    TEST_ASSERT_FLOAT_WITHIN(0.0f, 1.0f, z);
+  }
+}
+
 static void test_configured_mount_maps_accel_and_gyro_basis_vectors()
 {
 #if IMU_MOUNT_ROTATION == IMU_MOUNT_ROTATION_YAW_180
@@ -533,6 +570,9 @@ int main()
   RUN_TEST(test_idle_zero_is_rearm_only_and_final_drive_gate_stays_closed);
   RUN_TEST(test_imu_mount_rotation_identity_preserves_all_axes);
   RUN_TEST(test_imu_mount_rotation_yaw_180_negates_x_y_only);
+  RUN_TEST(test_imu_mount_rotation_roll_180_negates_y_z_only);
+  RUN_TEST(test_imu_mount_rotation_pitch_180_negates_x_z_only);
+  RUN_TEST(test_imu_mount_rotations_chip_down_restore_gravity_and_yaw_sign);
   RUN_TEST(test_configured_mount_maps_accel_and_gyro_basis_vectors);
   return UNITY_END();
 }

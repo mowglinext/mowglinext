@@ -299,8 +299,11 @@ func openocdTargetCfg(board string) string {
 }
 
 // firmwareEnvironment resolves the custom-build environment. The explicit
-// target matters for variants such as RM1000, which share an MCU board profile
-// with YardForce500B but require different compile-time behavior.
+// target matters for variants such as RM1000 and NX100i, which share an MCU
+// board profile with YardForce500B but require different compile-time
+// behavior (the NX100i build pulls up the white stop-button contact, so its
+// binary on a plain 500B reads that contact as permanently pressed, and the
+// 500B binary on an NX100i leaves that contact dead).
 func firmwareEnvironment(board, target string) (string, error) {
 	if target == "" {
 		switch board {
@@ -313,10 +316,11 @@ func firmwareEnvironment(board, target string) (string, error) {
 		}
 	}
 	allowed := map[string]string{
-		"Yardforce500":  "BOARD_YARDFORCE500",
-		"Yardforce500B": "BOARD_YARDFORCE500B",
-		"BiltemaRM1000": "BOARD_YARDFORCE500B",
-		"LUV1000RI":     "BOARD_LUV1000RI",
+		"Yardforce500":    "BOARD_YARDFORCE500",
+		"Yardforce500B":   "BOARD_YARDFORCE500B",
+		"BiltemaRM1000":   "BOARD_YARDFORCE500B",
+		"YardforceNX100i": "BOARD_YARDFORCE500B",
+		"LUV1000RI":       "BOARD_LUV1000RI",
 	}
 	wantBoard, ok := allowed[target]
 	if !ok {
@@ -328,11 +332,15 @@ func firmwareEnvironment(board, target string) (string, error) {
 	return target, nil
 }
 
-// requireExplicitRM1000Target prevents targetless RM1000 configs from falling
-// back to the ordinary Yardforce500B environment or its prebuilt binary.
+// validateFirmwareTargetSelection prevents targetless RM1000 and NX100i
+// configs from falling back to the ordinary Yardforce500B environment or its
+// prebuilt binary, and keeps those variant targets off other named models.
 func validateFirmwareTargetSelection(model, board, panel, target string) error {
 	if model == "BiltemaRM1000" && target != "BiltemaRM1000" {
 		return xerrors.Errorf("Biltema RM1000 requires the explicit and exact BiltemaRM1000 firmware target, got %q", target)
+	}
+	if model == "YardForceNX100i" && target != "YardforceNX100i" {
+		return xerrors.Errorf("YardForce NX100i requires the explicit and exact YardforceNX100i firmware target, got %q", target)
 	}
 	if target == "BiltemaRM1000" {
 		// CUSTOM represents user-defined mower hardware, so an expert can
@@ -346,6 +354,20 @@ func validateFirmwareTargetSelection(model, board, panel, target string) error {
 		}
 		if panel != "PANEL_TYPE_YARDFORCE_900_ECO" {
 			return xerrors.Errorf("BiltemaRM1000 firmware requires panel PANEL_TYPE_YARDFORCE_900_ECO, got %q", panel)
+		}
+	}
+	if target == "YardforceNX100i" {
+		// Same rules as RM1000: only the NX100i itself or a CUSTOM mower may
+		// select this target. Its stop-button pull-up makes the binary unsafe
+		// on a plain 500B (white contact reads as permanently pressed).
+		if model != "" && model != "YardForceNX100i" && model != "CUSTOM" {
+			return xerrors.Errorf("YardforceNX100i firmware is incompatible with mower model %q", model)
+		}
+		if board != "BOARD_YARDFORCE500B" {
+			return xerrors.Errorf("YardforceNX100i firmware requires board BOARD_YARDFORCE500B, got %q", board)
+		}
+		if panel != "PANEL_TYPE_YARDFORCE_500B_CLASSIC" {
+			return xerrors.Errorf("YardforceNX100i firmware requires panel PANEL_TYPE_YARDFORCE_500B_CLASSIC, got %q", panel)
 		}
 	}
 	return nil

@@ -121,7 +121,10 @@ Tout le reste (Docker, règles udev, overlays UART, les conteneurs) est fait par
 5. Plug the **USB A-to-A** cable between a Pi USB port and mainboard **J14**. On a Pi 5, keep the blue USB 3 ports for the SSD if you use a USB SSD, and use the black USB 2 ports for the mainboard, GNSS and ST-Link.
 
 > [!WARNING]
-> Do not power the board from the mainboard's J14 USB. It is a data connector; the STM32 side is not designed to be back-fed.`,
+> Do not power the board from the mainboard's J14 USB. It is a data connector; the STM32 side is not designed to be back-fed.
+
+> [!NOTE] YardForce NX100i
+> There is no J14: plug the USB A-to-A data cable into the **USB port in the battery compartment**. On this board the cable also back-powers the STM32 logic with 5 V, so the mainboard looks alive over USB even with the main switch off — the motors are not.`,
         fr: `1. Fixez la carte de calcul et le DC-DC sur le support imprimé (inserts thermiques ou vis M2,5). Ajoutez le ventilateur / dissipateur — la coque est une boîte fermée au soleil.
 2. Placez le support dans la cavité avant. Vérifiez que le capot ferme toujours et que rien ne touche le carter du moteur de lame ni les bras de roues.
 3. Amenez les fils **d'entrée** du DC-DC à la carte mère : **J3** (batterie après le bouton — la prise recommandée, le Pi s'éteint avec la tondeuse) ou **J18 broche 8 (VBat) + broche 1 (GND)**, 2 A max. Boîtier serti au pas de 2,0 mm sur J18 ; sur J3, doublez les cosses existantes ou utilisez un raccord en ligne.
@@ -129,7 +132,10 @@ Tout le reste (Docker, règles udev, overlays UART, les conteneurs) est fait par
 5. Branchez le câble **USB A vers A** entre un port USB du Pi et **J14** de la carte mère. Sur un Pi 5, gardez les ports USB 3 bleus pour le SSD si vous utilisez un SSD USB, et les ports USB 2 noirs pour la carte mère, le GNSS et le ST-Link.
 
 > [!WARNING]
-> N'alimentez pas la carte depuis le J14 USB de la carte mère. C'est un connecteur de données ; le côté STM32 n'est pas prévu pour être alimenté à l'envers.`,
+> N'alimentez pas la carte depuis le J14 USB de la carte mère. C'est un connecteur de données ; le côté STM32 n'est pas prévu pour être alimenté à l'envers.
+
+> [!NOTE] YardForce NX100i
+> Pas de J14 : branchez le câble USB A vers A sur le **port USB du compartiment batterie**. Sur cette carte, le câble alimente aussi la logique du STM32 en 5 V : la carte mère semble vivante en USB même interrupteur principal éteint — pas les moteurs.`,
       },
       parts: [
         { qty: 1, name: { en: "Printed bracket, M2.5 screws / inserts", fr: "Support imprimé, vis / inserts M2,5" } },
@@ -144,7 +150,7 @@ Tout le reste (Docker, règles udev, overlays UART, les conteneurs) est fait par
 
 - [ ] the DC-DC output still reads 5.1 V under load (measure at the board's pins);
 - [ ] the board boots (activity LED) and you can \`ssh\` into it over Wi-Fi from inside the shell;
-- [ ] \`lsusb\` on the board lists \`0483:5740 STMicroelectronics Virtual COM Port\` — that is the mainboard on J14 (it enumerates even with the stock firmware);
+- [ ] \`lsusb\` on the board lists \`0483:5740 STMicroelectronics Virtual COM Port\` — that is the mainboard on J14 (it enumerates even with the stock firmware); an NX100i still on stock firmware shows up as a \`RobotMower_Server\` HID device instead, and as \`Mowgli\` once flashed;
 - [ ] the mower's panel behaves as usual (stock firmware still installed).
 
 \`\`\`
@@ -157,7 +163,7 @@ If the board reboots when you press the mower's START button or the wheels twitc
 
 - [ ] la sortie du DC-DC lit toujours 5,1 V en charge (mesurez sur les broches de la carte) ;
 - [ ] la carte démarre (LED d'activité) et vous pouvez vous y connecter en \`ssh\` par Wi-Fi depuis l'intérieur de la coque ;
-- [ ] \`lsusb\` sur la carte liste \`0483:5740 STMicroelectronics Virtual COM Port\` — c'est la carte mère sur J14 (elle s'énumère même avec le firmware d'origine) ;
+- [ ] \`lsusb\` sur la carte liste \`0483:5740 STMicroelectronics Virtual COM Port\` — c'est la carte mère sur J14 (elle s'énumère même avec le firmware d'origine) ; une NX100i encore sous firmware d'origine apparaît comme périphérique HID \`RobotMower_Server\`, puis comme \`Mowgli\` une fois flashée ;
 - [ ] le panneau de la tondeuse se comporte normalement (firmware d'origine toujours en place).
 
 \`\`\`

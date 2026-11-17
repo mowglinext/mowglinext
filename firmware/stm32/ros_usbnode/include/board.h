@@ -34,6 +34,11 @@ extern "C"
 #define PANEL_TYPE_YARDFORCE_LUV1000RI 2
 #define PANEL_TYPE_YARDFORCE_900_ECO 3
 #define PANEL_TYPE_YARDFORCE_500B_CLASSIC 4
+#define PANEL_TYPE_YARDFORCE_NX100I 5 /* "RM EC3" LCD panel, USART1, panel_nx100i.c */
+
+/* ultrasonic backends, used when OPTION_ULTRASONIC == 1 */
+#define ULTRASONIC_TYPE_UART 1       /* LUV1000RI: serial module on MASTER_USART (ultrasonic_sensor.c) */
+#define ULTRASONIC_TYPE_NX100I_I2C 2 /* NX100i: "RM CSB" board on bit-banged I2C PC10/PC11 (ultrasonic_nx100i.c) */
 
 #if BOARD_YARDFORCE500_VARIANT_ORIG
 ///////////////////////////
@@ -75,7 +80,11 @@ extern "C"
 #define BLADEMOTOR_POLL_INTERVAL_MS 20u
 #define BLADEMOTOR_SEQUENCED_POWER 1
 #else
+#if defined(BOARD_YARDFORCE_NX100I)
+#define PANEL_TYPE PANEL_TYPE_YARDFORCE_NX100I
+#else
 #define PANEL_TYPE PANEL_TYPE_YARDFORCE_500B_CLASSIC
+#endif
 #define BLADEMOTOR_STOP_COMMAND_VALUE 0x00u
 #define BLADEMOTOR_FORWARD_COMMAND_VALUE 0x80u
 #define BLADEMOTOR_REVERSE_COMMAND_VALUE 0xC0u
@@ -89,8 +98,64 @@ extern "C"
 #define TICKS_PER_M 277.0 // Power-on fallback encoder ticks per meter; ROS runtime tuning overrides this after host connection
 #define WHEEL_BASE  0.325		// The distance between the center of the wheels in meters
 
+#if defined(BOARD_YARDFORCE_NX100I)
+/* The NX100i hood carries an ultrasonic board ("RM CSB", two sensors) that
+ * the mainboard reads over a bit-banged I2C bus; see ultrasonic_nx100i.c. */
+#define OPTION_ULTRASONIC 1
+#define ULTRASONIC_TYPE ULTRASONIC_TYPE_NX100I_I2C
+#else
 #define OPTION_ULTRASONIC 0
+#endif
+/* OPTION_BUMPER 0 compiles HALLSTOP_{Left,Right}_Sense() to a constant 0
+ * (main.c), so PD2/PD3 never influence drivemotor.c. */
 #define OPTION_BUMPER 0
+
+#if defined(BOARD_YARDFORCE_NX100I)
+/* YardForce NX100i: same GForce STM32F401VC mainboard and pinout as the 500B
+ * (verified live against the stock firmware, 2026-10-13), same PAC5210 /
+ * PAC5223 UART protocols. Differences handled here:
+ *  - PD2/PD3 hall-stop (bumper) lines are not connected on the NX100i and sit
+ *    permanently HIGH on the board; they stay compiled out (OPTION_BUMPER 0).
+ *    Collision sensing comes from the hood's ultrasonic board instead: an I2C
+ *    slave (addr 0x51, "RM CSB") on PC10 SCL / PC11 SDA that reports two
+ *    distances; ultrasonic_nx100i.c reads it and the values travel to the
+ *    host in pkt_status.uss_ranges_m[0..1] (protocol reverse-engineered from
+ *    the stock firmware, see docs in the PR).
+ *  - The hood stop button has two contacts: PC0 is driven HIGH when pressed
+ *    (works with the default pull-down); PC8 is a normally-closed contact to
+ *    GND that OPENS when pressed, so it needs a pull-up to read 1 = pressed.
+ *    With the pull-up, a disconnected hood cable also reads as pressed
+ *    (fail-safe). Verified with the stock firmware's own pull configuration.
+ *  - The NX100i LCD/18-button panel ("RM EC3") speaks its own protocol on
+ *    USART1: panel_nx100i.c (PANEL_TYPE_YARDFORCE_NX100I) does the handshake
+ *    and keepalive, forwards the panel's START/HOME as UI events, lets START
+ *    release a latched emergency like the play button, and can push a message
+ *    code to the LCD. */
+#define STOP_BUTTON_WHITE_PULL GPIO_PULLUP
+/* The J17/J18 accessory 5 V rail that powers an external IMU only comes up
+ * once the motor controllers and TF4 have been initialised; it is not a
+ * single GPIO (PD7, PD8, PE11, PE14, PE15 and PC5 were each tried alone and in
+ * combination at reset-halt, 2026-10-15). An unpowered IMU module's pull-ups
+ * hold J18 SCL/SDA low, so the stock boot order (IMU probe before the motor
+ * init) spends its whole 20 s window on a dead bus and never finds the
+ * sensor. main.c therefore probes the IMU after that init on this board. */
+#define IMU_PROBE_AFTER_POWER_INIT 1
+/* Hood ultrasonic board bus (bit-banged, open-drain). */
+#define NX100I_USS_SCL_PIN GPIO_PIN_10
+#define NX100I_USS_SCL_PORT GPIOC
+#define NX100I_USS_SDA_PIN GPIO_PIN_11
+#define NX100I_USS_SDA_PORT GPIOC
+#define NX100I_USS_GPIO_CLK_ENABLE() __HAL_RCC_GPIOC_CLK_ENABLE()
+/* Dock handshake. The NX100i station holds a current-limited ~14 V probe on
+ * its contacts (32 V open circuit) until the mower connects its battery bus;
+ * the stock firmware treats the charger as present above ~13 V (ADC > 1000),
+ * raises TF4 and starts the buck, after which the station ramps to full
+ * voltage. Mowgli's 500B thresholds (connect >= 30 V, docked >= 20 V) would
+ * never fire on this station. Charger topology, measurements and limits are
+ * otherwise identical to the 500B (verified against the stock firmware). */
+#define MIN_DOCKED_VOLTAGE 12.0f
+#define CHARGER_CONNECT_VOLTAGE 12.0f
+#endif
 
 #define BOARD_HAS_MASTER_USART 0
 #elif defined(BOARD_LUV1000RI) // TODO: This currently can't be selected via platformio
@@ -126,6 +191,10 @@ extern "C"
 // #define I_DONT_NEED_MY_FINGERS           1      // disables EmergencyController()
 
 // Battery/charge envelope, emergency-sensor timeouts and the onboard-IMU tilt
+#if (OPTION_ULTRASONIC == 1) && !defined(ULTRASONIC_TYPE)
+#define ULTRASONIC_TYPE ULTRASONIC_TYPE_UART
+#endif
+
 // threshold are single-sourced in board_defaults.h (shared with board.h.template
 // so CI and the GUI-flashed firmware can never drift). This file defines none of
 // them itself; the #ifndef fallbacks in board_defaults.h supply the blessed
