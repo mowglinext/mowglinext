@@ -122,20 +122,29 @@ coverage planner. It drives `GotoSequence` (`COMMAND_GOTO` = 9); `~/high_level_c
 refuses command 9.
 
 - **Acceptance** (`acceptGotoRequest`, `goto_request.hpp`, under `context_mutex`): only from a
-  settled, undocked rest state — tree parked in `IdleSequence`/`StopHoldSequence` (read from the
+  settled rest state, on the dock or off it — tree parked in `IdleSequence`/`StopHoldSequence` (read from the
   tree's node statuses, not the published name) or right after a GOTO ended (chaining), command
   0 or 8. Refusals change nothing and return one reason: `invalid_pose`, `busy` (any mission, a
   GOTO included, or a transition — no hot pre-emption: STOP, wait for IDLE, then request again),
   `critical_dock_failure`, `critical_charge_hold`, `battery_charge_pending` (unfinished battery
-  dock/charge; STOP or HOME releases it), `docked` (GOTO does not undock),
-  `heading_not_calibrated`, `localization_degraded`, `battery_unknown`, `battery_low`,
-  `maintenance_active`, `unsupported_tree`.
+  dock/charge; STOP or HOME releases it), `heading_not_calibrated` (off the charger with no
+  undock reverse unfinished: from either, the undock calibrates the heading; on the station
+  without charge the request is still refused, since `IsAtDockStation` judges the station from
+  the fused heading, which is unknown without a seed), `localization_degraded`, `battery_unknown`,
+  `battery_low`, `maintenance_active`, `unsupported_tree`.
 - **Accepted** = target stored, command 9, fleet ownership revoked (like every other accepted
   operator command: a coordinator that paused mowing loses its RESUME right and must not assume it
   still holds the robot) and the previous `stop_reason` cleared (like every command except STOP). `~/goto_pose` never
   clears a battery-recovery latch (it refuses instead) and leaves `battery_charge_pending` as it is
   (`docs/BATTERY_DOCK_RECOVERY.md`).
-- **Execution**: blade off and `StopMoving` before any motion; one `NavigateToPose` attempt
+- **Execution**: blade off and `StopMoving` before any motion. On the charger, on the station
+  without charge or with an undock reverse unfinished, the GOTO first leaves through
+  `StartFromRest`, the subtree the mowing start uses (Nav2 ready, preflight, `BackUp` of
+  `undock_distance`, RTK Fixed wait, `CalibrateHeadingFromUndock`); anywhere else it starts in
+  place. `StartFromRest`'s 1 m forward heading seed (`NotDockedBranch`) refuses command 9, so a
+  charging bit lost during the undock's waits ends the GOTO instead of driving into the station.
+  A failed undock ends the GOTO (`GOTO_UNDOCK_FAILED`, action result `FAILED` /
+  `undock failed`). Then one `NavigateToPose` attempt
   (default Nav2 tree, `AuthorizedTransitPlanner`; `BoundaryRecovery` is unreachable), bounded by
   `goto_timeout_sec` (default 300 s, monotonic clock, 0 = no limit). No retry loop. No root guard
   exempts command 9, except, as for mowing, the blade-off dock transit (`IsDocking`) in
@@ -143,19 +152,24 @@ refuses command 9.
   `battery_critical_voltage`) halts the transit and docks once (a failed dock sets `stop_reason`
   `DOCK_NAV_FAILED`; with a critical pack, `CriticalBatteryDock` may then try again); a
   critical-battery dock ends the GOTO docked, without backing up, and clears command 9.
-- **Statuses** on `/behavior_tree_node/high_level_status`: `GOTO_ACTIVE` (2),
+- **Statuses** on `/behavior_tree_node/high_level_status`: from the dock, first the undock's
+  `PREFLIGHT_CHECK`, `UNDOCKING` and `CALIBRATING_HEADING` (2), or `UNDOCK_FAILED` then the terminal
+  `GOTO_UNDOCK_FAILED` (1), which ends the GOTO before `GOTO_ACTIVE`; then `GOTO_ACTIVE` (2),
   `GOTO_LOW_BATTERY_DOCKING` (2), then one terminal name — `GOTO_REACHED` (1), `GOTO_FAILED` (1),
-  `GOTO_LOW_BATTERY_DOCKED` (1), `GOTO_LOW_BATTERY_DOCK_FAILED` (0) or
-  `GOTO_CRITICAL_BATTERY_DOCKED` (1). The terminal name is published once, then the tree
+  `GOTO_LOW_BATTERY_DOCKED` (1), `GOTO_LOW_BATTERY_DOCK_FAILED` (0),
+  `GOTO_CRITICAL_BATTERY_DOCKED` (1) or `GOTO_UNDOCK_FAILED` (1). The terminal name is published once, then the tree
   returns to `IDLE` within about a tick; command changes (STOP, HOME…) halt the GOTO and cancel its
   Nav2 goal without publishing a terminal name.
 - **Client sequence (v1)**: **subscribe to `high_level_status` first** (the publisher is reliable,
   depth 10, volatile — a late subscriber gets nothing that was published before it matched) → call
-  `~/goto_pose` → check `success` → wait for `GOTO_ACTIVE` → wait for the next terminal name, or for a
-  non-GOTO state (interrupted). `GOTO_ACTIVE` is published on every accepted GOTO that reaches the
-  tree (after `SetMowerEnabled(false)` and the 0.5 s `StopMoving`), so even a very short GOTO is
-  observable by a subscriber that matched before the request; a STOP/HOME during that first 0.5 s
-  ends it with no GOTO status at all. The 1 Hz republisher only repeats the current state.
+  `~/goto_pose` → check `success` → from the dock, `PREFLIGHT_CHECK`, `UNDOCKING`,
+  `CALIBRATING_HEADING` (and `UNDOCK_FAILED`) are the undock, not an interruption, and
+  `GOTO_UNDOCK_FAILED` ends the GOTO without `GOTO_ACTIVE` → wait for `GOTO_ACTIVE` → wait for the
+  next terminal name, or for another non-GOTO state (interrupted). Off the dock, `GOTO_ACTIVE` is
+  published on every accepted GOTO that reaches the tree (after `SetMowerEnabled(false)` and the
+  0.5 s `StopMoving`), so even a very short GOTO is observable by a subscriber that matched before
+  the request; a STOP/HOME before `GOTO_ACTIVE` (the 0.5 s stop, or the whole undock) ends it with
+  no GOTO status at all. The 1 Hz republisher only repeats the current state.
 - **Limitation**: the response carries no request ID and the status no correlation field, so a
   client attributes a terminal state to its own request only by following the sequence above. The
   result is one-shot, not durable, and can be missed by a client that was not already subscribed.
@@ -177,7 +191,8 @@ cancellation and feedback. Use it when the caller needs to know how *its* GOTO e
   active is refused `busy` without reaching the admission.
 - **End of a goal**: after every tick, `evaluateGotoMission` reads the context, in this order:
   the outcome recorded by `SetGotoOutcome` before each terminal GOTO status (`REACHED`,
-  `FAILED`, `LOW_BATTERY_DOCKED`, `LOW_BATTERY_DOCK_FAILED`, `CRITICAL_BATTERY_DOCKED`); a client
+  `FAILED`, `LOW_BATTERY_DOCKED`, `LOW_BATTERY_DOCK_FAILED`, `CRITICAL_BATTERY_DOCKED`,
+  `UNDOCK_FAILED` → result `FAILED` / `undock failed`); a client
   cancellation (`CANCELED`, the GOTO is stopped with command 8 if still running); `current_command` no longer 9
   without an outcome (`INTERRUPTED`, `error_msg` `command=<n> state=<last published state_name>`, e.g. STOP,
   HOME, `~/start_in_area`, maintenance, `CHARGER_FAILED`); a `CRITICAL_BATTERY_*` state
