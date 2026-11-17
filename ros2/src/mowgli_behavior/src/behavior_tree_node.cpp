@@ -1105,9 +1105,9 @@ private:
     // ~/goto_pose: point-to-point navigation to an arbitrary map-frame pose,
     // independent of the coverage planner (GOTO, COMMAND_GOTO=9). The only
     // way to start a GOTO (~/high_level_control refuses command 9). Accepted
-    // only from a settled, undocked rest state — see acceptGotoRequest() for
-    // every refusal reason; no hot pre-emption of a running GOTO or of any
-    // other mission. The blade is never enabled by this path (GotoSequence
+    // only from a settled rest state (from the dock it backs out first) — see
+    // acceptGotoRequest() for every refusal reason; no hot pre-emption of a
+    // running GOTO or of any other mission. The blade is never enabled by this path (GotoSequence
     // never ticks SetMowerEnabled(true)).
     using GotoPoseSrv = mowgli_interfaces::srv::GotoPose;
     goto_pose_srv_ = create_service<GotoPoseSrv>(

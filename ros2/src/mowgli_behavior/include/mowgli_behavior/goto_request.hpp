@@ -67,8 +67,8 @@ inline bool isValidGotoTimeout(double seconds)
 
 /// Decision behind the ~/goto_pose service (maintenance is checked by the caller).
 ///
-/// A GOTO only starts from a settled, undocked rest state; anything else is
-/// refused and leaves the context untouched:
+/// A GOTO only starts from a settled rest state, on the dock or off it;
+/// anything else is refused and leaves the context untouched:
 ///   - "invalid_pose": x, y or yaw is NaN/Inf.
 ///   - "busy": a mission is active (a GOTO included — no in-flight target
 ///     replacement, the caller sends COMMAND_STOP then a new request), or
@@ -84,11 +84,11 @@ inline bool isValidGotoTimeout(double seconds)
 ///   - "battery_charge_pending": a battery-driven dock/charge is unfinished
 ///     (e.g. a charge hold halted by a root guard, then the robot set down
 ///     off the dock). STOP or HOME releases it; a GOTO request never does.
-///   - "docked": on the charger, or an undock reverse is unfinished. GOTO has
-///     no undock sequence of its own; driving forward from there would push
-///     into the station.
-///   - "heading_not_calibrated": no heading seed this session (the mowing
-///     start drives 1 m forward to get one, GOTO does not).
+///   - "heading_not_calibrated": off the charger, no undock reverse
+///     unfinished, and no heading seed this session (the mowing start drives
+///     1 m forward to get one, GOTO does not). On the charger or with an undock
+///     reverse unfinished the GOTO first leaves through StartFromRest, whose
+///     undock calibrates the heading, so the seed is not required there.
 ///   - "localization_degraded": the latch LocalizationGuard reads is set
 ///     (exempted at rest, so it would only pause the GOTO right after start).
 ///   - "battery_unknown": no valid filtered battery voltage yet, or the last
@@ -130,11 +130,8 @@ inline GotoRequestDecision acceptGotoRequest(BTContext& ctx,
   {
     return {false, "battery_charge_pending"};
   }
-  if (ctx.latest_power.charger_enabled || ctx.undock_start_recorded)
-  {
-    return {false, "docked"};
-  }
-  if (!ctx.yaw_seeded_this_session)
+  const bool leaves_dock_first = ctx.latest_power.charger_enabled || ctx.undock_start_recorded;
+  if (!leaves_dock_first && !ctx.yaw_seeded_this_session)
   {
     return {false, "heading_not_calibrated"};
   }

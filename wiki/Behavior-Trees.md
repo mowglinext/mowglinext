@@ -85,7 +85,8 @@ Root (ReactiveSequence) — re-evaluates all children every tick
     │     clears its command (GOTO_CRITICAL_BATTERY_DOCKED).
     │
     ├── MowingSequence (COMMAND_START = 1)
-    │   ├── Nav2ReadyPoll, then UndockOrSkip:
+    │   ├── StartFromRest (subtree, shared with GotoSequence):
+    │   │   Nav2ReadyPoll, then UndockOrSkip:
     │   │     ├── not on dock → SeedYawFromMotion (1 m forward drive) + clear
     │   │     └── on dock → PreFlightCheck, RecordUndockStart, BackUp,
     │   │         WaitForGpsFix(min_fix_type=4), CalibrateHeadingFromUndock
@@ -112,8 +113,11 @@ Root (ReactiveSequence) — re-evaluates all children every tick
     │
     ├── HomeSequence (COMMAND_HOME = 2) → save, dock
     │
-    ├── GotoSequence (COMMAND_GOTO = 9, started only by ~/goto_pose)
-    │   ├── blade off, StopMoving, GOTO_ACTIVE
+    ├── GotoSequence (COMMAND_GOTO = 9, started by ~/goto_pose or ~/goto)
+    │   ├── blade off, StopMoving
+    │   ├── on the dock / station / mid-undock → StartFromRest (backs out,
+    │   │   calibrates the heading; never the forward seed); failure → GOTO_UNDOCK_FAILED
+    │   ├── GOTO_ACTIVE
     │   ├── one NavigateToPose to the target (default navigator tree,
     │   │   bounded by goto_timeout_sec) → GOTO_REACHED / GOTO_FAILED
     │   └── low battery → halt, dock once, end (no resume)

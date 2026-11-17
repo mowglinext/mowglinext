@@ -753,12 +753,21 @@ protected:
     // Retain the production startup waits, command/charge gates and complete
     // UndockOrSkip decision. Nav2, preflight and GPS are already ready, and
     // waits can complete immediately: none may conceal the missing power gate.
+    // MowingSequence starts through the StartFromRest subtree: inline it.
     auto startup = productionBranchXml("MowingSequence", "ReactiveSequence");
+    const std::string start_call = "<SubTree ID=\"StartFromRest\" _autoremap=\"true\"/>";
+    const auto call_begin = startup.find(start_call);
+    if (call_begin == std::string::npos)
+      throw std::runtime_error("StartFromRest missing from production startup");
+    startup.replace(call_begin,
+                    start_call.size(),
+                    productionBranchXml("StartFromRest", "Sequence"));
     const auto undock = productionBranchXml("UndockOrSkip", "Fallback");
     const auto undock_begin = startup.find(undock);
     if (undock_begin == std::string::npos)
       throw std::runtime_error("UndockOrSkip missing from production startup");
-    startup = startup.substr(0, undock_begin + undock.size()) + "</Sequence></ReactiveSequence>";
+    startup = startup.substr(0, undock_begin + undock.size()) +
+              "</Sequence></Sequence></ReactiveSequence>";
     const auto guard = include_power_guard
                            ? productionBranchXml("InitialPowerGuard", "ReactiveFallback")
                            : std::string();
@@ -1520,13 +1529,32 @@ protected:
   }
 
   /// MainLogic's order for these two branches: CriticalBatteryDock first.
+  /// These GOTOs start off the dock, so GotoSequence never calls StartFromRest;
+  /// its stand-in fails, which would end the GOTO if it ever were.
   BT::Tree gotoMainLogic()
   {
+    if (!factory.builders().count("IsCharging"))
+    {
+      factory.registerNodeType<mowgli_behavior::IsCharging>("IsCharging");
+    }
+    for (const auto* name : {"IsUndockInterrupted", "IsAtDockStation"})
+    {
+      if (!factory.builders().count(name))
+      {
+        factory.registerSimpleCondition(name,
+                                        [](BT::TreeNode&)
+                                        {
+                                          return BT::NodeStatus::FAILURE;
+                                        });
+      }
+    }
     return factory.createTreeFromText(
-        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Main\"><Fallback>" +
+        "<root BTCPP_format=\"4\" main_tree_to_execute=\"Main\"><BehaviorTree "
+        "ID=\"Main\"><Fallback>" +
             productionBranchXml("CriticalBatteryDock", "Sequence") +
             productionBranchXml("GotoSequence", "ReactiveSequence") +
-            "</Fallback></BehaviorTree></root>",
+            "</Fallback></BehaviorTree><BehaviorTree ID=\"StartFromRest\"><AlwaysFailure/>"
+            "</BehaviorTree></root>",
         blackboard);
   }
 

@@ -643,9 +643,9 @@
                        Only an active mow authorizes the recovery motion. The
                        reactive gate also cancels an undock on a new command.
                        A GOTO (COMMAND_GOTO=9) ends here, docked: without the
-                       ClearCommand, GotoSequence would drive off the charger with
-                       no undock on the next tick. The caller decides whether to
-                       send a new ~/goto_pose. -->
+                       ClearCommand, GotoSequence would undock and restart the GOTO
+                       on the next tick. The caller decides whether to send a new
+                       GOTO. -->
                   <Fallback name="CriticalBatteryResumeOrGotoTerminate">
                     <Sequence name="GotoTerminatesOnCriticalBattery">
                       <IsCommand command="9"/>
@@ -692,167 +692,9 @@
           </Fallback>
           <Sequence name="MowingAction">
 
-          <!-- Wait for Nav2 to be fully active. Polled check: finishes in
-               ~50 ms once the four lifecycle_manager_navigation nodes
-               (bt_navigator / controller / planner / behavior) are all
-               active; retries once per second for up to 60 s on ARM cold
-               boot. Previously this was a hardcoded 30 s sleep inside the
-               on-dock path only — which (a) wasted time when Nav2 was
-               already ready, and (b) let the off-dock path issue goals
-               into a half-up Nav2 stack, observed as bt_navigator stuck
-               inactive → instant NavigateToPose rejections → skip-cascade
-               drives the robot right out of the mowing area. -->
-          <PublishHighLevelStatus state="2" state_name="PREFLIGHT_CHECK"/>
-          <Fallback name="Nav2ReadyOrProceed">
-            <RetryUntilSuccessful num_attempts="60" name="Nav2ReadyPoll">
-              <Fallback>
-                <Nav2Active timeout_sec="0.5"/>
-                <Sequence>
-                  <WaitForDuration duration_sec="1.0"/>
-                  <AlwaysFailure/>
-                </Sequence>
-              </Fallback>
-            </RetryUntilSuccessful>
-            <!-- Timeout: proceed anyway with a warning. BoundaryGuard and
-                 the emergency latch still apply; we'd rather let the run
-                 fail fast at the first goal than freeze before starting. -->
-            <AlwaysSuccess/>
-          </Fallback>
-
-          <!-- Undock: only if currently charging (on dock).
-               If already undocked, skip entirely. -->
-          <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
-          <WaitForDuration duration_sec="1.0"/>
-          <Fallback name="UndockOrSkip">
-            <!-- Not on dock: the dock_yaw injection (hardware_bridge →
-                 /gnss/heading → dock_yaw_to_set_pose.py) never fired, so
-                 the global EKF has a random initial yaw. Drive forward 1 m
-                 and derive yaw from the GPS track direction. Guarded by
-                 yaw_seeded_this_session so a ReactiveSequence halt/resume
-                 cycle does not re-trigger the forward drive mid-session. -->
-            <Sequence name="NotDockedBranch">
-              <Inverter><IsCharging/></Inverter>
-              <!-- Never while an undock reverse is unfinished: the robot
-                   then still faces the dock, and this 1 m FORWARD drive
-                   would push it back onto it (ResumeInterruptedUndock). -->
-              <Inverter><IsUndockInterrupted/></Inverter>
-              <Inverter><IsAtDockStation/></Inverter>
-              <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
-              <SeedYawFromMotion distance_m="1.0" speed_ms="0.2" timeout_sec="30.0"/>
-              <!-- Drop stale obstacle marks projected during the pre-seed
-                   forward drive: while the EKF yaw was random the scans
-                   went into the costmap at the wrong orientation, and
-                   obstacle_layer has observation_persistence=0 but only
-                   clears via raytracing as the robot moves past. Clearing
-                   now guarantees Nav2 sees a fresh view once the seed has
-                   landed. -->
-              <ClearCostmap/>
-            </Sequence>
-            <!-- On dock — wait for GPS, save map, then undock. IsCharging
-                 gate ensures we only run the docked-undock path when the
-                 robot is physically on the dock. Previously this branch
-                 could fire as a fallback when NotDockedBranch failed,
-                 which was dangerous — 1 m BackUp from a mid-polygon
-                 pose frequently pushed us outside the boundary. -->
-            <Sequence name="UndockSequence">
-              <IsCharging/>
-              <!-- Pre-undock preflight gate: battery OK, TF chain healthy,
-                   mowing/coverage services up, and GPS at least RTK-corrected
-                   (min_gps_fix_type=2). It deliberately does NOT require RTK
-                   Fixed here: the dock cradle's partial sky obstruction / metal
-                   canopy commonly pins the F9P at RTK Float while parked, and
-                   Float collapses to fix_type=2 through the Universal GNSS flag
-                   pipeline (navsat_fix_adapter maps only true Fixed→GBAS_FIX;
-                   Float/DGPS→STATUS_FIX). Requiring Fixed here was a chicken-
-                   and-egg: the robot must undock into the open to ACQUIRE Fixed,
-                   but the gate blocked the undock. RTK Fixed is instead enforced
-                   AFTER undock by WaitForGpsFix(min_fix_type=4) below — "wait
-                   Fixed once undocked, not before". 120×1s retries then the
-                   sequence fails and falls through to UndockFailed. -->
-              <PublishHighLevelStatus state="2" state_name="PREFLIGHT_CHECK"/>
-              <RetryUntilSuccessful num_attempts="120">
-                <Fallback>
-                  <PreFlightCheck min_battery="20.0" min_gps_fix_type="2" tf_timeout_sec="0.5"/>
-                  <Sequence>
-                    <WaitForDuration duration_sec="1.0"/>
-                    <AlwaysFailure/>
-                  </Sequence>
-                </Fallback>
-              </RetryUntilSuccessful>
-              <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
-              <RecordUndockStart/>
-              <ClearCostmap/>
-              <!-- BackUp via Nav2 behavior_server instead of
-                   opennav_docking's UndockRobot: opennav's isDocked() uses
-                   a geometric distance to the dock pose that is fragile
-                   when RTK drifts briefly near the metal canopy. BackUp is
-                   deterministic — reverse at the given speed for the
-                   given distance. undock_distance must be > 0.5 m so
-                   CalibrateHeadingFromUndock has enough GPS displacement
-                   to resolve the initial heading accurately. -->
-              <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
-              <!-- Wait for RTK Fixed after undock. The dock often has a
-                   metal canopy that attenuates GPS; once the robot is 2 m
-                   out the F9P should re-acquire quickly. Timeout proceeds
-                   anyway at degraded precision rather than freeze. -->
-              <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
-              <!-- Refine the EKF yaw from GPS-verified backward motion:
-                   heading = atan2(-dy, -dx). Sync, no extra motion.
-                   Fails UndockSequence if GPS barely moved (robot stuck on
-                   dock) so the BT retries the whole undock. -->
-              <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
-              <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
-              <!-- Clear costmaps again after undock — dock structure must be
-                   cleared before navigation starts. -->
-              <ClearCostmap/>
-            </Sequence>
-            <!-- Off the dock with the undock reverse unfinished (Pause,
-                 emergency or a failed BackUp after RecordUndockStart):
-                 finish the reverse — only what is left of undock_distance
-                 from the recorded start — then calibrate as a normal undock.
-                 A failure here takes UndockFailed, never the forward seed. -->
-            <Sequence name="ResumeInterruptedUndock">
-              <Inverter><IsCharging/></Inverter>
-              <IsUndockInterrupted/>
-              <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
-              <Fallback>
-                <Inverter>
-                  <RemainingUndockDistance undock_distance="{undock_distance}"
-                                           remaining="{undock_remaining}"/>
-                </Inverter>
-                <BackUp backup_dist="{undock_remaining}" backup_speed="{undock_speed}"/>
-              </Fallback>
-              <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
-              <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
-              <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
-              <ClearCostmap/>
-            </Sequence>
-            <!-- On the station without charge (contact lost, #515): a transit
-                 is refused from here (a pivot would hit the head) and the forward
-                 seed in NotDockedBranch would drive INTO it, so that branch stands
-                 down here. Reverse out as an undock. A failed reverse takes
-                 UndockFailed, then ResumeInterruptedUndock on the next start. -->
-            <Sequence name="BackOutOfStation">
-              <Inverter><IsCharging/></Inverter>
-              <IsAtDockStation/>
-              <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
-              <RecordUndockStart/>
-              <ClearCostmap/>
-              <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
-              <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
-              <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
-              <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
-              <ClearCostmap/>
-            </Sequence>
-            <!-- Undock failed — abort -->
-            <Sequence name="UndockFailed">
-              <StopMoving/>
-              <PublishHighLevelStatus state="1" state_name="UNDOCK_FAILED"/>
-              <SetStopReason reason="UNDOCK_FAILED" detail="The mower could not back out of the dock."/>
-              <ClearCommand/>
-              <AlwaysFailure/>
-            </Sequence>
-          </Fallback>
+          <!-- Wait for Nav2, then leave the dock (or seed the heading off it):
+               the StartFromRest subtree below, shared with GotoSequence. -->
+          <SubTree ID="StartFromRest" _autoremap="true"/>
 
           <!-- Record if it was raining at start — user chose to mow in rain -->
           <WasRainingAtStart/>
@@ -1556,8 +1398,10 @@
         </ReactiveSequence>
 
         <!-- ============================================================
-             c2. Point-to-point GOTO (COMMAND_GOTO = 9, set by ~/goto_pose)
-             Blade off and stop, then ONE NavigateToPose to the target
+             c2. Point-to-point GOTO (COMMAND_GOTO = 9, set by ~/goto_pose
+             or the ~/goto action)
+             Blade off and stop, leave the dock through StartFromRest when on
+             it, then ONE NavigateToPose to the target
              (default navigator tree, AuthorizedTransitPlanner) bounded by
              {goto_timeout_sec}. GotoNavOrFailed always reaches ClearCommand,
              so a failed goal is never retried. GotoGuards re-checks the
@@ -1571,6 +1415,28 @@
           <Sequence name="GotoAction">
             <SetMowerEnabled enabled="false"/>
             <StopMoving/>
+            <!-- On the dock, on the station or with an undock reverse unfinished:
+                 leave exactly as a mowing start does (StartFromRest: Nav2 ready,
+                 preflight, BackUp, RTK Fixed wait, heading from the undock).
+                 Anywhere else the GOTO starts in place: admission already
+                 required a calibrated heading there. NotDockedBranch refuses
+                 command 9, so StartFromRest never drives its forward heading
+                 seed under a GOTO. An undock failure ends the GOTO
+                 (GOTO_UNDOCK_FAILED, no transit). -->
+            <Fallback name="GotoStartFromRest">
+              <Sequence name="GotoAwayFromDock">
+                <Inverter><IsCharging/></Inverter>
+                <Inverter><IsUndockInterrupted/></Inverter>
+                <Inverter><IsAtDockStation/></Inverter>
+              </Sequence>
+              <SubTree ID="StartFromRest" _autoremap="true"/>
+              <Sequence name="GotoUndockFailed">
+                <SetGotoOutcome outcome="UNDOCK_FAILED"/>
+                <PublishHighLevelStatus state="1" state_name="GOTO_UNDOCK_FAILED"/>
+                <ClearCommand/>
+                <AlwaysFailure/>
+              </Sequence>
+            </Fallback>
             <PublishHighLevelStatus state="2" state_name="GOTO_ACTIVE"/>
             <ReactiveSequence name="GotoGuards">
               <Fallback name="GotoLowBatteryGuard">
@@ -1750,6 +1616,184 @@
 
       </Fallback>
     </ReactiveSequence>
+  </BehaviorTree>
+
+  <!-- ==================================================================
+       StartFromRest — shared by MowingSequence (COMMAND_START) and
+       GotoSequence (COMMAND_GOTO): wait for Nav2, then UndockOrSkip.
+       SUCCESS once the robot is off the dock with a calibrated heading;
+       FAILURE after UndockFailed (which already stopped the robot,
+       published UNDOCK_FAILED and cleared the command).
+       ================================================================== -->
+  <BehaviorTree ID="StartFromRest">
+    <Sequence name="StartFromRest">
+
+      <!-- Wait for Nav2 to be fully active. Polled check: finishes in
+           ~50 ms once the four lifecycle_manager_navigation nodes
+           (bt_navigator / controller / planner / behavior) are all
+           active; retries once per second for up to 60 s on ARM cold
+           boot. Previously this was a hardcoded 30 s sleep inside the
+           on-dock path only — which (a) wasted time when Nav2 was
+           already ready, and (b) let the off-dock path issue goals
+           into a half-up Nav2 stack, observed as bt_navigator stuck
+           inactive → instant NavigateToPose rejections → skip-cascade
+           drives the robot right out of the mowing area. -->
+      <PublishHighLevelStatus state="2" state_name="PREFLIGHT_CHECK"/>
+      <Fallback name="Nav2ReadyOrProceed">
+        <RetryUntilSuccessful num_attempts="60" name="Nav2ReadyPoll">
+          <Fallback>
+            <Nav2Active timeout_sec="0.5"/>
+            <Sequence>
+              <WaitForDuration duration_sec="1.0"/>
+              <AlwaysFailure/>
+            </Sequence>
+          </Fallback>
+        </RetryUntilSuccessful>
+        <!-- Timeout: proceed anyway with a warning. BoundaryGuard and
+             the emergency latch still apply; we'd rather let the run
+             fail fast at the first goal than freeze before starting. -->
+        <AlwaysSuccess/>
+      </Fallback>
+
+      <!-- Undock: only if currently charging (on dock).
+           If already undocked, skip entirely. -->
+      <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
+      <WaitForDuration duration_sec="1.0"/>
+      <Fallback name="UndockOrSkip">
+        <!-- Not on dock: the dock_yaw injection (hardware_bridge →
+             /gnss/heading → dock_yaw_to_set_pose.py) never fired, so
+             the global EKF has a random initial yaw. Drive forward 1 m
+             and derive yaw from the GPS track direction. Guarded by
+             yaw_seeded_this_session so a ReactiveSequence halt/resume
+             cycle does not re-trigger the forward drive mid-session. -->
+        <Sequence name="NotDockedBranch">
+          <!-- Never under a GOTO: it only enters StartFromRest from the dock,
+               so a charging bit lost during the waits above must not turn
+               into a forward drive into the station. -->
+          <Inverter><IsCommand command="9"/></Inverter>
+          <Inverter><IsCharging/></Inverter>
+          <!-- Never while an undock reverse is unfinished: the robot
+               then still faces the dock, and this 1 m FORWARD drive
+               would push it back onto it (ResumeInterruptedUndock). -->
+          <Inverter><IsUndockInterrupted/></Inverter>
+          <Inverter><IsAtDockStation/></Inverter>
+          <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
+          <SeedYawFromMotion distance_m="1.0" speed_ms="0.2" timeout_sec="30.0"/>
+          <!-- Drop stale obstacle marks projected during the pre-seed
+               forward drive: while the EKF yaw was random the scans
+               went into the costmap at the wrong orientation, and
+               obstacle_layer has observation_persistence=0 but only
+               clears via raytracing as the robot moves past. Clearing
+               now guarantees Nav2 sees a fresh view once the seed has
+               landed. -->
+          <ClearCostmap/>
+        </Sequence>
+        <!-- On dock — wait for GPS, save map, then undock. IsCharging
+             gate ensures we only run the docked-undock path when the
+             robot is physically on the dock. Previously this branch
+             could fire as a fallback when NotDockedBranch failed,
+             which was dangerous — 1 m BackUp from a mid-polygon
+             pose frequently pushed us outside the boundary. -->
+        <Sequence name="UndockSequence">
+          <IsCharging/>
+          <!-- Pre-undock preflight gate: battery OK, TF chain healthy,
+               mowing/coverage services up, and GPS at least RTK-corrected
+               (min_gps_fix_type=2). It deliberately does NOT require RTK
+               Fixed here: the dock cradle's partial sky obstruction / metal
+               canopy commonly pins the F9P at RTK Float while parked, and
+               Float collapses to fix_type=2 through the Universal GNSS flag
+               pipeline (navsat_fix_adapter maps only true Fixed→GBAS_FIX;
+               Float/DGPS→STATUS_FIX). Requiring Fixed here was a chicken-
+               and-egg: the robot must undock into the open to ACQUIRE Fixed,
+               but the gate blocked the undock. RTK Fixed is instead enforced
+               AFTER undock by WaitForGpsFix(min_fix_type=4) below — "wait
+               Fixed once undocked, not before". 120×1s retries then the
+               sequence fails and falls through to UndockFailed. -->
+          <PublishHighLevelStatus state="2" state_name="PREFLIGHT_CHECK"/>
+          <RetryUntilSuccessful num_attempts="120">
+            <Fallback>
+              <PreFlightCheck min_battery="20.0" min_gps_fix_type="2" tf_timeout_sec="0.5"/>
+              <Sequence>
+                <WaitForDuration duration_sec="1.0"/>
+                <AlwaysFailure/>
+              </Sequence>
+            </Fallback>
+          </RetryUntilSuccessful>
+          <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
+          <RecordUndockStart/>
+          <ClearCostmap/>
+          <!-- BackUp via Nav2 behavior_server instead of
+               opennav_docking's UndockRobot: opennav's isDocked() uses
+               a geometric distance to the dock pose that is fragile
+               when RTK drifts briefly near the metal canopy. BackUp is
+               deterministic — reverse at the given speed for the
+               given distance. undock_distance must be > 0.5 m so
+               CalibrateHeadingFromUndock has enough GPS displacement
+               to resolve the initial heading accurately. -->
+          <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
+          <!-- Wait for RTK Fixed after undock. The dock often has a
+               metal canopy that attenuates GPS; once the robot is 2 m
+               out the F9P should re-acquire quickly. Timeout proceeds
+               anyway at degraded precision rather than freeze. -->
+          <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
+          <!-- Refine the EKF yaw from GPS-verified backward motion:
+               heading = atan2(-dy, -dx). Sync, no extra motion.
+               Fails UndockSequence if GPS barely moved (robot stuck on
+               dock) so the BT retries the whole undock. -->
+          <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
+          <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
+          <!-- Clear costmaps again after undock — dock structure must be
+               cleared before navigation starts. -->
+          <ClearCostmap/>
+        </Sequence>
+        <!-- Off the dock with the undock reverse unfinished (Pause,
+             emergency or a failed BackUp after RecordUndockStart):
+             finish the reverse — only what is left of undock_distance
+             from the recorded start — then calibrate as a normal undock.
+             A failure here takes UndockFailed, never the forward seed. -->
+        <Sequence name="ResumeInterruptedUndock">
+          <Inverter><IsCharging/></Inverter>
+          <IsUndockInterrupted/>
+          <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
+          <Fallback>
+            <Inverter>
+              <RemainingUndockDistance undock_distance="{undock_distance}"
+                                       remaining="{undock_remaining}"/>
+            </Inverter>
+            <BackUp backup_dist="{undock_remaining}" backup_speed="{undock_speed}"/>
+          </Fallback>
+          <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
+          <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
+          <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
+          <ClearCostmap/>
+        </Sequence>
+        <!-- On the station without charge (contact lost, #515): a transit
+             is refused from here (a pivot would hit the head) and the forward
+             seed in NotDockedBranch would drive INTO it, so that branch stands
+             down here. Reverse out as an undock. A failed reverse takes
+             UndockFailed, then ResumeInterruptedUndock on the next start. -->
+        <Sequence name="BackOutOfStation">
+          <Inverter><IsCharging/></Inverter>
+          <IsAtDockStation/>
+          <PublishHighLevelStatus state="2" state_name="UNDOCKING"/>
+          <RecordUndockStart/>
+          <ClearCostmap/>
+          <BackUp backup_dist="{undock_distance}" backup_speed="{undock_speed}"/>
+          <WaitForGpsFix timeout_sec="20.0" min_fix_type="4"/>
+          <PublishHighLevelStatus state="2" state_name="CALIBRATING_HEADING"/>
+          <CalibrateHeadingFromUndock min_displacement_m="0.5"/>
+          <ClearCostmap/>
+        </Sequence>
+        <!-- Undock failed — abort -->
+        <Sequence name="UndockFailed">
+          <StopMoving/>
+          <PublishHighLevelStatus state="1" state_name="UNDOCK_FAILED"/>
+          <SetStopReason reason="UNDOCK_FAILED" detail="The mower could not back out of the dock."/>
+          <ClearCommand/>
+          <AlwaysFailure/>
+        </Sequence>
+      </Fallback>
+    </Sequence>
   </BehaviorTree>
 
 </root>

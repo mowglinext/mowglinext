@@ -174,6 +174,31 @@ tinyxml2::XMLElement* namedElement(tinyxml2::XMLElement* element, const char* na
   return nullptr;
 }
 
+/// Replaces every <SubTree ID="..."/> under `element` with a copy of the
+/// production <Sequence name="..."> it calls (MowingSequence starts through
+/// StartFromRest), so each startup leaf is probed in place.
+void inlineSubTrees(tinyxml2::XMLElement* element, tinyxml2::XMLElement* production)
+{
+  for (auto* child = element->FirstChildElement(); child;)
+  {
+    auto* next = child->NextSiblingElement();
+    const auto* id = child->Attribute("ID");
+    if (std::string(child->Name()) == "SubTree" && id)
+    {
+      auto* body = namedElement(production, id);
+      if (!body)
+        throw std::runtime_error(std::string("Production subtree is missing: ") + id);
+      element->InsertAfterChild(child, body->DeepClone(element->GetDocument()));
+      element->DeleteChild(child);
+    }
+    else
+    {
+      inlineSubTrees(child, production);
+    }
+    child = next;
+  }
+}
+
 class StartupPauseTest : public ::testing::TestWithParam<Stage>
 {
 protected:
@@ -251,6 +276,7 @@ protected:
         "</BehaviorTree></root>");
     auto* fallback = test.RootElement()->FirstChildElement()->FirstChildElement();
     fallback->InsertEndChild(mowing->DeepClone(&test));
+    inlineSubTrees(fallback->FirstChildElement(), production.RootElement());
     fallback->InsertEndChild(stop->DeepClone(&test));
     auto* home = test.NewElement("ReactiveSequence");
     auto* command = test.NewElement("IsCommand");
