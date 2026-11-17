@@ -190,7 +190,7 @@ CorridorFilterStatsForTest apply_corridor_ignore_filter_for_test(
     const LidarExtrinsicsForTest& extrinsics)
 {
   CorridorFilterStatsForTest stats;
-  if (corridors.empty() || !robot_pose_map.has_value())
+  if (corridors.empty() || recorded_areas.empty() || !robot_pose_map.has_value())
     return stats;
   const Pose2DForTest& pose = *robot_pose_map;
   const float inf = std::numeric_limits<float>::infinity();
@@ -257,6 +257,12 @@ const std::vector<mowgli_localization::Point2DForTest> kEverywhereArea{{-100.0, 
                                                                        {100.0, -100.0},
                                                                        {100.0, 100.0},
                                                                        {-100.0, 100.0}};
+// A recorded area well away from every corridor test geometry, so a beam can
+// be "outside every recorded area" while the list itself is non-empty.
+const std::vector<mowgli_localization::Point2DForTest> kElsewhereArea{{-20.0, -20.0},
+                                                                      {-10.0, -20.0},
+                                                                      {-10.0, -10.0},
+                                                                      {-20.0, -10.0}};
 }  // namespace
 
 namespace
@@ -589,8 +595,8 @@ TEST(CostmapScanFilterCorridor, SuppressesAReturnInsideTheCorridorWhenOnTheAreaS
 
 TEST(CostmapScanFilterCorridor, BeyondEveryRecordedAreaIsSuppressedAtAnyDistanceAlongsideTheLine)
 {
-  // Same corridor/return as above, but no recorded area at all -> the point
-  // is "beyond every recorded area", so it is suppressed via the OTHER
+  // Same corridor/return as above, but the only recorded area is elsewhere
+  // -> the point is "beyond every recorded area", so it is suppressed via the OTHER
   // rule (point_projects_onto_corridor): unconditional on distance, only on
   // falling alongside the segment's own span. (2, 0) sits exactly halfway
   // along the corridor (2,-5)-(2,5), well within its span, so it matches
@@ -602,11 +608,31 @@ TEST(CostmapScanFilterCorridor, BeyondEveryRecordedAreaIsSuppressedAtAnyDistance
   std::optional<mowgli_localization::Pose2DForTest> pose =
       mowgli_localization::Pose2DForTest{0.0, 0.0, 0.0};
   const auto stats = mowgli_localization::apply_corridor_ignore_filter_for_test(
-      in, {corridor}, {}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+      in, {corridor}, {kElsewhereArea}, pose, mowgli_localization::LidarExtrinsicsForTest{});
   EXPECT_FALSE(std::isfinite(in.ranges[0]));
   EXPECT_EQ(stats.suppressed, 1u);
   EXPECT_EQ(stats.suppressed_area_side, 0u);
   EXPECT_EQ(stats.suppressed_beyond_boundary, 1u);
+}
+
+TEST(CostmapScanFilterCorridor, EmptyRecordedAreaListIsANoOp)
+{
+  // Same corridor/return as BeyondEveryRecordedArea..., but no recorded area
+  // list at all (not received yet, or the map is mid-replace / empty). The
+  // far-side rule is only safe because the polygon says where the robot can
+  // be; with no polygon every beam would read as "outside every recorded
+  // area" and be suppressed at any distance, on /scan_collision too. So the
+  // filter must pass the scan through untouched.
+  mowgli_localization::CorridorForTest corridor{{mowgli_localization::Point2DForTest{2.0, -5.0},
+                                                 mowgli_localization::Point2DForTest{2.0, 5.0}},
+                                                0.5};
+  auto in = make_forward_only_scan(2.0f);
+  std::optional<mowgli_localization::Pose2DForTest> pose =
+      mowgli_localization::Pose2DForTest{0.0, 0.0, 0.0};
+  const auto stats = mowgli_localization::apply_corridor_ignore_filter_for_test(
+      in, {corridor}, {}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+  EXPECT_FLOAT_EQ(in.ranges[0], 2.0f);
+  EXPECT_EQ(stats.suppressed, 0u);
 }
 
 TEST(CostmapScanFilterCorridor, BeyondEveryRecordedAreaButPastTheLinesEndIsNotSuppressed)
@@ -624,7 +650,7 @@ TEST(CostmapScanFilterCorridor, BeyondEveryRecordedAreaButPastTheLinesEndIsNotSu
   std::optional<mowgli_localization::Pose2DForTest> pose =
       mowgli_localization::Pose2DForTest{2.0, 0.0, M_PI / 2.0};
   const auto stats = mowgli_localization::apply_corridor_ignore_filter_for_test(
-      in, {corridor}, {}, pose, mowgli_localization::LidarExtrinsicsForTest{});
+      in, {corridor}, {kElsewhereArea}, pose, mowgli_localization::LidarExtrinsicsForTest{});
   EXPECT_FLOAT_EQ(in.ranges[0], 8.0f);
   EXPECT_EQ(stats.suppressed, 0u);
 }
