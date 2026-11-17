@@ -2,12 +2,12 @@ import {useCallback, useEffect, useLayoutEffect, useRef, useState} from "react";
 import type {TwistStamped} from "../../../types/ros.ts";
 import type {IJoystickUpdateEvent} from "react-joystick-component/build/lib/Joystick";
 
+import {MAX_LINEAR_MPS, MAX_ANGULAR_RAD_S} from "../../../gamepad/controller";
+
 const JOY_SEND_INTERVAL_MS = 100;
 // Keep the existing UI latch through short telemetry blips. Motion itself is
 // invalidated immediately on a mode change and requires a new pointer gesture.
 const MANUAL_EXIT_DEBOUNCE_MS = 1200;
-const MAX_LINEAR_MPS = 0.25;
-const MAX_ANGULAR_RAD_S = 0.6;
 
 interface UseManualModeOptions {
     mowerAction: (action: string, params: Record<string, unknown>) => () => Promise<void>;
@@ -17,6 +17,7 @@ interface UseManualModeOptions {
         motionSession?: () => {connected: boolean; generation: number};
     };
     stateName?: string;
+    controllerOwnsInput?: boolean;
 }
 
 const neutralTwist = (): TwistStamped => ({
@@ -24,7 +25,8 @@ const neutralTwist = (): TwistStamped => ({
     twist: {linear: {x: 0, y: 0, z: 0}, angular: {z: 0, x: 0, y: 0}},
 });
 
-export function useManualMode({mowerAction, joyStream, stateName}: UseManualModeOptions) {
+export function useManualMode({mowerAction, joyStream, stateName, controllerOwnsInput = false}: UseManualModeOptions) {
+    const controllerOwnsRef = useRef(controllerOwnsInput);
     const [manualMode, setManualMode] = useState(() => stateName === "MANUAL_MOWING");
     const exitTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
     const lastTwistRef = useRef<TwistStamped | null>(null);
@@ -49,6 +51,13 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
         // Never queue a Twist for a later WebSocket reconnection.
         try { sendJsonMessage(neutralTwist(), false); } catch { /* stream unavailable */ }
     }, [sendJsonMessage]);
+
+    // Revoke before passive socket teardown and controller polling. Returning
+    // ownership never restores the old touch gesture or its repeat timer.
+    useLayoutEffect(() => {
+        controllerOwnsRef.current = controllerOwnsInput;
+        if (controllerOwnsInput) neutralizeMotion();
+    }, [controllerOwnsInput, neutralizeMotion]);
 
     useLayoutEffect(() => {
         eligibleRef.current = stateName === "MANUAL_MOWING" || stateName === "RECORDING" ||
@@ -119,14 +128,14 @@ export function useManualMode({mowerAction, joyStream, stateName}: UseManualMode
 
     const gestureAllowed = useCallback(() => {
         const session = motionSession?.();
-        return mountedRef.current && eligibleRef.current && !stopBlockedRef.current &&
+        return mountedRef.current && eligibleRef.current && !controllerOwnsRef.current && !stopBlockedRef.current &&
             (!session || (session.connected && session.generation === gestureGenerationRef.current));
     }, [motionSession]);
 
     const handleJoyStart = useCallback(() => {
         neutralizeMotion();
         const session = motionSession?.();
-        if (!mountedRef.current || !eligibleRef.current || stopBlockedRef.current || (session && !session.connected)) return;
+        if (!mountedRef.current || !eligibleRef.current || controllerOwnsRef.current || stopBlockedRef.current || (session && !session.connected)) return;
         gestureGenerationRef.current = session?.generation;
         gestureRef.current = true;
     }, [motionSession, neutralizeMotion]);

@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -45,6 +46,12 @@ func newCmdVelRelayClient(url string) *cmdVelRelayClient {
 // Returns a non-nil error when the relay is not connected; callers
 // should fall back to foxglove_bridge in that case.
 func (c *cmdVelRelayClient) Send(msg interface{}) error {
+	return c.SendContext(context.Background(), msg)
+}
+
+// SendContext rejects stale input after waiting for the writer and bounds the
+// actual write by both the caller's lease and the existing relay write cap.
+func (c *cmdVelRelayClient) SendContext(ctx context.Context, msg interface{}) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("cmd_vel relay: marshal: %w", err)
@@ -52,10 +59,30 @@ func (c *cmdVelRelayClient) Send(msg interface{}) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c.conn == nil {
 		return fmt.Errorf("cmd_vel relay: not connected")
 	}
-	return c.conn.WriteMessage(websocket.TextMessage, data)
+	// Bound a stalled relay so teleop session cleanup can acquire the writer
+	// and send its stop. A timed-out WebSocket is unusable; reconnect it.
+	deadline := time.Now().Add(100 * time.Millisecond)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		if !time.Now().Before(contextDeadline) {
+			return context.DeadlineExceeded
+		}
+		deadline = contextDeadline
+	}
+	if err := c.conn.SetWriteDeadline(deadline); err != nil {
+		_ = c.conn.Close()
+		return err
+	}
+	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		_ = c.conn.Close()
+		return err
+	}
+	return nil
 }
 
 // Connected reports whether the relay WebSocket is currently up.

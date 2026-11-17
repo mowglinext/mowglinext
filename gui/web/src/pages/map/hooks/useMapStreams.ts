@@ -32,6 +32,7 @@ import {MAP_RENDER_BUDGETS} from "./mapRenderBudget.ts";
 export type MowProgressImage = GridImage;
 
 interface UseMapStreamsOptions {
+    controllerOwnsInput?: boolean;
     editMap: boolean;
     settings: Record<string, unknown>;
     offsetX: number;
@@ -50,6 +51,7 @@ interface LidarRenderFrame {
 }
 
 export function useMapStreams({
+    controllerOwnsInput = false,
     editMap,
     settings,
     offsetX,
@@ -318,6 +320,7 @@ export function useMapStreams({
             if (!path.poses || path.poses.length === 0) {
                 // Recording cleared — remove trajectory feature
                 setFeatures((oldFeatures) => {
+                    if (!oldFeatures["recording-trajectory"]) return oldFeatures;
                     const newFeatures = { ...oldFeatures };
                     delete newFeatures["recording-trajectory"];
                     return newFeatures;
@@ -421,40 +424,47 @@ export function useMapStreams({
         lidarMapStart("/api/mowglinext/subscribe/lidarMap");
     }, [editMap, datumLongitude, datumLatitude, poseStart, mapStart, pathStart, joyStart, planStart, lidarStart, obstaclesStart, recordingStart, highLevelStart, progressStart, lidarMapStart, poseStop, mapStop, pathStop, joyStop, planStop, lidarStop, obstaclesStop, recordingStop, highLevelStop, progressStop, lidarMapStop, poseRender, lidarRender]);
 
-    // Start joy + recording trajectory streams on RECORDING state
+    // Ownership changes affect only the legacy joy publisher.
     useEffect(() => {
-        if (stateName === "RECORDING") {
+        if (controllerOwnsInput) {
+            clearTimeout(joyStopTimerRef.current);
+            joyStopTimerRef.current = undefined;
+            joyStop();
+            return;
+        }
+        if (stateName === "RECORDING" || stateName === "MANUAL_MOWING") {
             clearTimeout(joyStopTimerRef.current);
             joyStopTimerRef.current = undefined;
             joyStart("/api/mowglinext/publish/joy");
-            recordingStart("/api/mowglinext/subscribe/recordingTrajectory");
-            setEditMap(false);
             return;
         }
-        if (stateName === "MANUAL_MOWING") {
-            clearTimeout(joyStopTimerRef.current);
-            joyStopTimerRef.current = undefined;
-            joyStart("/api/mowglinext/publish/joy");
-            return;
-        }
-        // Leaving a joy-eligible state: DEBOUNCE the joy teardown so a single
-        // stray guard frame (EMERGENCY/battery/boundary blip) can't kill teleop
-        // mid-drive. The recording-trajectory cleanup can happen immediately —
-        // it's only visual and re-subscribes instantly if RECORDING returns.
+        // Keep the socket through short telemetry blips; useManualMode still
+        // invalidates motion immediately and requires a fresh pointer gesture.
         if (joyStopTimerRef.current === undefined) {
             joyStopTimerRef.current = setTimeout(() => {
                 joyStopTimerRef.current = undefined;
                 joyStop();
             }, 1200);
         }
+    }, [stateName, controllerOwnsInput, joyStart, joyStop]);
+
+    // Keep the visual trajectory subscription independent of input ownership.
+    useEffect(() => {
+        if (stateName === "RECORDING") {
+            recordingStart("/api/mowglinext/subscribe/recordingTrajectory");
+            setEditMap(false);
+            return;
+        }
+        if (stateName === "MANUAL_MOWING") return;
         recordingStop();
-        // Clear trajectory feature when leaving recording mode
+        // Clear trajectory feature when leaving recording mode.
         setFeatures((oldFeatures) => {
+            if (!oldFeatures["recording-trajectory"]) return oldFeatures;
             const newFeatures = { ...oldFeatures };
             delete newFeatures["recording-trajectory"];
             return newFeatures;
         });
-    }, [stateName, joyStart, joyStop, recordingStart, recordingStop, setEditMap, setFeatures]);
+    }, [stateName, recordingStart, recordingStop, setEditMap, setFeatures]);
 
     // Clear the joy-stop debounce on unmount so it can't fire after teardown.
     useEffect(() => {

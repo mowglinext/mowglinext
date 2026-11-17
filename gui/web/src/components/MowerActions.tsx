@@ -1,3 +1,4 @@
+import type {RequestParams} from "../api/Api.ts";
 import {useApi} from "../hooks/useApi.ts";
 import {App, Card, Col, Divider, Row} from "antd";
 import {PlayCircleOutlined, HomeOutlined, WarningOutlined, RedoOutlined} from '@ant-design/icons';
@@ -23,9 +24,10 @@ const ActionsCard = styled(Card)`
 export const useMowerAction = () => {
     const {message} = App.useApp();
     const guiApi = useApi()
-    return (command: string, args: Record<string, any> = {}) => async () => {
+    return (command: string, args: Record<string, any> = {}, params?: RequestParams) => async () => {
         try {
-            const res = await guiApi.mowglinext.callCreate(command, args)
+            const res = await (params === undefined ? guiApi.mowglinext.callCreate(command, args) :
+                guiApi.mowglinext.callCreate(command, args, params))
             if (res.error) {
                 throw new Error(res.error.error)
             }
