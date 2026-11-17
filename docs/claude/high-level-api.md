@@ -207,7 +207,7 @@ The GUI's scheduler (`gui/pkg/providers/scheduler.go`) polls its `schedule:*` DB
 - GPS and the map-frame localizer keep running, and collision_monitor stays up — but it filters the **Nav2 lane only** (`cmd_vel_nav` → `cmd_vel_monitored`), so teleop bypasses it. Firmware safety and the hardware_bridge dig detector (on the merged `~/cmd_vel`) are the backstops
 - Exit with `COMMAND_STOP` (8) — the GUI's "Stop Manual" button; it halts in place and turns the blade off without driving to the dock
 
-> Protocol constants (`HL_MODE_*`) are manually mirrored in `firmware/stm32/ros_usbnode/include/mowgli_protocol.h` AND `ros2/src/mowgli_hardware/firmware/mowgli_protocol.h` — keep both in sync with `HighLevelStatus.msg` (see [`commands.md`](commands.md) → Code Generation Workflow).
+> Protocol constants (`HL_MODE_*`) are manually mirrored in `firmware/stm32/ros_usbnode/include/mowgli_protocol.h` and `ros2/src/mowgli_hardware/src/hardware_bridge_node.cpp` — keep both in sync with `HighLevelStatus.msg` (see [`commands.md`](commands.md) → Code Generation Workflow).
 
 ### DIG_OBSTRUCTION (repeat-dig escalation, Invariant 16)
 
