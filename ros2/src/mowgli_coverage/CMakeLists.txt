@@ -177,6 +177,14 @@ if(BUILD_TESTING)
     Fields2Cover::Fields2Cover
   )
 
+  # The planner's accelerations against their references: RingIndex vs
+  # pointInRing, nearest-first vs index-order least-cost choice.
+  ament_add_gtest(test_exact_acceleration test/test_exact_acceleration.cpp)
+  target_link_libraries(test_exact_acceleration
+    ${PROJECT_NAME}_core
+    Fields2Cover::Fields2Cover
+  )
+
   # Passive exact snapshots must not change the planner or connector output.
   ament_add_gtest(test_planning_trace test/replay/test_trace.cpp)
   target_link_libraries(test_planning_trace ${PROJECT_NAME}_core Fields2Cover::Fields2Cover)

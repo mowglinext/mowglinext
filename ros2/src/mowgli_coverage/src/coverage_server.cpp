@@ -928,6 +928,10 @@ void CoverageServer::planCoverage()
     // connector excursion is op_width/2 (~0.08 m) or more, well above it.
     constexpr double kBoundarySlackM = 0.05;
     const auto t_verify0 = now();
+    // Every pose is tested against these rings (pointInRing, indexed).
+    const RingIndex connector_index(connector_boundary);
+    const RingIndex outer_index(outer);
+    const std::vector<RingIndex> hole_index(plan.safe_holes.begin(), plan.safe_holes.end());
     std::size_t pivot_corners = 0;
     for (const auto& sub : subpaths)
     {
@@ -957,7 +961,7 @@ void CoverageServer::planCoverage()
         // connector left that envelope (the only way the blade/chassis can push
         // past the perimeter ring toward the operator boundary) — the
         // safety-relevant residual to surface, not merely outside the raw polygon.
-        if (connector_boundary.size() >= 3 && !pointInRing(x, y, connector_boundary) &&
+        if (connector_boundary.size() >= 3 && !connector_index.contains(x, y) &&
             distanceToRing(x, y, connector_boundary) > kBoundarySlackM)
         {
           ++out_of_bounds;
@@ -972,7 +976,7 @@ void CoverageServer::planCoverage()
           for (const double s : {robot_half, -robot_half})
           {
             const double fx = x + s * nx, fy = y + s * ny;
-            if (!pointInRing(fx, fy, outer) && distanceToRing(fx, fy, outer) > kBoundarySlackM)
+            if (!outer_index.contains(fx, fy) && distanceToRing(fx, fy, outer) > kBoundarySlackM)
             {
               ++footprint_out;
               break;
@@ -986,9 +990,9 @@ void CoverageServer::planCoverage()
         // ends exactly there, where ray casting is ambiguous (the 2026-09-21
         // lawn: 35 false "inside" ends, 0 beyond 1 mm).
         constexpr double kOnHoleEdgeM = 0.001;
-        for (const auto& hole : plan.safe_holes)
+        for (const auto& hole : hole_index)
         {
-          if (pointInRing(x, y, hole) && distanceToRing(x, y, hole) > kOnHoleEdgeM)
+          if (hole.contains(x, y) && distanceToRing(x, y, hole.ring()) > kOnHoleEdgeM)
           {
             ++in_hole;
             break;

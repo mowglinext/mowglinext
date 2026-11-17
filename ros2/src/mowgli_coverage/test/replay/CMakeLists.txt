@@ -40,6 +40,10 @@ if(NOT REPLAY_BASELINE)
   add_executable(test_replay_trace test_trace.cpp)
   target_link_libraries(test_replay_trace PRIVATE replay_planner GTest::gtest_main)
   add_test(NAME test_replay_trace COMMAND test_replay_trace)
+  # Planner accelerations vs their references (not in a pre-RingIndex baseline).
+  add_executable(test_exact_acceleration "${PLANNER_TEST_ROOT}/test_exact_acceleration.cpp")
+  target_link_libraries(test_exact_acceleration PRIVATE replay_planner GTest::gtest_main)
+  add_test(NAME test_exact_acceleration COMMAND test_exact_acceleration)
 endif()
 add_test(NAME replay_runner_unit COMMAND "${Python3_EXECUTABLE}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test_runner.py")
