@@ -389,6 +389,27 @@ Retained `"online"` (published once connected, and again on every reconnect) or 
 clean shutdown). Plain text, not JSON. Subscribe to this to distinguish "mower offline" from "mower
 online but silently stuck" — the latter still updates `<prefix>/diagnostics`/`<prefix>/status`.
 
+### Client IDs and reconnection
+
+A broker keeps one session per MQTT client ID and drops the older one when a second client connects
+with the same ID. Each robot therefore needs its own `mqtt_topic_prefix` on a shared broker, and the
+client IDs follow from it:
+
+- the bridge connects as `mowglinext_<prefix>_<hash>_bridge`, the GUI's schedule client
+  (`<prefix>/schedules`) as `mowglinext_<prefix>_<hash>_gui`. `<prefix>` is `mqtt_topic_prefix`
+  with every byte other than `[A-Za-z0-9_-]` replaced by `_` and cut to 32 bytes; `<hash>` is the
+  FNV-1a 32-bit hash of the unmodified prefix, as 8 lowercase hex digits, so `a/b` and `a_b` still
+  differ. Prefix `mowgli` gives `mowglinext_mowgli_059db5cc_bridge`;
+- a non-empty `mqtt_client_id` in the package-share `mqtt_bridge.yaml` replaces the bridge's derived
+  ID; it must then be unique on the broker. A broker ACL keyed on the former fixed IDs
+  (`mowgli_ros2`, `mowgli-gui-schedules`) needs the new ones;
+- the bridge logs its client ID at startup and on every reconnect attempt.
+
+While disconnected, the bridge retries at once, then after 1, 2, 4… s, up to one attempt every 30 s.
+The wait returns to 1 s only after a connection has held for 30 s, so a session the broker keeps
+closing (an ID still in use elsewhere, refused credentials) is retried at most every 30 s. The GUI's
+schedule client reconnects through paho's own retry.
+
 ### `<prefix>/command` (inbound)
 
 Payload is an **ASCII decimal integer string**, e.g. `"1"` — **not a raw byte**. The entire payload
@@ -731,7 +752,7 @@ Read once at startup (`ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt
 | `mqtt_topic_prefix` | `mowgli` | `mqtt_topic_prefix` |
 | `use_ssl` | `false` | `mqtt_use_ssl` |
 | `home_assistant_discovery_enabled` | `false` | `mqtt_home_assistant_discovery_enabled` |
-| `mqtt_client_id` | `mowgli_ros2` | package-share `mqtt_bridge.yaml` only (not on the GUI) |
+| `mqtt_client_id` | `""` = `mowglinext_<prefix>_<hash>_bridge`, derived from `mqtt_topic_prefix` (see [Client IDs and reconnection](#client-ids-and-reconnection)) | package-share `mqtt_bridge.yaml` only (not on the GUI); a non-empty value is used as is |
 | `publish_rate` | `1.0` Hz | package-share `mqtt_bridge.yaml` only — the rate cap for position/gps/pose/status/power/rtk_status. The MQTT network loop runs on its own fixed 50 ms timer, independent of this |
 | `state_heartbeat_period_s` | `10.0` s (clamped to 1–3600) | package-share `mqtt_bridge.yaml` only — how often an UNCHANGED emergency/high_level_status/status/power/rtk_status payload is resent; a change is sent at once |
 | `position_deadband_m` | `0.2` m (clamped to 0–100) | package-share `mqtt_bridge.yaml` only — movement that publishes position/pose/gps (gps: lat/lon distance, equirectangular); position/pose also publish on a turn > 5° |
