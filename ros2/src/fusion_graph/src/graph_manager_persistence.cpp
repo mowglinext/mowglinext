@@ -133,6 +133,8 @@ void GraphManager::ResetLocked()
 
   accum_.Reset();
   slip_window_.Clear();
+  bias_still_since_s_.reset();
+  wheel_stationary_now_ = false;
   queue_ = UnaryQueue{};
 
   latest_.reset();

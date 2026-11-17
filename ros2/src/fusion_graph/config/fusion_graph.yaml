@@ -181,6 +181,10 @@ fusion_graph_node:
     gyro_bias_estimation_enabled: true
     gyro_bias_ema_tau_s: 30.0
     gyro_bias_max_sample_rad_per_s: 0.10
+    # Learn the bias only after the encoders reported NO motion for this long:
+    # the stationary-snap gate admits slow real rotation (pivot ends, slow
+    # corner approaches), which the EMA used to learn as bias.
+    gyro_bias_min_still_s: 1.0
 
     # ── Full IMU preintegration (joint bias optim, item #3 final) ────
     # When true, replaces the EMA bias path with a per-node bias
