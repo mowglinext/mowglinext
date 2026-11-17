@@ -371,6 +371,9 @@ def generate_launch_description() -> LaunchDescription:
                 'quality_pattern': ParameterValue(
                     LaunchConfiguration('gps_quality_pattern'), value_type=str
                 ),
+                # One captured native 20 ms step of scheduling allowance.
+                # Consumer future-provenance rejection remains unchanged.
+                "delivery_latency_s": 0.020,
                 "noise_seed": 42,
             }
         ],
