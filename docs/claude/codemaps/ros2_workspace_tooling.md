@@ -44,7 +44,7 @@
 | `ros2/foxglove/mowgli_sim.json` | 505 | Foxglove Studio layout (3D + plots + CallService/Publish panels) |
 | **ros2/src/ (harness scripts, not packages)** | | |
 | `ros2/src/e2e_test.py` | 1648 | LiDAR sim E2E: undock→plan→mow→dock + manual-mow, area-recording, emergency-reset feature tests; 13 PASS/FAIL criteria |
-| `ros2/src/e2e_test_no_lidar.py` | 505 | GPS-only sim E2E: waits for `map→base_link` TF, START, median path deviation < 10 cm gate; exit code 0/1 |
+| `ros2/src/e2e_test_no_lidar.py` | 505 | GPS-only sim E2E: waits for `map→base_link` TF, START, then requires the whole undock→plan→mow→dock cycle (docked and charging) plus the path-deviation gate; exit code 0/1, also on SIGTERM; unit-tested by `mowgli_simulation/test/test_e2e_no_lidar.py` |
 | `ros2/src/precision_monitor.py` | 309 | Publishes `/precision/*` Float64 metrics at 2 Hz for Foxglove plots (subscribes `/gps/pose_sim`, which nothing publishes) |
 | **ros2/scripts/ — workspace helpers (bash)** | | |
 | `ros2/scripts/build.sh` | 98 | `colcon build --symlink-install` over `sync_workspace_packages.sh --print-base-paths`; cwd fixed to `/ros2_ws` |
@@ -98,7 +98,7 @@
 | `sim-stop` | `scripts/sim-stop.sh` |
 | `sim` | `sim-stop` then `ros2 launch mowgli_bringup sim_full_system.launch.py headless:=true use_rviz:=false` with `DISPLAY=:99` |
 | `e2e-test` | `sim-stop build` → launch sim in background → poll `ros2/scripts/wait_for_nav2_active.sh` for Nav2 lifecycle-active (kills sim, exits 1 on timeout — commit `09cbad2b`, replacing a fixed `sleep 90`) → `python3 src/e2e_test.py` → kill + `sim-stop`, exits with the test's code |
-| `e2e-test-no-lidar` | same with `use_lidar:=false simulate_gps_degradation:=false` and `src/e2e_test_no_lidar.py` |
+| `e2e-test-no-lidar` | same with `use_lidar:=false` and `src/e2e_test_no_lidar.py` |
 | `docker` / `docker-sim` | `docker build --target runtime\|simulation -t mowgli-ros2[-sim]:latest .` (context `ros2/` — **wrong context**, see Pitfalls) |
 | `lint` / `format` / `format-check` | cppcheck + cpplint / `clang-format -i` / `--dry-run --Werror` over `src/` (**includes** `opennav_coverage`, unlike `format.sh`) |
 | `deploy` | `rsync install/ pi@mowgli.local:/opt/mowgli_ros2/install/` + `sudo systemctl restart mowgli` |
@@ -143,8 +143,8 @@
 | `forward_1m_yaw_test.py` | `/odometry/filtered_map`, `/wheel_odom`, `/imu/data`, `/gps/fix` | `/cmd_vel_teleop`; `HighLevelControl` |
 | `coverage_ascii_render.py` | `/map_server_node/coverage_cells` (RELIABLE/VOLATILE depth 1), `/odometry/filtered_map` | — |
 | `robot_monitor.sh` | echoes `high_level_status`, `/gps/fix`, `/odometry/filtered_map`, `/map_server_node/coverage_cells`, `/map`; tf2_echo; service `/map_server_node/get_coverage_status` (typed `mowgli_interfaces/srv/GetCoverageStatus` — **no such .srv exists and no node advertises it; the call is dead**) | — |
-| `src/e2e_test.py` | `high_level_status`, `/coverage_planner_node/coverage_path`, `/wheel_odom`, `/odometry/filtered_map`, `/scan`, `/gps_degradation_sim/status`, `/map`, `/cmd_vel_smoothed`, `/cmd_vel` (`Twist`), `/map_server_node/boundary_violation` | `HighLevelControl` cmds 1/2/7/3/6; `/hardware_bridge/emergency_stop` (`mowgli_interfaces/srv/EmergencyStop`); `gz service /world/garden/{create/blocking,remove}` |
-| `src/e2e_test_no_lidar.py` | `high_level_status`, `/mowgli/coverage/path`, `/wheel_odom`, `/odometry/filtered_map`, `/cmd_vel` | `HighLevelControl` cmd 1 |
+| `src/e2e_test.py` | `high_level_status`, `/coverage_planner_node/coverage_path`, `/wheel_odom`, `/odometry/filtered_map`, `/scan`, `/gps_degradation_sim/status`, `/map`, `/scan_collision`, `/cmd_vel` (`TwistStamped`), `/map_server_node/boundary_violation` | `HighLevelControl` cmds 1/2/7/3/6; `/hardware_bridge/emergency_stop` (`mowgli_interfaces/srv/EmergencyStop`); `gz service /world/garden/{create/blocking,remove}` |
+| `src/e2e_test_no_lidar.py` | `high_level_status`, `/coverage/full_plan`, `/wheel_odom`, `/odometry/filtered_map`, `/cmd_vel` (`TwistStamped`) | `HighLevelControl` cmd 1 |
 | `src/precision_monitor.py` | `/wheel_odom`, `/gps/pose_sim`, `/scan`, `/map` (TRANSIENT_LOCAL), `/cmd_vel` | `/precision/gps_error_m`, `/precision/wheel_odom_speed`, `/precision/lidar_scan_count`, `/precision/lidar_min_range`, `/precision/map_known_pct`, `/precision/localization_quality` (`std_msgs/Float64`, 2 Hz) |
 
 ### Foxglove layout (`ros2/foxglove/mowgli_sim.json`)

@@ -48,7 +48,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
-from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, TwistStamped
 from nav_msgs.msg import Path, OccupancyGrid, Odometry
 from std_msgs.msg import Bool
 from sensor_msgs.msg import LaserScan
@@ -58,6 +58,11 @@ from mowgli_interfaces.msg import GnssStatus, HighLevelStatus
 WEBOTS_TEST_OBSTACLE_X = 3.0
 WEBOTS_TEST_OBSTACLE_Y = 1.5
 WEBOTS_LIDAR_YAW_IN_BASE_RAD = math.pi
+COLLISION_DISTANCE_M = 0.15
+CLOSE_CALL_DISTANCE_M = 0.30
+# A collision scan older than this at report time means the safety scan stopped
+# arriving, so the run proves nothing about collisions.
+COLLISION_SCAN_STALE_S = 10.0
 OBSTACLE_ENCOUNTER_RADIUS_M = 1.5
 OBSTACLE_DETECTION_MARGIN_M = 0.35
 OBSTACLE_DEPARTURE_TRAVEL_M = 0.5
@@ -96,6 +101,8 @@ class Metrics:
     coverage_path_len: int = 0
     coverage_path_poses: list = field(default_factory=list)
     min_obstacle_dist: list = field(default_factory=list)
+    collision_scans: int = 0
+    collision_scan_last_t: float = 0.0
     swath_count: int = 0
     completed_swaths: int = 0
     skipped_swaths: int = 0
@@ -157,6 +164,45 @@ def _mowing_efficiency(planned_distance: float, actual_distance: float) -> float
 
 def _obstacle_test_passed(result: Optional[str]) -> bool:
     return result == "PASS"
+
+
+def _collision_criterion(
+    scans_received: int,
+    last_scan_age_s: float,
+    samples: list,
+) -> tuple[bool, list[str]]:
+    """Score the filtered collision scan; return (passed, report lines).
+
+    ``samples`` are the (t, nearest return) pairs recorded while the scan had
+    valid returns. A scan with no return in range is a legitimate free-space
+    result, but a run that never received a scan, or whose scan stopped
+    arriving, has not been evaluated and must not pass.
+    """
+    if scans_received == 0:
+        return False, ["  FAIL: no /scan_collision data received — collisions not evaluated"]
+    if last_scan_age_s > COLLISION_SCAN_STALE_S:
+        return False, [
+            f"  FAIL: /scan_collision went silent {last_scan_age_s:.0f}s before the "
+            "end of the run — collisions not evaluated"
+        ]
+    if not samples:
+        return True, [f"  PASS: {scans_received} scans received, no returns in range"]
+
+    distances = [d for _, d in samples]
+    collision_events = sum(1 for d in distances if d < COLLISION_DISTANCE_M)
+    close_calls = sum(
+        1 for d in distances if COLLISION_DISTANCE_M <= d < CLOSE_CALL_DISTANCE_M
+    )
+    lines = [
+        f"  Closest approach: {min(distances):.3f} m",
+        f"  Collision events (<15cm): {collision_events}",
+        f"  Close calls (15-30cm):    {close_calls}",
+    ]
+    if collision_events > 0:
+        lines.append(f"  FAIL: {collision_events} potential collision(s)")
+        return False, lines
+    lines.append("  PASS: no collisions")
+    return True, lines
 
 
 class E2ETestNode(Node):
@@ -243,11 +289,9 @@ class E2ETestNode(Node):
         self.create_subscription(
             OccupancyGrid, "/map", self._on_map, reliable_qos
         )
+        # twist_mux output, TwistStamped in production and in the Webots sim.
         self.create_subscription(
-            Twist, "/cmd_vel_smoothed", self._on_cmd_vel, sensor_qos
-        )
-        self.create_subscription(
-            Twist, "/cmd_vel", self._on_cmd_vel_out, sensor_qos
+            TwistStamped, "/cmd_vel", self._on_cmd_vel, sensor_qos
         )
         self.create_subscription(
             Bool, "/map_server_node/boundary_violation", self._on_boundary_violation, reliable_qos
@@ -546,6 +590,8 @@ class E2ETestNode(Node):
     def _on_collision_scan(self, msg: LaserScan):
         self._latest_collision_scan = msg
         t = time.time() - self.metrics.start_time
+        self.metrics.collision_scans += 1
+        self.metrics.collision_scan_last_t = t
         valid_ranges = [
             r for r in msg.ranges
             if msg.range_min < r < msg.range_max and not math.isinf(r)
@@ -590,15 +636,15 @@ class E2ETestNode(Node):
                 "simulator ground truth against the unchanged mowing polygon"
             )
 
-    def _on_cmd_vel_out(self, msg: Twist):
-        self._last_cmd_vel_x = msg.linear.x
-
-    def _on_cmd_vel(self, msg: Twist):
+    def _on_cmd_vel(self, msg: TwistStamped):
+        self._last_cmd_vel_x = msg.twist.linear.x
         t = time.time() - self.metrics.start_time
         if len(self.metrics.cmd_vels) == 0 or (
             t - self.metrics.cmd_vels[-1][0] > 0.5
         ):
-            self.metrics.cmd_vels.append((t, msg.linear.x, msg.angular.z))
+            self.metrics.cmd_vels.append(
+                (t, msg.twist.linear.x, msg.twist.angular.z)
+            )
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -1421,20 +1467,10 @@ class E2ETestNode(Node):
 
         # ── Obstacle Proximity ──
         report.append("\n=== Obstacle Proximity ===")
-        collision_pass = True
-        if obs:
-            all_obs = [d for _, d in obs]
-            min_ever = min(all_obs)
-            collision_events = sum(1 for d in all_obs if d < 0.15)
-            close_calls = sum(1 for d in all_obs if 0.15 <= d < 0.30)
-            report.append(f"  Closest approach: {min_ever:.3f} m")
-            report.append(f"  Collision events (<15cm): {collision_events}")
-            report.append(f"  Close calls (15-30cm):    {close_calls}")
-            if collision_events > 0:
-                report.append(f"  FAIL: {collision_events} potential collision(s)")
-                collision_pass = False
-            else:
-                report.append("  PASS: no collisions")
+        collision_pass, collision_lines = _collision_criterion(
+            m.collision_scans, t - m.collision_scan_last_t, obs
+        )
+        report.extend(collision_lines)
 
         # ── Boundary Violations ──
         report.append("\n=== Boundary Violations ===")

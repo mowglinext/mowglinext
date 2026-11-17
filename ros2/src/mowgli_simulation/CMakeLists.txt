@@ -135,6 +135,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_e2e_ground_truth
     test/test_e2e_ground_truth.py
   )
+  ament_add_pytest_test(test_e2e_no_lidar
+    test/test_e2e_no_lidar.py
+  )
   ament_add_pytest_test(test_nav2_readiness_gate
     test/test_nav2_readiness_gate.py
   )
