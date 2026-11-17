@@ -220,8 +220,9 @@ bool AuthorizedTransitPlanner::costSegmentClear(transit::Point a,
   std::sort(ts.begin(), ts.end());
   for (std::size_t i = 0; i < ts.size(); ++i)
   {
-    for (double t : {ts[i], i ? (ts[i - 1] + ts[i]) / 2 : ts[i]})
+    for (std::size_t step = 0; step < (i ? 2U : 1U); ++step)
     {
+      const double t = step ? (ts[i - 1] + ts[i]) / 2 : ts[i];
       const auto p = transit::interpolate(a, b, t);
       unsigned x, y;
       if (!private_map_.worldToMap(p.x, p.y, x, y) || private_map_.getCost(x, y) >= 253)
@@ -528,8 +529,11 @@ nav_msgs::msg::Path AuthorizedTransitPlanner::createPlan(
     const auto width = private_map_.getSizeInCellsX();
     private_map_.mapToWorld(a % width, a / width, p.x, p.y);
     private_map_.mapToWorld(b % width, b / width, q.x, q.y);
-    return geometry.segmentAuthorized(p, q, geometry_cuts) &&
-           geometry.segmentClear(p, q, geometry_cuts) && costSegmentClear(p, q, cost_cuts);
+    if (!costSegmentClear(p, q, cost_cuts))
+      return false;
+    return (authorization[a] > 1 && authorization[b] > 1) ||
+           (geometry.segmentAuthorized(p, q, geometry_cuts) &&
+            geometry.segmentClear(p, q, geometry_cuts));
   };
   struct ResetContext
   {

@@ -24,7 +24,8 @@
 | Save / clear services, auto-checkpoints | `fusion_graph_node_setup_comms.cpp:205-270`; `DispatchAsyncSave` `callbacks_b.cpp:363`; `OnHighLevelStatus` :276; `OnPeriodicSaveTimer` `misc.cpp:126` |
 | map→odom anchor, odom re-base (opt-in, off), TF thread | `src/fusion_graph_node_publish.cpp` (`PublishOutputs`, `TfBroadcastLoop`); anchor capture/revision + optional re-base `fusion_graph_node_timer.cpp` `OnTimer`. The never-wired slew limiter (`anchor_slew.hpp`, `anchor_*` params) was removed 2026-11 |
 | Published covariance frame (body→map) | `fusion_graph_node_publish.cpp:183` + `include/fusion_graph/covariance_frame.hpp`; `test_covariance_frame.cpp` |
-| Sliding-window cap / iSAM2 rebase (node and successful-update budget) | `src/graph_manager_rebase.cpp` `RebaseISAM2` + `BuildRebaseGraph` (window re-linked by odometry-strength between-factors from the estimate, ONE absolute prior = the head's full marginal; independent 5 cm priors only as fallback); maintenance timer `setup_comms.cpp`; `test_graph_window.cpp`, `test_graph_corrections.cpp` |
+| Sliding-window cap / iSAM2 rebase (node and successful-update budget) | `src/graph_manager_rebase.cpp` `RebaseISAM2` + `BuildRebaseGraph` (window re-linked by odometry-strength between-factors from the estimate, ONE absolute prior = the head's full marginal; independent 5 cm priors only as fallback); maintenance timer `setup_comms.cpp`; `test_graph_window.cpp`, `test_graph_corrections.cpp`. Window rebuilds that still add independent priors (the rebase fallback, `RigidTransformAll`, `Load`) add them via `AddPosePriorTree` (`factors.hpp` `LinkedPosePriorFactor`: zero-Jacobian links → 26 Bayes-tree roots instead of one per pose; same model; `use_imu_preint` bias priors not linked) — `test_window_prior_tree.cpp` |
+| CPU / memory benchmark (synthetic mowing session, ROS-free) | `tools/bench/bench_graph_session.cpp` (+ standalone `tools/bench/CMakeLists.txt`); `--compare` diffs two dumps exactly; `--faults SEED` adds a seeded fault stream through OnGnss's gates plus the lifecycle calls (rebase, rigid re-pin, save/load, clear) |
 | LiDAR map anchor (scan-to-MAP localisation for complete GNSS outages): grid, gate, particle filter, per-estimate trust, shadow mode | `src/fusion_graph_node_lidar_anchor.cpp` (RTK-only map learning, any-usable-GNSS outage age, warm-up, verdicts, `/fusion_graph/lidar_anchor_candidate`); pure pieces `include/fusion_graph/lidar_occupancy_mapper.hpp` (log-odds grid, `ScoreScan`, `ImportCells`), `lidar_map_anchor_gate.hpp` (RTK-age mapping hysteresis), `lidar_compute_gate.hpp` (outage warm-up / compute cadence), `lidar_anchor_decision.hpp` (seed/reference/application decisions), `lidar_anchor_validator.hpp` (score / spread / dead-reckoning gates); params `setup_params.cpp` (`use_lidar_map_anchor`, `lidar_anchor_*`, `lidar_map_*`); graph consumer `graph_manager_node.cpp` (`PoseTranslationPrior`, XY only) |
 | Replaying a bag through the node on a laptop (reproduce a field failure) | `ros2/src/fusion_graph/tools/replay/README.md` |
 | LiDAR anchor map persistence / reset | persisted as tiles under `<graph_save_prefix>.lidartiles`; `src/lidar_submap_store.cpp` + `include/fusion_graph/lidar_submap_store.hpp`; legacy `.lidarmap` import remains only for migration; `~/clear_lidar_map` wipes the tiles, local window and filter. Continuous filter odometry: `lidar_anchor_odom.hpp` |
@@ -45,7 +46,7 @@
 | `.../fusion_graph_node_util.hpp` | 60 | `YawFromQuat`, `QuatFromYaw`, `ForwardStampPose`, `kEarthRadius` |
 | `.../graph_manager.hpp` | 582 | `GraphManager` API, `TickOutput`, `GraphStats`, accumulator/queue structs |
 | `.../graph_params.hpp` | 373 | `GraphParams` aggregate + `kTunedNodePeriodS` (0.04) / `kMinWheelSigmaM` |
-| `.../factors.hpp` | 160 | `GnssLeverArmFactor`, `GyroPreintFactor`, `YawUnaryFactor`, `WrapAngle` |
+| `.../factors.hpp` | 210 | `GnssLeverArmFactor`, `GyroPreintFactor`, `YawUnaryFactor`, `LinkedPosePriorFactor` + `AddPosePriorTree`, `WrapAngle` |
 | `.../slip_window.hpp` | 125 | Pure windowed slip veto: `SlipWindowNodes`, `SlipDetectedOverWindow`, `SlipWindow` |
 | `.../dr_slip_veto.hpp` | 79 | Pure DR slip veto + wheel yaw-rate quantum; shipped thresholds 0.44 / 0.15 rad/s |
 | `.../rtk_wrongfix_gate.hpp` | 57 | Pure `GpsJumpImplausible` + `ResetRtkWrongFixAccumulators` (reset on EVERY fix) |
@@ -93,6 +94,8 @@
 | `.../test_gyro_bias.cpp` | 198 | EMA bias converges when stationary, frozen when moving |
 | `.../test_graph_window.cpp` | | `max_graph_nodes` cap and estimate preservation across rebase |
 | `.../test_rigid_transform.cpp` | 60 | `RigidTransformAll` shifts the live trajectory by exactly the correction |
+| `.../test_one_hz_readers.cpp` | | `LiveNodeCount` / `GetAllPoses` report exactly the full `calculateEstimate()` through faults, rebase, rigid re-pin, save/load, clear; same failure on NaN |
+| `.../test_window_prior_tree.cpp` | | Prior tree shares one root (+25 plain), linearises like the plain prior and reproduces plain-prior iSAM2 bit for bit; every rebuild path (rebase ×2, rigid, load, reset); seeded fault injection (head pose + covariance exact; a deep pose merged into the linked root clique may differ by ≤ 4 ulp) |
 | `.../test_persistence.cpp` | 175 | Empty-graph Save/Load refused; non-empty round trip; datum cross-garden guard |
 | `.../test_dr_stationary.cpp` | | DR yaw hold thresholds and hand-rotation passthrough |
 | `.../test_graph_corrections.cpp` | | Rebase keeps head marginal + window linkage, `AnchorYaw`, retimed antenna point, preint after reload |

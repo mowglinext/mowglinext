@@ -76,6 +76,7 @@ FusionGraphNode::FusionGraphNode(const rclcpp::NodeOptions& opts)
   gp.gyro_bias_ema_tau_s = declare_parameter<double>("gyro_bias_ema_tau_s", 30.0);
   gp.gyro_bias_max_sample_rad_per_s =
       declare_parameter<double>("gyro_bias_max_sample_rad_per_s", 0.10);
+  gp.gyro_bias_min_still_s = declare_parameter<double>("gyro_bias_min_still_s", 1.0);
   // Full IMU preintegration with joint bias optimisation (opt-in).
   // When true, the EMA bias path is skipped and the graph carries a
   // per-node `bias` variable plus a GyroPreintFactor on each pair of

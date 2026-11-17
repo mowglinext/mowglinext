@@ -34,10 +34,12 @@
 
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -1845,4 +1847,158 @@ TEST_F(GetNextUnmowedAreaTest, FollowStripYieldsWhenItsAreaIsAssignedToAPeer)
       blackboard);
   EXPECT_EQ(tree2.tickOnce(), BT::NodeStatus::SUCCESS);
   EXPECT_EQ(ctx->fleet_yielded_areas.count(2u), 1u);
+}
+
+// PlanCoverageArea gives up its planner goal (a halt, or its handshake
+// timeout) before or after the planner answers: the goal must be cancelled
+// either way, or the planner keeps computing for nobody (#772). The planner
+// answers only when the test spins plan_executor.
+class PlanCoverageAreaAbandonTest : public GetNextUnmowedAreaTest
+{
+protected:
+  using Plan = mowgli_behavior::PlanCoverageArea::PlanCoverage;
+
+  void SetUp() override
+  {
+    GetNextUnmowedAreaTest::SetUp();
+    plan_node = rclcpp::Node::make_shared("plan_coverage_abandon_test_server");
+    action = rclcpp_action::create_server<Plan>(
+        plan_node,
+        "/plan_coverage",
+        [this](const auto&, const std::shared_ptr<const Plan::Goal>)
+        {
+          ++accepted;
+          return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+        },
+        [this](const auto&)
+        {
+          ++cancels;
+          return rclcpp_action::CancelResponse::ACCEPT;
+        },
+        // Keep the goal running like a planner still computing; a dropped
+        // handle would end it at once, leaving nothing to cancel.
+        [this](const std::shared_ptr<rclcpp_action::ServerGoalHandle<Plan>> handle)
+        {
+          running.push_back(handle);
+        });
+    plan_executor.add_node(plan_node);
+    executor.add_node(ctx->node);
+    factory.registerNodeType<mowgli_behavior::PlanCoverageArea>("PlanCoverageArea");
+    areas[0] = {"lawn", false};
+    tree = std::make_unique<BT::Tree>(factory.createTreeFromText(
+        "<root BTCPP_format=\"4\"><BehaviorTree ID=\"Test\"><PlanCoverageArea/>"
+        "</BehaviorTree></root>",
+        blackboard));
+  }
+
+  void TearDown() override
+  {
+    for (const auto& handle : running)
+    {
+      if (handle->is_canceling())
+      {
+        handle->canceled(std::make_shared<Plan::Result>());
+      }
+    }
+    plan_executor.remove_node(plan_node);
+    GetNextUnmowedAreaTest::TearDown();
+  }
+
+  /// Ticks until the area query is answered and the goal has left (RUNNING,
+  /// waiting for the planner). A discovery miss returns FAILURE before the
+  /// request, so it retries until RUNNING.
+  BT::NodeStatus dispatch()
+  {
+    BT::NodeStatus status = BT::NodeStatus::IDLE;
+    int running_ticks = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (running_ticks < 50 && std::chrono::steady_clock::now() < deadline)
+    {
+      status = tree->tickOnce();
+      running_ticks = status == BT::NodeStatus::RUNNING ? running_ticks + 1 : 0;
+      executor.spin_some();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return status;
+  }
+
+  /// Spins both sides until done() or 5 s.
+  bool pump(const std::function<bool()>& done)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!done() && std::chrono::steady_clock::now() < deadline)
+    {
+      plan_executor.spin_some();
+      executor.spin_some();
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return done();
+  }
+
+  rclcpp::Node::SharedPtr plan_node;
+  rclcpp::executors::SingleThreadedExecutor plan_executor;
+  rclcpp_action::Server<Plan>::SharedPtr action;
+  std::vector<std::shared_ptr<rclcpp_action::ServerGoalHandle<Plan>>> running;
+  std::size_t accepted = 0;
+  std::size_t cancels = 0;
+  std::unique_ptr<BT::Tree> tree;
+};
+
+TEST_F(PlanCoverageAreaAbandonTest, HaltBeforeThePlannerAnswersCancelsTheGoalOnAcceptance)
+{
+  ASSERT_EQ(dispatch(), BT::NodeStatus::RUNNING);
+  ASSERT_EQ(accepted, 0u) << "test precondition: the planner must not have answered yet";
+  tree->haltTree();
+  EXPECT_TRUE(pump(
+      [&]()
+      {
+        return cancels > 0;
+      }))
+      << "orphaned planner goal left running (accepted " << accepted << ")";
+}
+
+// The scenario #772 describes: the planner accepted the goal, then the node
+// is halted before its next tick reads the answer.
+TEST_F(PlanCoverageAreaAbandonTest, HaltAfterAcceptanceBeforeTheNextTickCancelsTheGoal)
+{
+  ASSERT_EQ(dispatch(), BT::NodeStatus::RUNNING);
+  ASSERT_TRUE(pump(
+      [&]()
+      {
+        return accepted == 1;
+      }));
+  // The answer reaches the node, which is not ticked again.
+  for (int i = 0; i < 20; ++i)
+  {
+    executor.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  tree->haltTree();
+  EXPECT_TRUE(pump(
+      [&]()
+      {
+        return cancels > 0;
+      }))
+      << "orphaned planner goal left running";
+}
+
+TEST_F(PlanCoverageAreaAbandonTest, HandshakeTimeoutCancelsAGoalAcceptedLater)
+{
+  ASSERT_EQ(dispatch(), BT::NodeStatus::RUNNING);
+  BT::NodeStatus status = BT::NodeStatus::RUNNING;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (status == BT::NodeStatus::RUNNING && std::chrono::steady_clock::now() < deadline)
+  {
+    status = tree->tickOnce();
+    executor.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_EQ(status, BT::NodeStatus::FAILURE) << "the 3 s goal handshake timeout";
+  ASSERT_EQ(accepted, 0u);
+  EXPECT_TRUE(pump(
+      [&]()
+      {
+        return cancels > 0;
+      }))
+      << "orphaned planner goal left running after the timeout";
 }
