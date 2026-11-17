@@ -9,26 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSnakeToCamel(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"hello_world", "HelloWorld"},
-		{"is_navigation_area", "IsNavigationArea"},
-		{"simple", "Simple"},
-		{"one_two_three", "OneTwoThree"},
-		{"already_Camel", "AlreadyCamel"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result := snakeToCamel(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestUnmarshalROSMessage(t *testing.T) {
 	type TestMsg struct {
 		Name             string

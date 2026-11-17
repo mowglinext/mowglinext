@@ -416,11 +416,6 @@ func (f *FleetProvider) Robots() ([]FleetRobot, error) {
 	return rows, nil
 }
 
-func snapshotRow(c *peerCache, now time.Time) (map[string]json.RawMessage, map[string]float64, *time.Time, bool) {
-	topics, ages, seen, online := c.snapshot(now)
-	return topics, ages, timePtr(seen), online
-}
-
 func timePtr(t time.Time) *time.Time {
 	if t.IsZero() {
 		return nil
