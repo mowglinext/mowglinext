@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0
 
 #include <gtest/gtest.h>
+#include <rcl/time.h>
 
 #define main sim_actuation_main_for_test
 #include "../src/sim_actuation_node.cpp"
@@ -22,6 +23,10 @@ struct SimActuationTestPeer
     auto msg = std::make_shared<geometry_msgs::msg::TwistStamped>();
     msg->twist.linear.x = vx;
     node.on_cmd_vel(msg);
+  }
+  static FirmwareWheelState state(const SimActuationNode& node)
+  {
+    return node.wheel_state_;
   }
   static void staleStatus(SimActuationNode& node)
   {
@@ -50,6 +55,15 @@ protected:
   rclcpp::executors::SingleThreadedExecutor executor;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr sub;
   double output{NAN};
+  int64_t sim_ns{20'000'000'000};
+  virtual bool modelEnabled() const
+  {
+    return false;
+  }
+  void setTime()
+  {
+    ASSERT_EQ(rcl_set_ros_time_override(node->get_clock()->get_clock_handle(), sim_ns), RCL_RET_OK);
+  }
   static void SetUpTestSuite()
   {
     rclcpp::init(0, nullptr);
@@ -62,9 +76,12 @@ protected:
   {
     rclcpp::NodeOptions options;
     options.use_intra_process_comms(true);
-    options.parameter_overrides({rclcpp::Parameter("deadband_enabled", false)});
+    options.parameter_overrides({rclcpp::Parameter("deadband_enabled", modelEnabled()),
+                                 rclcpp::Parameter("use_sim_time", true)});
     node = std::make_shared<SimActuationNode>(options);
     Peer::cancelTimer(*node);
+    ASSERT_EQ(rcl_enable_ros_time_override(node->get_clock()->get_clock_handle()), RCL_RET_OK);
+    setTime();
     sub = node->create_subscription<geometry_msgs::msg::TwistStamped>(
         "/cmd_vel_wheels",
         rclcpp::SystemDefaultsQoS(),
@@ -81,6 +98,8 @@ protected:
   double tick()
   {
     output = NAN;
+    sim_ns += 20'000'000;
+    setTime();
     Peer::tick(*node);
     executor.spin_some();
     EXPECT_TRUE(std::isfinite(output));
@@ -124,5 +143,50 @@ TEST_F(SimPrecision, ExpiredStatusAndCommandReduceOutputToExactZero)
   EXPECT_DOUBLE_EQ(input(.03), .03);
   Peer::staleCommand(*node);
   EXPECT_DOUBLE_EQ(tick(), 0.0);
+}
+class SimPrecisionWheelModel : public SimPrecision
+{
+  bool modelEnabled() const override
+  {
+    return true;
+  }
+};
+
+TEST_F(SimPrecisionWheelModel, NewAutonomyCannotRunCreepInThePrecedingManualInterval)
+{
+  Peer::input(*node, .03);  // manual/no-status guard keeps this at zero
+  sim_ns += 200'000'000;  // no executor tick during this old-mode interval
+  setTime();
+  Peer::report(*node, Status::HIGH_LEVEL_STATE_AUTONOMOUS);
+  (void)tick();  // only this next 20ms interval is autonomous
+  FirmwareWheelState expected;
+  FirmwareWheelModelParams params;
+  double vx, wz;
+  step_firmware_wheel_model(.03, 0, .02, params, expected, vx, wz);
+  const auto actual = Peer::state(*node);
+  EXPECT_DOUBLE_EQ(actual.left_pi_int_pwm, expected.left_pi_int_pwm);
+  EXPECT_DOUBLE_EQ(actual.right_pi_int_pwm, expected.right_pi_int_pwm);
+  EXPECT_DOUBLE_EQ(output, vx);
+}
+
+TEST_F(SimPrecisionWheelModel, RevocationDoesNotEraseAlreadyElapsedAutonomousModelSteps)
+{
+  Peer::report(*node, Status::HIGH_LEVEL_STATE_AUTONOMOUS);
+  Peer::input(*node, .03);
+  (void)tick();
+  sim_ns += 200'000'000;
+  setTime();
+  Peer::report(*node, Status::HIGH_LEVEL_STATE_IDLE);
+  FirmwareWheelState expected;
+  FirmwareWheelModelParams params;
+  double vx, wz;
+  for (int i = 0; i < 11; ++i)
+    step_firmware_wheel_model(.03, 0, .02, params, expected, vx, wz);
+  const auto actual = Peer::state(*node);
+  EXPECT_DOUBLE_EQ(actual.left_pi_int_pwm, expected.left_pi_int_pwm);
+  EXPECT_DOUBLE_EQ(actual.left_actual_mps, expected.left_actual_mps);
+  // The next interval observes the new mode and clamps the low command.
+  step_firmware_wheel_model(0, 0, .02, params, expected, vx, wz);
+  EXPECT_DOUBLE_EQ(tick(), vx);
 }
 }  // namespace mowgli_simulation
