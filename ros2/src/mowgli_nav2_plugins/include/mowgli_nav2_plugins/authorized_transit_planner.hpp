@@ -58,7 +58,8 @@ public:
     candidates.reserve(8);  // Node2D has at most eight grid neighbors.
     Node2D::getNeighbors(bridge, collision_checker, unknown, candidates);
     for (auto* candidate : candidates)
-      if (edge_allowed && edge_allowed(getIndex(), candidate->getIndex()))
+      if (!candidate->wasVisited() && edge_allowed &&
+          edge_allowed(getIndex(), candidate->getIndex()))
         neighbors.push_back(static_cast<TransitNode*>(candidate));
   }
 };

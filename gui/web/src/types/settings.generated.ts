@@ -216,6 +216,7 @@ export interface SettingsValues {
     yaw_goal_tolerance?: number | null;
     coverage_xy_tolerance?: number | null;
     progress_timeout_sec?: number | null;
+    transit_planning_timeout_sec?: number | null;
     boundary_inner_margin_m?: number | null;
     dock_inner_margin_exempt_radius_m?: number | null;
     obstacle_transit_margin_m?: number | null;

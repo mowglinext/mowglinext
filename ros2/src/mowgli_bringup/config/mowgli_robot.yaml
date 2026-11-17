@@ -1141,6 +1141,11 @@ mowgli:
     # obstacle-deviation + reverse-escape, not this timer, so the longer wait is
     # a coverage-completeness gain, not a safety regression.
     progress_timeout_sec: 30.0     # seconds without progress before a strip is aborted+skipped
+    # Feeds planner_server GridBased.max_planning_time (AuthorizedTransitPlanner)
+    # and BoundaryRecovery.max_planning_time via navigation.launch.py, clamped to
+    # [1.0, 60.0] s. Raise this on multi-zone gardens if return-to-dock or
+    # cross-zone transit path calculation times out on the 8.0 s budget.
+    transit_planning_timeout_sec: 8.0
 
     # -----------------------------------------------------------------
     # WS2812 status ring (mowgli_leds)

@@ -291,7 +291,7 @@ struct Geometry
                        allowed.end(),
                        [&](const auto& r)
                        {
-                         return inside(p, r);
+                         return !remoteRing(p, p, r, kEpsilon) && inside(p, r);
                        });
   }
   /// authorized(), or within `tolerance` of an allowed ring. COVERAGE ENTRY ONLY
@@ -315,7 +315,8 @@ struct Geometry
   bool clear(Point p) const
   {
     for (std::size_t i = 0; i < blocked.size(); ++i)
-      if (ringDistance(p, blocked[i]) <= margin(i) + kEpsilon)
+      if (!remoteRing(p, p, blocked[i], margin(i) + kEpsilon) &&
+          ringDistance(p, blocked[i]) <= margin(i) + kEpsilon)
         return false;
     return true;
   }

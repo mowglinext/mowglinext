@@ -435,6 +435,7 @@ def generate_launch_description() -> LaunchDescription:
     # (normally the mowgli_robot.yaml template supplies it — default 30.0, see
     # #396). Kept equal to that default so the effective timeout is one number.
     progress_timeout_sec = 30.0
+    transit_planning_timeout_sec = 8.0
     # num_headland_passes: 0 = auto (ceil(headland_width / tool_width)),
     # >0 forces exactly that many concentric perimeter rings, <0 = NONE (no
     # perimeter rings at all — the serpentine swaths mow to the boundary, #429).
@@ -616,6 +617,8 @@ def generate_launch_description() -> LaunchDescription:
         # forced the gate BELOW FTC's 0.50 m park distance and caused the stall).
         progress_timeout_sec = float(
             rt_rp.get("progress_timeout_sec", progress_timeout_sec))
+        transit_planning_timeout_sec = float(
+            rt_rp.get("transit_planning_timeout_sec", transit_planning_timeout_sec))
         dock_pose_yaw_sigma_rad = float(rt_rp.get(
             "dock_pose_yaw_sigma_rad", dock_pose_yaw_sigma_rad))
         enable_mag_cal = bool(rt_rp.get("enable_mag_cal", enable_mag_cal))
@@ -1071,6 +1074,18 @@ def generate_launch_description() -> LaunchDescription:
         # achieve required_movement_radius before declaring no-progress.
         pc = cs_params.setdefault("progress_checker", {})
         pc["movement_time_allowance"] = progress_timeout_sec
+
+        # Global transit planner timeout (AuthorizedTransitPlanner / BoundaryRecovery):
+        # clamped to [1.0, 60.0] s so an operator override can raise the 8.0 s
+        # budget on multi-zone gardens without starving A* or hanging indefinitely.
+        clamped_planning_timeout = min(
+            60.0, max(1.0, transit_planning_timeout_sec))
+        ps_params = (doc.setdefault("planner_server", {})
+                        .setdefault("ros__parameters", {}))
+        grid_based = ps_params.setdefault("GridBased", {})
+        grid_based["max_planning_time"] = clamped_planning_timeout
+        if "BoundaryRecovery" in ps_params:
+            ps_params["BoundaryRecovery"]["max_planning_time"] = clamped_planning_timeout
 
         # coverage_server (mowgli_coverage / Fields2Cover v3): the F2C
         # operation_width is the swath SPACING (Robot::setCovWidth). It must not
