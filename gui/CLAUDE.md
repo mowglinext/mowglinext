@@ -12,7 +12,7 @@ It must NOT own robot behaviour: no autonomy, no localizer, no TF, no *default* 
 | [`../docs/claude/ros-interfaces.md`](../docs/claude/ros-interfaces.md) | You need the real topic/service/QoS behind a GUI topic key or `call/:command` |
 | [`../docs/claude/parameters.md`](../docs/claude/parameters.md) | Adding/editing a settings field — which yaml key, its template default, whether a launch file injects it (`INERT` keys do nothing) |
 | [`../docs/claude/high-level-api.md`](../docs/claude/high-level-api.md) | Touching `HighLevelControl`/`HighLevelStatus` numbers, area recording, manual mowing, scheduler + IrriSense gate |
-| [`../docs/claude/testing-ci.md`](../docs/claude/testing-ci.md) | Before pushing — which of these suites CI actually gates (Go and Playwright: none) |
+| [`../docs/claude/testing-ci.md`](../docs/claude/testing-ci.md) | Before pushing — which of these suites CI actually gates (Go: `gui-ci.yml` `go-tests`; Playwright: only two specs) |
 | [`../docs/claude/commands.md`](../docs/claude/commands.md) | After changing a `.msg`/`.srv` — the full three-consumer codegen workflow |
 | [`../docs/claude/contributing.md`](../docs/claude/contributing.md) | Commit/branch/PR conventions and per-language style |
 | [`../docs/claude/codemaps/ci_repo_tooling.md`](../docs/claude/codemaps/ci_repo_tooling.md) | Editing `gui-ci.yml` / `gui-docker.yml` / `msg-codegen-drift.yml` |
