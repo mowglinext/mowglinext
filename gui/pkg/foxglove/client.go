@@ -822,17 +822,10 @@ func (c *Client) handleMessageData(data []byte) {
 	}
 
 	// Deserialize CDR → JSON.
-	result, err := DeserializeCDR(payload, ch.schema)
+	jsonData, err := deserializeCDRJSON(payload, ch.schema)
 	if err != nil {
 		logrus.WithError(err).WithField("topic", topic).
 			Debug("foxglove: CDR deserialization failed")
-		return
-	}
-
-	jsonData, err := json.Marshal(sanitizeJSONValue(result))
-	if err != nil {
-		logrus.WithError(err).WithField("topic", topic).
-			Debug("foxglove: JSON marshal failed")
 		return
 	}
 
