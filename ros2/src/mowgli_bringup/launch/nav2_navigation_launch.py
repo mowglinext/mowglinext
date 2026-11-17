@@ -55,7 +55,7 @@ def generate_launch_description():
         'bt_navigator',
         'waypoint_follower',
         'docking_server',
-        'coverage_server',     # opennav_coverage / Fields2Cover (F2C path planner)
+        'coverage_server',     # mowgli_coverage / Fields2Cover v3 (F2C path planner)
     ]
 
     remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]

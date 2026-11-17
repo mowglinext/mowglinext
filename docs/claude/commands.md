@@ -22,7 +22,7 @@ cd ros2 && make sim
 cd ros2 && make e2e-test
 cd ros2 && make e2e-test-no-lidar   # GPS-only variant (src/e2e_test_no_lidar.py)
 
-# Format C++ code (all of ros2/src, including the vendored opennav_coverage tree;
+# Format C++ code (all of ros2/src, including the vendored universal-gnss tree;
 # ./scripts/format.sh skips it and warns unless clang-format is 18.x — CI pins 18)
 cd ros2 && make format
 

@@ -49,14 +49,8 @@ git submodule update --init --recursive
 cd ros2
 source /opt/ros/lyrical/setup.bash
 source /opt/lyrical_vendor/local_setup.bash
-# Only opennav_coverage_msgs is used from the upstream submodule — the server
-# subpackages are not built here (CI does the same).
-for p in opennav_coverage opennav_coverage_bt opennav_coverage_demo \
-         opennav_coverage_navigator opennav_row_coverage; do
-  touch "src/opennav_coverage/$p/COLCON_IGNORE"
-done
 rosdep install --from-paths src --ignore-src --rosdistro lyrical -y \
-  --skip-keys "grid_map_core grid_map_ros grid_map_msgs beluga_ros nav2_smac_planner webots_ros2_driver opennav_coverage opennav_coverage_bt opennav_coverage_demo opennav_coverage_navigator opennav_row_coverage"
+  --skip-keys "grid_map_core grid_map_ros grid_map_msgs beluga_ros nav2_smac_planner webots_ros2_driver"
 colcon build
 colcon test
 ```

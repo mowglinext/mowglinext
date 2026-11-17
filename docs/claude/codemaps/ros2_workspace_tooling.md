@@ -1,19 +1,19 @@
 # Codemap: ros2_workspace_tooling
 
-> Workspace-level tooling around the ROS2 stack: `ros2/Makefile` + `ros2/scripts/` (link / build / test / sim / format / deploy helpers, field-calibration and diagnostic scripts, the config-drift CI gate, the mow-session recorder), the multi-stage production `ros2/Dockerfile` (plus the orphaned `Dockerfile.dev`), the bare-metal `systemd` unit, the Foxglove layout, the two sim E2E harnesses under `ros2/src/`, and the two git submodules (`opennav_coverage`, `universal-gnss`). It owns HOW the workspace is linked, built, imaged and exercised — not the ROS nodes themselves. Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed. Loaded on demand from `ros2/CLAUDE.md`.
+> Workspace-level tooling around the ROS2 stack: `ros2/Makefile` + `ros2/scripts/` (link / build / test / sim / format / deploy helpers, field-calibration and diagnostic scripts, the config-drift CI gate, the mow-session recorder), the multi-stage production `ros2/Dockerfile` (plus the orphaned `Dockerfile.dev`), the bare-metal `systemd` unit, the Foxglove layout, the two sim E2E harnesses under `ros2/src/`, and the git submodules (`universal-gnss`, `mowglimavros`). It owns HOW the workspace is linked, built, imaged and exercised — not the ROS nodes themselves. Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed. Loaded on demand from `ros2/CLAUDE.md`.
 
 ## Where to look
 | Task | Start here |
 |------|------------|
 | Build the workspace (devcontainer) | `ros2/Makefile` `build-full` / `build-pkg PKG=x` / `build-dev` → `ros2/scripts/build.sh` (env `BUILD_TYPE`, `PACKAGES`, `PACKAGES_MODE=up-to\|select`, L51-83) |
-| Control which package roots colcon sees | `ros2/scripts/sync_workspace_packages.sh` — globs `ros2/src/mowgli_*/` (L129), links `fusion_graph` (L175-177), `tools/motor` as `mowgli_tools` (L179-180), `opennav_coverage_msgs`, `universal_gnss_msgs`, and `universal_gnss_ros2`; `--print-base-paths` feeds build/test |
+| Control which package roots colcon sees | `ros2/scripts/sync_workspace_packages.sh` — globs `ros2/src/mowgli_*/` (L129), links `fusion_graph` (L175-177), `tools/motor` as `mowgli_tools` (L179-180), `universal_gnss_msgs`, and `universal_gnss_ros2`; `--print-base-paths` feeds build/test |
 | Run unit tests | `make test` → `ros2/scripts/test.sh` (`PACKAGES` env; requires `/ros2_ws/install/setup.bash`) |
 | Run headless Webots sim / E2E | `ros2/Makefile` `sim` (L81), `e2e-test` (L91), `e2e-test-no-lidar` (L111); harnesses `ros2/src/e2e_test.py`, `ros2/src/e2e_test_no_lidar.py` |
 | Sim will not start ("Failed to find a free participant", Webots IPC socket) | `ros2/scripts/sim-stop.sh` — SIGINT `ros2 launch`, kills Webots + node stragglers, wipes `/dev/shm/cyclone*`, `/tmp/webots/*` (L60-64) |
 | Change the production image | `ros2/Dockerfile` stage table below; `.github/workflows/ros2-docker.yml` builds target `runtime` for amd64+arm64 |
 | Bump GTSAM / Fields2Cover / ublox_dgnss pins | `ros2/Dockerfile` L13-129 (GTSAM 4.3a1, F2C **v3 only** @ `884d895` — the v2.0.0 stage was removed entirely by the Lyrical migration, commit `7035a236`) and L142-168 (`UBLOX_DGNSS_REF/SHA`) **and** the mirrored recipes in `.github/workflows/ros2-ci.yml` (GTSAM + F2C cache keys) |
 | Add a new ROS package to the image | `ros2/Dockerfile` deps-stage `COPY … package.xml/CMakeLists.txt` list (L297-340); the sync script picks up `mowgli_*` automatically, non-`mowgli_*` names need an explicit link (see `fusion_graph`, L175-177) |
-| Format C++ | `make format` / `ros2/scripts/format.sh [--check]` (clang-format 18, style `ros2/.clang-format`, skips `opennav_coverage`); CI = `git-clang-format-18` on changed lines vs `origin/main` |
+| Format C++ | `make format` / `ros2/scripts/format.sh [--check]` (clang-format 18, style `ros2/.clang-format`, skips `*/external/*`); CI = `git-clang-format-18` on changed lines vs `origin/main` |
 | Lint C++ | `make lint` (cppcheck `--enable=all` + cpplint with `ros2/CPPLINT.cfg`); CI cppcheck is report-only on changed files |
 | Config drift / padded defaults CI failure | `ros2/scripts/check_config_drift.py` (`STRUCTURAL` L72, `USER_OVERRIDE` L90, `CALIBRATION_OUTPUT` L132, `INSTALL_SEED` L145) + `ros2/scripts/test_check_config_drift.py` |
 | Record a mowing / tuning session | `ros2/scripts/mow_session_monitor.py --session NAME [--output-dir DIR --rate HZ]` (copied to `/ros2_ws/scripts/` in the runtime image, Dockerfile L471); usage in `docs/claude/session-monitoring.md` |
@@ -26,7 +26,7 @@
 | GNSS receiver hardware probes | `ros2/scripts/f9p_set_nav_prio.py`, `serial_latency_probe.py` (u-blox F9P over `/dev/ttyACM0`), `unicore_signalgroup_benchmark.py --host … ` (UM982 over SSH) |
 | Foxglove panels for the sim | `ros2/foxglove/mowgli_sim.json` (copied to `/ros2_ws/foxglove/` in the simulation stage, Dockerfile L552) |
 | Bare-metal (non-Docker) robot deploy | `ros2/systemd/mowgli.service` + `make deploy` / `make backup-maps` (`ROBOT_HOST`, `ROBOT_USER`) |
-| Submodule pins | `.gitmodules` (`universal-gnss` → `https://github.com/Pepeuch/universal-gnss.git`, pinned by the MowgliNext gitlink to validated release commits; current pin `v0.7.4-rc5`; `opennav_coverage` → upstream `main`) |
+| Submodule pins | `.gitmodules` (`universal-gnss` → `https://github.com/Pepeuch/universal-gnss.git`, pinned by the MowgliNext gitlink to validated release commits; current pin `v0.7.4-rc5`; `mowglimavros` → `https://github.com/Pepeuch/mowglimavros.git`) |
 | Container startup env | `ros2/scripts/ros2_entrypoint.sh` (sources lyrical + `/opt/ublox_msgs` + `/ros2_ws/install`) |
 | Overlay library wins at runtime (#1121) | `ros2/scripts/check_vendor_overlay.sh` — run through the entrypoint in the runtime stage; fails the image build if a Nav2 consumer resolves an `/opt/lyrical_vendor`-overridden DSO (e.g. the #1058 `libnav2_costmap_2d_core.so`) to `/opt/ros/lyrical/lib`. Never preset `LD_LIBRARY_PATH`/`AMENT_PREFIX_PATH`/`CMAKE_PREFIX_PATH` to the overlay with `ENV` in `base`: ROS sourced afterwards then shadows it |
 
@@ -49,12 +49,12 @@
 | **ros2/scripts/ — workspace helpers (bash)** | | |
 | `ros2/scripts/build.sh` | 98 | `colcon build --symlink-install` over `sync_workspace_packages.sh --print-base-paths`; cwd fixed to `/ros2_ws` |
 | `ros2/scripts/test.sh` | 80 | `colcon test --return-code-on-test-failure` + `colcon test-result --verbose` |
-| `ros2/scripts/sync_workspace_packages.sh` | 201 | Symlinks package roots into `/ros2_ws/src`; `INCLUDE_OPENNAV_COVERAGE_STACK=1`, `UNIVERSAL_GNSS_PATH`, `MONOREPO_ROOT`, `WORKSPACE_ROOT` env |
+| `ros2/scripts/sync_workspace_packages.sh` | 201 | Symlinks package roots into `/ros2_ws/src`; `UNIVERSAL_GNSS_PATH`, `MONOREPO_ROOT`, `WORKSPACE_ROOT` env |
 | `ros2/scripts/ros2_entrypoint.sh` | 35 | Image ENTRYPOINT; hardcodes `/opt/ros/lyrical/setup.bash` (L15) |
 | `ros2/scripts/start_vnc.sh` | 64 | TigerVNC `:1` + noVNC `6080` + `sim_full_system.launch.py headless:=false`; compose `simulation-gui` command |
 | `ros2/scripts/start_dev_sim.sh` | 79 | `Dockerfile.dev`-only entry: first-run `build.sh`, VNC, `LAUNCH_FILE`/`LAUNCH_ARGS` env; echoes non-existent `make dev-*` targets (L63-66) |
 | `ros2/scripts/sim-stop.sh` | 66 | Graceful-then-SIGKILL stop of `ros2 launch`, Webots, listed node executables; DDS shm + Webots IPC cleanup |
-| `ros2/scripts/format.sh` | 40 | clang-format wrapper, `REQUIRED_MAJOR=18` (L12), excludes `*/opennav_coverage/*` (L27) |
+| `ros2/scripts/format.sh` | 40 | clang-format wrapper, `REQUIRED_MAJOR=18` (L12), excludes `*/external/*` |
 | `ros2/scripts/fix-copyright.sh` | 72 | Prepends the GPL header to staged `.cpp/.hpp/.h/.py` lacking one (pre-commit helper; not wired in `ros2/.pre-commit-config.yaml`) |
 | `ros2/scripts/robot_monitor.sh` | 251 | Host-side health dump via `docker exec mowgli-ros2` (containers, `high_level_status`, `/gps/fix`, TF chain, coverage service, sensor topics, error log grep) |
 | **ros2/scripts/ — CI gates & config tooling (python)** | | |
@@ -100,7 +100,7 @@
 | `e2e-test` | `sim-stop build` → launch sim in background → poll `ros2/scripts/wait_for_nav2_active.sh` for Nav2 lifecycle-active (kills sim, exits 1 on timeout — commit `09cbad2b`, replacing a fixed `sleep 90`) → `python3 src/e2e_test.py` → kill + `sim-stop`, exits with the test's code |
 | `e2e-test-no-lidar` | same with `use_lidar:=false simulate_gps_degradation:=false` and `src/e2e_test_no_lidar.py` |
 | `docker` / `docker-sim` | `docker build --target runtime\|simulation -t mowgli-ros2[-sim]:latest .` (context `ros2/` — **wrong context**, see Pitfalls) |
-| `lint` / `format` / `format-check` | cppcheck + cpplint / `clang-format -i` / `--dry-run --Werror` over `src/` (**includes** `opennav_coverage`, unlike `format.sh`) |
+| `lint` / `format` / `format-check` | cppcheck + cpplint / `clang-format -i` / `--dry-run --Werror` over `src/` (**includes** vendored submodules, unlike `format.sh`) |
 | `deploy` | `rsync install/ pi@mowgli.local:/opt/mowgli_ros2/install/` + `sudo systemctl restart mowgli` |
 | `backup-maps` | `scp …:/opt/mowgli_ros2/maps/* maps_backup/<ts>/` |
 
@@ -111,9 +111,9 @@
 | `fields2cover-v3-builder` | 72 | ros base | F2C v3 @ `884d895b…` + `<iomanip>` patch → `/opt/fields2cover-300`. The F2C v2.0.0 stage (`fields2cover-builder` → `/opt/fields2cover-200`) was removed entirely by the Lyrical migration (commit `7035a236`) — there is no v2 tree on disk any more |
 | `ublox-msgs-builder` | 142 | ros base | `ublox_ubx_msgs` + `ublox_ubx_interfaces` from `cedbossneo/ublox_dgnss` (`UBLOX_DGNSS_SHA=5e1d0cf…`) → `/opt/ublox_msgs` (schema resolution for foxglove_bridge only) |
 | `base` | 171 | ros base | apt runtime deps (Nav2, twist_mux, BT.CPP, grid_map, foxglove-bridge, rtcm-msgs, opennav-docking, Cyclone DDS, ortools, python3-websockets), GTSAM + the single F2C v3 tree copied, ldconfig'd (L298-299); L175-178 forces apt IPv4 (marked LOCAL-ONLY) |
-| `deps` | 282 | base | colcon/rosdep; COPY of every package's `package.xml`+`CMakeLists.txt` (incl. `opennav_coverage_msgs`, `external/universal-gnss/gnss_ros2`, `tools/motor` → `src/mowgli_tools`); `rosdep install … \|\| true` |
+| `deps` | 282 | base | colcon/rosdep; COPY of every package's `package.xml`+`CMakeLists.txt` (incl. `external/universal-gnss/gnss_ros2`, `tools/motor` → `src/mowgli_tools`); `rosdep install … \|\| true` |
 | `build-interfaces` | 357 | deps | `mowgli_interfaces` only (cache layer) |
-| `build` | 374 | build-interfaces | COPY `ros2/src/` + `tools/motor/`; `touch` COLCON_IGNORE in the 5 upstream `opennav_coverage` subpackages (L387-392); `colcon build -DBUILD_TESTING=OFF --parallel-workers 2` (L404-410); `colcon test -L gtest … \|\| true` (non-blocking, L416-419) |
+| `build` | 374 | build-interfaces | COPY `ros2/src/` + `tools/motor/`; `colcon build -DBUILD_TESTING=OFF --parallel-workers 2` (L404-410); `colcon test -L gtest … \|\| true` (non-blocking, L416-419) |
 | `runtime` | 425 | base | `install/` from build, `/opt/ublox_msgs`, launch+config dirs re-COPYed, `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`, entrypoint (L466), `mow_session_monitor.py` → `/ros2_ws/scripts/` (L471); `CMD ros2 launch mowgli_bringup mowgli.launch.py` (L475) |
 | `simulation` | 487 | runtime | Webots R2025a (amd64 only, `TARGETARCH` guard), xvfb, TigerVNC/noVNC/openbox, `webots_ros2` built from a pinned source revision, `is_wsl()` patch, CRLF fix, `start_vnc.sh`, `foxglove/`; `EXPOSE 8765 6080`; `CMD sim_full_system.launch.py headless:=true use_rviz:=false` (L559) |
 
@@ -130,7 +130,7 @@
 | `config-drift` | hard | `python3 ros2/scripts/check_config_drift.py` + `pytest ros2/scripts/test_check_config_drift.py` |
 | `build-and-test` = **`Build & Test (ROS2 kilted)`** (required on `dev`) | hard | submodules recursive, `ln -s ../../tools/motor src/mowgli_tools`, cached GTSAM + F2C v3 source builds mirroring the Dockerfile, `touch` COLCON_IGNORE on the 5 opennav subpackages, `rosdep --skip-keys` them, `colcon build`/`colcon test`, `ros2 run mowgli_tools tune_drive_pid --help`, `full_system.launch.py --show-args` must NOT list `use_universal_gnss` |
 | `format-check` | hard | `git-clang-format-18 --style=file:ros2/.clang-format --diff <merge-base origin/main> -- ros2/src` (changed lines only) |
-| `static-analysis` | report-only | cppcheck `--enable=warning,performance,portability --inline-suppr` on changed `ros2/src` `.cpp/.hpp` (excl. `/test/`, `opennav_coverage`) |
+| `static-analysis` | report-only | cppcheck `--enable=warning,performance,portability --inline-suppr` on changed `ros2/src` `.cpp/.hpp` (excl. `/test/`) |
 | `ros2-docker.yml` | — | `docker/build-push-action` target `runtime`, amd64 + arm64 native runners, `ghcr.io/<repo>/mowgli-ros2`, SBOM off, smoke test (`ros2 pkg prefix mowgli_bringup/mowgli_tools`, `tune_drive_pid --help`, `--show-args` grep) |
 
 ### ROS surface of the scripts (all use absolute topics; `HighLevelControl` = `mowgli_interfaces/srv/HighLevelControl` on `/behavior_tree_node/high_level_control`)
@@ -157,7 +157,7 @@
 cd ros2                                   # inside the devcontainer (/ros2_ws must exist)
 make build-full                           # or: make build-pkg PKG=mowgli_behavior ; PACKAGES_MODE=select make build-pkg PKG=x
 make test                                 # or: PACKAGES="mowgli_behavior" ./scripts/test.sh
-make format-check && make lint            # ./scripts/format.sh --check is the CI-equivalent (skips opennav_coverage)
+make format-check && make lint            # ./scripts/format.sh --check is the CI-equivalent (skips `*/external/*`)
 make sim                                  # headless Webots; Foxglove ws://localhost:8765 (needs an X server on :99)
 make e2e-test                             # self-contained: sim-stop + build + sim + Nav2-readiness poll + src/e2e_test.py + sim-stop
 make e2e-test-no-lidar                    # GPS-only variant, src/e2e_test_no_lidar.py (exit 1 on FAIL)
@@ -172,7 +172,6 @@ docker compose -f docker/docker-compose.simulation.yaml up dev-sim   # then: exe
 ## Change coupling — "if you change X, also update Y"
 - **GTSAM / F2C v3 pin or cmake flags** in `ros2/Dockerfile` ↔ the same recipe + cache keys (`gtsam-4.3a1-…`, `f2c-3.0.0-884d895-…`) in `.github/workflows/ros2-ci.yml`, and `.devcontainer/Dockerfile` (mirrors stage 0). F2C install prefix ↔ `ros2/src/mowgli_coverage/CMakeLists.txt:42` (`find_package(Fields2Cover 3.0.0 … PATHS /opt/fields2cover-300)`).
 - **New `mowgli_*` package**: auto-linked by `sync_workspace_packages.sh`, but must be added to the `deps` stage COPY list in `ros2/Dockerfile` (L297-340) for the rosdep cache layer, and its launch/config dirs re-COPYed in `runtime` if it ships any (L450-460 pattern). Non-`mowgli_*` names need an explicit `link_workspace_package` line.
-- **Upstream `opennav_coverage` subpackages**: the COLCON_IGNORE marker list is duplicated in `sync_workspace_packages.sh` L141-169, `ros2/Dockerfile` L387-392, and `ros2-ci.yml` (`touch` + `rosdep --skip-keys`) — change all three.
 - **`ublox_dgnss` pin** (`UBLOX_DGNSS_REF/SHA`, Dockerfile L145-147): the comment says it must match `sensors/gps/Dockerfile`, but that file currently has no `UBLOX_DGNSS_*` args — verify the GPS sidecar's actual driver source before bumping.
 - **`mowgli_robot.yaml` keys**: adding/removing a key → update `STRUCTURAL` / `USER_OVERRIDE` / `CALIBRATION_OUTPUT` / `INSTALL_SEED` in `check_config_drift.py`, `retiredParamKeys` in `gui/pkg/api/settings.go` (L367), and the physics inputs in `compute_nav2_params.py` (`gather_inputs`, L284) if Nav2 derives from it. Retired keys must be REMOVED from `USER_OVERRIDE` (so the orphan report surfaces them).
 - **Nav2 param split** (`nav2_params_base.yaml` + overlays): `mow_session_monitor.py` hashes all three (`_CONFIG_LOCATIONS`, L1050-1081) and `compute_nav2_params.py --compare` deep-merges them with `robot_config_util.deep_merge` — keep file names in sync.
@@ -192,21 +191,19 @@ docker compose -f docker/docker-compose.simulation.yaml up dev-sim   # then: exe
 - `ros2/scripts/e2e_test.py` and `ros2/scripts/precision_monitor.py` are stale duplicates of the `ros2/src/` versions (the scripts copy still references `/pose`, SLAM map growth, `/ros2_ws/src/scripts/e2e_test.py`); edit the `ros2/src/` files.
 - `systemd/mowgli.service` sets `ROS_DISTRO=jazzy` (L36) and its comment (L19) says jazzy, while `ros2_entrypoint.sh` hardcodes `/opt/ros/lyrical/setup.bash` (L15); `make deploy` rsyncs only `install/` to `/opt/mowgli_ros2/install/` but the unit's `ExecStart` needs `/opt/mowgli_ros2/scripts/ros2_entrypoint.sh` (never synced). The unit `Documentation=` URL points at `cedricziel/mowgli-ros2`. The supported deployment is the Docker installer (`install/mowglinext.sh`); treat the unit as unmaintained.
 - `make backup-maps` help text says "Pull SLAM maps" (L48) and pulls `/opt/mowgli_ros2/maps/*` — the Docker deployment keeps maps in the `mowgli_maps` volume mounted at `/ros2_ws/maps`; there is no SLAM (CLAUDE.md "Do NOT re-introduce slam_toolbox"). Same for `sim-stop.sh` L63-64 (`garden_map.posegraph`), `robot_monitor.sh` L120/L209-212 ("SLAM" labels on `map→odom` and `/map`), and `mow_session_monitor.py` comments mentioning `ekf_map_node` (L118) — labels only, harmless.
-- `Makefile` `lint`/`format`/`format-check` glob all of `src/` **including** `opennav_coverage` submodule sources (Makefile L145-166) — use `./scripts/format.sh --check` (excludes it, L27) to match CI; `make format` will rewrite submodule files.
+- `Makefile` `lint`/`format`/`format-check` glob all of `src/` **including** vendored `universal-gnss` submodule sources (Makefile L145-166) — use `./scripts/format.sh --check` (excludes `*/external/*`) to match CI; `make format` will rewrite submodule files.
 - `format.sh` warns (does not fail) on clang-format ≠ 18; CI pins 18 and the pre-commit hook pins v18.1.8 — a brew clang-format 22 silently produces diffs CI rejects.
 - `check_config_drift.py` paths are repo-relative to `Path(__file__).parents[2]` (L64-66): run from a checkout, not from the container's `/ros2_ws/config`.
 - `compute_nav2_params.py --robot-yaml` defaults to `docker/config/mowgli/mowgli_robot.yaml` (L1054), which does not exist in the repo (`docker/config/mowgli/` holds `drive_tuning` + README) — always pass the template or `install/config/mowgli/mowgli_robot.yaml`. Its `--compare` still emits MPPI-era keys (`mppi()`, L431) while the coverage controller is FTC (CLAUDE.md Invariant 8).
 - `mow_session_monitor.py` defaults (`--output-dir /home/ubuntu/mowglinext/docker/logs/mow_sessions`, git lookups and `install/.env` under `/home/ubuntu/mowglinext`, L985-1030) assume the robot host layout; inside the container pass `--output-dir /ros2_ws/maps` (bind-mounted volume) or the file lands in an unmounted path.
 - `robot_monitor.sh` hardcodes container `mowgli-ros2` (L14) and expects `mowgli-gui/gps/lidar/mqtt` containers — the `install/compose` names; it is host-side, not for the devcontainer.
 - `sync_workspace_packages.sh` refuses to overwrite a non-symlink entry in `/ros2_ws/src` (L101-104); CI's `ln -s ../../tools/motor src/mowgli_tools` and the script's `mowgli_tools` link are the same package under two mechanisms.
-- `opennav_coverage` COLCON_IGNORE markers are **untracked** files created at sync/build/CI time (`touch`), never committed (unforked submodule) — a fresh checkout without running the sync script or Dockerfile will try to compile the F2C-1.2.1 server packages and fail. Even with `INCLUDE_OPENNAV_COVERAGE_STACK=1` they are source-inspection only.
-- No in-tree package depends on `opennav_coverage_msgs` any more (`mowgli_coverage/package.xml` deps L17-28 → `mowgli_interfaces`; coverage action is `mowgli_interfaces/action/PlanCoverage`, CLAUDE.md Invariant 7). The submodule is still linked, COPYed and built (sync L135-138, Dockerfile L331-332) purely by inertia.
 - `universal-gnss` uses the canonical `https://github.com/Pepeuch/universal-gnss.git` repository and is pinned by the MowgliNext gitlink to validated release commits (current pin `v0.7.4-rc5`). Both `universal_gnss_msgs` and `universal_gnss_ros2` are linked into the workspace; the `gnss_*` CMake subdirs are pulled in at build. `UNIVERSAL_GNSS_PATH` overrides the vendored copy; legacy `/workspaces/universal-gnss` is only the fallback tried after it (sync L35-37, L65-72). The runtime stack does not launch it (`full_system.launch.py --show-args` must not list `use_universal_gnss`, asserted in CI and the Docker smoke test); the `mowgli-gps` sidecar owns GNSS.
 - Dockerfile `build` stage runs `colcon test … || true` (L412-419) — image builds never fail on unit tests; the gate is `ros2-ci.yml`.
 - `ros2/CPPLINT.cfg` `set noparent` applies to `ros2/` only; cpplint is run by `make lint`, not by CI.
 
 ## Generated & vendored — do not hand-edit
-- `ros2/src/opennav_coverage/` — upstream `open-navigation/opennav_coverage` submodule @ `d6e41a29` (`main`); only `opennav_coverage_msgs` is ever linked/built; the 5 server subpackages are COLCON_IGNORE'd by untracked markers (see CLAUDE.md "Do NOT use the upstream `opennav_coverage` server").
+- The `opennav_coverage` submodule was removed (2026-11): no in-tree package depended on `opennav_coverage_msgs` (coverage action is `mowgli_interfaces/action/PlanCoverage`, CLAUDE.md Invariant 7). `sync_workspace_packages.sh` still unlinks stale `opennav_*` symlinks left in `/ros2_ws/src` by older syncs.
 - `ros2/src/external/universal-gnss/` — canonical `https://github.com/Pepeuch/universal-gnss.git` submodule, pinned by the MowgliNext gitlink to validated release commits (current pin `v0.7.4-rc5`). Workspace links `universal_gnss_msgs/` and `gnss_ros2/` as `universal_gnss_msgs` and `universal_gnss_ros2`.
 - `/ros2_ws/src/*` symlinks, `build/ install/ log/`, `maps_backup/` — produced by `sync_workspace_packages.sh` / colcon / `make backup-maps`; gitignored.
 - `docker/logs/mow_sessions/*.jsonl` — session recordings written by `mow_session_monitor.py`; gitignored (`.gitignore` L64-65, only `.gitkeep` is force-tracked). The ad-hoc `.py`/`.md` analysis files sitting next to them ARE tracked.

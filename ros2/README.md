@@ -419,7 +419,7 @@ cd /path/to/mowgli-ros2
 rosdep update --rosdistro lyrical
 git submodule update --init --recursive
 rosdep install --from-paths src --ignore-src --rosdistro lyrical -y \
-  --skip-keys "grid_map_core grid_map_ros grid_map_msgs beluga_ros nav2_smac_planner webots_ros2_driver opennav_coverage opennav_coverage_bt opennav_coverage_demo opennav_coverage_navigator opennav_row_coverage"
+  --skip-keys "grid_map_core grid_map_ros grid_map_msgs beluga_ros nav2_smac_planner webots_ros2_driver"
 
 colcon build \
   --cmake-args -DCMAKE_BUILD_TYPE=Release \
@@ -474,20 +474,9 @@ make lint            # cppcheck + cpplint
 ```
 
 `make format` / `format-check` / `lint` glob all of `src/`, **including** the vendored
-`opennav_coverage` submodule. Use `./scripts/format.sh [--check]` to match CI and leave the
+`universal-gnss` submodule. Use `./scripts/format.sh [--check]` to match CI and leave the
 submodule alone. `make sim` and `make e2e-test` export `DISPLAY=:99` but do **not** start
 Xvfb — start it yourself (compose does) or Webots fails to open a display.
-
-The upstream `opennav_coverage` submodule is linked as
-`opennav_coverage_msgs` by default for action definitions. Its server, BT,
-demo, navigator, and row-coverage packages are optional full-stack packages and
-require Fields2Cover to be installed. To include them in local package linking
-and builds, run:
-
-```bash
-INCLUDE_OPENNAV_COVERAGE_STACK=1 ./scripts/sync_workspace_packages.sh
-INCLUDE_OPENNAV_COVERAGE_STACK=1 ./scripts/build.sh
-```
 
 ---
 
@@ -995,7 +984,7 @@ Reference C implementation for STM32 porting is in `src/mowgli_hardware/firmware
 
 Contributions are welcome. Before opening a pull request:
 
-1. Run `./scripts/format.sh` to apply `clang-format` (style file: `.clang-format`, **clang-format 18**). `make format` also globs the vendored `opennav_coverage` submodule — `scripts/format.sh` matches CI and skips it.
+1. Run `./scripts/format.sh` to apply `clang-format` (style file: `.clang-format`, **clang-format 18**). `make format` also globs the vendored `universal-gnss` submodule — `scripts/format.sh` matches CI and skips it.
 2. Run `make lint` to check with `cppcheck` and `cpplint`.
 3. Run `make test` and confirm all tests pass.
 

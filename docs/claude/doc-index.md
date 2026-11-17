@@ -2,7 +2,7 @@
 
 > Index generated 2026-09-03 at f21729e9.
 > Every human-written `.md` in the repo, classified so a future Claude knows which document is
-> authoritative and which is a historical record. Excludes `ros2/src/opennav_coverage/**` and
+> authoritative and which is a historical record. Excludes
 > `ros2/src/external/**` (vendored submodules) and `node_modules/`.
 
 ## Documents added after index generation

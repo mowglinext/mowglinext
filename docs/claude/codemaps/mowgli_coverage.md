@@ -267,8 +267,7 @@ Related tests elsewhere: `ros2/src/mowgli_bringup/test/test_launch_injection.py:
 (GUI three-way sentinel, #429).
 
 CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895` and cached
-(`:233-276`), ldconfig + `CMAKE_PREFIX_PATH` (`:278-287`), `COLCON_IGNORE` for upstream
-`opennav_coverage` subpackages (`:301-306`), whole-workspace `colcon build` (`:337-342`) and
+(`:233-276`), ldconfig + `CMAKE_PREFIX_PATH` (`:278-287`), whole-workspace `colcon build` (`:337-342`) and
 `colcon test` (`:344-350`). There is no per-package CI job.
 
 ## Change coupling — "if you change X, also update Y"
@@ -315,9 +314,6 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
 - **F2C pin** (`CMakeLists.txt:42-48`, 3.0.0 at `/opt/fields2cover-300`) ↔ `ros2/Dockerfile:79-125`
   (stage + SHA), `:273-275` (copy + ldconfig), `ros2-ci.yml:233-276` (same SHA in cache key), RPATHs
   in `CMakeLists.txt:82,97,135`. Moving the SHA means all four.
-- **`opennav_coverage` submodule**: only `opennav_coverage_msgs` builds; `COLCON_IGNORE` markers are
-  created at build time (`ros2/Dockerfile:388-392`, `ros2-ci.yml:301-306`, `ros2/scripts/sync_workspace_packages.sh`),
-  not committed. `mowgli_coverage` has no dependency on it (`package.xml`).
 - **`mow_angle_deg`** is a BT/blackboard param, not a `coverage_server` param: template
   `mowgli_robot.yaml:338` → `full_system.launch.py:250` → `behavior_tree_node.cpp:947`.
 
@@ -328,7 +324,7 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
 ## Pitfalls
 
 - Coverage-slot rules are CLAUDE.md Invariants 7 and 8 plus the "What NOT to Do" bans (no F2C turn
-  planners, no upstream `opennav_coverage`, no `buildHeadlandRingPath` on the BT side). The driven
+  planners, no upstream `opennav_coverage` (submodule removed), no `buildHeadlandRingPath` on the BT side). The driven
   artefact is `drivable_subpaths`, never `segments`.
 - `on_configure` can run twice (cleanup → configure); use the `has_parameter` guarded lambdas
   (`coverage_server.cpp:34-51`) — a bare `declare_parameter` throws and bricks Nav2 bringup.
@@ -389,4 +385,3 @@ CI: `.github/workflows/ros2-ci.yml` — F2C v3 built from source at SHA `884d895
 
 - `fields2cover.h` / `libFields2Cover.so` (v3.0 @ `884d895`) come from `/opt/fields2cover-300`, built by `ros2/Dockerfile` stage `fields2cover-v3-builder` and `ros2-ci.yml`; not in the tree.
 - `mowgli_interfaces/action/plan_coverage.hpp` is rosidl-generated from `PlanCoverage.action`; GUI Go/TS message bindings are generated (`docs/claude/commands.md`).
-- `ros2/src/opennav_coverage/` is a git submodule — only `opennav_coverage_msgs` is built; the server subpackages get build-time `COLCON_IGNORE` markers.
