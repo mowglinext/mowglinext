@@ -392,8 +392,10 @@ CurvatureAtRobot CurvatureAhead(const PoseAt& pose_at,
 /// carries kp_heading x (plan heading at the carrot - plan heading at the
 /// robot); `lead_heading_rad` is exactly that change, accumulated along the
 /// plan from the robot's projection (PlanHeadingChange, not a wrapped
-/// difference). Only the deficit is supplied. Zero unless enabled and driving
-/// forward; bounded by the angular limit.
+/// difference). Only the difference is supplied, so the term is negative when
+/// the lead already turns harder than v x curvature and then trims the native
+/// turn back. Zero unless enabled and driving forward; bounded by the angular
+/// limit.
 inline double CurvatureFeedforward(double gain,
                                    double forward_speed,
                                    double curvature,
