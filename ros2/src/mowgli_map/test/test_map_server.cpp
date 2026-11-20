@@ -167,6 +167,116 @@ TEST_F(MapServerTest, GridMapHasAllRequiredLayers)
   EXPECT_TRUE(m.exists(std::string(mowgli_map::layers::CLASSIFICATION)));
 }
 
+// #1137: the template's all-zero dock pose means "no dock placed yet", and it
+// must stay that way on a robot. Only an explicit dock_pose_explicit (the
+// Webots sim, whose dock is the world origin) turns (0, 0, 0) into a dock, so
+// map_server publishes the dock body coverage_server plans around.
+namespace
+{
+std::shared_ptr<mowgli_map::MapServerNode> make_origin_dock_node(bool explicit_pose)
+{
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("resolution", 0.1);
+  options.append_parameter_override("areas_file_path", "");
+  options.append_parameter_override("dock_pose_x", 0.0);
+  options.append_parameter_override("dock_pose_y", 0.0);
+  options.append_parameter_override("dock_pose_yaw", 0.0);
+  if (explicit_pose)
+  {
+    options.append_parameter_override("dock_pose_explicit", true);
+  }
+  return std::make_shared<mowgli_map::MapServerNode>(options);
+}
+
+// Markers of the first non-empty transit_geometry snapshot after an area add.
+std::vector<visualization_msgs::msg::Marker> origin_dock_snapshot(
+    const std::shared_ptr<mowgli_map::MapServerNode>& node)
+{
+  auto observer = std::make_shared<rclcpp::Node>("origin_dock_observer");
+  visualization_msgs::msg::MarkerArray::ConstSharedPtr latest;
+  auto subscription = observer->create_subscription<visualization_msgs::msg::MarkerArray>(
+      "/map_server_node/transit_geometry",
+      rclcpp::QoS(1).transient_local(),
+      [&](visualization_msgs::msg::MarkerArray::ConstSharedPtr message)
+      {
+        latest = message;
+      });
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(observer);
+  auto request = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Request>();
+  request->area.name = "lawn";
+  for (const auto& xy :
+       std::vector<std::pair<float, float>>{{-4.5F, -3}, {4.5F, -3}, {4.5F, 3}, {-4.5F, 3}})
+  {
+    geometry_msgs::msg::Point32 point;
+    point.x = xy.first;
+    point.y = xy.second;
+    request->area.area.points.push_back(point);
+  }
+  auto added = std::make_shared<mowgli_interfaces::srv::AddMowingArea::Response>();
+  node->add_area_for_test(request, added);
+  EXPECT_TRUE(added->success);
+  node->build_keepout_mask_for_test();
+  for (int i = 0; i < 200; ++i)
+  {
+    executor.spin_some();
+    if (latest && !latest->markers.empty())
+      return latest->markers;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ADD_FAILURE() << "no transit_geometry snapshot";
+  return {};
+}
+}  // namespace
+
+TEST_F(MapServerTest, AllZeroDockPoseStaysUnsetByDefault)
+{
+  node_.reset();
+  node_ = make_origin_dock_node(false);
+  EXPECT_FALSE(node_->docking_pose_set_for_test());
+  for (const auto& marker : origin_dock_snapshot(node_))
+  {
+    EXPECT_NE(marker.ns, "dock_body");
+    EXPECT_NE(marker.ns, "dock_corridor");
+  }
+}
+
+TEST_F(MapServerTest, ExplicitDockPoseAtOriginBuildsTheDockBody)
+{
+  node_.reset();
+  node_ = make_origin_dock_node(true);
+  ASSERT_TRUE(node_->docking_pose_set_for_test());
+  EXPECT_DOUBLE_EQ(node_->docking_pose_for_test().position.x, 0.0);
+  EXPECT_DOUBLE_EQ(node_->docking_pose_for_test().position.y, 0.0);
+  EXPECT_DOUBLE_EQ(node_->docking_pose_for_test().orientation.w, 1.0);
+  const auto markers = origin_dock_snapshot(node_);
+  const auto body = std::find_if(markers.begin(),
+                                 markers.end(),
+                                 [](const auto& marker)
+                                 {
+                                   return marker.ns == "dock_body";
+                                 });
+  ASSERT_NE(body, markers.end());
+  ASSERT_GE(body->points.size(), 4U);
+  // The station ring at the defaults: 0.12 m behind the pose to 0.68 m ahead,
+  // 0.275 m either side, so it holds the origin the sim charges around.
+  double min_x = 1e9;
+  double max_x = -1e9;
+  double min_y = 1e9;
+  double max_y = -1e9;
+  for (const auto& p : body->points)
+  {
+    min_x = std::min(min_x, p.x);
+    max_x = std::max(max_x, p.x);
+    min_y = std::min(min_y, p.y);
+    max_y = std::max(max_y, p.y);
+  }
+  EXPECT_NEAR(min_x, -0.12, 1e-6);
+  EXPECT_NEAR(max_x, 0.68, 1e-6);
+  EXPECT_NEAR(min_y, -0.275, 1e-6);
+  EXPECT_NEAR(max_y, 0.275, 1e-6);
+}
+
 TEST_F(MapServerTest, GuiAreaReplacementPreservesCalibratedDockGeometry)
 {
   node_.reset();

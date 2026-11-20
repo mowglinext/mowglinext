@@ -114,3 +114,37 @@ def test_make_quality_arguments_are_accepted_by_ros_cli(tmp_path, target, patter
                  if token.startswith('gps_quality_pattern:=')]
     parsed = list(parse_launch_arguments(arguments))
     assert parsed == ([('gps_quality_pattern', pattern)] if pattern.strip() else [])
+
+
+def test_sim_map_server_gets_the_origin_dock(monkeypatch):
+    """#1137: the sim dock at (0, 0, 0) must reach map_server as a placed dock."""
+    packages = Path(__file__).resolve().parents[2]
+    path = packages / 'mowgli_bringup' / 'launch' / 'sim_full_system.launch.py'
+    spec = importlib.util.spec_from_file_location('sim_dock_launch', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(
+        module, 'get_package_share_directory', lambda name: str(packages / name),
+    )
+    description = module.generate_launch_description()
+    context = LaunchContext()
+    for entity in description.entities:
+        if isinstance(entity, DeclareLaunchArgument):
+            entity.execute(context)
+    servers = [entity for entity in description.entities
+               if isinstance(entity, Node)
+               and entity.node_executable == 'map_server_node']
+    assert len(servers) == 1
+    parameters = evaluate_parameters(context, servers[0]._Node__parameters)
+    merged = {}
+    for group in parameters:
+        if isinstance(group, dict):
+            merged.update(group)
+    assert merged['dock_pose_explicit'] is True
+    # The template's sim dock, which docking_server and fake_hardware_bridge use.
+    assert (merged['dock_pose_x'], merged['dock_pose_y'], merged['dock_pose_yaw']) == (
+        0.0, 0.0, 0.0)
+    # Body at the chassis-derived extents, as full_system.launch.py injects them.
+    assert merged['dock_body_rear_m'] == pytest.approx(0.12)
+    assert merged['dock_body_length_m'] == pytest.approx(0.80)
+    assert merged['dock_body_width_m'] == pytest.approx(0.55)
