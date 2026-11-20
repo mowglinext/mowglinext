@@ -44,6 +44,7 @@ Phase 2 work — until that lands the helpers below may not see live data.
 
 import json
 import os
+from typing import List
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -54,10 +55,18 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 import yaml
+
+
+# The Webots world's static test_obstacle (mowgli_garden.wbt: a 0.5 x 0.5 m box
+# centred at (3.0, 1.5)), as a map_server obstacle polygon (the footprint only;
+# the keepout band and coverage margin add the robot body). Only used when
+# LiDAR is off: nothing then senses the box, so without a map entry the plan
+# drives straight into it and the robot sits against it until the timeout.
+SIM_WORLD_OBSTACLE = "2.75,1.25;3.25,1.25;3.25,1.75;2.75,1.75"
 
 
 def _on_required_gnss_exit(context):
@@ -153,6 +162,13 @@ def generate_launch_description() -> LaunchDescription:
     world = LaunchConfiguration("world")
     use_rviz = LaunchConfiguration("use_rviz")
     use_lidar = LaunchConfiguration("use_lidar")
+    # A string-array parameter: the expression yields the list literal, parsed as YAML.
+    sim_area_obstacles = ParameterValue(
+        PythonExpression(
+            ["[''] if '", use_lidar, "'.lower() in ('true', '1') else ['", SIM_WORLD_OBSTACLE, "']"]
+        ),
+        value_type=List[str],
+    )
     mode = LaunchConfiguration("mode")
 
     # ------------------------------------------------------------------
@@ -253,13 +269,15 @@ def generate_launch_description() -> LaunchDescription:
             # never tries to mow a phantom polygon at the GPS datum (see
             # commit history for BLOCKER #1). The sim needs a polygon to
             # exercise coverage, so override here. 9×6 m rectangle, no
-            # pre-defined obstacles — runtime obstacle tracker handles
-            # whatever appears in the world file.
+            # pre-defined obstacles with LiDAR — the runtime obstacle tracker
+            # handles whatever appears in the world file. Without LiDAR nothing
+            # can sense world obstacles, so the world's static test_obstacle is
+            # surveyed into the map instead (see SIM_WORLD_OBSTACLE).
             {
                 "area_names": ["main_mow"],
                 "area_polygons": ["-4.5,-3.0;4.5,-3.0;4.5,3.0;-4.5,3.0"],
                 "area_is_navigation": [False],
-                "area_obstacles": [""],
+                "area_obstacles": sim_area_obstacles,
             },
             # Same datum the sim navsat converter projects with (below) —
             # keeps the areas.dat datum stamp / datum-change migration
