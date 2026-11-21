@@ -33,6 +33,7 @@
 #include <tf2/exceptions.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
+#include "mowgli_map/costmap_clusters.hpp"
 #include <mowgli_interfaces/srv/get_mowing_area.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 
@@ -265,69 +266,17 @@ void ObstacleTrackerNode::process_costmap()
     msg = latest_costmap_;  // Copy so the flood-fill runs without the lock.
   }
 
-  const int w = static_cast<int>(msg.info.width);
-  const int h = static_cast<int>(msg.info.height);
-  const double res = msg.info.resolution;
-  const double ox = msg.info.origin.position.x;
-  const double oy = msg.info.origin.position.y;
-
-  if (w == 0 || h == 0)
+  if (msg.info.width == 0 || msg.info.height == 0)
     return;
 
-  // Mark cells that are unsafe for the robot (cost >= 50 captures the
-  // inflation zone, not just lethal cells). This gives obstacle polygons
-  // that match the full no-go area including safety margin.
+  // Connected components of cells that are unsafe for the robot (cost >= 50
+  // captures the inflation zone, not just lethal cells), so obstacle polygons
+  // match the full no-go area including safety margin. Components that
+  // cannot pass associate_clusters()' max_obstacle_radius_ filter — above all
+  // the lethal region outside the recorded areas — are not materialised.
   constexpr int8_t OBSTACLE_COST = 50;
-  std::vector<bool> visited(w * h, false);
-  std::vector<std::vector<std::pair<double, double>>> clusters;
-
-  // Flood-fill to find connected components of obstacle cells
-  for (int y = 0; y < h; ++y)
-  {
-    for (int x = 0; x < w; ++x)
-    {
-      const int idx = y * w + x;
-      if (visited[idx] || msg.data[idx] < OBSTACLE_COST)
-        continue;
-
-      // BFS flood-fill
-      std::vector<std::pair<double, double>> cluster;
-      std::vector<std::pair<int, int>> queue;
-      queue.emplace_back(x, y);
-      visited[idx] = true;
-
-      while (!queue.empty())
-      {
-        auto [cx, cy] = queue.back();
-        queue.pop_back();
-
-        // Convert cell to map frame
-        double mx = ox + (cx + 0.5) * res;
-        double my = oy + (cy + 0.5) * res;
-        cluster.emplace_back(mx, my);
-
-        // 4-connected neighbors
-        for (auto [dx, dy] : std::vector<std::pair<int, int>>{{1, 0}, {-1, 0}, {0, 1}, {0, -1}})
-        {
-          int nx = cx + dx, ny = cy + dy;
-          if (nx >= 0 && nx < w && ny >= 0 && ny < h)
-          {
-            int nidx = ny * w + nx;
-            if (!visited[nidx] && msg.data[nidx] >= OBSTACLE_COST)
-            {
-              visited[nidx] = true;
-              queue.emplace_back(nx, ny);
-            }
-          }
-        }
-      }
-
-      if (static_cast<int>(cluster.size()) >= min_cluster_points_)
-      {
-        clusters.push_back(std::move(cluster));
-      }
-    }
-  }
+  const std::vector<std::vector<std::pair<double, double>>> clusters =
+      cluster_costmap_cells(msg, OBSTACLE_COST, min_cluster_points_, max_obstacle_radius_);
 
   const rclcpp::Time stamp(msg.header.stamp);
   std::lock_guard<std::mutex> lock(mutex_);
@@ -1135,22 +1084,12 @@ void ObstacleTrackerNode::associate_clusters(
       continue;
     }
 
-    // Compute cluster centroid and bounding radius.
-    double cx = 0.0;
-    double cy = 0.0;
-    for (const auto& [x, y] : cluster)
-    {
-      cx += x;
-      cy += y;
-    }
-    cx /= static_cast<double>(cluster.size());
-    cy /= static_cast<double>(cluster.size());
-
-    double max_r = 0.0;
-    for (const auto& [x, y] : cluster)
-    {
-      max_r = std::max(max_r, std::hypot(x - cx, y - cy));
-    }
+    // Compute cluster centroid and bounding radius (the radius scan stops
+    // early once it is above max_obstacle_radius_ — rejected either way).
+    const ClusterExtent extent = cluster_extent(cluster, max_obstacle_radius_);
+    const double cx = extent.cx;
+    const double cy = extent.cy;
+    const double max_r = extent.max_r;
 
     // Filter by radius bounds.
     if (max_r < min_obstacle_radius_ || max_r > max_obstacle_radius_)
