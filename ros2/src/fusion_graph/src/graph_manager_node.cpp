@@ -132,7 +132,18 @@ std::optional<TickOutput> GraphManager::CreateNodeLocked(double now_s)
   // the bias estimate from incoming samples. wheel_stationary_now_
   // stays at the latest tick's value until the next tick, so the
   // bias EMA sees the right gate state across many IMU samples.
-  wheel_stationary_now_ = wheel_stationary;
+  // Bias learning needs more than the stationary-snap gate: encoder-level
+  // stillness (no tick moved) sustained for gyro_bias_min_still_s. The snap
+  // gate admits slow real rotation, which the EMA would learn as bias.
+  const bool encoders_still = std::abs(accum_.dx) <= kBiasStillWheelEps &&
+                              std::abs(accum_.dy) <= kBiasStillWheelEps &&
+                              std::abs(accum_.dtheta_wheel) <= kBiasStillWheelEps;
+  if (!encoders_still)
+    bias_still_since_s_.reset();
+  else if (!bias_still_since_s_)
+    bias_still_since_s_ = last_node_time_s_;
+  wheel_stationary_now_ = wheel_stationary && bias_still_since_s_ &&
+                          now_s - *bias_still_since_s_ >= params_.gyro_bias_min_still_s;
   // Multi-source confirmation: if the wheel claims stationary but the
   // gyro reports a rotation rate above the residual-bias floor, the
   // robot is being externally rotated (hand-pushed off the dock,
