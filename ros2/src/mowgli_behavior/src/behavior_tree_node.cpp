@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -27,6 +28,7 @@
 #include <string>
 #include <vector>
 
+#include "action_msgs/srv/cancel_goal.hpp"
 #include "ament_index_cpp/get_package_share_path.hpp"
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/loggers/bt_cout_logger.h"
@@ -1409,7 +1411,13 @@ private:
   void startBootHold()
   {
     using Clock = BootHold::Clock;
-    const double timeout_s = declare_parameter<double>("boot_hold_timeout_s", 3.0);
+    double timeout_s = declare_parameter<double>("boot_hold_timeout_s", 3.0);
+    if (!std::isfinite(timeout_s))
+    {
+      RCLCPP_WARN(get_logger(), "boot_hold_timeout_s is not a finite number: using 3 s");
+      timeout_s = 3.0;
+    }
+    timeout_s = std::min(timeout_s, 60.0);  // a start-up hold, not a way to keep the tree off
     boot_hold_start_ = Clock::now();
     boot_hold_ = std::make_unique<BootHold>(Clock::now(),
                                             std::chrono::duration_cast<Clock::duration>(
@@ -1471,8 +1479,9 @@ private:
     boot_hold_->add_step("cancel /backup", cancelStep<nav2_msgs::action::BackUp>("/backup"));
   }
 
-  /// Blade OFF, done once the bridge has answered success; retried while the service is not up
-  /// or answers failure.
+  /// Blade OFF, done once the bridge has answered success (it accepted the request and passed it
+  /// on; the bridge does not report a failed serial write here). Retried while the service is not
+  /// up or answers failure.
   BootHold::Step bladeOffStep()
   {
     struct State
@@ -1519,7 +1528,10 @@ private:
     };
   }
 
-  /// Cancel-all on one action server, done once the server has answered the request.
+  /// Cancel-all on one action server, done once the server has answered the request. An answer
+  /// means the server has moved every running goal to canceling (it ends them on its next control
+  /// cycle; the settle step and the second sweep give it time and catch late dispatches). A server
+  /// that refuses is asked again until the hold's deadline.
   template <typename ActionT>
   BootHold::Step cancelStep(const std::string& name)
   {
@@ -1527,6 +1539,15 @@ private:
     if (!slot)
     {
       slot = rclcpp_action::create_client<ActionT>(this, name);
+      // If the hold gives up, still ask this server to cancel (see giveUpBootHold()).
+      boot_give_up_cancels_.push_back(
+          [client = std::static_pointer_cast<rclcpp_action::Client<ActionT>>(slot)]()
+          {
+            if (client->action_server_is_ready())
+            {
+              client->async_cancel_all_goals();
+            }
+          });
     }
     auto client = std::static_pointer_cast<rclcpp_action::Client<ActionT>>(slot);
     struct State
@@ -1558,13 +1579,41 @@ private:
       }
       state->sent = true;
       client->async_cancel_all_goals(
-          [this, name, state](typename rclcpp_action::Client<ActionT>::CancelResponse::SharedPtr)
+          [this, name, state](
+              typename rclcpp_action::Client<ActionT>::CancelResponse::SharedPtr response)
           {
+            if (!response ||
+                response->return_code == action_msgs::srv::CancelGoal::Response::ERROR_REJECTED)
+            {
+              RCLCPP_WARN(get_logger(), "Boot hold: %s refused cancel-all, retrying", name.c_str());
+              state->sent = false;
+              return;
+            }
             state->acked = true;
             RCLCPP_INFO(get_logger(), "Boot hold: %s acknowledged cancel-all", name.c_str());
           });
       return false;
     };
+  }
+
+  /// The hold ran out of time with steps pending (a server that is discovered but does not answer,
+  /// or a step gated behind one that does not). Best effort before the tree ticks: ask every
+  /// motion server to cancel and the bridge to turn the blade off, without waiting for answers. A
+  /// goal the new tree sends meanwhile may be cancelled by this too, which the tree handles like
+  /// any cancelled goal; a stale goal left driving is worse.
+  void giveUpBootHold()
+  {
+    for (const auto& cancel : boot_give_up_cancels_)
+    {
+      cancel();
+    }
+    if (boot_blade_client_ && boot_blade_client_->service_is_ready())
+    {
+      auto request = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
+      request->mow_enabled = false;
+      request->mow_direction = 0;
+      boot_blade_client_->async_send_request(request);
+    }
   }
 
   /// Advances the hold; true once the tree may tick.
@@ -1590,6 +1639,7 @@ private:
         left += (left.empty() ? "" : ", ") + name;
       }
       RCLCPP_WARN(get_logger(), "Boot hold gave up on: %s (not available yet)", left.c_str());
+      giveUpBootHold();
     }
     RCLCPP_INFO(get_logger(), "Boot hold over: the behaviour tree starts ticking");
     return true;
@@ -2254,6 +2304,7 @@ private:
   static constexpr std::chrono::milliseconds kBootDiscoveryGrace{1000};
   rclcpp::TimerBase::SharedPtr boot_hold_timer_;
   std::map<std::string, std::shared_ptr<void>> boot_action_clients_;
+  std::vector<std::function<void()>> boot_give_up_cancels_;
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr boot_blade_client_;
   std::chrono::steady_clock::time_point nav2_wait_deadline_;
   bool nav_ready_{false};

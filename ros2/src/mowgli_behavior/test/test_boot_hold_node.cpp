@@ -74,17 +74,29 @@ public:
     Clock::time_point at;
   };
 
-  /// `late_follow_goal`: once /navigate_to_pose has processed its cancel, the dead parent still
-  /// dispatches one more controller goal 200 ms later (a parent acknowledges a cancel before it has
-  /// stopped), which only the second sweep can catch.
+  /// `late_follow_goal`: once /follow_path has processed its first cancel, the dead parent still
+  /// dispatches one more controller goal 100 ms later (a parent acknowledges a cancel before it has
+  /// stopped). The first sweep is over by then, so only the second sweep can catch it.
+  /// `slow_endpoint`: one server whose cancel answer takes `slow_delay` instead of `cancel_delay`
+  /// (a server that is discovered but does not answer in time).
+  /// `refused_follow_cancels`: /follow_path refuses its first cancel requests (a server that
+  /// cannot cancel yet).
   Endpoints(const std::vector<std::string>& served,
             bool with_blade,
             std::chrono::milliseconds cancel_delay,
-            bool late_follow_goal = false)
+            bool late_follow_goal = false,
+            std::string slow_endpoint = "",
+            std::chrono::milliseconds slow_delay = 0ms,
+            int refused_follow_cancels = 0)
       : peer_(rclcpp::Node::make_shared("boot_hold_fixture")),
         delay_(cancel_delay),
+        slow_endpoint_(std::move(slow_endpoint)),
+        slow_delay_(slow_delay),
+        refused_follow_cancels_(refused_follow_cancels),
         late_follow_goal_(late_follow_goal)
   {
+    // Reentrant: a server that sits on its answer must not stall the others.
+    group_ = peer_->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     if (with_blade)
     {
       blade_ = peer_->create_service<Mower>("/hardware_bridge/mower_control",
@@ -186,13 +198,19 @@ private:
         },
         [this, name](const std::shared_ptr<Handle>)
         {
-          std::this_thread::sleep_for(delay_);  // a busy server: the answer comes late
+          // a busy server: the answer comes late
+          std::this_thread::sleep_for(name == slow_endpoint_ ? slow_delay_ : delay_);
           std::lock_guard<std::mutex> lock(mutex_);
           cancels_.push_back({name, Clock::now()});
-          if (late_follow_goal_ && name == "/navigate_to_pose" && !late_sent_)
+          if (name == "/follow_path" && refused_follow_cancels_ > 0)
+          {
+            --refused_follow_cancels_;
+            return rclcpp_action::CancelResponse::REJECT;
+          }
+          if (late_follow_goal_ && name == "/follow_path" && !late_sent_)
           {
             late_sent_ = true;
-            late_due_ = Clock::now() + 200ms;
+            late_due_ = Clock::now() + 100ms;
           }
           return rclcpp_action::CancelResponse::ACCEPT;
         },
@@ -209,7 +227,9 @@ private:
                   goal->canceled(std::make_shared<typename ActionT::Result>());
                 }
               });
-        });
+        },
+        rcl_action_server_get_default_options(),
+        group_);
     auto client = rclcpp_action::create_client<ActionT>(peer_, name);
     servers_.push_back(server);
     clients_.push_back(client);
@@ -241,6 +261,10 @@ public:
 private:
   rclcpp::Node::SharedPtr peer_;
   std::chrono::milliseconds delay_;
+  std::string slow_endpoint_;
+  std::chrono::milliseconds slow_delay_;
+  int refused_follow_cancels_{0};
+  rclcpp::CallbackGroup::SharedPtr group_;
   rclcpp::executors::MultiThreadedExecutor executor_{rclcpp::ExecutorOptions(), 4};
   std::thread thread_;
   mutable std::mutex mutex_;
@@ -346,9 +370,94 @@ TEST_F(BootHoldNode, WaitsForEveryServerToAnswerItsCancelBeforeTheFirstTick)
     EXPECT_LE(cancels[i].at, cancels[4].at);
   }
   EXPECT_EQ(cancels[4].name, "/follow_path");
-  // The dead parent dispatched one more controller goal after it had acknowledged its cancel: only
-  // the second sweep catches it.
+  // The dead parent dispatched one more controller goal after the first controller sweep was over:
+  // only the second sweep catches it.
   EXPECT_EQ(cancels[5].name, "/follow_path");
+  EXPECT_GT(cancels[5].at, cancels[4].at);
+}
+
+TEST_F(BootHoldNode, ARefusedCancelIsAskedAgainBeforeTheFirstTick)
+{
+  Endpoints fx(kAllEndpoints,
+               true,
+               0ms,
+               /*late_follow_goal=*/false,
+               "",
+               0ms,
+               /*refused_follow_cancels=*/2);
+  fx.sendDeadGoals();
+  ASSERT_TRUE(fx.allGoalsHeld());
+
+  Probe probe;
+  auto node = makeNode(probe);
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  ASSERT_TRUE(spinUntil(executor,
+                        [&]
+                        {
+                          return probe.ticks.load() > 0;
+                        }));
+  node->context()->node.reset();
+
+  std::vector<Endpoints::CancelLog> follow;
+  for (const auto& c : fx.cancels())
+  {
+    if (c.name == "/follow_path")
+    {
+      follow.push_back(c);
+    }
+  }
+  // Refused twice, accepted on the third ask. Counting a refusal as an answer would leave the
+  // goal running when the tree ticks (the second sweep is refused as well).
+  ASSERT_EQ(follow.size(), 3u);
+  EXPECT_LT(follow[2].at, probe.first_tick);
+}
+
+TEST_F(BootHoldNode, GivingUpStillAsksTheControllerToCancel)
+{
+  // The parent is discovered but sits on its answer past the hold's deadline, so the controller
+  // sweep (gated behind it) never runs inside the hold. At the deadline the node cancels anyway.
+  Endpoints fx(kAllEndpoints,
+               true,
+               0ms,
+               /*late_follow_goal=*/false,
+               "/navigate_to_pose",
+               3s);
+  fx.sendDeadGoals();
+  ASSERT_TRUE(fx.allGoalsHeld());
+
+  Probe probe;
+  auto node = makeNode(probe, {rclcpp::Parameter("boot_hold_timeout_s", 1.5)});
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  const auto t0 = Clock::now();
+  ASSERT_TRUE(spinUntil(executor,
+                        [&]
+                        {
+                          return probe.ticks.load() > 0;
+                        }));
+  node->context()->node.reset();
+  std::this_thread::sleep_for(300ms);  // the give-up cancel is fire and forget
+
+  EXPECT_LT(probe.first_tick - t0, 2500ms) << "the hold gave up at its deadline";
+  bool follow_cancelled_before_parent_answered = false;
+  Clock::time_point parent_answered = Clock::time_point::max();
+  for (const auto& c : fx.cancels())
+  {
+    if (c.name == "/navigate_to_pose")
+    {
+      parent_answered = c.at;
+    }
+  }
+  for (const auto& c : fx.cancels())
+  {
+    if (c.name == "/follow_path" && c.at < parent_answered)
+    {
+      follow_cancelled_before_parent_answered = true;
+    }
+  }
+  EXPECT_TRUE(follow_cancelled_before_parent_answered)
+      << "/follow_path was cancelled by the give-up path, not by the gated sweep";
 }
 
 TEST_F(BootHoldNode, ServersThatAreNotRunningHoldNoGoalsAndAreSkippedAfterTheGrace)
