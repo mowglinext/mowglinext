@@ -20,10 +20,15 @@
 #include <nav2_msgs/action/back_up.hpp>
 
 #include <gtest/gtest.h>
+// test_blade_services.cpp includes this file after the node source: a translation unit that
+// includes the node source needs about 4.7 GB to compile, so these cases share one instead of
+// adding another.
+#ifndef MOWGLI_BEHAVIOR_NODE_SOURCE_INCLUDED
 #define main boot_hold_behavior_main_for_test
 // Include this package's implementation to exercise the real start-up wiring.
 #include "../src/behavior_tree_node.cpp"  // NOLINT(build/include)
 #undef main
+#endif
 
 namespace mowgli_behavior
 {

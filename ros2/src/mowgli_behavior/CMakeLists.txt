@@ -187,37 +187,11 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
-  # The restarted tree's start-up hold on the real node: blade OFF and the dead instance's goals
-  # cancelled before the first tick.
-  ament_add_ros_isolated_gtest(test_boot_hold_node
-    test/test_boot_hold_node.cpp
-    ${blade_service_sources}
-  )
-  target_include_directories(test_boot_hold_node PUBLIC
-    include
-    ${mowgli_localization_INCLUDE_DIRS}
-  )
-  target_link_libraries(test_boot_hold_node
-    ${visualization_msgs_TARGETS}
-    ${ament_index_cpp_TARGETS}
-    ${rclcpp_TARGETS}
-    ${rclcpp_action_TARGETS}
-    ${behaviortree_cpp_TARGETS}
-    ${mowgli_interfaces_TARGETS}
-    ${nav2_msgs_TARGETS}
-    ${nav_msgs_TARGETS}
-    ${map_msgs_TARGETS}
-    ${geometry_msgs_TARGETS}
-    ${sensor_msgs_TARGETS}
-    ${std_msgs_TARGETS}
-    ${std_srvs_TARGETS}
-    ${tf2_TARGETS}
-    ${tf2_ros_TARGETS}
-    ${tf2_geometry_msgs_TARGETS}
-    ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
-    ${rcl_interfaces_TARGETS}
-    ${action_msgs_TARGETS}
-  )
+  # The restarted tree's start-up hold cases (test/test_boot_hold_node.cpp) are included by
+  # test_blade_services.cpp: every translation unit that includes the node source needs about
+  # 4.7 GB to compile, so these cases share one instead of adding a third.
+  set_property(SOURCE test/test_blade_services.cpp APPEND PROPERTY OBJECT_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_boot_hold_node.cpp)
 
   ament_add_ros_isolated_gtest(test_fleet_yield_services
     test/test_fleet_yield_services.cpp
