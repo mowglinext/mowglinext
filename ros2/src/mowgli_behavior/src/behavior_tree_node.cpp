@@ -28,6 +28,8 @@
 #include <string>
 #include <vector>
 
+#include "action_msgs/msg/goal_status.hpp"
+#include "action_msgs/msg/goal_status_array.hpp"
 #include "action_msgs/srv/cancel_goal.hpp"
 #include "ament_index_cpp/get_package_share_path.hpp"
 #include "behaviortree_cpp/behavior_tree.h"
@@ -1404,8 +1406,10 @@ private:
   // A restarted tree inherits whatever its dead predecessor left running: the Nav2 goals it sent
   // (the action servers own them, so they keep driving) and a powered blade. The bridge cannot see
   // that the instance changed, and a restart inside its status timeout never trips its hold. So the
-  // tree starts with blade OFF and every motion goal cancelled, and does not tick until that has
-  // gone out (or `boot_hold_timeout_s` has passed: on a cold boot nothing is up to clean).
+  // tree starts with blade OFF and every motion goal cancelled, and does not tick until the bridge
+  // has acknowledged the blade request, every motion server has answered its cancel and no server
+  // reports an active goal any more (or `boot_hold_timeout_s` has passed: on a cold boot nothing is
+  // up to clean).
   // This only ever reduces actuation. Whether the restored mission then resumes on its own is the
   // existing coverage-resume policy, unchanged.
   void startBootHold()
@@ -1417,16 +1421,17 @@ private:
       RCLCPP_WARN(get_logger(), "boot_hold_timeout_s is not a finite number: using 3 s");
       timeout_s = 3.0;
     }
-    timeout_s = std::min(timeout_s, 60.0);  // a start-up hold, not a way to keep the tree off
     boot_hold_start_ = Clock::now();
-    boot_hold_ = std::make_unique<BootHold>(Clock::now(),
-                                            std::chrono::duration_cast<Clock::duration>(
-                                                std::chrono::duration<double>(timeout_s)));
     if (timeout_s <= 0.0)
     {
       RCLCPP_WARN(get_logger(), "boot_hold_timeout_s <= 0: start-up hold disabled");
+      boot_hold_ = std::make_unique<BootHold>(boot_hold_start_, Clock::duration::zero());
       return;
     }
+    timeout_s = std::min(timeout_s, 60.0);  // a start-up hold, not a way to keep the tree off
+    boot_hold_ = std::make_unique<BootHold>(boot_hold_start_,
+                                            std::chrono::duration_cast<Clock::duration>(
+                                                std::chrono::duration<double>(timeout_s)));
 
     boot_blade_client_ =
         create_client<mowgli_interfaces::srv::MowerControl>("/hardware_bridge/mower_control");
@@ -1454,6 +1459,18 @@ private:
     addBootCancels(/*controller_goals=*/false);
     boot_hold_->next_group();
     addBootCancels(/*controller_goals=*/true);
+    // An answered cancel only means the goal is canceling. Release once no endpoint reports an
+    // active goal any more.
+    boot_hold_->next_group();
+    for (const auto* name : {"/navigate_to_pose",
+                             "/undock_robot",
+                             "/dock_robot",
+                             "/backup",
+                             "/retrace",
+                             "/follow_path"})
+    {
+      boot_hold_->add_step(std::string("no active goal on ") + name, noActiveGoalStep(name));
+    }
 
     boot_hold_timer_ = create_wall_timer(100ms,
                                          [this]()
@@ -1477,6 +1494,8 @@ private:
     boot_hold_->add_step("cancel /dock_robot",
                          cancelStep<nav2_msgs::action::DockRobot>("/dock_robot"));
     boot_hold_->add_step("cancel /backup", cancelStep<nav2_msgs::action::BackUp>("/backup"));
+    // The tree's navigation subtrees back up through this separate BackUp server.
+    boot_hold_->add_step("cancel /retrace", cancelStep<nav2_msgs::action::BackUp>("/retrace"));
   }
 
   /// Blade OFF, done once the bridge has answered success (it accepted the request and passed it
@@ -1528,10 +1547,38 @@ private:
     };
   }
 
+  /// Done once the action server's status topic shows no accepted, executing or canceling goal (or
+  /// nothing publishes it: no server, no goals). The subscription is transient-local, like the
+  /// server's publisher, so it gets the last status at once.
+  BootHold::Step noActiveGoalStep(const std::string& action)
+  {
+    auto active = std::make_shared<bool>(false);
+    auto sub = create_subscription<action_msgs::msg::GoalStatusArray>(
+        action + "/_action/status",
+        rclcpp::QoS(1).reliable().transient_local(),
+        [active](action_msgs::msg::GoalStatusArray::ConstSharedPtr msg)
+        {
+          using Status = action_msgs::msg::GoalStatus;
+          *active = std::any_of(msg->status_list.begin(),
+                                msg->status_list.end(),
+                                [](const Status& goal)
+                                {
+                                  return goal.status == Status::STATUS_ACCEPTED ||
+                                         goal.status == Status::STATUS_EXECUTING ||
+                                         goal.status == Status::STATUS_CANCELING;
+                                });
+        });
+    boot_status_subs_.push_back(sub);
+    return [sub, active]()
+    {
+      return sub->get_publisher_count() == 0 || !*active;
+    };
+  }
+
   /// Cancel-all on one action server, done once the server has answered the request. An answer
-  /// means the server has moved every running goal to canceling (it ends them on its next control
-  /// cycle; the settle step and the second sweep give it time and catch late dispatches). A server
-  /// that refuses is asked again until the hold's deadline.
+  /// means the server has moved every running goal to canceling, not that they have ended (the
+  /// last group waits for that); the settle step and the second sweep catch late dispatches. A
+  /// server that refuses is asked again until the hold's deadline.
   template <typename ActionT>
   BootHold::Step cancelStep(const std::string& name)
   {
@@ -1541,11 +1588,13 @@ private:
       slot = rclcpp_action::create_client<ActionT>(this, name);
       // If the hold gives up, still ask this server to cancel (see giveUpBootHold()).
       boot_give_up_cancels_.push_back(
-          [client = std::static_pointer_cast<rclcpp_action::Client<ActionT>>(slot)]()
+          [this, client = std::static_pointer_cast<rclcpp_action::Client<ActionT>>(slot)]()
           {
             if (client->action_server_is_ready())
             {
-              client->async_cancel_all_goals();
+              // Only goals accepted up to now: one the new tree sends after this is left alone,
+              // even if this request is still queued when it arrives.
+              client->async_cancel_goals_before(now());
             }
           });
     }
@@ -1597,10 +1646,11 @@ private:
   }
 
   /// The hold ran out of time with steps pending (a server that is discovered but does not answer,
-  /// or a step gated behind one that does not). Best effort before the tree ticks: ask every
-  /// motion server to cancel and the bridge to turn the blade off, without waiting for answers. A
-  /// goal the new tree sends meanwhile may be cancelled by this too, which the tree handles like
-  /// any cancelled goal; a stale goal left driving is worse.
+  /// a goal that is still canceling, or a step gated behind one of those). Best effort before the
+  /// tree ticks: ask every motion server to cancel the goals it has accepted up to now and the
+  /// bridge to turn the blade off, without waiting for answers. A goal the new tree sends after
+  /// this is not touched, even if the request is still queued when it arrives. The bridge's own
+  /// status timeout remains the backstop for a goal that keeps driving.
   void giveUpBootHold()
   {
     for (const auto& cancel : boot_give_up_cancels_)
@@ -1642,6 +1692,8 @@ private:
       giveUpBootHold();
     }
     RCLCPP_INFO(get_logger(), "Boot hold over: the behaviour tree starts ticking");
+    boot_status_subs_.clear();
+    boot_hold_.reset();
     return true;
   }
 
@@ -2305,6 +2357,7 @@ private:
   rclcpp::TimerBase::SharedPtr boot_hold_timer_;
   std::map<std::string, std::shared_ptr<void>> boot_action_clients_;
   std::vector<std::function<void()>> boot_give_up_cancels_;
+  std::vector<rclcpp::Subscription<action_msgs::msg::GoalStatusArray>::SharedPtr> boot_status_subs_;
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr boot_blade_client_;
   std::chrono::steady_clock::time_point nav2_wait_deadline_;
   bool nav_ready_{false};

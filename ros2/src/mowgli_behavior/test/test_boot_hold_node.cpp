@@ -81,18 +81,22 @@ public:
   /// (a server that is discovered but does not answer in time).
   /// `refused_follow_cancels`: /follow_path refuses its first cancel requests (a server that
   /// cannot cancel yet).
+  /// `follow_finish_delay`: a cancelled /follow_path goal stays canceling this long before it ends
+  /// (a controller that has not noticed the cancel yet).
   Endpoints(const std::vector<std::string>& served,
             bool with_blade,
             std::chrono::milliseconds cancel_delay,
             bool late_follow_goal = false,
             std::string slow_endpoint = "",
             std::chrono::milliseconds slow_delay = 0ms,
-            int refused_follow_cancels = 0)
+            int refused_follow_cancels = 0,
+            std::chrono::milliseconds follow_finish_delay = 0ms)
       : peer_(rclcpp::Node::make_shared("boot_hold_fixture")),
         delay_(cancel_delay),
         slow_endpoint_(std::move(slow_endpoint)),
         slow_delay_(slow_delay),
         refused_follow_cancels_(refused_follow_cancels),
+        follow_finish_delay_(follow_finish_delay),
         late_follow_goal_(late_follow_goal)
   {
     // Reentrant: a server that sits on its answer must not stall the others.
@@ -117,7 +121,7 @@ public:
         add<nav2_msgs::action::UndockRobot>(name);
       else if (name == "/dock_robot")
         add<nav2_msgs::action::DockRobot>(name);
-      else if (name == "/backup")
+      else if (name == "/backup" || name == "/retrace")
         add<nav2_msgs::action::BackUp>(name);
       else if (name == "/follow_path")
         add<nav2_msgs::action::FollowPath>(name);
@@ -177,6 +181,12 @@ public:
     std::lock_guard<std::mutex> lock(mutex_);
     return cancels_;
   }
+  /// When each cancelled goal reached its terminal state.
+  std::vector<CancelLog> terminals() const
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return terminals_;
+  }
   std::vector<std::pair<bool, Clock::time_point>> bladeRequests() const
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -214,18 +224,28 @@ private:
           }
           return rclcpp_action::CancelResponse::ACCEPT;
         },
-        [this](const std::shared_ptr<Handle> goal)
+        [this, name](const std::shared_ptr<Handle> goal)
         {
           std::lock_guard<std::mutex> lock(mutex_);
           goals_.push_back(goal);  // held running: the dead instance's goal
           ++held_;
           finishers_.push_back(
-              [goal]
+              [this, goal, name, seen = std::optional<Clock::time_point>{}]() mutable
               {
-                if (goal->is_canceling())
+                if (!goal->is_canceling())
                 {
-                  goal->canceled(std::make_shared<typename ActionT::Result>());
+                  return;
                 }
+                if (!seen)
+                {
+                  seen = Clock::now();
+                }
+                if (name == "/follow_path" && Clock::now() - *seen < follow_finish_delay_)
+                {
+                  return;
+                }
+                goal->canceled(std::make_shared<typename ActionT::Result>());
+                terminals_.push_back({name, Clock::now()});
               });
         },
         rcl_action_server_get_default_options(),
@@ -269,6 +289,8 @@ private:
   std::thread thread_;
   mutable std::mutex mutex_;
   std::vector<CancelLog> cancels_;
+  std::vector<CancelLog> terminals_;
+  std::chrono::milliseconds follow_finish_delay_{0};
   std::vector<std::pair<bool, Clock::time_point>> blade_requests_;
   std::vector<std::shared_ptr<void>> goals_;
   std::vector<std::shared_ptr<void>> servers_;
@@ -286,7 +308,7 @@ private:
 };
 
 const std::vector<std::string> kAllEndpoints{
-    "/navigate_to_pose", "/undock_robot", "/dock_robot", "/backup", "/follow_path"};
+    "/navigate_to_pose", "/undock_robot", "/dock_robot", "/backup", "/retrace", "/follow_path"};
 
 class BootHoldNode : public ::testing::Test
 {
@@ -335,7 +357,14 @@ protected:
 
 TEST_F(BootHoldNode, WaitsForEveryServerToAnswerItsCancelBeforeTheFirstTick)
 {
-  Endpoints fx(kAllEndpoints, true, 150ms, /*late_follow_goal=*/true);
+  Endpoints fx(kAllEndpoints,
+               true,
+               150ms,
+               /*late_follow_goal=*/true,
+               "",
+               0ms,
+               0,
+               /*follow_finish_delay=*/800ms);
   fx.sendDeadGoals();
   ASSERT_TRUE(fx.allGoalsHeld());
 
@@ -356,24 +385,33 @@ TEST_F(BootHoldNode, WaitsForEveryServerToAnswerItsCancelBeforeTheFirstTick)
   EXPECT_FALSE(blades[0].first) << "blade OFF";
   EXPECT_LT(blades[0].second, probe.first_tick);
 
-  // First sweep: the four parents, then the controller goal, each answered (the servers take
+  // First sweep: the five parents, then the controller goal, each answered (the servers take
   // 150 ms) before the tree ticks: a goal the new tree sends first must never meet a cancel-all
   // that is still queued.
-  ASSERT_EQ(cancels.size(), 6u);
+  ASSERT_EQ(cancels.size(), 7u);
   for (const auto& c : cancels)
   {
     EXPECT_LT(c.at, probe.first_tick) << c.name << " cancel processed after the first tick";
   }
-  for (std::size_t i = 0; i < 4; ++i)
+  for (std::size_t i = 0; i < 5; ++i)
   {
     EXPECT_NE(cancels[i].name, "/follow_path");
-    EXPECT_LE(cancels[i].at, cancels[4].at);
+    EXPECT_LE(cancels[i].at, cancels[5].at);
   }
-  EXPECT_EQ(cancels[4].name, "/follow_path");
+  EXPECT_EQ(cancels[5].name, "/follow_path");
   // The dead parent dispatched one more controller goal after the first controller sweep was over:
   // only the second sweep catches it.
-  EXPECT_EQ(cancels[5].name, "/follow_path");
-  EXPECT_GT(cancels[5].at, cancels[4].at);
+  EXPECT_EQ(cancels[6].name, "/follow_path");
+  EXPECT_GT(cancels[6].at, cancels[5].at);
+
+  // An answered cancel leaves a goal canceling; the controller takes another 800 ms to end it. The
+  // tree must not tick while any goal is still alive.
+  const auto terminals = fx.terminals();
+  ASSERT_EQ(terminals.size(), 7u);
+  for (const auto& t : terminals)
+  {
+    EXPECT_LT(t.at, probe.first_tick) << t.name << " goal still active at the first tick";
+  }
 }
 
 TEST_F(BootHoldNode, ARefusedCancelIsAskedAgainBeforeTheFirstTick)
