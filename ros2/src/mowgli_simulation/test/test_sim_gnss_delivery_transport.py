@@ -100,7 +100,10 @@ class Transport:
 
 
 @pytest.mark.parametrize('epoch', [68_240_000_000, 240_660_000_000])
-@pytest.mark.parametrize('latency,consumer_offset', [(0.0, -20_000_000), (0.02, 0), (0.02, -1)])
+@pytest.mark.parametrize(
+    'latency,consumer_offset',
+    [(0.0, -20_000_000), (0.02, 0), (0.02, -1), (0.02, -20_000_000)],
+)
 def test_independent_clocks_preserve_source_epoch_at_delivery(epoch, latency, consumer_offset):
     fixture = Transport(latency)
     try:

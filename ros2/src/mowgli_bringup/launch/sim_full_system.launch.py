@@ -141,6 +141,12 @@ def generate_launch_description() -> LaunchDescription:
         ),
     )
 
+    gps_delivery_latency_arg = DeclareLaunchArgument(
+        "gps_delivery_latency_s",
+        default_value="0.0",
+        description="Simulated GNSS delivery delay in producer ROS seconds.",
+    )
+
     # use_magnetometer comes from mowgli_robot.yaml via navigation.launch.py
     # — no need to declare it here. CLI override still propagates.
     # (There is no use_fusion_graph arg; fusion_graph_node is the sole,
@@ -371,9 +377,9 @@ def generate_launch_description() -> LaunchDescription:
                 'quality_pattern': ParameterValue(
                     LaunchConfiguration('gps_quality_pattern'), value_type=str
                 ),
-                # One captured native 20 ms step of scheduling allowance.
-                # Consumer future-provenance rejection remains unchanged.
-                "delivery_latency_s": 0.020,
+                "delivery_latency_s": ParameterValue(
+                    LaunchConfiguration("gps_delivery_latency_s"), value_type=float
+                ),
                 "noise_seed": 42,
             }
         ],
@@ -519,6 +525,7 @@ def generate_launch_description() -> LaunchDescription:
             use_lidar_arg,
             mode_arg,
             gps_quality_pattern_arg,
+            gps_delivery_latency_arg,
             # Subsystem includes
             simulation_launch,
             navigation_launch,

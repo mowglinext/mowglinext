@@ -19,8 +19,10 @@ from ros2launch.api.api import parse_launch_arguments
 
 
 @pytest.mark.parametrize('use_lidar', ['false', 'true'])
-@pytest.mark.parametrize('pattern', [None, '', '1,RTK_FIXED;2,RTK_FLOAT;3,NO_FIX'])
-def test_quality_pattern_reaches_single_relay(monkeypatch, use_lidar, pattern):
+@pytest.mark.parametrize(
+    'pattern,latency', [(None, None), ('', '0.0'), ('1,RTK_FIXED;2,RTK_FLOAT;3,NO_FIX', '0.020')]
+)
+def test_gnss_scenario_reaches_single_relay(monkeypatch, use_lidar, pattern, latency):
     packages = Path(__file__).resolve().parents[2]
     path = packages / 'mowgli_bringup' / 'launch' / 'sim_full_system.launch.py'
     spec = importlib.util.spec_from_file_location('sim_quality_launch', path)
@@ -35,6 +37,8 @@ def test_quality_pattern_reaches_single_relay(monkeypatch, use_lidar, pattern):
     context.launch_configurations['use_lidar'] = use_lidar
     if pattern is not None:
         context.launch_configurations['gps_quality_pattern'] = pattern
+    if latency is not None:
+        context.launch_configurations['gps_delivery_latency_s'] = latency
     for entity in description.entities:
         if isinstance(entity, DeclareLaunchArgument):
             entity.execute(context)
@@ -48,6 +52,8 @@ def test_quality_pattern_reaches_single_relay(monkeypatch, use_lidar, pattern):
     merged = {key: value for group in parameters for key, value in group.items()}
     assert merged['quality_pattern'] == (pattern or '')
     assert isinstance(merged['quality_pattern'], str)
+    assert merged['delivery_latency_s'] == float(latency or 0.0)
+    assert isinstance(merged['delivery_latency_s'], float)
     guards = [action for action in relays[0].get_sub_entities()
               if isinstance(action, OpaqueFunction)]
     assert len(guards) == 1

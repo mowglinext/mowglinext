@@ -298,9 +298,8 @@ class SimNavSatRtkFix(Node):
                           on_clock_change=True),
             post_callback=self._on_clock_jump,
         )
-        self._delivery_timer = self.create_timer(
-            0.020, self._drain_deliveries, clock=self.get_clock(),
-        )
+        if self._delivery_latency_ns > 0:
+            self.create_timer(0.020, self._drain_deliveries, clock=self.get_clock())
 
         # Diagnostics — surface the regime distribution observed.
         self._regime_counts: dict[str, int] = dict.fromkeys(QUALITY_REGIMES, 0)

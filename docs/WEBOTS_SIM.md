@@ -116,19 +116,19 @@ at rest. Future truth waits for clock eligibility without advancing authority;
 clock rewind clears pending truth, delivery and accepted stamps but preserves
 sequence identity and the source quality-cycle origin.
 
-Generated GNSS fix/status pairs wait until source epoch plus `delivery_latency_s`
-in producer ROS time. The immutable standalone default is `0.0`; the full
-simulation launch explicitly uses `0.020` s, one captured native clock step of
-scheduling allowance. Coordinates, noise, quality, covariance, header and sequence
-are generated once from source truth and retained unchanged. A 20 ms ROS timer
-releases final pending pairs without another raw GPS callback; a paused clock
-never flushes them. The ten-pair FIFO drops a newly generated pair on overflow,
-logs the drop and consumes its identity. Clock rewind discards pending deliveries;
-a forward jump releases original epochs, which may correctly be stale.
+The simulator can model GNSS delivery latency with `gps_delivery_latency_s:=0.020`
+on `sim_full_system.launch.py`. The launch argument and the immutable relay
+parameter `delivery_latency_s` both default to `0.0` seconds. With latency
+configured, fix/status pairs wait until source epoch plus that delay in producer
+ROS time. Coordinates, noise, quality, covariance, header and sequence are
+generated once from source truth and retained unchanged. A 20 ms ROS timer
+releases final pending pairs without another raw GPS callback. A paused clock
+holds the queue. The ten-pair FIFO logs and drops a newly generated pair on
+overflow, consuming its identity. Clock rewind discards pending deliveries.
+A forward jump releases original epochs, which may correctly be stale.
 
-This allowance addresses the captured 20 ms consumer-clock lag; it does not
-synchronize distributed clocks. Future-provenance rejection remains necessary
-when a consumer has not reached the source epoch. Input, timer and clock-jump
+The producer cannot observe a consumer's clock. A consumer whose clock still
+lags the source epoch can reject the observation as future-dated. Input, timer and clock-jump
 state use the executable's single-threaded executor. Clock-jump notification
 also catches rewind-and-catch-up between sensor/timer callbacks.
 Raw vendor wheel/IMU header phase and arbitrary cross-generation replay remain
