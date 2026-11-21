@@ -226,6 +226,7 @@ void GraphManager::BuildRebaseGraph(const gtsam::Values& estimate,
       cov && head_index && estimate.exists(PoseKey(*head_index)) && *head_index >= cutoff_index;
 
   std::vector<std::pair<uint64_t, gtsam::Pose2>> poses;
+  std::vector<gtsam::PriorFactor<gtsam::Pose2>> independent_priors;  // fallback only
   for (const auto& kv : estimate)
   {
     const gtsam::Symbol sym(kv.key);
@@ -240,13 +241,17 @@ void GraphManager::BuildRebaseGraph(const gtsam::Values& estimate,
     const auto pose = kv.value.cast<gtsam::Pose2>();
     if (!chain)
     {
-      fg.add(gtsam::PriorFactor<gtsam::Pose2>(kv.key, pose, independent_noise));
+      independent_priors.emplace_back(kv.key, pose, independent_noise);
       continue;
     }
     poses.emplace_back(sym.index(), pose);
   }
   if (!chain)
+  {
+    // Same independent priors, linked into one Bayes-tree root (#1118).
+    AddPosePriorTree(fg, independent_priors, kWindowPlainPriors);
     return;
+  }
 
   // Head: its full marginal (tangent frame, like the published covariance).
   fg.add(gtsam::PriorFactor<gtsam::Pose2>(PoseKey(*head_index),
