@@ -65,7 +65,10 @@ void GraphManager::RefreshEstimateLocked() const
   // periodic checkpoint).
   if (!estimate_dirty_)
     return;
-  current_estimate_ = isam_.calculateEstimate();
+  // gtsam::Values has no move assignment: swap instead of deep-copying the
+  // freshly built estimate a second time.
+  gtsam::Values fresh = isam_.calculateEstimate();
+  current_estimate_.swap(fresh);
   estimate_dirty_ = false;
 }
 
@@ -286,9 +289,14 @@ std::optional<TickOutput> GraphManager::LatestSnapshot() const
 uint64_t GraphManager::LiveNodeCount() const
 {
   std::lock_guard<std::mutex> lock(mu_);
-  const_cast<GraphManager*>(this)->RefreshEstimateLocked();
+  // The estimate holds exactly the linearization point's keys, so count those
+  // instead of materialising every pose (1 Hz diagnostics). getDelta() keeps
+  // iSAM2's deferred back-substitution on the schedule the old full refresh
+  // gave it, so later estimates are bit-for-bit unchanged.
+  if (estimate_dirty_)
+    isam_.getDelta();
   uint64_t n = 0;
-  for (const auto& kv : current_estimate_)
+  for (const auto& kv : isam_.getLinearizationPoint())
   {
     if (gtsam::Symbol(kv.key).chr() == 'x')
       ++n;
@@ -399,16 +407,41 @@ void GraphManager::AnchorYaw(uint64_t node_index, double yaw, double sigma_theta
 std::map<uint64_t, gtsam::Pose2> GraphManager::GetAllPoses() const
 {
   std::lock_guard<std::mutex> lock(mu_);
-  // Viz consumer: needs every node, so refresh the cached estimate.
-  // Throttled by the caller (1 Hz markers) — not on the per-Tick path.
-  RefreshEstimateLocked();
+  // Viz consumer (1 Hz markers): needs every node. Retract the poses
+  // straight into the map, exactly as calculateEstimate() does, rather than
+  // building and caching a full gtsam::Values (one heap node per variable).
   std::map<uint64_t, gtsam::Pose2> out;
-  for (const auto& kv : current_estimate_)
+  if (!estimate_dirty_)
   {
+    for (const auto& kv : current_estimate_)
+    {
+      gtsam::Symbol s(kv.key);
+      if (s.chr() == 'x')
+        out.emplace(static_cast<uint64_t>(s.index()), kv.value.cast<gtsam::Pose2>());
+    }
+    return out;
+  }
+  // iSAM2 keeps one delta per linearization-point variable and, in a GTSAM
+  // built without TBB (as shipped), both maps are key-ordered: walk them in
+  // lockstep instead of a lookup per key (the lookup remains the fallback).
+  // Same rule as Values::retract: retract every pose that has a delta (even a
+  // zero one, which also normalises -0.0), copy one that has none.
+  const gtsam::VectorValues& delta = isam_.getDelta();
+  auto d = delta.begin();
+  for (const auto& kv : isam_.getLinearizationPoint())
+  {
+    const gtsam::Vector* dx = nullptr;
+    if (d != delta.end() && d->first == kv.key)
+      dx = &(d++)->second;
+    else if (const auto it = delta.find(kv.key); it != delta.end())
+      dx = &it->second;
     gtsam::Symbol s(kv.key);
     if (s.chr() != 'x')
       continue;
-    out.emplace(static_cast<uint64_t>(s.index()), kv.value.cast<gtsam::Pose2>());
+    const auto& pose = kv.value.cast<gtsam::Pose2>();
+    out.emplace_hint(out.end(),
+                     static_cast<uint64_t>(s.index()),
+                     dx ? gtsam::traits<gtsam::Pose2>::Retract(pose, *dx) : pose);
   }
   return out;
 }
