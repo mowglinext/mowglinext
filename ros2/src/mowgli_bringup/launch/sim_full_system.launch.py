@@ -44,18 +44,24 @@ Phase 2 work — until that lands the helpers below may not see live data.
 
 import json
 import os
-from typing import List
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    LogWarning,
     OpaqueFunction,
 )
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import (
+    AndSubstitution,
+    EqualsSubstitution,
+    IfElseSubstitution,
+    LaunchConfiguration,
+    NotSubstitution,
+)
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 import yaml
@@ -64,8 +70,9 @@ import yaml
 # The Webots world's static test_obstacle (mowgli_garden.wbt: a 0.5 x 0.5 m box
 # centred at (3.0, 1.5)), as a map_server obstacle polygon (the footprint only;
 # the keepout band and coverage margin add the robot body). Only used when
-# LiDAR is off: nothing then senses the box, so without a map entry the plan
-# drives straight into it and the robot sits against it until the timeout.
+# the shipped garden runs with LiDAR off: nothing then senses the box, so the plan
+# otherwise drives straight into it.
+GARDEN_WORLD = "mowgli_garden.wbt"
 SIM_WORLD_OBSTACLE = "2.75,1.25;3.25,1.25;3.25,1.75;2.75,1.75"
 
 
@@ -73,6 +80,16 @@ def _on_required_gnss_exit(context):
     """Fail unexpected relay exits; preserve successful requested teardown."""
     if not context.is_shutdown:
         raise RuntimeError('Required GNSS quality relay exited unexpectedly')
+
+
+def _warn_if_saved_map_overrides_obstacle(context, seed_obstacle, map_params):
+    if not IfCondition(seed_obstacle).evaluate(context):
+        return
+    with open(map_params, "r", encoding="utf-8") as handle:
+        config = yaml.safe_load(handle)
+    areas_path = config["map_server_node"]["ros__parameters"].get("areas_file_path")
+    if areas_path and os.path.isfile(areas_path):
+        return [LogWarning(msg="Saved areas take precedence over the GPS-only garden obstacle seed.")]
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -101,7 +118,7 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     world_arg = DeclareLaunchArgument(
         "world",
-        default_value="mowgli_garden.wbt",
+        default_value=GARDEN_WORLD,
         description="Webots world filename inside worlds_webots/.",
     )
 
@@ -162,12 +179,17 @@ def generate_launch_description() -> LaunchDescription:
     world = LaunchConfiguration("world")
     use_rviz = LaunchConfiguration("use_rviz")
     use_lidar = LaunchConfiguration("use_lidar")
-    # A string-array parameter: the expression yields the list literal, parsed as YAML.
+    # Map seed only. A persisted map remains authoritative.
+    seed_obstacle = AndSubstitution(
+        EqualsSubstitution(world, GARDEN_WORLD), NotSubstitution(use_lidar)
+    )
     sim_area_obstacles = ParameterValue(
-        PythonExpression(
-            ["[''] if '", use_lidar, "'.lower() in ('true', '1') else ['", SIM_WORLD_OBSTACLE, "']"]
+        IfElseSubstitution(
+            seed_obstacle,
+            if_value=f"['{SIM_WORLD_OBSTACLE}']",
+            else_value="['']",
         ),
-        value_type=List[str],
+        value_type=list[str],
     )
     mode = LaunchConfiguration("mode")
 
@@ -270,9 +292,8 @@ def generate_launch_description() -> LaunchDescription:
             # commit history for BLOCKER #1). The sim needs a polygon to
             # exercise coverage, so override here. 9×6 m rectangle, no
             # pre-defined obstacles with LiDAR — the runtime obstacle tracker
-            # handles whatever appears in the world file. Without LiDAR nothing
-            # can sense world obstacles, so the world's static test_obstacle is
-            # surveyed into the map instead (see SIM_WORLD_OBSTACLE).
+            # handles the world obstacles. The shipped GPS-only garden seeds its
+            # static box into a fresh map (see SIM_WORLD_OBSTACLE).
             {
                 "area_names": ["main_mow"],
                 "area_polygons": ["-4.5,-3.0;4.5,-3.0;4.5,3.0;-4.5,3.0"],
@@ -545,6 +566,9 @@ def generate_launch_description() -> LaunchDescription:
             sim_wheel_slip_node,
             sim_imu_noise_node,
             behavior_tree_node,
+            OpaqueFunction(
+                function=_warn_if_saved_map_overrides_obstacle, args=[seed_obstacle, map_params]
+            ),
             map_server_node,
             obstacle_tracker_node,
             diagnostics_node,

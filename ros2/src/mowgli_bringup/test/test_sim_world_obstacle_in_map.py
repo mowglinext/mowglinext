@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 
 from launch import LaunchContext
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, LogWarning
 from launch_ros.actions import Node
 from launch_ros.utilities import evaluate_parameters
 import pytest
@@ -22,7 +22,7 @@ LAUNCH = PACKAGES / 'mowgli_bringup' / 'launch' / 'sim_full_system.launch.py'
 WORLD = PACKAGES / 'mowgli_simulation' / 'worlds_webots' / 'mowgli_garden.wbt'
 
 
-def _map_server_params(monkeypatch, use_lidar):
+def _map_server_params(monkeypatch, use_lidar, world=None):
     spec = importlib.util.spec_from_file_location('sim_world_obstacle_launch', LAUNCH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -30,6 +30,8 @@ def _map_server_params(monkeypatch, use_lidar):
     description = module.generate_launch_description()
     context = LaunchContext()
     context.launch_configurations['use_lidar'] = use_lidar
+    if world is not None:
+        context.launch_configurations['world'] = world
     for entity in description.entities:
         if isinstance(entity, DeclareLaunchArgument):
             entity.execute(context)
@@ -67,3 +69,27 @@ def test_map_obstacle_matches_the_world_box_without_lidar(monkeypatch):
 def test_map_stays_empty_with_lidar(monkeypatch, use_lidar):
     params = _map_server_params(monkeypatch, use_lidar)
     assert params['area_obstacles'] == ['']
+
+
+
+def test_custom_world_does_not_get_the_garden_obstacle(monkeypatch):
+    params = _map_server_params(monkeypatch, 'false', world='my_yard.wbt')
+    assert params['area_obstacles'] == ['']
+
+
+def test_garden_seed_warns_when_the_saved_map_takes_precedence(tmp_path):
+    spec = importlib.util.spec_from_file_location('sim_world_obstacle_warning', LAUNCH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    areas = tmp_path / 'areas.dat'
+    map_params = tmp_path / 'map_server.yaml'
+    map_params.write_text(
+        f'map_server_node:\n  ros__parameters:\n    areas_file_path: {areas}\n'
+    )
+    context = LaunchContext()
+    assert module._warn_if_saved_map_overrides_obstacle(context, 'true', map_params) is None
+    areas.touch()
+    actions = module._warn_if_saved_map_overrides_obstacle(context, 'true', map_params)
+    assert len(actions) == 1
+    assert isinstance(actions[0], LogWarning)
+    assert module._warn_if_saved_map_overrides_obstacle(context, 'false', map_params) is None
