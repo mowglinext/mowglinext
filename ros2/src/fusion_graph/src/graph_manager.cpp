@@ -102,6 +102,7 @@ void GraphManager::AddWheelTwist(double vx, double vy, double wz, double dt)
   // the between-factor noise absorbs.
   accum_.dx += vx * dt;
   accum_.dy += vy * dt;
+  accum_.wheel_travel_m += std::hypot(vx, vy) * dt;
   accum_.dtheta_wheel += wz * dt;
   accum_.dt_total += dt;
 }
