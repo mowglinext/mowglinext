@@ -449,6 +449,8 @@ private:
   // read by AddGyroDelta to gate EMA updates. Single-writer (Tick)
   // / single-reader (AddGyroDelta), both under mu_.
   bool wheel_stationary_now_ = false;
+  // Start of the current run of encoder-still nodes (gyro_bias_min_still_s).
+  std::optional<double> bias_still_since_s_;
 
   // ── Async-rebase pipeline ───────────────────────────────────────
   // RebaseISAM2 rebuilds the iSAM2 Bayes tree from scratch with one
