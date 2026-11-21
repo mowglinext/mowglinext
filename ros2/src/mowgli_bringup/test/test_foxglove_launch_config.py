@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import re
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,11 @@ def _build(filename, **overrides):
             "LaunchConfiguration": Configuration,
             "PythonExpression": Action,
             "EnvironmentVariable": Action,
+            "EqualsSubstitution": Action,
+            "IfElseSubstitution": Action,
+            "OnShutdown": Action,
+            "RegisterEventHandler": Action,
+            "tempfile": tempfile,
             "ParameterValue": Parameter,
             "Node": Node,
             'OpaqueFunction': Action,
