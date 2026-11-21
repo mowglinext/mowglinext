@@ -3,6 +3,8 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <sstream>
 #include <thread>
 
 #include "fusion_graph/lidar_map_file.hpp"
@@ -183,6 +185,99 @@ TEST_F(SubmapStoreTest, RejectsNonFiniteEvidenceInOtherwiseValidTile)
   LidarSubmapStore restored(params_, prefix_, 48, 2);
   EXPECT_FALSE(Ready(restored));
   EXPECT_NE(restored.last_error().find("evidence"), std::string::npos);
+}
+
+TEST_F(SubmapStoreTest, PackedScalarFormatIsCompatibleAcrossRowsAndTileOffsets)
+{
+  // Small tiles exercise every row and all nine offsets in the live window.
+  constexpr std::size_t cells = 10;
+  const auto evidence = [](std::size_t x, std::size_t y)
+  {
+    const double values[] = {-2.0, -1.23456789012345, -0.0, 0.0, 0.45, 0.85, 3.5};
+    return (x + y) % 5 == 0 ? LidarOccupancyMapper::Evidence{0.0, 0}
+                            : LidarOccupancyMapper::Evidence{values[(x + 3 * y) % 7], 1};
+  };
+  {
+    LidarSubmapStore store(params_, prefix_, 48, 2, 1, 1);
+    ASSERT_TRUE(Ready(store));
+    for (std::size_t y = 0; y < 3 * cells; ++y)
+      for (std::size_t x = 0; x < 3 * cells; ++x)
+        ASSERT_TRUE(store.mapper()->SetEvidence(x, y, evidence(x, y)));
+    store.RequestSave();
+    ASSERT_TRUE(Ready(store));
+    for (int ty = -1; ty <= 1; ++ty)
+      for (int tx = -1; tx <= 1; ++tx)
+      {
+        // Independent scalar encoder of the pre-existing file format. No
+        // struct writes: the on-disk evidence is exactly eight plus one byte.
+        std::ostringstream scalar(std::ios::binary | std::ios::out);
+        const auto append = [&](const auto& value)
+        {
+          scalar.write(reinterpret_cast<const char*>(&value), sizeof(value));
+        };
+        scalar.write("MWLTILE1", 8);
+        append(std::uint32_t{cells});
+        append(static_cast<std::int32_t>(tx));
+        append(static_cast<std::int32_t>(ty));
+        for (double value : {params_.resolution_m, 1.0, 48.0, 2.0})
+          append(value);
+        for (std::size_t y = 0; y < cells; ++y)
+          for (std::size_t x = 0; x < cells; ++x)
+          {
+            const auto e = evidence((tx + 1) * cells + x, (ty + 1) * cells + y);
+            append(e.log_odds);
+            append(e.touched);
+          }
+        const auto path =
+            prefix_ + ".lidartiles/" + std::to_string(tx) + "_" + std::to_string(ty) + ".tile";
+        std::ifstream actual(path, std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(actual)), {});
+        ASSERT_EQ(bytes, scalar.str()) << tx << "," << ty;
+        // Also exercise the reader with files emitted by the scalar encoder.
+        actual.close();
+        std::ofstream fixture(path, std::ios::binary | std::ios::trunc);
+        fixture << scalar.str();
+        ASSERT_TRUE(fixture.good());
+      }
+  }
+  LidarSubmapStore restored(params_, prefix_, 48, 2, 1, 1);
+  ASSERT_TRUE(Ready(restored));
+  for (std::size_t y = 0; y < 3 * cells; ++y)
+    for (std::size_t x = 0; x < 3 * cells; ++x)
+    {
+      const auto actual = restored.mapper()->EvidenceAt(x, y), expected = evidence(x, y);
+      EXPECT_DOUBLE_EQ(actual.log_odds, expected.log_odds) << x << "," << y;
+      EXPECT_EQ(std::signbit(actual.log_odds), std::signbit(expected.log_odds));
+      EXPECT_EQ(actual.touched, expected.touched) << x << "," << y;
+    }
+}
+
+TEST_F(SubmapStoreTest, RejectsInvalidEvidenceInLaterPackedRow)
+{
+  {
+    LidarSubmapStore store(params_, prefix_, 48, 2, 1, 1);
+    ASSERT_TRUE(Ready(store));
+    ASSERT_TRUE(store.mapper()->SetEvidence(10, 10, {0.85, 1}));
+    store.RequestSave();
+    ASSERT_TRUE(Ready(store));
+  }
+  const LidarOccupancyMapper::Evidence invalid[] = {{3.6, 1},
+                                                    {0.0, 2},
+                                                    {0.125, 0},
+                                                    {std::numeric_limits<double>::quiet_NaN(), 1}};
+  for (const auto e : invalid)
+  {
+    std::fstream corrupt(prefix_ + ".lidartiles/0_0.tile",
+                         std::ios::binary | std::ios::in | std::ios::out);
+    corrupt.seekp(52 + 9 * (9 * 10 + 7));
+    corrupt.write(reinterpret_cast<const char*>(&e.log_odds), sizeof(e.log_odds));
+    corrupt.write(reinterpret_cast<const char*>(&e.touched), sizeof(e.touched));
+    corrupt.close();
+    LidarSubmapStore restored(params_, prefix_, 48, 2, 1, 1);
+    EXPECT_FALSE(Ready(restored));
+    EXPECT_NE(restored.last_error().find("evidence"), std::string::npos);
+    EXPECT_EQ(restored.mapper(), nullptr);
+  }
 }
 
 TEST_F(SubmapStoreTest, LegacyImportPersistsCellsOutsideActiveWindow)

@@ -1230,10 +1230,88 @@ double FTCController::distanceLookahead() const
   return lookahead_distance;
 }
 
+bool FTCController::curvatureRegulationAllowed() const
+{
+  if (current_index_ + 1 >= global_plan_.size())
+    return false;
+  const auto& a = global_plan_[current_index_].pose;
+  const auto& b = global_plan_[current_index_ + 1].pose;
+  if (!PlanIntervalCurvature(std::hypot(b.position.x - a.position.x, b.position.y - a.position.y),
+                             tf2::getYaw(b.orientation) - tf2::getYaw(a.orientation)))
+    return false;  // recheck after carrot advancement before using this cycle's cached evidence
+  // turn_fallback_.phase also covers a running contour bypass. The stop-corner
+  // approach owns its point-bearing output and speed reserve.
+  return config_.forward_only && current_state_ == PlannerState::FOLLOWING && !is_avoiding_ &&
+         lateral_deviation_ == 0.0 && target_lateral_deviation_ == 0.0 && !reverse_escape_active_ &&
+         !obstacle_waiting_ && !obstacle_recovery_active_ &&
+         turn_fallback_.phase == TurnFallbackPhase::kIdle && !is_stalled_ && !stopCornerApproach();
+}
+
+void FTCController::updateCurvatureAtRobot()
+{
+  curvature_robot_.reset();
+  curvature_ = CurvatureAtRobot{};
+  if ((!config_.curvature_speed_limit_enabled && !(config_.curvature_feedforward_gain > 0.0)) ||
+      !curvatureRegulationAllowed() || current_index_ + 1 >= global_plan_.size())
+  {
+    return;
+  }
+  geometry_msgs::msg::TransformStamped robot;
+  try
+  {
+    // Non-blocking: the native lookup below stays the TF failure authority.
+    robot = tf_buffer_->lookupTransform("map",
+                                        "base_link",
+                                        tf2::TimePointZero,
+                                        tf2::durationFromSec(0.0));
+  }
+  catch (const tf2::TransformException&)
+  {
+    return;
+  }
+  const auto pose_at = [this](std::size_t i)
+  {
+    const auto& p = global_plan_[i].pose;
+    return CurvaturePlanPose{p.position.x, p.position.y, tf2::getYaw(p.orientation)};
+  };
+  // Back from the carrot by at most the lead the longitudinal loop allows
+  // plus a margin: the robot cannot legitimately be farther behind.
+  const double max_back =
+      CarrotMaxLead(config_.carrot_max_lead, config_.speed_fast, config_.kp_lon) + 0.30;
+  curvature_robot_ = ProjectRobotBehindCarrot(pose_at,
+                                              global_plan_.size(),
+                                              current_index_,
+                                              current_progress_,
+                                              robot.transform.translation.x,
+                                              robot.transform.translation.y,
+                                              max_back);
+  if (!curvature_robot_)
+    return;
+  const double speed = std::max({current_movement_speed_, last_measured_fwd_speed_, 0.0});
+  curvature_ =
+      CurvatureAhead(pose_at,
+                     global_plan_.size(),
+                     *curvature_robot_,
+                     speed,
+                     config_.max_cmd_vel_ang,
+                     config_.curvature_speed_yaw_reserve,
+                     config_.stall_crawl_speed,
+                     config_.acceleration,
+                     config_.curvature_speed_response_s,
+                     config_.curvature_speed_min_turn_deg * M_PI / 180.0,
+                     // A run is the bend the native speed_fast cannot hold.
+                     config_.max_cmd_vel_ang *
+                         (1.0 - std::clamp(config_.curvature_speed_yaw_reserve, 0.0, 0.9)) /
+                         std::max(config_.speed_fast, 1e-3));
+}
+
 void FTCController::update_control_point(double dt)
 {
   if (!pivot_corners_.empty() && plan_header_.frame_id != "map")
     throw nav2_core::ControllerException("FTCController: pivot requires a map-frame path.");
+  // Curvature evidence is per cycle and only ever set in FOLLOWING below.
+  curvature_robot_.reset();
+  curvature_ = CurvatureAtRobot{};
   switch (current_state_)
   {
     case PlannerState::PRE_ROTATE:
@@ -1305,6 +1383,18 @@ void FTCController::update_control_point(double dt)
       const double max_speed = maxLinearSpeed();
       target_speed = std::min(target_speed, max_speed);
       current_movement_speed_ = std::min(current_movement_speed_, max_speed);
+
+      // Opt-in curvature speed cap, from the ROBOT's place on the plan so it
+      // holds until the chassis has left the arc (ftc_curvature_feedforward.hpp).
+      updateCurvatureAtRobot();
+      if (config_.curvature_speed_limit_enabled && curvature_.supported)
+      {
+        target_speed = std::min(target_speed, curvature_.speed_cap);
+        // As for max_speed above: the stall detector's expected speed must
+        // not lag a cap that appears at once (a ramp from above would read a
+        // capped robot as slipping).
+        current_movement_speed_ = std::min(current_movement_speed_, curvature_.speed_cap);
+      }
 
       // Anti-wheelspin traction control. If the carrot is already commanding a
       // meaningful forward speed but the robot's ACTUAL forward speed (odom
@@ -1716,6 +1806,14 @@ void FTCController::calculate_velocity_commands(double dt,
     cmd_vel.twist.linear.x = 0.0;
   }
 
+  // Curvature cap on the FINAL forward output, after the min_speed_mps floor
+  // and the stall crawl: neither may restore a speed the arc cannot be held at.
+  if (config_.curvature_speed_limit_enabled && curvature_.supported &&
+      curvatureRegulationAllowed() && cmd_vel.twist.linear.x > curvature_.speed_cap)
+  {
+    cmd_vel.twist.linear.x = curvature_.speed_cap;
+  }
+
   // ── Angular velocity ───────────────────────────────────────────────────────
 
   // When reversing, steering must correct in the opposite lateral direction.
@@ -1734,6 +1832,31 @@ void FTCController::calculate_velocity_commands(double dt,
     double ang_speed = angle_error_ * config_.kp_ang_following + i_angle_error_ * config_.ki_ang +
                        d_angle * config_.kd_ang + lat_error_for_steering * config_.kp_lat +
                        i_lat_error_ * config_.ki_lat + d_lat * config_.kd_lat;
+
+    // Opt-in: the rate the path itself turns at the commanded speed, so an
+    // arc is held without a standing error (ftc_curvature_feedforward.hpp).
+    // Only on clean nominal following with a valid robot projection; any
+    // unsupported cycle applies no part of the correction.
+    if (config_.curvature_feedforward_gain > 0.0 && curvature_.supported && curvature_robot_ &&
+        curvatureRegulationAllowed() && current_index_ + 1 < global_plan_.size())
+    {
+      const auto pose_at = [this](std::size_t i)
+      {
+        const auto& p = global_plan_[i].pose;
+        return CurvaturePlanPose{p.position.x, p.position.y, tf2::getYaw(p.orientation)};
+      };
+      const auto lead = PlanHeadingChange(
+          pose_at, curvature_robot_->index, curvature_robot_->t, current_index_, current_progress_);
+      if (lead)
+      {
+        ang_speed += CurvatureFeedforward(config_.curvature_feedforward_gain,
+                                          cmd_vel.twist.linear.x,
+                                          curvature_.anticipated_curvature,
+                                          config_.kp_ang_following,
+                                          *lead,
+                                          config_.max_cmd_vel_ang);
+      }
+    }
 
     ang_speed = std::clamp(ang_speed, -config_.max_cmd_vel_ang, config_.max_cmd_vel_ang);
     cmd_vel.twist.angular.z = ang_speed;

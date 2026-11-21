@@ -121,6 +121,26 @@ void FTCController::declareParameters(const nav2::LifecycleNode::SharedPtr& node
   // unless explicitly lowered (it is, in nav2_params_base.yaml, to kill the
   // straight-swath weave without softening the PRE_ROTATE pivot).
   config_.kp_ang_following = declare_double("kp_ang_following", config_.kp_ang);
+  // Curvature regulation in FOLLOWING (ftc_curvature_feedforward.hpp); both
+  // switches off = the native feedback-only law.
+  config_.curvature_feedforward_gain = declare_double("curvature_feedforward_gain", 0.0);
+  config_.curvature_speed_limit_enabled = declare_bool("curvature_speed_limit_enabled", false);
+  config_.curvature_speed_yaw_reserve = declare_double("curvature_speed_yaw_reserve", 0.15);
+  config_.curvature_speed_response_s = declare_double("curvature_speed_response_s", 0.3);
+  config_.curvature_speed_min_turn_deg = declare_double("curvature_speed_min_turn_deg", 0.0);
+  // Same ranges as onParameterChange.
+  const auto out_of_range = [](double value, double min, double max)
+  {
+    return !std::isfinite(value) || value < min || value > max;
+  };
+  if (out_of_range(config_.curvature_feedforward_gain, 0.0, kCurvatureFeedforwardGainMax) ||
+      out_of_range(config_.curvature_speed_yaw_reserve, 0.0, kCurvatureYawReserveMax) ||
+      out_of_range(config_.curvature_speed_response_s, 0.0, kCurvatureResponseMaxS) ||
+      out_of_range(config_.curvature_speed_min_turn_deg, 0.0, kCurvatureMinTurnMaxDeg))
+  {
+    throw nav2_core::ControllerException(plugin_name_ +
+                                         ": curvature regulation parameters out of range");
+  }
 
   // Derivative low-pass time constant (s); 0 = raw derivative (prior behaviour).
   config_.derivative_filter_tau = declare_double("derivative_filter_tau", 0.0);
@@ -460,6 +480,34 @@ rcl_interfaces::msg::SetParametersResult FTCController::onParameterChange(
       if (reject_invalid(key, p.as_double(), 0.0, 100.0))
         break;
       next.kp_ang_following = p.as_double();
+    }
+    else if (key == "curvature_speed_limit_enabled")
+    {
+      next.curvature_speed_limit_enabled = p.as_bool();
+    }
+    else if (key == "curvature_feedforward_gain")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, kCurvatureFeedforwardGainMax))
+        break;
+      next.curvature_feedforward_gain = p.as_double();
+    }
+    else if (key == "curvature_speed_yaw_reserve")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, kCurvatureYawReserveMax))
+        break;
+      next.curvature_speed_yaw_reserve = p.as_double();
+    }
+    else if (key == "curvature_speed_response_s")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, kCurvatureResponseMaxS))
+        break;
+      next.curvature_speed_response_s = p.as_double();
+    }
+    else if (key == "curvature_speed_min_turn_deg")
+    {
+      if (reject_invalid(key, p.as_double(), 0.0, kCurvatureMinTurnMaxDeg))
+        break;
+      next.curvature_speed_min_turn_deg = p.as_double();
     }
     else if (key == "ki_ang")
     {

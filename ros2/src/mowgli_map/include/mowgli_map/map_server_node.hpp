@@ -285,6 +285,13 @@ public:
     on_clear_map(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
   }
 
+  /// Test-only: the ~/save_areas service handler (the commit that ends a GUI
+  /// map replace).
+  void save_areas_service_for_test(std_srvs::srv::Trigger::Response::SharedPtr response)
+  {
+    on_save_areas(std::make_shared<std_srvs::srv::Trigger::Request>(), response);
+  }
+
   /// Test-only: current area-list generation (mowglinext#637 phase 2).
   uint64_t area_list_generation_for_test() const
   {
@@ -607,7 +614,19 @@ private:
   /// LiDAR-ignore-corridor area-side restriction; defined in
   /// area_manager.cpp (unlike the corridor publish above, this one needs
   /// direct access to areas_, which area_manager.cpp already owns).
+  /// ~/clear_map and ~/add_area do NOT call it directly: they call
+  /// begin_area_list_edit (see recorded_areas_publication_pending_).
   void publish_recorded_area_polygons();
+
+  /// The message half of publish_recorded_area_polygons, without the transit
+  /// invalidation (the edit path has already invalidated transit via
+  /// defer_mask_rebuild).
+  void publish_recorded_area_list();
+
+  /// Called by ~/clear_map and ~/add_area: publish an EMPTY area list at once
+  /// (unless the last one sent was already empty), which turns the corridor
+  /// filter off, and schedule the real list for when the edit has settled.
+  void begin_area_list_edit();
 
   /// ~/capture_dock_antenna: average the RAW antenna position while seated on
   /// the dock (charging + RTK gates) and hold it, unpersisted, for the
@@ -1172,6 +1191,29 @@ private:
   std::string corridor_server_instance_id_;
   uint64_t corridor_revision_{0};
   bool corridor_publication_pending_{false};
+
+  /// An area edit is in progress: the empty list has been sent and the real
+  /// one goes out from on_publish_timer at area_list_publish_not_before_.
+  /// A GUI map save is clear_map -> add_area x N; publishing the list between
+  /// those calls handed costmap_scan_filter_node a PARTIAL list, and keeping
+  /// the previous list instead is just as wrong once an area grew. Either way
+  /// a beam inside an area the filter does not know about reads as "outside
+  /// every recorded area" and, next to a LiDAR-ignore corridor, is suppressed
+  /// at any distance on /scan_collision too. An empty list disables the
+  /// filter, so while an edit is in progress nothing is suppressed.
+  /// Its own deadline, not mask_rebuild_not_before_: peer-dock updates push
+  /// that one out and must not hold the filter off. Guarded by
+  /// areas_state_mutex_.
+  bool recorded_areas_publication_pending_{false};
+  std::chrono::steady_clock::time_point area_list_publish_not_before_{};
+  bool area_list_published_empty_{false};
+
+  /// Set by ~/clear_map: a replace is in progress, and a quiet spell between
+  /// two add_area calls (a slow link) does not mean it is complete. The list
+  /// stays empty until the caller commits with ~/save_areas (the GUI does,
+  /// after a replace and after a rollback), or a complete list is loaded
+  /// (load_areas_from_file / datum migration). Guarded by areas_state_mutex_.
+  bool area_replace_in_progress_{false};
 
   /// Bumped on every successful ~/add_area (mowglinext#637 phase 2) and
   /// published on area_list_generation_pub_ (transient_local — a late

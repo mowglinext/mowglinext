@@ -215,8 +215,24 @@ if(BUILD_TESTING)
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  # Opt-in benchmark, not part of the default build or CI:
+  #   colcon build --packages-select mowgli_nav2_plugins --cmake-target ftc_solver_bench
+  add_executable(ftc_solver_bench EXCLUDE_FROM_ALL
+    test/bench/ftc_solver_bench.cpp
+  )
+  target_include_directories(ftc_solver_bench PRIVATE include)
+  target_sources(ftc_solver_bench PRIVATE
+    src/ftc_lattice_solver.cpp
+    src/obstacle_deviation.cpp
+  )
+  target_link_libraries(ftc_solver_bench
+    ${nav2_costmap_2d_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+  )
+
   ament_add_gtest(test_obstacle_deviation
     test/test_obstacle_deviation.cpp
+    test/test_footprint_raster_parity.cpp
     src/obstacle_deviation.cpp
   )
 
@@ -422,6 +438,12 @@ if(BUILD_TESTING)
     TIMEOUT 300
   )
   target_link_libraries(test_ftc_turn_fallback_controller ${PROJECT_NAME})
+
+  # Curvature regulation: pure helpers + the real FTCController in closed loop.
+  ament_add_ros_isolated_gtest(test_ftc_curvature_feedforward
+    test/test_ftc_curvature_feedforward.cpp
+  )
+  target_link_libraries(test_ftc_curvature_feedforward ${PROJECT_NAME})
 
   ament_add_ros_isolated_gtest(test_ftc_speed_limit test/test_ftc_speed_limit.cpp)
   target_link_libraries(test_ftc_speed_limit ${PROJECT_NAME})
