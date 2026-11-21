@@ -138,6 +138,14 @@
           <MarkGuardHalt reason="scan_stale"/>
           <SetMowerEnabled enabled="false"/>
           <StopMoving/>
+          <!-- Confirm an operator stop while this guard still owns the hold. -->
+          <Fallback>
+            <Sequence>
+              <IsCommand command="8"/>
+              <PublishHighLevelStatus state="1" state_name="IDLE"/>
+            </Sequence>
+            <AlwaysSuccess/>
+          </Fallback>
           <WaitForDuration duration_sec="1.0"/>
           <AlwaysFailure/>
         </Sequence>

@@ -10,7 +10,7 @@ hardware_bridge:
     # HighLevelStatus supervision: the behaviour tree republishes its status at 1 Hz. If it stays
     # silent this long while it last reported an actuating mode (AUTONOMOUS, RECORDING,
     # MANUAL_MOWING), the bridge stops wheels and blade and holds the firmware in IDLE until a
-    # fresh status arrives. Without it a dead tree leaves Nav2 finishing its last goal unguarded
+    # new IDLE status arrives. Without it a dead tree leaves Nav2 finishing its last goal unguarded
     # while the bridge keeps announcing AUTONOMOUS. 0 disables.
     high_level_status_timeout_s: 5.0
     publish_rate: 100.0   # Hz – sensor read tick. Actual /imu/data rate

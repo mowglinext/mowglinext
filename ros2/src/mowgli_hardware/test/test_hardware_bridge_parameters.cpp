@@ -1237,7 +1237,7 @@ TEST_F(BridgeStatusSupervision, TheHoldKeepsRefusingMotionBladeAndModeWhileTheSt
   EXPECT_FALSE(Peer::actuationAllowed(*node));
 }
 
-TEST_F(BridgeStatusSupervision, AFreshStatusReleasesTheHoldButNeverRestartsTheBlade)
+TEST_F(BridgeStatusSupervision, AReturningMowingStatusCannotResumeAnInterruptedStrip)
 {
   startMowing();
   Peer::ageStatus(*node, 6'000'000'000);
@@ -1248,21 +1248,47 @@ TEST_F(BridgeStatusSupervision, AFreshStatusReleasesTheHoldButNeverRestartsTheBl
       }));
   drainPackets();
 
-  Peer::mode(*node, HL_MODE_AUTONOMOUS);  // the tree is back and reports again
+  for (const auto mode :
+       {HL_MODE_AUTONOMOUS, HL_MODE_RECORDING, HL_MODE_MANUAL_MOWING, HL_MODE_NULL})
+  {
+    Peer::mode(*node, mode);
+    EXPECT_FALSE(Peer::actuationAllowed(*node));
+    EXPECT_FALSE(Peer::controlResult(*node, 1, 0));
+    Peer::sendCmdVel(*node, 0.25, 0.0);
+  }
+  const auto held = drainPackets();
+  ASSERT_FALSE(cmdVels(held).empty());
+  for (const auto& command : cmdVels(held))
+  {
+    EXPECT_EQ(command.linear_x, 0.0f);
+  }
+  ASSERT_FALSE(modes(held).empty());
+  for (const auto mode : modes(held))
+  {
+    EXPECT_EQ(mode, HL_MODE_IDLE);
+  }
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+
+  Peer::mode(*node, HL_MODE_IDLE);  // Stop/Pause was processed by the tree.
   ASSERT_TRUE(Peer::actuationAllowed(*node));
+  Peer::mode(*node, HL_MODE_AUTONOMOUS);
+  Peer::sendCmdVel(*node, 0.25, 0.0);
   const auto released = drainPackets();
   ASSERT_FALSE(modes(released).empty());
   EXPECT_EQ(modes(released).back(), HL_MODE_AUTONOMOUS);
-  for (const auto on : blades(released))
-  {
-    EXPECT_EQ(on, 0u);
-  }
-  EXPECT_FALSE(Peer::mowEnabled(*node));  // a new explicit MowerControl request is needed
+  ASSERT_FALSE(cmdVels(released).empty());
+  EXPECT_EQ(cmdVels(released).back().linear_x, 0.25f);
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+  EXPECT_TRUE(Peer::controlResult(*node, 1, 0));  // Only a new request may start the blade.
+}
 
-  Peer::sendCmdVel(*node, 0.25, 0.0);
-  const auto sent = cmdVels(drainPackets());
-  ASSERT_EQ(sent.size(), 1u);
-  EXPECT_EQ(sent[0].linear_x, 0.25f);
+TEST_F(BridgeStatusSupervision, AReturningActiveStatusCannotEraseAnUnobservedTimeout)
+{
+  startMowing();
+  Peer::ageStatus(*node, 6'000'000'000);  // No timer or command has noticed the gap yet.
+  Peer::mode(*node, HL_MODE_AUTONOMOUS);
+  EXPECT_FALSE(Peer::actuationAllowed(*node));
+  EXPECT_FALSE(Peer::mowEnabled(*node));
 }
 
 TEST_F(BridgeStatusSupervision, StatusInsideTheTimeoutKeepsActuating)

@@ -161,7 +161,7 @@ hardware_bridge:
 
     # HighLevelStatus supervision: if the behaviour tree's status stays silent this long
     # while it last reported an actuating mode, wheels and blade are stopped and the
-    # firmware is held in IDLE until a fresh status arrives (0 disables)
+    # firmware is held in IDLE until the tree reports IDLE (0 disables)
     high_level_status_timeout_s: 5.0
 
     # Sensor read tick (Hz). The actual /imu/data rate is capped by the

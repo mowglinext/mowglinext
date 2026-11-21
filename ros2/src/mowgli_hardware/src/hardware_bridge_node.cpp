@@ -2701,7 +2701,7 @@ private:
     const char* held_reason = "";
     if (!allowed)
     {
-      held_reason = high_level_status_lost_ ? " [held IDLE: BT status lost]"
+      held_reason = high_level_status_hold_ ? " [held IDLE: BT status hold]"
                                             : " [held IDLE: firmware protocol not verified]";
     }
     if (last_sent_mode_ != current_mode_ || last_sent_mode_state_name_ != current_mode_state_name_)
@@ -3316,14 +3316,13 @@ private:
   // ---------------------------------------------------------------------------
 
   /// True once the board has completed a handshake reporting this image's
-  /// protocol AND the behaviour tree's status has not gone silent in an
-  /// actuating mode (high_level_status_supervision.hpp). Gates every motion /
-  /// blade / mode packet; never the heartbeat (emergency stop + release), the
+  /// protocol AND the behaviour-tree status hold is clear (high_level_status_supervision.hpp).
+  /// Gates every motion / blade / mode packet; never the heartbeat (emergency stop + release), the
   /// handshake, telemetry or parameter reads.
   [[nodiscard]] bool actuation_allowed() const
   {
     return mowgli_hardware::firmware_actuation_allowed(fw_handshake_done_, fw_compatible_) &&
-           !high_level_status_lost_;
+           !high_level_status_hold_;
   }
 
   void log_interlock_refusal(const char* what, const char* outcome)
@@ -3333,12 +3332,10 @@ private:
       RCLCPP_WARN_THROTTLE(get_logger(),
                            *get_clock(),
                            5000,
-                           "Firmware interlock: %s refused (%s) — no HighLevelStatus from the "
-                           "behaviour tree for over %.1f s. Actuation resumes automatically when "
-                           "the status is fresh again.",
+                           "Firmware interlock: %s refused (%s) — BT status hold. "
+                           "Waiting for the behaviour tree to report IDLE.",
                            what,
-                           outcome,
-                           high_level_status_timeout_s_);
+                           outcome);
       return;
     }
     RCLCPP_WARN_THROTTLE(get_logger(),
@@ -3354,40 +3351,28 @@ private:
                          static_cast<unsigned>(fw_protocol_version_));
   }
 
-  /// Behaviour-tree liveness (high_level_status_supervision.hpp). Runs on the
-  /// high-level timer and on every received status. A tree that dies in an
-  /// actuating mode leaves the bridge announcing that mode to the firmware and
-  /// Nav2 finishing the last goal unguarded, so a silent status engages the
-  /// firmware interlock; a fresh one releases it.
+  /// Watch the mode sent to firmware, including the cmd_vel fallback. The status history and
+  /// hold survive serial reconnects. Only a new IDLE report can clear a latched interruption:
+  /// resuming an existing Nav2 goal would otherwise drive a strip with its blade intent cleared.
   void supervise_high_level_status()
   {
-    // Judged on the mode the firmware is being told (current_mode_, which the cmd_vel fallback
-    // can also set) and on a flag that, unlike have_high_level_status_, survives a serial
-    // reconnect: neither a reconnect nor a fallback promotion may leave the hold.
-    const bool lost = mowgli_hardware::high_level_status_lost(bt_status_seen_,
-                                                              current_mode_,
-                                                              steadyNowNs(),
-                                                              last_high_level_status_steady_ns_,
-                                                              high_level_status_timeout_s_);
-    if (lost == high_level_status_lost_)
+    if (high_level_status_hold_ ||
+        !mowgli_hardware::high_level_status_lost(bt_status_seen_,
+                                                 current_mode_,
+                                                 steadyNowNs(),
+                                                 last_high_level_status_steady_ns_,
+                                                 high_level_status_timeout_s_))
     {
       return;
     }
     const bool was_allowed = actuation_allowed();
-    high_level_status_lost_ = lost;
-    if (lost)
-    {
-      RCLCPP_ERROR(get_logger(),
-                   "No HighLevelStatus for over %.1f s while the behaviour tree last reported "
-                   "mode %u (%s) — treating it as lost.",
-                   high_level_status_timeout_s_,
-                   current_mode_,
-                   high_level_mode_name(current_mode_));
-    }
-    else
-    {
-      RCLCPP_INFO(get_logger(), "HighLevelStatus is fresh again.");
-    }
+    high_level_status_hold_ = true;
+    RCLCPP_ERROR(get_logger(),
+                 "No HighLevelStatus for over %.1f s in mode %u (%s) — holding motion and blade "
+                 "off until the tree reports IDLE. Stop or Pause the mission before resuming.",
+                 high_level_status_timeout_s_,
+                 current_mode_,
+                 high_level_mode_name(current_mode_));
     apply_firmware_interlock_transition(was_allowed);
   }
 
@@ -3405,8 +3390,8 @@ private:
     if (transition == mowgli_hardware::InterlockTransition::kReleased)
     {
       RCLCPP_INFO(get_logger(),
-                  "Firmware interlock released: board speaks protocol v%u and the behaviour "
-                  "tree's status is fresh — actuation enabled.",
+                  "Firmware interlock released: board speaks protocol v%u and no BT status hold "
+                  "is active.",
                   static_cast<unsigned>(fw_protocol_version_));
       send_high_level_state();
       return;
@@ -3414,7 +3399,7 @@ private:
     RCLCPP_ERROR(get_logger(),
                  "Firmware interlock ENGAGED: %s — stopping wheels and blade, holding the board "
                  "in IDLE.",
-                 high_level_status_lost_ ? "behaviour tree status lost"
+                 high_level_status_hold_ ? "behaviour tree status hold"
                                          : "firmware protocol not verified");
     dig_escaping_ = false;
     dig_escape_state_ = DigEscapeState{};
@@ -3638,6 +3623,8 @@ private:
 
   void on_high_level_status(mowgli_interfaces::msg::HighLevelStatus::ConstSharedPtr msg)
   {
+    // Observe a completed lapse even if the returning report beats the watchdog timer.
+    supervise_high_level_status();
     const uint8_t previous_mode = current_mode_;
     const std::string previous_state_name = current_mode_state_name_;
     if (previous_mode != msg->state)
@@ -3650,7 +3637,13 @@ private:
     have_high_level_status_ = true;
     bt_status_seen_ = true;
     last_high_level_status_steady_ns_ = steadyNowNs();
-    supervise_high_level_status();
+    if (high_level_status_hold_ && current_mode_ == HL_MODE_IDLE)
+    {
+      const bool was_allowed = actuation_allowed();
+      high_level_status_hold_ = false;
+      RCLCPP_INFO(get_logger(), "Behaviour tree reported IDLE; BT status hold cleared.");
+      apply_firmware_interlock_transition(was_allowed);
+    }
     if (previous_mode != current_mode_ || previous_state_name != current_mode_state_name_)
     {
       RCLCPP_INFO(get_logger(),
@@ -3746,6 +3739,10 @@ private:
                   high_level_mode_name(current_mode_));
       // A BT that reported NULL and then went silent must not be promoted into a fresh window.
       supervise_high_level_status();
+      if (high_level_status_hold_)
+      {
+        return;  // The interlock already sent zero; avoid shaping the refused command.
+      }
       send_high_level_state();
     }
 
@@ -4271,12 +4268,11 @@ private:
     if (mowgli_hardware::interlock_refuses_blade(actuation_allowed(), requested_enable ? 1u : 0u))
     {
       // Not throttled: a service call is rare and the operator pressed something.
-      if (high_level_status_lost_)
+      if (high_level_status_hold_)
       {
         RCLCPP_WARN(get_logger(),
-                    "Firmware interlock: MowerControl blade enable REFUSED — no HighLevelStatus "
-                    "from the behaviour tree for over %.1f s. Blade kept OFF.",
-                    high_level_status_timeout_s_);
+                    "Firmware interlock: MowerControl blade enable REFUSED — BT status hold. "
+                    "Waiting for the behaviour tree to report IDLE.");
       }
       else
       {
@@ -4625,7 +4621,7 @@ private:
   // Serial-link RX watchdog (auto-reconnect on flash / board reboot / unplug).
   double serial_rx_timeout_s_{2.0};
   double high_level_status_timeout_s_{mowgli_hardware::kDefaultHighLevelStatusTimeoutS};
-  bool high_level_status_lost_{false};
+  bool high_level_status_hold_{false};
   /// A HighLevelStatus has been received since startup. Never cleared (see
   /// supervise_high_level_status()); have_high_level_status_ is cleared on reconnect.
   bool bt_status_seen_{false};
