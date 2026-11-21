@@ -425,6 +425,73 @@ TEST(GuardFallthroughTest, ProductionLocalizationGuardHonoursStopButStillGatesNe
   EXPECT_EQ(ctx->current_command, 1);
 }
 
+TEST(GuardFallthroughTest, SensorFaultConfirmsOperatorStopAndKeepsTheGuard)
+{
+  auto ctx = MakeContext("test_stop_during_sensor_fault");
+  auto blackboard = BT::Blackboard::create();
+  blackboard->set("context", ctx);
+  BT::BehaviorTreeFactory factory;
+  factory.registerNodeType<IsCommand>("IsCommand");
+  factory.registerSimpleCondition("IsCharging",
+                                  [](BT::TreeNode&)
+                                  {
+                                    return BT::NodeStatus::FAILURE;
+                                  });
+  factory.registerSimpleCondition("IsDocking",
+                                  [](BT::TreeNode&)
+                                  {
+                                    return BT::NodeStatus::FAILURE;
+                                  });
+  factory.registerSimpleCondition("IsScanStale",
+                                  [](BT::TreeNode&)
+                                  {
+                                    return BT::NodeStatus::SUCCESS;
+                                  },
+                                  {BT::InputPort<double>("max_age_sec")});
+  factory.registerSimpleCondition("IsCollisionStopSustained",
+                                  [](BT::TreeNode&)
+                                  {
+                                    return BT::NodeStatus::FAILURE;
+                                  },
+                                  {BT::InputPort<double>("min_duration_sec"),
+                                   BT::InputPort<double>("max_state_age_sec")});
+  const auto succeed = [](BT::TreeNode&)
+  {
+    return BT::NodeStatus::SUCCESS;
+  };
+  factory.registerSimpleAction("MarkGuardHalt", succeed, {BT::InputPort<std::string>("reason")});
+  factory.registerSimpleAction("SetMowerEnabled", succeed, {BT::InputPort<bool>("enabled")});
+  factory.registerSimpleAction("StopMoving", succeed);
+  factory.registerSimpleAction("WaitForDuration", succeed, {BT::InputPort<double>("duration_sec")});
+  int idle_reports = 0;
+  factory.registerSimpleAction("PublishHighLevelStatus",
+                               [&idle_reports](BT::TreeNode& node)
+                               {
+                                 EXPECT_EQ(node.getInput<int>("state").value(), 1);
+                                 EXPECT_EQ(node.getInput<std::string>("state_name").value(),
+                                           "IDLE");
+                                 ++idle_reports;
+                                 return BT::NodeStatus::SUCCESS;
+                               },
+                               {BT::InputPort<int>("state"),
+                                BT::InputPort<std::string>("state_name")});
+  const auto guard = ExtractGuardBlock(ReadMainTree(), "SensorSafetyGuard");
+  ASSERT_FALSE(guard.empty());
+  auto tree = factory.createTreeFromText("<root BTCPP_format=\"4\"><BehaviorTree ID=\"Main\">" +
+                                             guard + "</BehaviorTree></root>",
+                                         blackboard);
+
+  ctx->current_command = 1;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(idle_reports, 0);
+  ctx->current_command = 8;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(idle_reports, 1);
+  ctx->current_command = 1;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(idle_reports, 1);
+}
+
 // Every guard that must BLOCK MainLogic while its fault holds. Nav2ResumeGuard
 // is deliberately always-SUCCESS (it is a pass-through that resumes the Nav2
 // lifecycle) and RecordingCommandGuard is a pure condition, so neither is

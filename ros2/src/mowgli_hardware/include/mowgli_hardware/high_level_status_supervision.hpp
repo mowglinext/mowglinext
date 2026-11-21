@@ -24,7 +24,7 @@
 // high-level timer, so an idle robot is stopped at most one timer tick late.
 // The bridge then applies the existing firmware interlock (firmware_interlock.hpp):
 // wheels zero, blade OFF, mode IDLE. It only ever reduces what reaches the wire,
-// and releases on its own as soon as a fresh status arrives.
+// and holds until a new IDLE status arrives.
 //
 // A bridge that has never received a status is not supervised: before the BT has
 // booted, the cmd_vel fallback in hardware_bridge_node.cpp owns that case.
@@ -42,7 +42,7 @@ namespace mowgli_hardware
 /// Default silence, in seconds, after which a BT status counts as lost. Five
 /// missed 1 Hz republishes: short enough that Nav2 cannot drive the dead tree's
 /// goal to its end. A host or tree stalled for longer than this is stopped too
-/// (fails safe, and releases on the next status).
+/// (the bridge holds until IDLE).
 inline constexpr double kDefaultHighLevelStatusTimeoutS = 5.0;
 
 /// True for every mode in which the firmware acts on cmd_vel or the blade.
