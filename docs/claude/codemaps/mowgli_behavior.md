@@ -105,7 +105,7 @@ entry tests; component success does not establish full-mission availability.
 | `dig_skip.hpp` | ~245 | Header-only session dig skip zones (Invariant 16, the issue-#500 re-dig protection): `DigPoint`, `recordDigPoint`, `insideDigZone`, `nextDrivableRun` (drivable run outside every zone, by arc length), `DigSettleStep` (wait for the bridge's bounded reverse). Driven by `FollowStrip::stepDigRecovery` / `skipUnitFrontPastDigZones` |
 | `dock_alignment.hpp` | 129 | Header-only along/cross-track dock delta + `EvaluateDockYawDrift` (`kDockStagingRunwayM=1.5`, σ floor 0.035 rad) |
 | `coverage_persistence.hpp` | 73 | save/load/clear resume-state API |
-| `boot_hold.hpp` | 139 | `BootHold` (pure): grouped start-up steps retried until done or a deadline; `behavior_tree_node` uses it for blade OFF + cancelling the dead instance's Nav2 goals (parents, then `/follow_path`, twice) before the first tick, each step done only when the server answered (`boot_hold_timeout_s`, 3 s, 0 disables) |
+| `boot_hold.hpp` | — | `BootHold`: ordered cleanup. A timeout warns while the node remains in IDLE. A marker owned by the native launch distinguishes a child respawn from a fresh stack. |
 | `battery_filter.hpp` | 108 | `BatteryVoltageFilter` (τ=2 s, min valid 10 V), `batteryPercentFromVoltage` |
 | `status_snapshot.hpp` | 55 | `withLiveStatusFields(base, ctx)` |
 | **`src/`** | | |
@@ -236,7 +236,7 @@ All declared in `behavior_tree_node.cpp` with `declare_parameter`, read ONCE at 
 | `tick_rate` | 10.0 (:894) | :93 | tick timer :985; `bt_tick_rate` blackboard |
 | `tree_file` | "" → `share/mowgli_behavior/trees/main_tree.xml` (:813) | — | `setupBehaviorTree` |
 | `coverage_resume_path` | `/ros2_ws/maps/coverage_resume.txt` (:92) | — | `coverage_persistence.cpp`; "" disables |
-| `boot_hold_timeout_s` | `3.0` | — | `startBootHold()`: blade OFF and cancel-all on `/navigate_to_pose`, `/undock_robot`, `/dock_robot`, `/backup`, then `/follow_path`, swept twice 0.5 s apart, each waited for until the server answers (a refusal is asked again); a server absent for 1 s holds no goals; on timeout it sends a best-effort cancel-all and blade OFF and starts ticking; non-finite values fall back to 3, capped at 60; <= 0 disables |
+| `boot_hold_timeout_s` | `3.0` | — | Delay before logging outstanding cleanup after native BT respawn. The tree continues publishing `BOOT_HOLD` (IDLE) and waits for blade OFF and terminal Nav2 goals. |
 | `undock_speed` / `undock_distance` | 0.15 / 1.0 (:853-855) | :433 / :432 | `{undock_speed}` `{undock_distance}` in XML BackUps (Invariant 10) |
 | `transit_speed` / `mowing_speed` | 0.2 / 0.2 (:873-874) | :310 / :309 | `SetNavMode` → controller params |
 | `idle_nav2_suspend` | false (:864) | :170 | `SetNav2Lifecycle` |

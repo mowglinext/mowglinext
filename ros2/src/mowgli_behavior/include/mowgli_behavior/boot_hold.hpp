@@ -1,25 +1,15 @@
 // Copyright 2026 Mowgli Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Start-up hold for a (re)started behaviour tree. Pure logic, no ROS, so it is unit-testable
-// standalone (see test_boot_hold.cpp).
-//
-// A restarted behavior_tree_node does not know what its dead predecessor left running: a Nav2 goal
-// it sent keeps driving (the action server owns it, not the client), and the blade stays on until
-// the firmware's own blade timeout. Neither the bridge nor the tree sees that the instance changed,
-// so the new tree has to clean up before it ticks: blade OFF and cancel every motion goal, then
-// start from a clean slate. The hold runs each step until it has taken effect (a service or action
-// server that is not up yet is retried) and gives up after `timeout`, so a cold boot (nothing
-// running yet, nothing to clean up) starts at most `timeout` late.
-//
-// Steps are grouped: a step only runs once every step of the earlier groups has succeeded. That
-// orders "cancel the parent goal, wait for its answer" before "sweep the controller goals it
-// would otherwise keep spawning".
+// Start-up hold for a (re)started behaviour tree. The node holds IDLE until all
+// cleanup steps succeed. A deadline reports a delay, and pending steps keep
+// running. Groups order upstream action cancellation before child cleanup.
 
 #ifndef MOWGLI_BEHAVIOR__BOOT_HOLD_HPP_
 #define MOWGLI_BEHAVIOR__BOOT_HOLD_HPP_
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <utility>
@@ -28,6 +18,14 @@
 namespace mowgli_behavior
 {
 
+/// A launch-owned marker distinguishes a respawn from the first BT in a fresh stack.
+/// The first process claims the marker before it can dispatch any action. Errors
+/// require cleanup too, because they leave the previous process state unknown.
+inline bool boot_cleanup_required(const std::filesystem::path& marker, std::error_code& error)
+{
+  return !marker.empty() && !std::filesystem::create_directory(marker, error);
+}
+
 class BootHold
 {
 public:
@@ -35,9 +33,8 @@ public:
   /// Returns true once the step has been carried out; false asks to be retried.
   using Step = std::function<bool()>;
 
-  /// `timeout <= 0` disables the hold: it is done from the start.
-  BootHold(Clock::time_point start, Clock::duration timeout)
-      : deadline_(start + timeout), disabled_(timeout <= Clock::duration::zero())
+  BootHold(Clock::time_point start, Clock::duration warning_after)
+      : deadline_(start + warning_after)
   {
   }
 
@@ -53,17 +50,11 @@ public:
     ++group_;
   }
 
-  /// Runs every step that has not succeeded yet, in order. Returns true when the hold is over:
-  /// every step has succeeded, or the deadline has passed (steps still pending are then given up).
+  /// Runs pending steps in order. Only completed cleanup releases the hold.
   bool poll(Clock::time_point now)
   {
     if (done_)
     {
-      return true;
-    }
-    if (disabled_)
-    {
-      done_ = true;
       return true;
     }
     bool earlier_done = true;  // every step of the groups before the current one succeeded
@@ -89,7 +80,6 @@ public:
     }
     else if (now >= deadline_)
     {
-      done_ = true;
       timed_out_ = true;
     }
     return done_;
@@ -97,14 +87,14 @@ public:
 
   bool done() const
   {
-    return done_ || disabled_;
+    return done_;
   }
   bool timed_out() const
   {
     return timed_out_;
   }
 
-  /// Names of the steps that never succeeded (for the log line when the hold gives up).
+  /// Names of steps that still need to complete.
   std::vector<std::string> pending() const
   {
     std::vector<std::string> out;
@@ -129,7 +119,6 @@ private:
   std::vector<Entry> steps_;
   int group_{0};
   Clock::time_point deadline_;
-  bool disabled_{false};
   bool done_{false};
   bool timed_out_{false};
 };

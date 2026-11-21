@@ -127,7 +127,8 @@ void discardRestoredCoverageProgress(BTContext& ctx)
 
 RestoredCommandPolicy applyRestoredCommandPolicy(BTContext& ctx,
                                                  std::chrono::system_clock::time_point wall_now,
-                                                 std::chrono::steady_clock::time_point steady_now)
+                                                 std::chrono::steady_clock::time_point steady_now,
+                                                 bool allow_auto_continue)
 {
   constexpr uint8_t kCommandStart = 1;  // HighLevelControl::Request::COMMAND_START
   constexpr uint8_t kCommandStop = 8;  // HighLevelControl::Request::COMMAND_STOP
@@ -142,7 +143,8 @@ RestoredCommandPolicy applyRestoredCommandPolicy(BTContext& ctx,
     discardRestoredCoverageProgress(ctx);
     policy.expired_progress = true;
   }
-  policy.auto_continue = ctx.current_command == kCommandStart && hasCoverageResumeState(ctx);
+  policy.auto_continue =
+      allow_auto_continue && ctx.current_command == kCommandStart && hasCoverageResumeState(ctx);
   policy.preserve_stop_hold =
       ctx.current_command == kCommandStop && ctx.critical_charge_stop_latched;
   ctx.restored_mow_charge_check_pending = policy.auto_continue;

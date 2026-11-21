@@ -64,7 +64,7 @@ TEST(BootHold, RetriesAStepThatIsNotReadyAndNeverRepeatsOneThatSucceeded)
   EXPECT_EQ(nav, 3);
 }
 
-TEST(BootHold, GivesUpAtTheDeadlineAndNamesWhatNeverRan)
+TEST(BootHold, ContinuesAfterTheWarningUntilEveryStepSucceeds)
 {
   BootHold hold(t0, 3s);
   hold.add_step("blade",
@@ -72,16 +72,20 @@ TEST(BootHold, GivesUpAtTheDeadlineAndNamesWhatNeverRan)
                 {
                   return true;
                 });
+  bool stopped = false;
   hold.add_step("follow_path",
-                []
+                [&]
                 {
-                  return false;
-                });  // no Nav2 yet: a cold boot
+                  return stopped;
+                });
   EXPECT_FALSE(hold.poll(t0 + 2900ms));
-  EXPECT_TRUE(hold.poll(t0 + 3s));
-  EXPECT_TRUE(hold.done());
+  EXPECT_FALSE(hold.poll(t0 + 3s));
+  EXPECT_FALSE(hold.done());
   EXPECT_TRUE(hold.timed_out());
   EXPECT_EQ(hold.pending(), (std::vector<std::string>{"follow_path"}));
+  stopped = true;
+  EXPECT_TRUE(hold.poll(t0 + 4s));
+  EXPECT_TRUE(hold.done());
 }
 
 TEST(BootHold, AGroupOnlyRunsOnceEveryEarlierStepHasSucceeded)
@@ -109,7 +113,7 @@ TEST(BootHold, AGroupOnlyRunsOnceEveryEarlierStepHasSucceeded)
   EXPECT_EQ(order, (std::vector<std::string>{"parent", "parent", "parent", "controller"}));
 }
 
-TEST(BootHold, AStepOfALaterGroupIsGivenUpOnWithTheOthersAtTheDeadline)
+TEST(BootHold, AStepOfALaterGroupStillWaitsForItsParentAfterTheWarning)
 {
   BootHold hold(t0, 3s);
   hold.add_step("parent",
@@ -123,7 +127,7 @@ TEST(BootHold, AStepOfALaterGroupIsGivenUpOnWithTheOthersAtTheDeadline)
                 {
                   return true;
                 });
-  EXPECT_TRUE(hold.poll(t0 + 3s));
+  EXPECT_FALSE(hold.poll(t0 + 3s));
   EXPECT_TRUE(hold.timed_out());
   EXPECT_EQ(hold.pending(), (std::vector<std::string>{"parent", "controller"}));
 }
@@ -139,17 +143,19 @@ TEST(BootHold, ARunningHoldIsNotDoneBeforeItsFirstPoll)
   EXPECT_FALSE(hold.done());
 }
 
-TEST(BootHold, ZeroTimeoutDisablesTheHold)
+TEST(BootHold, ANewLaunchClaimsTheMarkerAndARespawnRequiresCleanup)
 {
-  int runs = 0;
-  BootHold hold(t0, 0s);
-  hold.add_step("blade",
-                [&]
-                {
-                  ++runs;
-                  return true;
-                });
-  EXPECT_TRUE(hold.done());
-  EXPECT_TRUE(hold.poll(t0));
-  EXPECT_EQ(runs, 0);
+  const auto dir =
+      std::filesystem::temp_directory_path() /
+      ("mowgli-bt-test-" + std::to_string(BootHold::Clock::now().time_since_epoch().count()));
+  ASSERT_TRUE(std::filesystem::create_directory(dir));
+  std::error_code error;
+  EXPECT_FALSE(mowgli_behavior::boot_cleanup_required({}, error));
+  EXPECT_FALSE(mowgli_behavior::boot_cleanup_required(dir / "started", error));
+  EXPECT_FALSE(error);
+  EXPECT_TRUE(mowgli_behavior::boot_cleanup_required(dir / "started", error));
+  EXPECT_FALSE(error);
+  EXPECT_TRUE(mowgli_behavior::boot_cleanup_required(dir / "missing" / "started", error));
+  EXPECT_TRUE(error);
+  std::filesystem::remove_all(dir);
 }
