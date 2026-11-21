@@ -222,7 +222,7 @@ const SECTION_DEFINITIONS: SectionMeta[] = [
         icon: "home",
         description: "settingsSections.docking.description",
         keys: [
-            "undock_distance", "undock_speed", "dock_approach_distance",
+            "undock_distance", "undock_speed", "min_gps_fix_type", "dock_approach_distance",
             "dock_max_retries", "dock_use_charger_detection",
             "dock_charging_threshold",
             "dock_approach_overshoot", "dock_pose_yaw_sigma_rad",

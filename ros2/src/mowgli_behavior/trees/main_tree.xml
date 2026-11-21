@@ -341,6 +341,10 @@
           <IsCommand command="1"/>
           <IsDocking/>
         </Sequence>
+        <Sequence name="LocUndockExempt">
+          <IsCommand command="1"/>
+          <IsUndockInterrupted/>
+        </Sequence>
         <Sequence name="LocGotoDockTransitExempt">
           <IsCommand command="9"/>
           <IsDocking/>
@@ -772,7 +776,7 @@
               <PublishHighLevelStatus state="2" state_name="PREFLIGHT_CHECK"/>
               <RetryUntilSuccessful num_attempts="120">
                 <Fallback>
-                  <PreFlightCheck min_battery="20.0" min_gps_fix_type="2" tf_timeout_sec="0.5"/>
+                  <PreFlightCheck min_battery="20.0" min_gps_fix_type="{min_gps_fix_type}" tf_timeout_sec="0.5"/>
                   <Sequence>
                     <WaitForDuration duration_sec="1.0"/>
                     <AlwaysFailure/>

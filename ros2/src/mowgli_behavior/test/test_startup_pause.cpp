@@ -191,6 +191,7 @@ protected:
     observations->context->area_resume_pose_index[0] = 42;
     blackboard = BT::Blackboard::create();
     blackboard->set("context", observations->context);
+    blackboard->set("min_gps_fix_type", 2);
     factory.registerNodeType<mowgli_behavior::IsCommand>("IsCommand");
     factory.registerNodeType<mowgli_behavior::IsBatteryChargePending>("IsBatteryChargePending");
     factory.registerNodeType<mowgli_behavior::IsDocking>("IsDocking");

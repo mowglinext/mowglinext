@@ -571,6 +571,7 @@ protected:
     blackboard->set("battery_manual_resume_pct", 30.0f);
     blackboard->set("undock_distance", 1.0);
     blackboard->set("undock_speed", 0.15);
+    blackboard->set("min_gps_fix_type", 2);
     factory.registerNodeType<mowgli_behavior::ConfirmChargingDock>("ConfirmChargingDock");
     factory.registerNodeType<mowgli_behavior::IsBatteryChargePending>("IsBatteryChargePending");
     factory.registerNodeType<mowgli_behavior::SetBatteryChargePending>("SetBatteryChargePending");

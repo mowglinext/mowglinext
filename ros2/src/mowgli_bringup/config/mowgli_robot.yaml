@@ -726,6 +726,14 @@ mowgli:
     # be lowered (the clamp no longer blocks it), but that is a supervised
     # physical-behaviour change, not a config tidy-up.
     undock_speed: 0.16             # reverse speed (m/s)
+    # Minimum GPS fix quality required on the dock before starting the undock
+    # reverse (PreFlightCheck in UndockSequence). Quality-monotonic encoding:
+    #   0 = any / no fix required (undock immediately on wheel odometry, then
+    #       wait for RTK Fixed in the open after reversing out of the station)
+    #   2 = 3D / DGPS fix
+    #   3 = RTK Float
+    #   4 = RTK Fixed
+    min_gps_fix_type: 2
     # Distance (m) to the staging pose behind the dock — the final
     # straight-in approach runway. Injected as opennav_docking
     # simple_charging_dock.staging_x_offset = -dock_approach_distance

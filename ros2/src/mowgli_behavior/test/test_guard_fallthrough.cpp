@@ -318,6 +318,12 @@ BT::Tree MakeProductionLocalizationTree(BT::BehaviorTreeFactory& factory,
   factory.registerNodeType<IsCharging>("IsCharging");
   factory.registerNodeType<IsCommand>("IsCommand");
   factory.registerNodeType<mowgli_behavior::IsDocking>("IsDocking");
+  factory.registerSimpleCondition("IsUndockInterrupted",
+                                  [ctx](BT::TreeNode&)
+                                  {
+                                    return ctx->undock_start_recorded ? BT::NodeStatus::SUCCESS
+                                                                      : BT::NodeStatus::FAILURE;
+                                  });
   factory.registerNodeType<IsLocalizationDegraded>("IsLocalizationDegraded");
   factory.registerSimpleAction("MarkGuardHalt",
                                [](BT::TreeNode&)
@@ -423,6 +429,36 @@ TEST(GuardFallthroughTest, ProductionLocalizationGuardHonoursStopButStillGatesNe
   EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
   EXPECT_EQ(probe.main_ticks, 2);
   EXPECT_EQ(ctx->current_command, 1);
+}
+
+TEST(GuardFallthroughTest, ProductionLocalizationGuardExemptsUndockInFlightUnderCommand1)
+{
+  auto ctx = MakeContext("test_undock_in_flight_exempt");
+  ctx->current_command = 1;
+  ctx->latest_power.charger_enabled = false;
+  ctx->undock_start_recorded = true;
+  ctx->localization_degraded = true;
+
+  LocalizationProbe probe;
+  BT::BehaviorTreeFactory factory;
+  auto tree = MakeProductionLocalizationTree(factory, ctx, probe);
+
+  // While the blade-off undock reverse is in flight (between RecordUndockStart
+  // and CalibrateHeadingFromUndock), losing contact with the charging pins must
+  // not halt the BackUp on the dock threshold.
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::SUCCESS);
+  EXPECT_EQ(probe.main_ticks, 1);
+  EXPECT_EQ(probe.wait_statuses, 0);
+  EXPECT_EQ(probe.stop_ticks, 0);
+
+  // Once CalibrateHeadingFromUndock completes and clears undock_start_recorded,
+  // if localization is still degraded in the open, LocalizationGuard holds the
+  // robot in WAITING_FOR_RTK outside the dock before coverage/blade starts.
+  ctx->undock_start_recorded = false;
+  EXPECT_EQ(tree.tickOnce(), BT::NodeStatus::FAILURE);
+  EXPECT_EQ(probe.main_ticks, 1);
+  EXPECT_EQ(probe.wait_statuses, 1);
+  EXPECT_EQ(probe.stop_ticks, 1);
 }
 
 // Every guard that must BLOCK MainLogic while its fault holds. Nav2ResumeGuard

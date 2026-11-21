@@ -859,6 +859,13 @@ struct BTContext
   double undock_start_x{0.0};
   double undock_start_y{0.0};
   bool undock_start_recorded{false};
+  /// True when RecordUndockStart captured undock_start_x/y under an
+  /// authoritative RTK-Fixed solution (gps_is_fixed). Without it, the on-dock
+  /// start position may be degraded or zero (e.g. when min_gps_fix_type < 4
+  /// allows undocking under a dock canopy), so CalibrateHeadingFromUndock must
+  /// not use the endpoint fallback (atan2(-dy, -dx)) to overwrite the
+  /// calibrated dock_pose_yaw seed.
+  bool undock_start_gps_fixed{false};
 
   /// GPS samples (map-frame x, y) accumulated by the GPS subscriber while
   /// undock_start_recorded is true. CalibrateHeadingFromUndock fits a line
