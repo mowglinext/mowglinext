@@ -94,7 +94,7 @@
 | `wait_for_map_odom_tf` | ExecuteProcess `wait_for_tf.py` | `navigation.launch.py` L992 | Nav2 group starts `OnProcessExit` (L1029) — also on exit code 1 |
 | `controller_server`, `smoother_server`, `planner_server`, `behavior_server`, `bt_navigator`, `waypoint_follower`, `collision_monitor`, `docking_server` (opennav_docking), `coverage_server` (mowgli_coverage/`mowgli_coverage`), `lifecycle_manager_navigation` | Nav2 | `nav2_navigation_launch.py` L131–256 via `navigation.launch.py` L1013 | all lifecycle-managed, `use_composition: False`, `respawn` off; controller/behavior `cmd_vel`→`cmd_vel_nav`, docking `cmd_vel`→`cmd_vel_docking` |
 | `empty_static_map_pub` | mowgli_bringup/`empty_static_map_pub.py` | `navigation.launch.py` L1040 | `UnlessCondition(use_lidar)` |
-| `behavior_tree_node` | mowgli_behavior | `full_system.launch.py` L216; sim L190 | `behavior_tree.yaml` + ~35 injected keys (sim injects none) |
+| `behavior_tree_node` | mowgli_behavior | `full_system.launch.py` L216; sim L190 | `behavior_tree.yaml` + ~35 injected keys (sim injects none); `respawn=True`, 2 s delay (a restarted tree holds blade OFF and cancels the dead instance's Nav2 goals before it ticks) |
 | `map_server_node` | mowgli_map | `full_system.launch.py` L366; sim L204 | `map_server.yaml` + dock/geometry/datum injection; sim adds polygon `main_mow` |
 | `obstacle_tracker` | mowgli_map/`obstacle_tracker_node` | `full_system.launch.py` L636; sim L282 | `use_obstacle_tracker AND use_lidar` (sim: `use_lidar`) |
 | `navsat_to_absolute_pose` | mowgli_localization/`navsat_to_absolute_pose_node` | `full_system.launch.py` L454; sim L348 | `datum_lat/lon` (sim hardcodes 48.137154/11.576124) |

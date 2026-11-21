@@ -18,8 +18,10 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -34,6 +36,7 @@
 #include "mowgli_behavior/battery_filter.hpp"
 #include "mowgli_behavior/battery_recovery_command.hpp"
 #include "mowgli_behavior/blade_control_service.hpp"
+#include "mowgli_behavior/boot_hold.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/coverage_entry.hpp"
@@ -62,9 +65,13 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/goto_pose.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
+#include "mowgli_interfaces/srv/mower_control.hpp"
 #include "mowgli_interfaces/srv/set_fleet_assignment.hpp"
 #include "mowgli_interfaces/srv/start_in_area.hpp"
 #include "mowgli_interfaces/update_maintenance.hpp"
+#include "nav2_msgs/action/back_up.hpp"
+#include "nav2_msgs/action/dock_robot.hpp"
+#include "nav2_msgs/action/follow_path.hpp"
 #include "nav2_msgs/action/navigate_to_pose.hpp"
 #include "nav2_msgs/action/undock_robot.hpp"
 #include "nav2_msgs/msg/collision_monitor_state.hpp"
@@ -227,6 +234,7 @@ public:
     setupSubscribers();
     setupServiceServer();
     setupBehaviorTree();
+    startBootHold();
     setupTimer();
     setupHighLevelStatusRepublish();
     startNav2WaitTimer();
@@ -276,6 +284,7 @@ public:
 
 private:
   friend struct BladeServiceTestPeer;
+  friend struct BootHoldTestPeer;
   friend struct FleetYieldServiceTestPeer;
   // ------------------------------------------------------------------
   // ROS2 infrastructure
@@ -1390,6 +1399,202 @@ private:
     resume_available_published_ = true;
   }
 
+  // A restarted tree inherits whatever its dead predecessor left running: the Nav2 goals it sent
+  // (the action servers own them, so they keep driving) and a powered blade. The bridge cannot see
+  // that the instance changed, and a restart inside its status timeout never trips its hold. So the
+  // tree starts with blade OFF and every motion goal cancelled, and does not tick until that has
+  // gone out (or `boot_hold_timeout_s` has passed: on a cold boot nothing is up to clean).
+  // This only ever reduces actuation. Whether the restored mission then resumes on its own is the
+  // existing coverage-resume policy, unchanged.
+  void startBootHold()
+  {
+    using Clock = BootHold::Clock;
+    const double timeout_s = declare_parameter<double>("boot_hold_timeout_s", 3.0);
+    boot_hold_start_ = Clock::now();
+    boot_hold_ = std::make_unique<BootHold>(Clock::now(),
+                                            std::chrono::duration_cast<Clock::duration>(
+                                                std::chrono::duration<double>(timeout_s)));
+    if (timeout_s <= 0.0)
+    {
+      RCLCPP_WARN(get_logger(), "boot_hold_timeout_s <= 0: start-up hold disabled");
+      return;
+    }
+
+    boot_blade_client_ =
+        create_client<mowgli_interfaces::srv::MowerControl>("/hardware_bridge/mower_control");
+    boot_hold_->add_step("blade OFF", bladeOffStep());
+    // Parents before the controller goals they drive: a parent that is still running would
+    // dispatch a new controller goal after the sweep. A cancel only counts once the server has
+    // answered it (the answer is sent after the request was processed), so the tree cannot tick
+    // and send a goal that a still-queued cancel-all would then also cancel.
+    addBootCancels(/*controller_goals=*/false);
+    boot_hold_->next_group();
+    addBootCancels(/*controller_goals=*/true);
+    // A parent acknowledges its cancel before it has stopped dispatching, so sweep again once
+    // everything has settled.
+    boot_hold_->next_group();
+    boot_hold_->add_step("settle",
+                         [started = std::optional<BootHold::Clock::time_point>{}]() mutable
+                         {
+                           if (!started)
+                           {
+                             started = BootHold::Clock::now();
+                           }
+                           return BootHold::Clock::now() - *started >= 500ms;
+                         });
+    boot_hold_->next_group();
+    addBootCancels(/*controller_goals=*/false);
+    boot_hold_->next_group();
+    addBootCancels(/*controller_goals=*/true);
+
+    boot_hold_timer_ = create_wall_timer(100ms,
+                                         [this]()
+                                         {
+                                           bootHoldFinished();
+                                         });
+  }
+
+  void addBootCancels(bool controller_goals)
+  {
+    if (controller_goals)
+    {
+      boot_hold_->add_step("cancel /follow_path",
+                           cancelStep<nav2_msgs::action::FollowPath>("/follow_path"));
+      return;
+    }
+    boot_hold_->add_step("cancel /navigate_to_pose",
+                         cancelStep<nav2_msgs::action::NavigateToPose>("/navigate_to_pose"));
+    boot_hold_->add_step("cancel /undock_robot",
+                         cancelStep<nav2_msgs::action::UndockRobot>("/undock_robot"));
+    boot_hold_->add_step("cancel /dock_robot",
+                         cancelStep<nav2_msgs::action::DockRobot>("/dock_robot"));
+    boot_hold_->add_step("cancel /backup", cancelStep<nav2_msgs::action::BackUp>("/backup"));
+  }
+
+  /// Blade OFF, done once the bridge has answered success; retried while the service is not up
+  /// or answers failure.
+  BootHold::Step bladeOffStep()
+  {
+    struct State
+    {
+      bool inflight{false};
+      bool ok{false};
+    };
+    auto state = std::make_shared<State>();
+    return [this, state]()
+    {
+      if (state->ok)
+      {
+        return true;
+      }
+      if (state->inflight)
+      {
+        return false;
+      }
+      if (!boot_blade_client_->service_is_ready())
+      {
+        if (BootHold::Clock::now() - boot_hold_start_ < kBootDiscoveryGrace)
+        {
+          return false;
+        }
+        RCLCPP_WARN(get_logger(), "Boot hold: bridge blade service not available, skipped");
+        return true;  // nothing to command; the tree's own idle branch turns the blade off
+      }
+      auto request = std::make_shared<mowgli_interfaces::srv::MowerControl::Request>();
+      request->mow_enabled = false;
+      request->mow_direction = 0;
+      state->inflight = true;
+      boot_blade_client_->async_send_request(
+          request,
+          [this, state](rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedFuture answer)
+          {
+            const auto response = answer.get();
+            state->ok = response && response->success;
+            state->inflight = false;
+            RCLCPP_INFO(get_logger(),
+                        state->ok ? "Boot hold: blade OFF acknowledged"
+                                  : "Boot hold: blade OFF refused, retrying");
+          });
+      return false;
+    };
+  }
+
+  /// Cancel-all on one action server, done once the server has answered the request.
+  template <typename ActionT>
+  BootHold::Step cancelStep(const std::string& name)
+  {
+    auto& slot = boot_action_clients_[name];  // one client per endpoint, shared by both sweeps
+    if (!slot)
+    {
+      slot = rclcpp_action::create_client<ActionT>(this, name);
+    }
+    auto client = std::static_pointer_cast<rclcpp_action::Client<ActionT>>(slot);
+    struct State
+    {
+      bool sent{false};
+      bool acked{false};
+    };
+    auto state = std::make_shared<State>();
+    return [this, client, name, state]()
+    {
+      if (state->acked)
+      {
+        return true;
+      }
+      if (state->sent)
+      {
+        return false;
+      }
+      if (!client->action_server_is_ready())
+      {
+        if (BootHold::Clock::now() - boot_hold_start_ < kBootDiscoveryGrace)
+        {
+          return false;
+        }
+        // A server that is not up holds no goals, and a later instance starts with none.
+        RCLCPP_INFO(get_logger(), "Boot hold: %s not available, nothing to cancel", name.c_str());
+        state->acked = true;
+        return true;
+      }
+      state->sent = true;
+      client->async_cancel_all_goals(
+          [this, name, state](typename rclcpp_action::Client<ActionT>::CancelResponse::SharedPtr)
+          {
+            state->acked = true;
+            RCLCPP_INFO(get_logger(), "Boot hold: %s acknowledged cancel-all", name.c_str());
+          });
+      return false;
+    };
+  }
+
+  /// Advances the hold; true once the tree may tick.
+  bool bootHoldFinished()
+  {
+    if (!boot_hold_ || boot_hold_->done())
+    {
+      return true;
+    }
+    if (!boot_hold_->poll(BootHold::Clock::now()))
+    {
+      return false;
+    }
+    if (boot_hold_timer_)
+    {
+      boot_hold_timer_->cancel();
+    }
+    if (boot_hold_->timed_out())
+    {
+      std::string left;
+      for (const auto& name : boot_hold_->pending())
+      {
+        left += (left.empty() ? "" : ", ") + name;
+      }
+      RCLCPP_WARN(get_logger(), "Boot hold gave up on: %s (not available yet)", left.c_str());
+    }
+    RCLCPP_INFO(get_logger(), "Boot hold over: the behaviour tree starts ticking");
+    return true;
+  }
+
   // Non-blocking check for Nav2 action servers.  The BT tick loop starts
   // immediately so that idle-state publishers (high_level_status, etc.) are
   // created right away.  A periodic timer polls for Nav2 readiness and
@@ -1801,6 +2006,10 @@ private:
 
   void tickTree()
   {
+    if (!bootHoldFinished())
+    {
+      return;
+    }
     coverage_orientation_service_->processPending();
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
@@ -2038,6 +2247,14 @@ private:
   rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SharedPtr nav_client_;
   rclcpp_action::Client<nav2_msgs::action::UndockRobot>::SharedPtr undock_client_;
   rclcpp::TimerBase::SharedPtr nav2_wait_timer_;
+  std::unique_ptr<BootHold> boot_hold_;
+  BootHold::Clock::time_point boot_hold_start_;
+  /// How long a server or service may be absent from the graph before it counts as not running
+  /// (discovery of a server that is up takes a moment after the client is created).
+  static constexpr std::chrono::milliseconds kBootDiscoveryGrace{1000};
+  rclcpp::TimerBase::SharedPtr boot_hold_timer_;
+  std::map<std::string, std::shared_ptr<void>> boot_action_clients_;
+  rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr boot_blade_client_;
   std::chrono::steady_clock::time_point nav2_wait_deadline_;
   bool nav_ready_{false};
   bool undock_ready_{false};

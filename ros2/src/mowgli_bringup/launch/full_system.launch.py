@@ -340,6 +340,12 @@ def generate_launch_description() -> LaunchDescription:
         executable="behavior_tree_node",
         name="behavior_tree_node",
         output="screen",
+        # A dead tree leaves the mower unsupervised (hardware_bridge holds it stopped
+        # while the status is silent), so bring it back. The restarted tree holds blade OFF
+        # and cancels the dead instance's Nav2 goals before it ticks (boot_hold_timeout_s);
+        # a crash loop is bounded by respawn_delay.
+        respawn=True,
+        respawn_delay=2.0,
         parameters=[
             behavior_params,
             {"use_sim_time": use_sim_time},

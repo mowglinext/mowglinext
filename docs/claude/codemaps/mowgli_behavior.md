@@ -105,6 +105,7 @@ entry tests; component success does not establish full-mission availability.
 | `dig_skip.hpp` | ~245 | Header-only session dig skip zones (Invariant 16, the issue-#500 re-dig protection): `DigPoint`, `recordDigPoint`, `insideDigZone`, `nextDrivableRun` (drivable run outside every zone, by arc length), `DigSettleStep` (wait for the bridge's bounded reverse). Driven by `FollowStrip::stepDigRecovery` / `skipUnitFrontPastDigZones` |
 | `dock_alignment.hpp` | 129 | Header-only along/cross-track dock delta + `EvaluateDockYawDrift` (`kDockStagingRunwayM=1.5`, σ floor 0.035 rad) |
 | `coverage_persistence.hpp` | 73 | save/load/clear resume-state API |
+| `boot_hold.hpp` | 139 | `BootHold` (pure): grouped start-up steps retried until done or a deadline; `behavior_tree_node` uses it for blade OFF + cancelling the dead instance's Nav2 goals (parents, then `/follow_path`, twice) before the first tick, each step done only when the server answered (`boot_hold_timeout_s`, 3 s, 0 disables) |
 | `battery_filter.hpp` | 108 | `BatteryVoltageFilter` (τ=2 s, min valid 10 V), `batteryPercentFromVoltage` |
 | `status_snapshot.hpp` | 55 | `withLiveStatusFields(base, ctx)` |
 | **`src/`** | | |
@@ -147,6 +148,7 @@ entry tests; component success does not establish full-mission availability.
 | `test_battery_critical_resume.cpp` | 225 | 3 tests: critical-battery tail auto-continues, only dead charger ends session |
 | `test_guard_fallthrough.cpp` | 558 | 10 tests: guard handlers return FAILURE + structural `<AlwaysFailure/>` check on every blocking guard in `main_tree.xml` + `<MarkGuardHalt/>` is the first handler child in `SensorSafetyGuard` / `LocalizationGuard` / `RainGuard` (commit `a4b8a0e0`, "#760") / `BatteryGuard` (commit `becc6508`, "#765") |
 | `test_high_level_status_snapshot.cpp` | ~250 | 12 tests: republished status carries live battery/progress, tree-owned state untouched, `transiting` overrides `sub_state_name` to `"TRANSIT"`, `coverage_plausibility_warning` overrides it to `"COVERAGE_INCOMPLETE"` (issue #680), and `coverage_scan_paused` overrides both with `"SCAN_PAUSED"` |
+| `test_boot_hold.cpp`, `test_boot_hold_node.cpp` | 155, 417 | `BootHold` logic; real node against a fake bridge blade service and a `/follow_path` server holding a dead client's goal: blade OFF + goal cancelled before the first tick |
 | `test_battery_filter.cpp` | 243 | 13 tests: sag immunity, rate independence, invalid reading never → 0 % |
 | `test_dock_alignment.cpp` | 191 | 11 tests: along/cross decomposition, yaw-drift band |
 | `test_mow_coverage_plausibility.cpp` | ~185 | 8 tests: `PointInPolygon` inside/outside/degenerate; `ComputeMowedFraction` — headland-only band falls below the floor, fully-mowed interior is plausible, obstacle holes excluded from the denominator, degenerate polygon / empty grid data both read as not-plausible |
@@ -234,6 +236,7 @@ All declared in `behavior_tree_node.cpp` with `declare_parameter`, read ONCE at 
 | `tick_rate` | 10.0 (:894) | :93 | tick timer :985; `bt_tick_rate` blackboard |
 | `tree_file` | "" → `share/mowgli_behavior/trees/main_tree.xml` (:813) | — | `setupBehaviorTree` |
 | `coverage_resume_path` | `/ros2_ws/maps/coverage_resume.txt` (:92) | — | `coverage_persistence.cpp`; "" disables |
+| `boot_hold_timeout_s` | `3.0` | — | `startBootHold()`: blade OFF and cancel-all on `/navigate_to_pose`, `/undock_robot`, `/dock_robot`, `/backup`, then `/follow_path`, swept twice 0.5 s apart, each waited for until the server answers; a server absent for 1 s holds no goals; gives up after this long; 0 disables |
 | `undock_speed` / `undock_distance` | 0.15 / 1.0 (:853-855) | :433 / :432 | `{undock_speed}` `{undock_distance}` in XML BackUps (Invariant 10) |
 | `transit_speed` / `mowing_speed` | 0.2 / 0.2 (:873-874) | :310 / :309 | `SetNavMode` → controller params |
 | `idle_nav2_suspend` | false (:864) | :170 | `SetNav2Lifecycle` |

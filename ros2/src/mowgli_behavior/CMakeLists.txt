@@ -187,6 +187,38 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
+  # The restarted tree's start-up hold on the real node: blade OFF and the dead instance's goals
+  # cancelled before the first tick.
+  ament_add_ros_isolated_gtest(test_boot_hold_node
+    test/test_boot_hold_node.cpp
+    ${blade_service_sources}
+  )
+  target_include_directories(test_boot_hold_node PUBLIC
+    include
+    ${mowgli_localization_INCLUDE_DIRS}
+  )
+  target_link_libraries(test_boot_hold_node
+    ${visualization_msgs_TARGETS}
+    ${ament_index_cpp_TARGETS}
+    ${rclcpp_TARGETS}
+    ${rclcpp_action_TARGETS}
+    ${behaviortree_cpp_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    ${nav2_msgs_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${map_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${std_msgs_TARGETS}
+    ${std_srvs_TARGETS}
+    ${tf2_TARGETS}
+    ${tf2_ros_TARGETS}
+    ${tf2_geometry_msgs_TARGETS}
+    ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
+    ${rcl_interfaces_TARGETS}
+    ${action_msgs_TARGETS}
+  )
+
   ament_add_ros_isolated_gtest(test_fleet_yield_services
     test/test_fleet_yield_services.cpp
     ${blade_service_sources}
@@ -1314,6 +1346,10 @@ if(BUILD_TESTING)
   target_include_directories(test_precision_coverage_support PRIVATE include ${mowgli_localization_INCLUDE_DIRS})
   target_link_libraries(test_precision_coverage_support ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
     ${mowgli_interfaces_TARGETS} ${sensor_msgs_TARGETS})
+
+  # Start-up hold of a restarted tree (blade OFF, cancel orphan motion goals). Pure logic.
+  ament_add_gtest(test_boot_hold test/test_boot_hold.cpp)
+  target_include_directories(test_boot_hold PRIVATE include)
 
   ament_add_gtest(test_blade_ready test/test_blade_ready.cpp)
   target_include_directories(test_blade_ready PRIVATE include)
