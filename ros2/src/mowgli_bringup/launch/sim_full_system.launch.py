@@ -166,6 +166,9 @@ def generate_launch_description() -> LaunchDescription:
     map_params = os.path.join(map_dir, "config", "map_server.yaml")
     # The same merged config navigation.launch.py hands docking_server.
     robot_params = load_robot_params(bringup_dir, "/ros2_ws/config/mowgli_robot.yaml")
+    dock_x = float(robot_params.get("dock_pose_x", 0.0))
+    dock_y = float(robot_params.get("dock_pose_y", 0.0))
+    dock_yaw = float(robot_params.get("dock_pose_yaw", 0.0))
     dock_rear_m, dock_length_m = dock_body_extents(robot_params)
     monitoring_params = os.path.join(monitoring_dir, "config", "diagnostics.yaml")
 
@@ -268,16 +271,13 @@ def generate_launch_description() -> LaunchDescription:
                 "area_is_navigation": [False],
                 "area_obstacles": [""],
             },
-            # The simulated dock (fake_hardware_bridge charges within 0.3 m of
-            # the world origin) is the dock docking_server steers to. Without it
-            # map_server reads the all-zero pose as "no dock", plans no dock body,
-            # and the coverage plan drives across the charging contact (#1137).
-            # dock_pose_explicit keeps a dock AT the origin; the body follows the
-            # chassis as on the robot (full_system.launch.py).
+            # The planner and fake charging contact use the same dock pose.
+            # The default is the world origin, which needs dock_pose_explicit
+            # so the map server builds a dock body there (#1137).
             {
-                "dock_pose_x": float(robot_params.get("dock_pose_x", 0.0)),
-                "dock_pose_y": float(robot_params.get("dock_pose_y", 0.0)),
-                "dock_pose_yaw": float(robot_params.get("dock_pose_yaw", 0.0)),
+                "dock_pose_x": dock_x,
+                "dock_pose_y": dock_y,
+                "dock_pose_yaw": dock_yaw,
                 "dock_pose_explicit": True,
                 "dock_body_rear_m": dock_rear_m,
                 "dock_body_length_m": dock_length_m,
@@ -360,7 +360,12 @@ def generate_launch_description() -> LaunchDescription:
         executable="fake_hardware_bridge_node",
         name="fake_hardware_bridge",
         output="screen",
-        parameters=[{"use_sim_time": True}],
+        parameters=[{
+            "use_sim_time": True,
+            "dock_x": dock_x,
+            "dock_y": dock_y,
+            "dock_pose_yaw": dock_yaw,
+        }],
     )
 
     # ------------------------------------------------------------------
