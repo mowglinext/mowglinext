@@ -247,6 +247,16 @@ if(BUILD_TESTING)
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
 
+  # ---- test_high_level_status_supervision ----
+  # Header-only pure logic (high_level_status_supervision.hpp), same as test_blade_gate.
+  ament_add_gtest(test_high_level_status_supervision
+    test/test_high_level_status_supervision.cpp
+  )
+  target_include_directories(test_high_level_status_supervision
+    PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+
   # ---- test_blade_reassert ----
   # Header-only pure logic (blade_reassert.hpp), same as test_blade_gate.
   ament_add_gtest(test_blade_reassert

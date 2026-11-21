@@ -49,6 +49,9 @@
  *   heartbeat_rate   (double,  default 4.0 Hz  → 250 ms period)
  *   publish_rate     (double,  default 100.0 Hz → 10 ms period)
  *   high_level_rate  (double,  default 2.0 Hz   → 500 ms period)
+ *   high_level_status_timeout_s (double, default 5.0 s, startup-only — HighLevelStatus silence
+ *                     after which wheels and blade are stopped and the firmware held in IDLE;
+ *                     0 disables)
  *   cmd_vel_{linear,angular}_{accel,decel}_limit (double, startup-only)
  *   deadband_pwm     (double,  default 40.0 PWM, startup-only — motor stiction
  *                     estimate the wheel_pid_* set must be able to bridge)
@@ -85,6 +88,7 @@
 #include "mowgli_hardware/firmware_param_store_reset_gate.hpp"
 #include "mowgli_hardware/firmware_params.hpp"
 #include "mowgli_hardware/gnss_hardware_status.hpp"
+#include "mowgli_hardware/high_level_status_supervision.hpp"
 #include "mowgli_hardware/imu_liveness.hpp"
 #include "mowgli_hardware/ll_datatypes.hpp"
 #include "mowgli_hardware/odometry_publisher.hpp"
@@ -413,6 +417,14 @@ private:
         2.0,
         "Finite non-negative startup-only RX watchdog timeout in seconds; zero disables it.");
     high_level_rate_ = timer_rate("high_level_rate", 2.0, kHighLevelRateRange);
+    // The BT republishes HighLevelStatus at 1 Hz. Silence longer than this while it last
+    // reported an actuating mode engages the firmware interlock (wheels zero, blade OFF, mode
+    // IDLE) until a fresh status arrives. Zero disables the supervision.
+    high_level_status_timeout_s_ = startup_double(
+        "high_level_status_timeout_s",
+        mowgli_hardware::kDefaultHighLevelStatusTimeoutS,
+        "Finite non-negative startup-only HighLevelStatus silence in seconds after which the "
+        "bridge stops wheels and blade and holds the firmware in IDLE; zero disables it.");
     dock_x_ = declare_parameter<double>("dock_pose_x", 0.0);
     dock_y_ = declare_parameter<double>("dock_pose_y", 0.0);
     dock_yaw_ = declare_parameter<double>("dock_pose_yaw", 0.0);
@@ -942,6 +954,7 @@ private:
       wheel_track_ = effective_wheel_track;
     }
     require_finite_nonnegative_timeout(serial_rx_timeout_s_, "serial_rx_timeout_s");
+    require_finite_nonnegative_timeout(high_level_status_timeout_s_, "high_level_status_timeout_s");
     require_finite_positive(dig_gnss_timeout_s_, "dig_gnss_timeout_s");
     require_finite_positive(dig_gyro_timeout_s_, "dig_gyro_timeout_s");
     require_finite_positive(dig_escape_cfg_.timeout_s, "dig_reverse_timeout_s");
@@ -1298,6 +1311,7 @@ private:
     timer_high_level_ = create_wall_timer(hl_period,
                                           [this]()
                                           {
+                                            supervise_high_level_status();
                                             send_high_level_state();
                                           });
 
@@ -2684,6 +2698,12 @@ private:
     }
     pkt.gps_quality = GnssQualityForFirmware(gnssObservationFresh(), gps_quality_);
 
+    const char* held_reason = "";
+    if (!allowed)
+    {
+      held_reason = high_level_status_lost_ ? " [held IDLE: BT status lost]"
+                                            : " [held IDLE: firmware protocol not verified]";
+    }
     if (last_sent_mode_ != current_mode_ || last_sent_mode_state_name_ != current_mode_state_name_)
     {
       RCLCPP_INFO(get_logger(),
@@ -2693,7 +2713,7 @@ private:
                   high_level_mode_name(pkt.current_mode),
                   current_mode_state_name_.c_str(),
                   pkt.gps_quality,
-                  allowed ? "" : " [held IDLE: firmware protocol not verified]");
+                  held_reason);
       last_sent_mode_ = current_mode_;
       last_sent_mode_state_name_ = current_mode_state_name_;
     }
@@ -3296,15 +3316,31 @@ private:
   // ---------------------------------------------------------------------------
 
   /// True once the board has completed a handshake reporting this image's
-  /// protocol. Gates every motion / blade / mode packet; never the heartbeat
-  /// (emergency stop + release), the handshake, telemetry or parameter reads.
+  /// protocol AND the behaviour tree's status has not gone silent in an
+  /// actuating mode (high_level_status_supervision.hpp). Gates every motion /
+  /// blade / mode packet; never the heartbeat (emergency stop + release), the
+  /// handshake, telemetry or parameter reads.
   [[nodiscard]] bool actuation_allowed() const
   {
-    return mowgli_hardware::firmware_actuation_allowed(fw_handshake_done_, fw_compatible_);
+    return mowgli_hardware::firmware_actuation_allowed(fw_handshake_done_, fw_compatible_) &&
+           !high_level_status_lost_;
   }
 
   void log_interlock_refusal(const char* what, const char* outcome)
   {
+    if (mowgli_hardware::firmware_actuation_allowed(fw_handshake_done_, fw_compatible_))
+    {
+      RCLCPP_WARN_THROTTLE(get_logger(),
+                           *get_clock(),
+                           5000,
+                           "Firmware interlock: %s refused (%s) — no HighLevelStatus from the "
+                           "behaviour tree for over %.1f s. Actuation resumes automatically when "
+                           "the status is fresh again.",
+                           what,
+                           outcome,
+                           high_level_status_timeout_s_);
+      return;
+    }
     RCLCPP_WARN_THROTTLE(get_logger(),
                          *get_clock(),
                          5000,
@@ -3316,6 +3352,43 @@ private:
                          static_cast<unsigned>(kMowgliProtocolVersion),
                          fw_handshake_done_ ? "done" : "pending",
                          static_cast<unsigned>(fw_protocol_version_));
+  }
+
+  /// Behaviour-tree liveness (high_level_status_supervision.hpp). Runs on the
+  /// high-level timer and on every received status. A tree that dies in an
+  /// actuating mode leaves the bridge announcing that mode to the firmware and
+  /// Nav2 finishing the last goal unguarded, so a silent status engages the
+  /// firmware interlock; a fresh one releases it.
+  void supervise_high_level_status()
+  {
+    // Judged on the mode the firmware is being told (current_mode_, which the cmd_vel fallback
+    // can also set) and on a flag that, unlike have_high_level_status_, survives a serial
+    // reconnect: neither a reconnect nor a fallback promotion may leave the hold.
+    const bool lost = mowgli_hardware::high_level_status_lost(bt_status_seen_,
+                                                              current_mode_,
+                                                              steadyNowNs(),
+                                                              last_high_level_status_steady_ns_,
+                                                              high_level_status_timeout_s_);
+    if (lost == high_level_status_lost_)
+    {
+      return;
+    }
+    const bool was_allowed = actuation_allowed();
+    high_level_status_lost_ = lost;
+    if (lost)
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "No HighLevelStatus for over %.1f s while the behaviour tree last reported "
+                   "mode %u (%s) — treating it as lost.",
+                   high_level_status_timeout_s_,
+                   current_mode_,
+                   high_level_mode_name(current_mode_));
+    }
+    else
+    {
+      RCLCPP_INFO(get_logger(), "HighLevelStatus is fresh again.");
+    }
+    apply_firmware_interlock_transition(was_allowed);
   }
 
   /// Called after every change to the handshake state. Engaging actively stops
@@ -3332,14 +3405,17 @@ private:
     if (transition == mowgli_hardware::InterlockTransition::kReleased)
     {
       RCLCPP_INFO(get_logger(),
-                  "Firmware interlock released: board speaks protocol v%u — actuation enabled.",
+                  "Firmware interlock released: board speaks protocol v%u and the behaviour "
+                  "tree's status is fresh — actuation enabled.",
                   static_cast<unsigned>(fw_protocol_version_));
       send_high_level_state();
       return;
     }
     RCLCPP_ERROR(get_logger(),
-                 "Firmware interlock ENGAGED: firmware protocol not verified — stopping wheels "
-                 "and blade, holding the board in IDLE.");
+                 "Firmware interlock ENGAGED: %s — stopping wheels and blade, holding the board "
+                 "in IDLE.",
+                 high_level_status_lost_ ? "behaviour tree status lost"
+                                         : "firmware protocol not verified");
     dig_escaping_ = false;
     dig_escape_state_ = DigEscapeState{};
     dig_invalidate_baselines();
@@ -3572,7 +3648,9 @@ private:
     current_mode_ = msg->state;
     current_mode_state_name_ = msg->state_name;
     have_high_level_status_ = true;
+    bt_status_seen_ = true;
     last_high_level_status_steady_ns_ = steadyNowNs();
+    supervise_high_level_status();
     if (previous_mode != current_mode_ || previous_state_name != current_mode_state_name_)
     {
       RCLCPP_INFO(get_logger(),
@@ -3609,6 +3687,9 @@ private:
           wz);
       return;
     }
+
+    // Do not wait for the next high-level tick to notice an expired status.
+    supervise_high_level_status();
 
     // Firmware interlock: until the board has proven it speaks this image's
     // protocol, every command is a stop. Zeroing it HERE (not only at the
@@ -3663,6 +3744,8 @@ private:
                   "forcing STM32 mode to %u (%s).",
                   current_mode_,
                   high_level_mode_name(current_mode_));
+      // A BT that reported NULL and then went silent must not be promoted into a fresh window.
+      supervise_high_level_status();
       send_high_level_state();
     }
 
@@ -4180,6 +4263,7 @@ private:
                         std::shared_ptr<mowgli_interfaces::srv::MowerControl::Response> res)
   {
     const bool requested_enable = (req->mow_enabled != 0u);
+    supervise_high_level_status();
     // Firmware interlock (firmware_interlock.hpp): an ENABLE is refused while
     // the board has not proven it speaks this image's protocol. The OFF is
     // still written, and the caller is told — FollowStrip and the GUI read
@@ -4187,12 +4271,22 @@ private:
     if (mowgli_hardware::interlock_refuses_blade(actuation_allowed(), requested_enable ? 1u : 0u))
     {
       // Not throttled: a service call is rare and the operator pressed something.
-      RCLCPP_WARN(get_logger(),
-                  "Firmware interlock: MowerControl blade enable REFUSED — the STM32 has not "
-                  "reported protocol v%u (handshake %s, board protocol v%u). Blade kept OFF.",
-                  static_cast<unsigned>(kMowgliProtocolVersion),
-                  fw_handshake_done_ ? "done" : "pending",
-                  static_cast<unsigned>(fw_protocol_version_));
+      if (high_level_status_lost_)
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Firmware interlock: MowerControl blade enable REFUSED — no HighLevelStatus "
+                    "from the behaviour tree for over %.1f s. Blade kept OFF.",
+                    high_level_status_timeout_s_);
+      }
+      else
+      {
+        RCLCPP_WARN(get_logger(),
+                    "Firmware interlock: MowerControl blade enable REFUSED — the STM32 has not "
+                    "reported protocol v%u (handshake %s, board protocol v%u). Blade kept OFF.",
+                    static_cast<unsigned>(kMowgliProtocolVersion),
+                    fw_handshake_done_ ? "done" : "pending",
+                    static_cast<unsigned>(fw_protocol_version_));
+      }
       mow_enabled_ = false;
       blade_intent_authorized_ = false;
       cancelBladeResume();
@@ -4530,6 +4624,11 @@ private:
   double publish_rate_{100.0};
   // Serial-link RX watchdog (auto-reconnect on flash / board reboot / unplug).
   double serial_rx_timeout_s_{2.0};
+  double high_level_status_timeout_s_{mowgli_hardware::kDefaultHighLevelStatusTimeoutS};
+  bool high_level_status_lost_{false};
+  /// A HighLevelStatus has been received since startup. Never cleared (see
+  /// supervise_high_level_status()); have_high_level_status_ is cleared on reconnect.
+  bool bt_status_seen_{false};
   rclcpp::Time last_serial_rx_time_{0, 0, RCL_ROS_TIME};
   std::int64_t last_serial_rx_steady_ns_{0};
   double high_level_rate_{2.0};

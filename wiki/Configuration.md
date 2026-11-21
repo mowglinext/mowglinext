@@ -159,6 +159,11 @@ hardware_bridge:
     # re-enumeration, which otherwise leaves the bridge writing to a dead fd)
     serial_rx_timeout_s: 2.0
 
+    # HighLevelStatus supervision: if the behaviour tree's status stays silent this long
+    # while it last reported an actuating mode, wheels and blade are stopped and the
+    # firmware is held in IDLE until a fresh status arrives (0 disables)
+    high_level_status_timeout_s: 5.0
+
     # Sensor read tick (Hz). The actual /imu/data rate is capped by the
     # firmware packet rate (~47 Hz); a 100 Hz tick just makes sure every
     # available packet is consumed without serial backlog.
