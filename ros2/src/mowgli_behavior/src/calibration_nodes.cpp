@@ -164,10 +164,10 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
   const bool have_line_fit_samples =
       samples.size() >= 4u && std::hypot(samples.back().first - samples.front().first,
                                          samples.back().second - samples.front().second) >= 0.5;
-  const double effective_dist =
-      have_line_fit_samples ? std::hypot(samples.back().first - samples.front().first,
-                                         samples.back().second - samples.front().second)
-                            : dist;
+  const double effective_dist = have_line_fit_samples
+                                    ? std::hypot(samples.back().first - samples.front().first,
+                                                 samples.back().second - samples.front().second)
+                                    : dist;
 
   if (effective_dist < min_displacement)
   {
