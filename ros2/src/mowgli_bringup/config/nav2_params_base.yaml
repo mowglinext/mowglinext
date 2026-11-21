@@ -530,6 +530,34 @@ controller_server:
       kd_lat: 0.5
       kp_ang: 1.5             # PRE_ROTATE pivot gain — MUST stay high (deadband)
       kp_ang_following: 1.0   # FOLLOWING (straight-swath) heading gain — kills the weave
+      # Curvature regulation in clean FOLLOWING (ftc_curvature_feedforward.hpp),
+      # evaluated from the robot's own projection on the plan. The speed cap
+      # keeps v <= (1 - yaw_reserve) x max_cmd_vel_ang / |curvature| over the
+      # braking distance (R 0.20 -> 0.136 m/s); the feed-forward adds the turn
+      # rate the carrot's heading lead does not already supply. Both OFF =
+      # native law. An arc too tight to hold at stall_crawl_speed (R < ~0.12 m
+      # here) gets no correction. EXPERIMENTAL, simulation evidence only; do
+      # not enable on a robot without physical acceptance.
+      curvature_speed_limit_enabled: false
+      curvature_speed_yaw_reserve: 0.15
+      curvature_speed_response_s: 0.3
+      # Bends whose whole same-direction run turns less than this do not cap the
+      # speed (a headland ring's 10-15 deg boundary vertices); 0 = every bend.
+      curvature_speed_min_turn_deg: 0.0
+      curvature_feedforward_gain: 0.0
+      # Simulator-tuned set (2026-11, SIMULATION ONLY; the shipped values above
+      # are unchanged): curvature_speed_limit_enabled true,
+      # curvature_feedforward_gain 1.0, curvature_speed_response_s 0.15,
+      # kp_lon 2.0, kp_lat 6.0, kd_lat 2.0, kp_ang_following 1.6,
+      # max_cmd_vel_ang 0.9, plus connector_turn_radius 0.40 in mowgli_robot.yaml.
+      # In the Webots sim with GNSS/IMU/slip disturbance (research build of this
+      # curvature code) it left 9-12 % of the stock reachable misses at
+      # 0.45-0.5 m/s for <= +4 % mission time; at 0.6 m/s it left 55 % in a run
+      # whose real-time factor dipped below 0.4 (inconclusive). Two pairs on this
+      # dev code at 0.5 m/s (seeds 7, 8) left 7-8 % at <= 1 % less time. Not validated on
+      # hardware: kp_lat/kd_lat contradict the 2026-06-25 field tuning above
+      # (kd_lat 1.5 pumped a weave on the real robot), so check a straight swath
+      # for weave before adopting it.
       ki_ang: 0.0
       kd_ang: 0.0
       # Low-pass the PID derivative (cherry-picked from PR #290, commit 64dce368).
