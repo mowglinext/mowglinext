@@ -87,6 +87,7 @@ public:
   /// (a server that is discovered but does not answer in time).
   /// `refused_follow_cancels`: /follow_path refuses its first cancel requests (a server that
   /// cannot cancel yet).
+  /// `follow_finish_delay`: the time a /follow_path goal remains CANCELING before it ends.
   Endpoints(const std::vector<std::string>& served,
             bool with_blade,
             std::chrono::milliseconds cancel_delay,

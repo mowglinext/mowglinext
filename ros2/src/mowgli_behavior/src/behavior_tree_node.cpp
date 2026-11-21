@@ -1470,7 +1470,7 @@ private:
                            bool clean = blade_off();
                            for (const auto& action : boot_actions_)
                            {
-                             if (!checkBootAction(*action.second))
+                             if (!checkBootAction(action.second))
                              {
                                clean = false;
                              }
@@ -1587,14 +1587,18 @@ private:
   {
     for (const auto* name : names)
     {
-      auto& state = boot_actions_[name];
-      state = std::make_unique<BootAction>();
+      auto state = std::make_shared<BootAction>();
       state->cancel = create_client<BootCancel>(std::string(name) + "/_action/cancel_goal");
       state->status = create_subscription<BootGoalStatusArray>(
           std::string(name) + "/_action/status",
           rclcpp::QoS(1).reliable().transient_local(),
-          [state = state.get()](BootGoalStatusArray::ConstSharedPtr report)
+          [weak = std::weak_ptr<BootAction>(state)](BootGoalStatusArray::ConstSharedPtr report)
           {
+            const auto state = weak.lock();
+            if (!state)
+            {
+              return;
+            }
             for (const auto& goal : report->status_list)
             {
               if (isBootGoalTerminal(goal.status))
@@ -1605,79 +1609,84 @@ private:
             state->last_status = std::move(report);
           });
       boot_hold_->add_step(name,
-                           [this, state = state.get()]()
+                           [this, state]()
                            {
-                             return checkBootAction(*state);
+                             return checkBootAction(state);
                            });
+      boot_actions_.emplace(name, std::move(state));
     }
   }
 
-  bool checkBootAction(BootAction& state)
+  bool checkBootAction(const std::shared_ptr<BootAction>& state)
   {
-    if (!state.cancel->service_is_ready() || state.status->get_publisher_count() != 1u)
+    if (!state->cancel->service_is_ready() || state->status->get_publisher_count() != 1u)
     {
-      state.matched_at.reset();
-      state.acknowledged = false;
+      state->matched_at.reset();
+      state->acknowledged = false;
       return false;
     }
     const auto now = BootHold::Clock::now();
-    if (!state.matched_at)
+    if (!state->matched_at)
     {
-      state.matched_at = now;
+      state->matched_at = now;
     }
     // Idle servers need not publish an initial array. Always get a cancel response,
     // and allow the matched durable writer time to deliver any existing status.
-    const bool settled_status = state.last_status || now - *state.matched_at >= 500ms;
+    const bool settled_status = state->last_status || now - *state->matched_at >= 500ms;
     const bool has_live_goal =
-        state.last_status && std::any_of(state.last_status->status_list.begin(),
-                                         state.last_status->status_list.end(),
-                                         [](const auto& goal)
-                                         {
-                                           return !isBootGoalTerminal(goal.status);
-                                         });
-    if (state.inflight)
+        state->last_status && std::any_of(state->last_status->status_list.begin(),
+                                          state->last_status->status_list.end(),
+                                          [](const auto& goal)
+                                          {
+                                            return !isBootGoalTerminal(goal.status);
+                                          });
+    if (state->inflight)
     {
       return false;  // A delayed cancel must never outlive the hold and reach a new goal.
     }
-    if (state.acknowledged && settled_status && state.awaiting_terminal.empty() && !has_live_goal)
+    if (state->acknowledged && settled_status && state->awaiting_terminal.empty() && !has_live_goal)
     {
       return true;
     }
-    if (!settled_status || !state.awaiting_terminal.empty())
+    if (!settled_status || !state->awaiting_terminal.empty())
     {
       return false;
     }
-    state.inflight = true;
-    state.cancel->async_send_request(std::make_shared<BootCancel::Request>(),
-                                     [&state](rclcpp::Client<BootCancel>::SharedFuture answer)
-                                     {
-                                       const auto response = answer.get();
-                                       state.inflight = false;
-                                       state.acknowledged =
-                                           response && response->return_code ==
-                                                           BootCancel::Response::ERROR_NONE;
-                                       if (!response)
-                                       {
-                                         return;
-                                       }
-                                       for (const auto& info : response->goals_canceling)
-                                       {
-                                         const bool terminal_seen =
-                                             state.last_status &&
-                                             std::any_of(state.last_status->status_list.begin(),
-                                                         state.last_status->status_list.end(),
-                                                         [&info](const auto& goal)
-                                                         {
-                                                           return goal.goal_info.goal_id.uuid ==
-                                                                      info.goal_id.uuid &&
-                                                                  isBootGoalTerminal(goal.status);
-                                                         });
-                                         if (!terminal_seen)
-                                         {
-                                           state.awaiting_terminal.insert(info.goal_id.uuid);
-                                         }
-                                       }
-                                     });
+    state->inflight = true;
+    state->cancel->async_send_request(
+        std::make_shared<BootCancel::Request>(),
+        [weak = std::weak_ptr<BootAction>(state)](rclcpp::Client<BootCancel>::SharedFuture answer)
+        {
+          const auto state = weak.lock();
+          if (!state)
+          {
+            return;
+          }
+          const auto response = answer.get();
+          state->inflight = false;
+          state->acknowledged =
+              response && response->return_code == BootCancel::Response::ERROR_NONE;
+          if (!response)
+          {
+            return;
+          }
+          for (const auto& info : response->goals_canceling)
+          {
+            const bool terminal_seen =
+                state->last_status &&
+                std::any_of(state->last_status->status_list.begin(),
+                            state->last_status->status_list.end(),
+                            [&info](const auto& goal)
+                            {
+                              return goal.goal_info.goal_id.uuid == info.goal_id.uuid &&
+                                     isBootGoalTerminal(goal.status);
+                            });
+            if (!terminal_seen)
+            {
+              state->awaiting_terminal.insert(info.goal_id.uuid);
+            }
+          }
+        });
     return false;
   }
 
@@ -1687,6 +1696,9 @@ private:
     if (boot_hold_->poll(BootHold::Clock::now()))
     {
       boot_hold_timer_->cancel();
+      boot_hold_.reset();
+      boot_actions_.clear();
+      boot_blade_client_.reset();
       RCLCPP_INFO(get_logger(), "Boot cleanup complete; the behaviour tree may start");
       return;
     }
@@ -2357,7 +2369,7 @@ private:
   bool boot_cleanup_required_{false};
   std::unique_ptr<BootHold> boot_hold_;
   rclcpp::TimerBase::SharedPtr boot_hold_timer_;
-  std::map<std::string, std::unique_ptr<BootAction>> boot_actions_;
+  std::map<std::string, std::shared_ptr<BootAction>> boot_actions_;
   rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr boot_blade_client_;
   std::chrono::steady_clock::time_point nav2_wait_deadline_;
   bool nav_ready_{false};
