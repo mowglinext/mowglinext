@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0
 
 #include <cstring>
+#include <thread>
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -58,6 +59,10 @@ struct HardwareBridgeBladeStatusTestPeer
   static void staleStatus(HardwareBridgeNode& node)
   {
     node.last_high_level_status_steady_ns_ = steadyNowNs() - 3'000'000'000;
+  }
+  static void ageStatus(HardwareBridgeNode& node, std::int64_t age_ns)
+  {
+    node.last_high_level_status_steady_ns_ = steadyNowNs() - age_ns;
   }
   static uint8_t mode(const HardwareBridgeNode& node)
   {
@@ -327,6 +332,12 @@ protected:
   using Peer = HardwareBridgeBladeStatusTestPeer;
   int master{-1};
   std::shared_ptr<HardwareBridgeNode> node;
+  // Cases that spin the node for seconds override this: the pty never answers, so the default
+  // serial RX watchdog would otherwise reopen the link and re-arm the handshake mid-test.
+  virtual std::vector<rclcpp::Parameter> extraParameters()
+  {
+    return {};
+  }
   void SetUp() override
   {
     master = posix_openpt(O_RDWR | O_NOCTTY | O_NONBLOCK);
@@ -334,9 +345,15 @@ protected:
     ASSERT_EQ(grantpt(master), 0);
     ASSERT_EQ(unlockpt(master), 0);
     rclcpp::NodeOptions options;
-    options.parameter_overrides({rclcpp::Parameter("serial_port", ptsname(master)),
-                                 rclcpp::Parameter("lift_recovery_mode", true),
-                                 rclcpp::Parameter("lift_blade_resume_delay_sec", 1.0)});
+    std::vector<rclcpp::Parameter> parameters{rclcpp::Parameter("serial_port", ptsname(master)),
+                                              rclcpp::Parameter("lift_recovery_mode", true),
+                                              rclcpp::Parameter("lift_blade_resume_delay_sec",
+                                                                1.0)};
+    for (auto& extra : extraParameters())
+    {
+      parameters.push_back(std::move(extra));
+    }
+    options.parameter_overrides(parameters);
     options.use_intra_process_comms(true);
     node = std::make_shared<HardwareBridgeNode>(options);
     // The board under test speaks this image's protocol; the firmware
@@ -1102,6 +1119,309 @@ TEST_F(BridgeFirmwareInterlock, RearmOnReconnectEngagesTheInterlock)
   Peer::rearmHandshake(*node);
   EXPECT_FALSE(Peer::actuationAllowed(*node));
   EXPECT_EQ(blades(drainPackets()), (std::vector<uint8_t>{0u}));
+}
+
+// Run whatever is ready on the node (its timers and subscriptions) once.
+static void spinOnce(const std::shared_ptr<HardwareBridgeNode>& node)
+{
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+  executor.spin_some();
+}
+
+// A behaviour tree that dies while reporting an actuating mode must not leave the bridge
+// announcing that mode: the wheels and blade stop and the firmware is held in IDLE until a
+// fresh status arrives. These cases run through the real high-level timer.
+class BridgeStatusSupervision : public BridgeFirmwareInterlock
+{
+protected:
+  std::vector<rclcpp::Parameter> extraParameters() override
+  {
+    return {rclcpp::Parameter("serial_rx_timeout_s", 0.0)};
+  }
+  // Spin the node until `done` holds, so the real high-level timer drives the supervision.
+  template <typename Predicate>
+  bool spinUntil(Predicate done, std::chrono::milliseconds timeout = std::chrono::seconds(3))
+  {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!done())
+    {
+      if (std::chrono::steady_clock::now() > deadline)
+      {
+        return false;
+      }
+      spinOnce(node);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return true;
+  }
+  // Spin for a fixed time, long enough for several high-level ticks at the default 2 Hz.
+  void spinFor(std::chrono::milliseconds duration)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + duration;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+      spinOnce(node);
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  void startMowing()
+  {
+    Peer::handshake(*node, kMowgliProtocolVersion);
+    Peer::mode(*node, HL_MODE_AUTONOMOUS);
+    ASSERT_TRUE(Peer::controlResult(*node, 1, 0));
+    Peer::sendCmdVel(*node, 0.3, 0.0);
+    drainPackets();
+  }
+};
+
+TEST_F(BridgeStatusSupervision, SilentStatusWhileAutonomousStopsWheelsAndBladeAndHoldsIdle)
+{
+  startMowing();
+  ASSERT_TRUE(Peer::actuationAllowed(*node));
+
+  Peer::ageStatus(*node, 6'000'000'000);
+  ASSERT_TRUE(spinUntil(
+      [&]()
+      {
+        return !Peer::actuationAllowed(*node);
+      }));
+
+  const auto packets = drainPackets();
+  ASSERT_FALSE(blades(packets).empty());
+  EXPECT_EQ(blades(packets).front(), 0u);
+  const auto sent = cmdVels(packets);
+  ASSERT_FALSE(sent.empty());
+  EXPECT_EQ(sent.front().linear_x, 0.0f);
+  EXPECT_EQ(sent.front().angular_z, 0.0f);
+  ASSERT_FALSE(modes(packets).empty());
+  for (const auto mode : modes(packets))
+  {
+    EXPECT_EQ(mode, HL_MODE_IDLE);
+  }
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+}
+
+TEST_F(BridgeStatusSupervision, TheHoldKeepsRefusingMotionBladeAndModeWhileTheStatusStaysSilent)
+{
+  startMowing();
+  Peer::ageStatus(*node, 6'000'000'000);
+  ASSERT_TRUE(spinUntil(
+      [&]()
+      {
+        return !Peer::actuationAllowed(*node);
+      }));
+  drainPackets();
+
+  // Nav2 finishing the dead tree's last goal keeps sending cmd_vel; none of it reaches the wire.
+  Peer::cmdVel(*node, 0.3, 0.2);
+  Peer::sendCmdVel(*node, 0.3, 0.0);
+  EXPECT_FALSE(Peer::controlResult(*node, 1, 0));
+  spinFor(std::chrono::milliseconds(1200));  // several more high-level ticks
+
+  const auto packets = drainPackets();
+  for (const auto& v : cmdVels(packets))
+  {
+    EXPECT_EQ(v.linear_x, 0.0f);
+    EXPECT_EQ(v.angular_z, 0.0f);
+  }
+  for (const auto on : blades(packets))
+  {
+    EXPECT_EQ(on, 0u);
+  }
+  ASSERT_FALSE(modes(packets).empty());
+  for (const auto mode : modes(packets))
+  {
+    EXPECT_EQ(mode, HL_MODE_IDLE);
+  }
+  EXPECT_FALSE(Peer::actuationAllowed(*node));
+}
+
+TEST_F(BridgeStatusSupervision, AReturningMowingStatusCannotResumeAnInterruptedStrip)
+{
+  startMowing();
+  Peer::ageStatus(*node, 6'000'000'000);
+  ASSERT_TRUE(spinUntil(
+      [&]()
+      {
+        return !Peer::actuationAllowed(*node);
+      }));
+  drainPackets();
+
+  for (const auto mode :
+       {HL_MODE_AUTONOMOUS, HL_MODE_RECORDING, HL_MODE_MANUAL_MOWING, HL_MODE_NULL})
+  {
+    Peer::mode(*node, mode);
+    EXPECT_FALSE(Peer::actuationAllowed(*node));
+    EXPECT_FALSE(Peer::controlResult(*node, 1, 0));
+    Peer::sendCmdVel(*node, 0.25, 0.0);
+  }
+  const auto held = drainPackets();
+  ASSERT_FALSE(cmdVels(held).empty());
+  for (const auto& command : cmdVels(held))
+  {
+    EXPECT_EQ(command.linear_x, 0.0f);
+  }
+  ASSERT_FALSE(modes(held).empty());
+  for (const auto mode : modes(held))
+  {
+    EXPECT_EQ(mode, HL_MODE_IDLE);
+  }
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+
+  Peer::mode(*node, HL_MODE_IDLE);  // Stop/Pause was processed by the tree.
+  ASSERT_TRUE(Peer::actuationAllowed(*node));
+  Peer::mode(*node, HL_MODE_AUTONOMOUS);
+  Peer::sendCmdVel(*node, 0.25, 0.0);
+  const auto released = drainPackets();
+  ASSERT_FALSE(modes(released).empty());
+  EXPECT_EQ(modes(released).back(), HL_MODE_AUTONOMOUS);
+  ASSERT_FALSE(cmdVels(released).empty());
+  EXPECT_EQ(cmdVels(released).back().linear_x, 0.25f);
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+  EXPECT_TRUE(Peer::controlResult(*node, 1, 0));  // Only a new request may start the blade.
+}
+
+TEST_F(BridgeStatusSupervision, AReturningActiveStatusCannotEraseAnUnobservedTimeout)
+{
+  startMowing();
+  Peer::ageStatus(*node, 6'000'000'000);  // No timer or command has noticed the gap yet.
+  Peer::mode(*node, HL_MODE_AUTONOMOUS);
+  EXPECT_FALSE(Peer::actuationAllowed(*node));
+  EXPECT_FALSE(Peer::mowEnabled(*node));
+}
+
+TEST_F(BridgeStatusSupervision, StatusInsideTheTimeoutKeepsActuating)
+{
+  startMowing();
+  Peer::ageStatus(*node, 3'000'000'000);  // older than the 2 s freshness, inside the 5 s bound
+  std::vector<uint8_t> announced;
+  ASSERT_TRUE(spinUntil(
+      [&]()
+      {
+        const auto more = modes(drainPackets());
+        announced.insert(announced.end(), more.begin(), more.end());
+        return !announced.empty();  // at least one high-level tick has run
+      }));
+  EXPECT_TRUE(Peer::actuationAllowed(*node));
+  for (const auto mode : announced)
+  {
+    EXPECT_EQ(mode, HL_MODE_AUTONOMOUS);
+  }
+}
+
+TEST_F(BridgeStatusSupervision, AnExpiredStatusIsNoticedByTheNextCommandNotOnlyTheNextTick)
+{
+  startMowing();
+  Peer::ageStatus(*node, 6'000'000'000);  // no timer tick has run since
+
+  Peer::cmdVel(*node, 0.25, 0.0);
+  EXPECT_FALSE(Peer::actuationAllowed(*node));
+  for (const auto& v : cmdVels(drainPackets()))
+  {
+    EXPECT_EQ(v.linear_x, 0.0f);
+  }
+  EXPECT_FALSE(Peer::controlResult(*node, 1, 0));
+}
+
+TEST_F(BridgeStatusSupervision, ASerialReconnectDoesNotReleaseTheHold)
+{
+  startMowing();
+  Peer::ageStatus(*node, 6'000'000'000);
+  ASSERT_TRUE(spinUntil(
+      [&]()
+      {
+        return !Peer::actuationAllowed(*node);
+      }));
+
+  // The link drops and comes back, and the board handshakes again. No BT status arrived.
+  Peer::disconnect(*node);
+  ASSERT_TRUE(Peer::reopen(*node));
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  spinFor(std::chrono::milliseconds(1200));  // several high-level ticks
+  drainPackets();
+  EXPECT_FALSE(Peer::actuationAllowed(*node));
+
+  Peer::cmdVel(*node, 0.25, 0.0);
+  const auto packets = drainPackets();
+  for (const auto& v : cmdVels(packets))
+  {
+    EXPECT_EQ(v.linear_x, 0.0f);
+  }
+  for (const auto mode : modes(packets))
+  {
+    EXPECT_EQ(mode, HL_MODE_IDLE);
+  }
+}
+
+TEST_F(BridgeStatusSupervision, ACmdVelFallbackCannotPromoteASilentBtOutOfNull)
+{
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  Peer::mode(*node, HL_MODE_NULL);  // the BT reported NULL, then died
+  Peer::ageStatus(*node, 6'000'000'000);
+  drainPackets();
+
+  Peer::cmdVel(*node, 0.3, 0.0);
+  const auto packets = drainPackets();
+  for (const auto& v : cmdVels(packets))
+  {
+    EXPECT_EQ(v.linear_x, 0.0f);
+  }
+  for (const auto mode : modes(packets))
+  {
+    EXPECT_EQ(mode, HL_MODE_IDLE);
+  }
+  EXPECT_FALSE(Peer::actuationAllowed(*node));
+}
+
+TEST_F(BridgeStatusSupervision, IdleAndANeverReportedStatusAreNotSupervised)
+{
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  // Never received a status: the BT may simply not have booted yet.
+  Peer::ageStatus(*node, 60'000'000'000);
+  spinFor(std::chrono::milliseconds(1200));
+  EXPECT_TRUE(Peer::actuationAllowed(*node));
+
+  // IDLE is already the firmware's stopped mode.
+  Peer::mode(*node, HL_MODE_IDLE);
+  Peer::ageStatus(*node, 60'000'000'000);
+  spinFor(std::chrono::milliseconds(1200));
+  EXPECT_TRUE(Peer::actuationAllowed(*node));
+}
+
+TEST_F(HardwareBridgeParametersTest, ZeroStatusTimeoutDisablesTheSupervision)
+{
+  using Peer = HardwareBridgeBladeStatusTestPeer;
+  rclcpp::NodeOptions options;
+  options.parameter_overrides({rclcpp::Parameter("serial_port", "/definitely/not/a/serial/device"),
+                               rclcpp::Parameter("high_level_status_timeout_s", 0.0)});
+  auto node = std::make_shared<HardwareBridgeNode>(options);
+  Peer::handshake(*node, kMowgliProtocolVersion);
+  Peer::mode(*node, HL_MODE_AUTONOMOUS);
+  Peer::ageStatus(*node, 600'000'000'000);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1200);
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    spinOnce(node);
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_TRUE(Peer::actuationAllowed(*node));
+}
+
+TEST_F(HardwareBridgeParametersTest, InvalidStatusTimeoutFailsStartupAndRejectsRuntimeUpdate)
+{
+  rclcpp::NodeOptions bad;
+  bad.parameter_overrides({rclcpp::Parameter("serial_port", "/definitely/not/a/serial/device"),
+                           rclcpp::Parameter("high_level_status_timeout_s", -1.0)});
+  EXPECT_THROW(std::make_shared<HardwareBridgeNode>(bad), std::invalid_argument);
+
+  rclcpp::NodeOptions options;
+  options.parameter_overrides(
+      {rclcpp::Parameter("serial_port", "/definitely/not/a/serial/device")});
+  auto node = std::make_shared<HardwareBridgeNode>(options);
+  EXPECT_DOUBLE_EQ(node->get_parameter("high_level_status_timeout_s").as_double(), 5.0);
+  EXPECT_FALSE(
+      node->set_parameter(rclcpp::Parameter("high_level_status_timeout_s", 1.0)).successful);
 }
 
 }  // namespace mowgli_hardware

@@ -7,6 +7,12 @@ hardware_bridge:
     # long (auto-reconnect after a firmware flash / board reboot / USB
     # re-enumeration, which otherwise leaves the bridge writing to a dead fd).
     serial_rx_timeout_s: 2.0
+    # HighLevelStatus supervision: the behaviour tree republishes its status at 1 Hz. If it stays
+    # silent this long while it last reported an actuating mode (AUTONOMOUS, RECORDING,
+    # MANUAL_MOWING), the bridge stops wheels and blade and holds the firmware in IDLE until a
+    # new IDLE status arrives. Without it a dead tree leaves Nav2 finishing its last goal unguarded
+    # while the bridge keeps announcing AUTONOMOUS. 0 disables.
+    high_level_status_timeout_s: 5.0
     publish_rate: 100.0   # Hz – sensor read tick. Actual /imu/data rate
                           # is capped by the firmware packet rate (~47 Hz);
                           # 100 Hz tick ensures every available packet is
