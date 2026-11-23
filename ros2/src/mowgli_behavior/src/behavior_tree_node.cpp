@@ -18,13 +18,18 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <initializer_list>
+#include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "action_msgs/msg/goal_status_array.hpp"
+#include "action_msgs/srv/cancel_goal.hpp"
 #include "ament_index_cpp/get_package_share_path.hpp"
 #include "behaviortree_cpp/behavior_tree.h"
 #include "behaviortree_cpp/loggers/bt_cout_logger.h"
@@ -34,6 +39,7 @@
 #include "mowgli_behavior/battery_filter.hpp"
 #include "mowgli_behavior/battery_recovery_command.hpp"
 #include "mowgli_behavior/blade_control_service.hpp"
+#include "mowgli_behavior/boot_hold.hpp"
 #include "mowgli_behavior/bt_context.hpp"
 #include "mowgli_behavior/condition_nodes.hpp"
 #include "mowgli_behavior/coverage_entry.hpp"
@@ -62,6 +68,7 @@
 #include "mowgli_interfaces/msg/status.hpp"
 #include "mowgli_interfaces/srv/goto_pose.hpp"
 #include "mowgli_interfaces/srv/high_level_control.hpp"
+#include "mowgli_interfaces/srv/mower_control.hpp"
 #include "mowgli_interfaces/srv/set_fleet_assignment.hpp"
 #include "mowgli_interfaces/srv/start_in_area.hpp"
 #include "mowgli_interfaces/update_maintenance.hpp"
@@ -113,6 +120,16 @@ public:
     context_->tf_listener = std::make_shared<tf2_ros::TransformListener>(*context_->tf_buffer);
     context_->helper_node = rclcpp::Node::make_shared("_bt_helper_node");
 
+    std::error_code marker_error;
+    boot_cleanup_required_ =
+        boot_cleanup_required(declare_parameter<std::string>("boot_hold_marker", ""), marker_error);
+    if (marker_error)
+    {
+      RCLCPP_ERROR(get_logger(),
+                   "Cannot claim the BT launch marker: %s. Holding for cleanup.",
+                   marker_error.message().c_str());
+    }
+
     // Disk-backed coverage resume: where FollowStrip persists per-area progress
     // so an interrupted mow survives a full process/container restart (reboot,
     // crash, docker restart, power-cycle after an emergency stop) — the in-RAM
@@ -122,7 +139,8 @@ public:
         declare_parameter<std::string>("coverage_resume_path", "/ros2_ws/maps/coverage_resume.txt");
     if (loadCoverageResumeState(*context_))
     {
-      // Auto-continue after a mid-run container restart: the loader also restored
+      // Auto-continue after a mid-run container restart. A respawn within the same
+      // launch keeps progress for an explicit Start. The loader also restored
       // current_command from disk, but only leave it active (so MowingSequence
       // auto-re-enters) when it was a mow command (COMMAND_START == 1) AND a
       // resumable snapshot genuinely exists. Preserve an explicitly latched
@@ -132,7 +150,11 @@ public:
       // IDLE too.
       // A saved battery charge wait survives only with an auto-continued mow
       // (applyRestoredCommandPolicy): alone it must never drive an IDLE mower.
-      const RestoredCommandPolicy policy = applyRestoredCommandPolicy(*context_);
+      const RestoredCommandPolicy policy =
+          applyRestoredCommandPolicy(*context_,
+                                     std::chrono::system_clock::now(),
+                                     std::chrono::steady_clock::now(),
+                                     !boot_cleanup_required_);
       const bool auto_continue = policy.auto_continue;
       const bool preserve_stop_hold = policy.preserve_stop_hold;
       if (policy.cleared_charge_pending)
@@ -227,6 +249,7 @@ public:
     setupSubscribers();
     setupServiceServer();
     setupBehaviorTree();
+    startBootHold();
     setupTimer();
     setupHighLevelStatusRepublish();
     startNav2WaitTimer();
@@ -276,6 +299,7 @@ public:
 
 private:
   friend struct BladeServiceTestPeer;
+  friend struct BootHoldTestPeer;
   friend struct FleetYieldServiceTestPeer;
   // ------------------------------------------------------------------
   // ROS2 infrastructure
@@ -1390,6 +1414,306 @@ private:
     resume_available_published_ = true;
   }
 
+  // An IDLE status holds the native bridge stopped while we verify cleanup.
+  // All timers, clients and subscriptions below use the node's default
+  // mutually exclusive callback group, including under MultiThreadedExecutor.
+  void startBootHold()
+  {
+    if (!boot_cleanup_required_)
+    {
+      return;
+    }
+    using Clock = BootHold::Clock;
+    double warning_s = declare_parameter<double>("boot_hold_timeout_s", 3.0);
+    if (!std::isfinite(warning_s) || warning_s <= 0.0)
+    {
+      RCLCPP_WARN(get_logger(), "Invalid boot hold warning delay; using 3 s");
+      warning_s = 3.0;
+    }
+    boot_hold_ =
+        std::make_unique<BootHold>(Clock::now(),
+                                   std::chrono::duration_cast<Clock::duration>(
+                                       std::chrono::duration<double>(std::min(warning_s, 60.0))));
+    {
+      std::lock_guard<std::mutex> lock(context_->context_mutex);
+      using Status = mowgli_interfaces::msg::HighLevelStatus;
+      context_->high_level_status_pub = create_publisher<Status>("~/high_level_status", 10);
+      context_->last_high_level_status.state = Status::HIGH_LEVEL_STATE_IDLE;
+      context_->last_high_level_status.state_name = "BOOT_HOLD";
+      context_->has_high_level_status = true;
+    }
+    republishHighLevelStatus();
+
+    boot_blade_client_ =
+        create_client<mowgli_interfaces::srv::MowerControl>("/hardware_bridge/mower_control");
+    auto blade_off = bladeOffStep();
+    boot_hold_->add_step("blade OFF", blade_off);
+    // Upstream goals can dispatch child goals until terminal. Sweep children only after
+    // the upstream goals are terminal, then verify all endpoints again before releasing.
+    addBootCancels({"/follow_waypoints", "/follow_gps_waypoints", "/dock_robot", "/undock_robot"});
+    boot_hold_->next_group();
+    addBootCancels({"/navigate_to_pose", "/navigate_through_poses"});
+    boot_hold_->next_group();
+    addBootCancels(
+        {"/follow_path", "/backup", "/retrace", "/spin", "/drive_on_heading", "/assisted_teleop"});
+    boot_hold_->next_group();
+    if (has_parameter("idle_nav2_suspend") && get_parameter("idle_nav2_suspend").as_bool())
+    {
+      boot_hold_->add_step("Nav2 lifecycle state", restoreNav2LifecycleStep());
+    }
+
+    boot_hold_->add_step("verify stopped actions and blade",
+                         [this,
+                          blade_off,
+                          clean_since = std::optional<Clock::time_point>{}]() mutable
+                         {
+                           bool clean = blade_off();
+                           for (const auto& action : boot_actions_)
+                           {
+                             if (!checkBootAction(action.second))
+                             {
+                               clean = false;
+                             }
+                           }
+                           if (!clean)
+                           {
+                             clean_since.reset();
+                             return false;
+                           }
+                           // Recheck during a quiet interval for child requests already in DDS when
+                           // their parent stopped. Every observed goal still needs explicit
+                           // terminal status.
+                           const auto now = Clock::now();
+                           if (!clean_since)
+                           {
+                             clean_since = now;
+                           }
+                           return now - *clean_since >= 400ms;
+                         });
+
+    boot_hold_timer_ = create_wall_timer(100ms,
+                                         [this]()
+                                         {
+                                           pollBootHold();
+                                         });
+  }
+
+  BootHold::Step bladeOffStep()
+  {
+    using Control = mowgli_interfaces::srv::MowerControl;
+    struct State
+    {
+      bool inflight{false};
+      bool accepted{false};
+      BootHold::Clock::time_point requested_at{};
+    };
+    auto state = std::make_shared<State>();
+    return [this, state]()
+    {
+      if (state->accepted)
+      {
+        std::lock_guard<std::mutex> lock(context_->context_mutex);
+        return context_->last_status_time >= state->requested_at &&
+               BootHold::Clock::now() - context_->last_status_time <= 1s &&
+               !context_->latest_status.mow_enabled;
+      }
+      if (!state->inflight && boot_blade_client_->service_is_ready())
+      {
+        auto request = std::make_shared<Control::Request>();
+        request->mow_enabled = false;
+        request->mow_direction = 0;
+        state->inflight = true;
+        state->requested_at = BootHold::Clock::now();
+        boot_blade_client_->async_send_request(request,
+                                               [state](rclcpp::Client<Control>::SharedFuture answer)
+                                               {
+                                                 const auto response = answer.get();
+                                                 state->accepted = response && response->success;
+                                                 state->inflight = false;
+                                               });
+      }
+      return false;
+    };
+  }
+
+  BootHold::Step restoreNav2LifecycleStep()
+  {
+    using Trigger = std_srvs::srv::Trigger;
+    auto client = create_client<Trigger>("/lifecycle_manager_navigation/is_active");
+    auto response = std::make_shared<std::optional<bool>>();
+    return [this, client, response, sent = false]() mutable
+    {
+      if (*response)
+      {
+        std::lock_guard<std::mutex> lock(context_->context_mutex);
+        context_->nav2_suspended = !response->value();
+        return true;
+      }
+      if (!sent && client->service_is_ready())
+      {
+        sent = true;
+        client->async_send_request(std::make_shared<Trigger::Request>(),
+                                   [response](rclcpp::Client<Trigger>::SharedFuture future)
+                                   {
+                                     *response = future.get()->success;
+                                   });
+      }
+      return false;
+    };
+  }
+
+  using BootCancel = action_msgs::srv::CancelGoal;
+  using BootGoalStatus = action_msgs::msg::GoalStatus;
+  using BootGoalStatusArray = action_msgs::msg::GoalStatusArray;
+
+  struct BootAction
+  {
+    rclcpp::Client<BootCancel>::SharedPtr cancel;
+    rclcpp::Subscription<BootGoalStatusArray>::SharedPtr status;
+    BootGoalStatusArray::ConstSharedPtr last_status;
+    std::set<rclcpp_action::GoalUUID> awaiting_terminal;
+    std::optional<BootHold::Clock::time_point> matched_at;
+    bool inflight{false};
+    bool acknowledged{false};
+  };
+
+  static bool isBootGoalTerminal(int8_t status)
+  {
+    return status == BootGoalStatus::STATUS_SUCCEEDED ||
+           status == BootGoalStatus::STATUS_CANCELED || status == BootGoalStatus::STATUS_ABORTED;
+  }
+
+  void addBootCancels(std::initializer_list<const char*> names)
+  {
+    for (const auto* name : names)
+    {
+      auto state = std::make_shared<BootAction>();
+      state->cancel = create_client<BootCancel>(std::string(name) + "/_action/cancel_goal");
+      state->status = create_subscription<BootGoalStatusArray>(
+          std::string(name) + "/_action/status",
+          rclcpp::QoS(1).reliable().transient_local(),
+          [weak = std::weak_ptr<BootAction>(state)](BootGoalStatusArray::ConstSharedPtr report)
+          {
+            const auto state = weak.lock();
+            if (!state)
+            {
+              return;
+            }
+            for (const auto& goal : report->status_list)
+            {
+              if (isBootGoalTerminal(goal.status))
+              {
+                state->awaiting_terminal.erase(goal.goal_info.goal_id.uuid);
+              }
+            }
+            state->last_status = std::move(report);
+          });
+      boot_hold_->add_step(name,
+                           [this, state]()
+                           {
+                             return checkBootAction(state);
+                           });
+      boot_actions_.emplace(name, std::move(state));
+    }
+  }
+
+  bool checkBootAction(const std::shared_ptr<BootAction>& state)
+  {
+    if (!state->cancel->service_is_ready() || state->status->get_publisher_count() != 1u)
+    {
+      state->matched_at.reset();
+      state->acknowledged = false;
+      return false;
+    }
+    const auto now = BootHold::Clock::now();
+    if (!state->matched_at)
+    {
+      state->matched_at = now;
+    }
+    // Idle servers need not publish an initial array. Always get a cancel response,
+    // and allow the matched durable writer time to deliver any existing status.
+    const bool settled_status = state->last_status || now - *state->matched_at >= 500ms;
+    const bool has_live_goal =
+        state->last_status && std::any_of(state->last_status->status_list.begin(),
+                                          state->last_status->status_list.end(),
+                                          [](const auto& goal)
+                                          {
+                                            return !isBootGoalTerminal(goal.status);
+                                          });
+    if (state->inflight)
+    {
+      return false;  // A delayed cancel must never outlive the hold and reach a new goal.
+    }
+    if (state->acknowledged && settled_status && state->awaiting_terminal.empty() && !has_live_goal)
+    {
+      return true;
+    }
+    if (!settled_status || !state->awaiting_terminal.empty())
+    {
+      return false;
+    }
+    state->inflight = true;
+    state->cancel->async_send_request(
+        std::make_shared<BootCancel::Request>(),
+        [weak = std::weak_ptr<BootAction>(state)](rclcpp::Client<BootCancel>::SharedFuture answer)
+        {
+          const auto state = weak.lock();
+          if (!state)
+          {
+            return;
+          }
+          const auto response = answer.get();
+          state->inflight = false;
+          state->acknowledged =
+              response && response->return_code == BootCancel::Response::ERROR_NONE;
+          if (!response)
+          {
+            return;
+          }
+          for (const auto& info : response->goals_canceling)
+          {
+            const bool terminal_seen =
+                state->last_status &&
+                std::any_of(state->last_status->status_list.begin(),
+                            state->last_status->status_list.end(),
+                            [&info](const auto& goal)
+                            {
+                              return goal.goal_info.goal_id.uuid == info.goal_id.uuid &&
+                                     isBootGoalTerminal(goal.status);
+                            });
+            if (!terminal_seen)
+            {
+              state->awaiting_terminal.insert(info.goal_id.uuid);
+            }
+          }
+        });
+    return false;
+  }
+
+  void pollBootHold()
+  {
+    const bool warned = boot_hold_->timed_out();
+    if (boot_hold_->poll(BootHold::Clock::now()))
+    {
+      boot_hold_timer_->cancel();
+      boot_hold_.reset();
+      boot_actions_.clear();
+      boot_blade_client_.reset();
+      RCLCPP_INFO(get_logger(), "Boot cleanup complete; the behaviour tree may start");
+      return;
+    }
+    republishHighLevelStatus();
+    if (boot_hold_->timed_out() && !warned)
+    {
+      std::string pending;
+      for (const auto& name : boot_hold_->pending())
+      {
+        pending += (pending.empty() ? "" : ", ") + name;
+      }
+      RCLCPP_ERROR(get_logger(), "Staying in BOOT_HOLD while waiting for: %s", pending.c_str());
+    }
+  }
+
   // Non-blocking check for Nav2 action servers.  The BT tick loop starts
   // immediately so that idle-state publishers (high_level_status, etc.) are
   // created right away.  A periodic timer polls for Nav2 readiness and
@@ -1801,6 +2125,10 @@ private:
 
   void tickTree()
   {
+    if (boot_hold_ && !boot_hold_->done())
+    {
+      return;
+    }
     coverage_orientation_service_->processPending();
     {
       std::lock_guard<std::mutex> lock(context_->context_mutex);
@@ -2038,6 +2366,11 @@ private:
   rclcpp_action::Client<nav2_msgs::action::NavigateToPose>::SharedPtr nav_client_;
   rclcpp_action::Client<nav2_msgs::action::UndockRobot>::SharedPtr undock_client_;
   rclcpp::TimerBase::SharedPtr nav2_wait_timer_;
+  bool boot_cleanup_required_{false};
+  std::unique_ptr<BootHold> boot_hold_;
+  rclcpp::TimerBase::SharedPtr boot_hold_timer_;
+  std::map<std::string, std::shared_ptr<BootAction>> boot_actions_;
+  rclcpp::Client<mowgli_interfaces::srv::MowerControl>::SharedPtr boot_blade_client_;
   std::chrono::steady_clock::time_point nav2_wait_deadline_;
   bool nav_ready_{false};
   bool undock_ready_{false};

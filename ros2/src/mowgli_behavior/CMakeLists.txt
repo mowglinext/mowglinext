@@ -187,6 +187,12 @@ if(BUILD_TESTING)
     ${action_msgs_TARGETS}
   )
 
+  # The restarted tree's start-up hold cases (test/test_boot_hold_node.cpp) are included by
+  # test_blade_services.cpp: every translation unit that includes the node source needs about
+  # 4.7 GB to compile, so these cases share one instead of adding a third.
+  set_property(SOURCE test/test_blade_services.cpp APPEND PROPERTY OBJECT_DEPENDS
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/test_boot_hold_node.cpp)
+
   ament_add_ros_isolated_gtest(test_fleet_yield_services
     test/test_fleet_yield_services.cpp
     ${blade_service_sources}
@@ -1314,6 +1320,10 @@ if(BUILD_TESTING)
   target_include_directories(test_precision_coverage_support PRIVATE include ${mowgli_localization_INCLUDE_DIRS})
   target_link_libraries(test_precision_coverage_support ${NAVSAT_STATUS_ASSOCIATION_LIBRARY}
     ${mowgli_interfaces_TARGETS} ${sensor_msgs_TARGETS})
+
+  # Start-up hold of a restarted tree (blade OFF, cancel orphan motion goals). Pure logic.
+  ament_add_gtest(test_boot_hold test/test_boot_hold.cpp)
+  target_include_directories(test_boot_hold PRIVATE include)
 
   ament_add_gtest(test_blade_ready test/test_blade_ready.cpp)
   target_include_directories(test_blade_ready PRIVATE include)

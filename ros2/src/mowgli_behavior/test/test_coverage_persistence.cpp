@@ -990,3 +990,21 @@ TEST(CoveragePersistence, ExpiredProgressKeepsTheCrossHatchPhase)
   EXPECT_TRUE(restarted.cross_hatch.at(0).next_perpendicular);
   std::remove(ctx.coverage_resume_path.c_str());
 }
+
+TEST(CoveragePersistence, ProcessRespawnKeepsProgressButRequiresAStartCommand)
+{
+  mowgli_behavior::BTContext ctx;
+  ctx.current_command = 1;
+  ctx.battery_charge_pending = true;
+  ctx.area_resume_pose_index[0] = 12;
+  const auto policy = mowgli_behavior::applyRestoredCommandPolicy(ctx,
+                                                                  std::chrono::system_clock::now(),
+                                                                  std::chrono::steady_clock::now(),
+                                                                  false);
+  EXPECT_FALSE(policy.auto_continue);
+  EXPECT_TRUE(policy.cleared_charge_pending);
+  EXPECT_EQ(ctx.current_command, 0);
+  EXPECT_FALSE(ctx.battery_charge_pending);
+  EXPECT_TRUE(ctx.resume_after_incomplete_end);
+  EXPECT_EQ(ctx.area_resume_pose_index.at(0), 12u);
+}

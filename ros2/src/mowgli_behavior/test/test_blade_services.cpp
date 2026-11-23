@@ -182,3 +182,8 @@ TEST_F(BladeServices, RealTickExcludesOperatorCallbackUnderMultithreadedExecutor
   node->context()->node.reset();
 }
 }  // namespace mowgli_behavior
+
+// The restarted tree's start-up hold cases live in their own file but are compiled here, so the
+// node source is compiled once for both.
+#define MOWGLI_BEHAVIOR_NODE_SOURCE_INCLUDED
+#include "test_boot_hold_node.cpp"  // NOLINT(build/include)

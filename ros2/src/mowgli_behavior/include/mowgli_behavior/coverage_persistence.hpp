@@ -100,7 +100,8 @@ struct RestoredCommandPolicy
 RestoredCommandPolicy applyRestoredCommandPolicy(
     BTContext& ctx,
     std::chrono::system_clock::time_point wall_now = std::chrono::system_clock::now(),
-    std::chrono::steady_clock::time_point steady_now = std::chrono::steady_clock::now());
+    std::chrono::steady_clock::time_point steady_now = std::chrono::steady_clock::now(),
+    bool allow_auto_continue = true);
 
 /// Drop every piece of restored coverage progress (completed swaths, cursors,
 /// per-unit progress, finished areas, plan fingerprints, pose counts, the

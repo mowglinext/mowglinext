@@ -35,17 +35,23 @@ Brings up all subsystems:
 
 import os
 import sys
+import tempfile
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
+    OpaqueFunction,
+    RegisterEventHandler,
 )
 from launch.conditions import IfCondition
+from launch.event_handlers import OnShutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (
     EnvironmentVariable,
+    EqualsSubstitution,
+    IfElseSubstitution,
     LaunchConfiguration,
     PythonExpression,
 )
@@ -335,14 +341,28 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     # 3. Behavior tree node
     # ------------------------------------------------------------------
+    # Boot cleanup relies on the native bridge honoring IDLE and its status watchdog.
+    supervised_bt = EqualsSubstitution(hardware_backend, "mowgli")
+    bt_launch_state = tempfile.TemporaryDirectory(prefix="mowgli-bt-")
+    cleanup_bt_launch_state = RegisterEventHandler(
+        OnShutdown(on_shutdown=[OpaqueFunction(function=lambda _context: bt_launch_state.cleanup())])
+    )
     behavior_tree_node = Node(
         package="mowgli_behavior",
         executable="behavior_tree_node",
         name="behavior_tree_node",
         output="screen",
+        respawn=supervised_bt,
+        respawn_delay=2.0,
         parameters=[
             behavior_params,
             {"use_sim_time": use_sim_time},
+            {"boot_hold_marker": ParameterValue(
+                IfElseSubstitution(
+                    supervised_bt, if_value=os.path.join(bt_launch_state.name, "started")
+                ),
+                value_type=str,
+            )},
             # Operator-tunable BT knobs sourced from mowgli_robot.yaml
             # so they appear on the GUI Settings page.
             {"tick_rate": float(robot_params.get("tick_rate", 10.0))},
@@ -1042,6 +1062,7 @@ def generate_launch_description() -> LaunchDescription:
             mowgli_launch,
             navigation_launch,
             # Individual nodes
+            cleanup_bt_launch_state,
             behavior_tree_node,
             map_server_node,
             obstacle_tracker_node,
