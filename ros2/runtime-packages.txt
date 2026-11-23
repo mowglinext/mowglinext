@@ -1,0 +1,68 @@
+# apt packages the `runtime` image installs on top of ros:lyrical-ros-core
+# (and the build `base` installs too, so every build stage sees the same
+# runtime set). Only what has to be present WITHOUT being linked by a shipped
+# ELF belongs here: pluginlib plugins, executables, launch-time Python
+# modules, CLIs. Every shared library a shipped binary links is derived at
+# build time by ros2/scripts/list_runtime_packages.py instead.
+#
+# One package per line; '#' starts a comment.
+
+# Same ROS surface as the ros-base image (rosbag2 for the GUI's
+# `ros2 bag record`, geometry2, urdf, kdl), without its build toolchain
+ros-lyrical-ros-base
+# Navigation (servers + their pluginlib plugins)
+ros-lyrical-nav2-bt-navigator
+ros-lyrical-nav2-controller
+ros-lyrical-nav2-planner
+ros-lyrical-nav2-smoother
+ros-lyrical-nav2-collision-monitor
+ros-lyrical-nav2-behaviors
+ros-lyrical-nav2-regulated-pure-pursuit-controller
+ros-lyrical-nav2-rotation-shim-controller
+ros-lyrical-nav2-costmap-2d
+ros-lyrical-nav2-map-server
+ros-lyrical-nav2-lifecycle-manager
+ros-lyrical-nav2-waypoint-follower
+ros-lyrical-nav2-velocity-smoother
+ros-lyrical-nav2-core
+ros-lyrical-nav2-util
+ros-lyrical-nav2-msgs
+# nav2_common: Python launch helpers imported by the launch files
+ros-lyrical-nav2-common
+# Docking (opennav_docking docking_server)
+ros-lyrical-opennav-docking
+# Motion control
+ros-lyrical-twist-mux
+# Behavior trees
+ros-lyrical-behaviortree-cpp
+# Robot description / TF
+ros-lyrical-xacro
+ros-lyrical-robot-state-publisher
+ros-lyrical-joint-state-publisher
+ros-lyrical-tf2-ros
+ros-lyrical-tf2-eigen
+ros-lyrical-tf2-geometry-msgs
+# Diagnostics
+ros-lyrical-diagnostic-msgs
+ros-lyrical-diagnostic-updater
+# Foxglove Bridge (WebSocket bridge for the GUI and Foxglove Studio)
+ros-lyrical-foxglove-bridge
+# Schema/typesupport only: foxglove_bridge runs here while the MAVROS node
+# lives in its sidecar; the GUI reads /mavros/state through the bridge.
+ros-lyrical-mavros-msgs
+# RTCM message definitions for the public /rtcm topic
+ros-lyrical-rtcm-msgs
+# Topic tools (relay, throttle)
+ros-lyrical-topic-tools
+# DDS middleware — Cyclone DDS (FastRTPS has stale shm issues on ARM)
+ros-lyrical-rmw-cyclonedds-cpp
+# Fields2Cover's OR-Tools
+ros-lyrical-ortools-vendor
+libtbb12
+# mqtt_bridge_node (libmosquitto is no rosdep key)
+libmosquitto1
+# Python used by shipped nodes, launch files and scripts
+python3-argcomplete
+python3-numpy
+python3-websockets
+python3-yaml

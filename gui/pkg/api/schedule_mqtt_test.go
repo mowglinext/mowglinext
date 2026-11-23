@@ -423,3 +423,24 @@ func TestLoadMqttBrokerSettings_ReadsUseSSL(t *testing.T) {
 	assert.True(t, settings.useSSL, "mqtt_use_ssl must be read, or the password goes out in the clear")
 	assert.Equal(t, 8883, settings.port)
 }
+
+// The expected IDs are the ones mqtt_bridge_node derives for the same prefixes
+// (ros2/src/mowgli_monitoring/test/test_mqtt_connection.cpp): the GUI and the
+// bridge follow one rule, and only the role differs.
+func TestMqttClientIDMatchesTheBridgeRule(t *testing.T) {
+	cases := []struct{ prefix, role, want string }{
+		{"mowgli", "bridge", "mowglinext_mowgli_059db5cc_bridge"},
+		{"mowgli", "gui", "mowglinext_mowgli_059db5cc_gui"},
+		{"mowgli/mowglinext", "gui", "mowglinext_mowgli_mowglinext_9726e199_gui"},
+		{"mowgli/mowglimavros", "gui", "mowglinext_mowgli_mowglimavros_860e58cc_gui"},
+		{"a/b", "gui", "mowglinext_a_b_3a8e75c1_gui"},
+		{"a_b", "gui", "mowglinext_a_b_1ba46871_gui"},
+		{"garden/front mower", "gui", "mowglinext_garden_front_mower_5cefaa8a_gui"},
+		{"tondeuse-\xc3\xa9t\xc3\xa9", "gui", "mowglinext_tondeuse-__t___d2eb9165_gui"},
+		{"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "gui", "mowglinext_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_84ae4e65_gui"},
+		{"", "gui", "mowglinext__811c9dc5_gui"},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, mqttClientID(c.prefix, c.role), "prefix %q", c.prefix)
+	}
+}

@@ -221,6 +221,13 @@ if(BUILD_TESTING)
     test/test_mqtt_bridge.cpp
   )
 
+  # ROS-free: the derived client ID and the reconnect backoff.
+  ament_add_gtest(test_mqtt_connection
+    test/test_mqtt_connection.cpp
+  )
+  target_include_directories(test_mqtt_connection
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
   # ROS-free: the bridge's send-on-change / deadband / diagnostics-merge policies.
   ament_add_gtest(test_mqtt_publish_policy
     test/test_mqtt_publish_policy.cpp

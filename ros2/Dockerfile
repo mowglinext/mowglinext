@@ -183,8 +183,10 @@ RUN . /opt/ros/lyrical/setup.sh \
 
 # =============================================================================
 # Stage 1: base
-# Installs all runtime ROS2 dependencies. Both runtime and simulation stages
-# inherit from here, keeping the image lean.
+# Build base: the runtime package set plus everything compiling the workspace
+# needs (vendor build list, -dev libraries, toolchain). The deps/build stages
+# inherit from here; the shipped `runtime` image does NOT (see runtime-packages
+# below) — it gets only the shared libraries the build output links.
 # =============================================================================
 FROM ros:lyrical-ros-base AS base
 
@@ -205,88 +207,19 @@ COPY --from=lyrical-vendor /opt/lyrical_vendor /opt/lyrical_vendor
 # the base-derived stages.
 RUN echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    # Navigation
-    ros-lyrical-nav2-bt-navigator \
-    ros-lyrical-nav2-controller \
-    ros-lyrical-nav2-planner \
-    ros-lyrical-nav2-smoother \
-    ros-lyrical-nav2-collision-monitor \
-    ros-lyrical-nav2-behaviors \
-    ros-lyrical-nav2-regulated-pure-pursuit-controller \
-    ros-lyrical-nav2-costmap-2d \
-    ros-lyrical-nav2-map-server \
-    ros-lyrical-nav2-lifecycle-manager \
-    ros-lyrical-nav2-waypoint-follower \
-    ros-lyrical-nav2-velocity-smoother \
-    # Motion control
-    ros-lyrical-twist-mux \
-    # Behavior trees
-    ros-lyrical-behaviortree-cpp \
-    # Robot description / TF
-    ros-lyrical-xacro \
-    ros-lyrical-robot-state-publisher \
-    ros-lyrical-joint-state-publisher \
-    ros-lyrical-tf2-ros \
-    ros-lyrical-tf2-eigen \
-    ros-lyrical-tf2-geometry-msgs \
-    # Grid map
-    # Diagnostics
-    ros-lyrical-diagnostic-msgs \
-    ros-lyrical-diagnostic-updater \
-    # Foxglove Bridge (WebSocket bridge for GUI and Foxglove Studio)
-    ros-lyrical-foxglove-bridge \
-    # Schema/typesupport only: foxglove_bridge runs in this image while the
-    # MAVROS node lives in its sidecar. The GUI reads /mavros/state and calls
-    # /mavros/vehicle_info_get through that bridge.
-    ros-lyrical-mavros-msgs \
-    # RTCM message definitions for the public /rtcm topic
-    ros-lyrical-rtcm-msgs \
-    # tinyxml2 (required at runtime by BehaviorTree.CPP)
-    libtinyxml2-dev \
-    # Topic tools (relay, throttle — used in simulation for topic remapping)
-    ros-lyrical-topic-tools \
-    # Docking (opennav_docking — dock/undock action server)
-    # DockRobot/UndockRobot actions are in nav2_msgs (already installed).
-    # The docking_server executable is in opennav_docking.
-    ros-lyrical-opennav-docking \
-    # Rotation shim controller for transit navigation
-    ros-lyrical-nav2-rotation-shim-controller \
-    # Nav2 core headers (FTC controller plugin depends on nav2_core)
-    ros-lyrical-nav2-core \
-    ros-lyrical-nav2-util \
-    # Nav2 msgs (CostmapFilterInfo for costmap filters)
-    ros-lyrical-nav2-msgs \
-    # DDS middleware — Cyclone DDS is more reliable than FastRTPS on ARM
-    # (no shared memory, no stale /dev/shm segments, better service discovery)
-    ros-lyrical-rmw-cyclonedds-cpp \
-    # GTSAM runtime deps — libgtsam itself is COPYed from the
-    # gtsam-builder stage below. libmetis-dev provides both the
-    # runtime libmetis5 and the unversioned libmetis.so symlink
-    # that GTSAM's exported CMake target references at link time.
-    # libboost-* runtime libs are pulled in transitively.
-    libmetis-dev \
-    # Fields2Cover runtime deps. libFields2Cover.so links
-    # against libgdal, libgeos_c, libortools, libtinyxml2 + bundles
-    # its own libsteering_functions and libmatplot under
-    # /opt/fields2cover-300/lib. -dev variants are needed because
-    # mowgli_coverage's find_package pulls in transitive headers via
-    # the exported Fields2Cover CMake target.
-    libgdal-dev libgeos++-dev libtinyxml2-dev libtbb12 \
-    ros-lyrical-ortools-vendor \
-    # LiDAR map anchor: Beluga MCL (header-only) + its ROS adapters
-    # MQTT bridge (mowgli_monitoring/mqtt_bridge_node) runtime dependency.
-    # libmosquitto-dev (headers + .so, needed to link) is installed in the
-    # deps stage below; this is the runtime .so the final `runtime` image
-    # (built FROM base, not FROM deps) actually needs to load
-    # MosquittoMqttClient. Not a rosdep key (checked ros/rosdistro
-    # rosdep/base.yaml — absent), so it's a plain apt-get here rather than
-    # a package.xml <depend>.
-    libmosquitto1 \
-    # Utilities
-    python3-argcomplete \
-    # WebSocket server for cmd_vel_ws_relay (manual mowing low-latency path)
-    python3-websockets \
+# The runtime package set (ros2/runtime-packages.txt) is shared with the slim
+# `runtime` stage so every build stage sees the same ROS surface. On top of it
+# the build needs the -dev variants of the libraries mowgli_coverage /
+# fusion_graph find_package() through exported CMake targets: GTSAM's
+# references the unversioned libmetis.so, Fields2Cover's pulls libgdal /
+# libgeos / libtinyxml2 headers. The runtime stage installs only their shared
+# libraries, derived from the build output (list_runtime_packages.py).
+COPY ros2/runtime-packages.txt /tmp/runtime-packages.txt
+RUN apt-get update \
+ && grep -vE '^[[:space:]]*(#|$)' /tmp/runtime-packages.txt \
+    | xargs apt-get install -y --no-install-recommends \
+ && apt-get install -y --no-install-recommends \
+    libtinyxml2-dev libmetis-dev libgdal-dev libgeos++-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # Pull source-built GTSAM 4.3a1 into /opt/gtsam and register its lib
@@ -470,10 +403,44 @@ RUN --mount=type=cache,id=mowgli-ros2-lyrical-${TARGETARCH},target=/home/ubuntu/
 
 # =============================================================================
 # Stage 5: runtime
-# Minimal image containing only what is needed to run the robot.
+# Minimal image containing only what is needed to run the robot: FROM
+# ros:lyrical-ros-core, the explicit runtime-packages.txt set, and the shared
+# libraries derived from the build output — no compilers, no -dev packages.
 # =============================================================================
-FROM base AS runtime
+# Derive the runtime apt set from what was actually built: every ELF under the
+# shipped prefixes, through ldd, to the packages owning those libraries. The
+# build stages carry compilers, -dev packages, colcon and their dependency
+# trees (OpenMPI's Fortran toolchain alone is ~600 MB); none of it is needed
+# to run, so the runtime image no longer inherits `base`.
+FROM build AS runtime-packages
+USER root
+COPY --from=ublox-msgs-builder /ws/install /opt/ublox_msgs
+COPY ros2/scripts/ros2_entrypoint.sh /ros2_entrypoint.sh
+COPY ros2/scripts/list_runtime_packages.py /tmp/list_runtime_packages.py
+RUN chmod +x /ros2_entrypoint.sh \
+ && /ros2_entrypoint.sh python3 /tmp/list_runtime_packages.py \
+      /ros2_ws/install /opt/lyrical_vendor /opt/gtsam /opt/fields2cover-300 \
+      /opt/ublox_msgs /opt/universal_gnss_interfaces \
+      > /tmp/runtime-libraries.txt
+
+FROM ros:lyrical-ros-core AS runtime
 LABEL garden.mowgli.maintenance-api="1"
+
+ARG DEBIAN_FRONTEND=noninteractive
+COPY ros2/runtime-packages.txt /tmp/runtime-packages.txt
+COPY --from=runtime-packages /tmp/runtime-libraries.txt /tmp/runtime-libraries.txt
+RUN apt-get update \
+ && grep -vhE '^[[:space:]]*(#|$)' /tmp/runtime-packages.txt /tmp/runtime-libraries.txt \
+    | sort -u | xargs apt-get install -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/* /tmp/runtime-packages.txt
+
+# Source-built prefixes (see their builder stages). Same layout as `base`.
+COPY --from=lyrical-vendor /opt/lyrical_vendor /opt/lyrical_vendor
+COPY --from=gtsam-builder /opt/gtsam /opt/gtsam
+COPY --from=fields2cover-v3-builder /opt/fields2cover-300 /opt/fields2cover-300
+RUN echo '/opt/gtsam/lib' > /etc/ld.so.conf.d/gtsam.conf \
+ && echo '/opt/fields2cover-300/lib' > /etc/ld.so.conf.d/fields2cover-300.conf \
+ && ldconfig
 
 WORKDIR /ros2_ws
 
@@ -519,6 +486,13 @@ RUN chmod +x /ros2_entrypoint.sh
 COPY ros2/scripts/check_vendor_overlay.sh /ros2_ws/scripts/check_vendor_overlay.sh
 RUN chmod +x /ros2_ws/scripts/check_vendor_overlay.sh \
  && /ros2_entrypoint.sh /ros2_ws/scripts/check_vendor_overlay.sh
+
+# Fail the image build if any shipped binary or plugin links a library the
+# slim apt set did not bring (the runtime counterpart of runtime-packages).
+COPY ros2/scripts/list_runtime_packages.py /ros2_ws/scripts/list_runtime_packages.py
+RUN /ros2_entrypoint.sh python3 /ros2_ws/scripts/list_runtime_packages.py --check \
+      /ros2_ws/install /opt/lyrical_vendor /opt/gtsam /opt/fields2cover-300 \
+      /opt/ublox_msgs /opt/universal_gnss_interfaces
 
 # Mow-session monitor — runs alongside the live stack to record a full
 # state timeline per mowing test (see CLAUDE.md "Mowing Session Monitoring").

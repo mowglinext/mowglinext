@@ -8,8 +8,12 @@
     mqtt_username: ""
     mqtt_password: ""
 
-    # MQTT client identity as seen by the broker.
-    mqtt_client_id: "mowgli_ros2"
+    # MQTT client ID as seen by the broker. A broker drops the older session
+    # when a second client connects with the same ID, so every client on one
+    # broker needs its own. Empty = derived from mqtt_topic_prefix
+    # ("mowglinext_<prefix>_<hash>_bridge", mqtt_connection.hpp), unique as long
+    # as the robots' prefixes are; a non-empty value is used as is.
+    mqtt_client_id: ""
 
     # Prefix prepended to every MQTT topic published or subscribed by this node.
     # With the default "mowgli" prefix the topics include (full list and
