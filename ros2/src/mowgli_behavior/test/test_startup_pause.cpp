@@ -220,8 +220,21 @@ protected:
       const std::string id = tag + "Probe" + std::to_string(occurrence);
       BT::PortsList ports;
       for (auto* attribute = element->FirstAttribute(); attribute; attribute = attribute->Next())
-        if (std::string(attribute->Name()) != "name")
-          ports.emplace(BT::InputPort<std::string>(attribute->Name()));
+      {
+        const std::string attr_name = attribute->Name();
+        if (attr_name == "name")
+        {
+          continue;
+        }
+        if (attr_name == "min_gps_fix_type")
+        {
+          ports.emplace(BT::InputPort<int>(attr_name));
+        }
+        else
+        {
+          ports.emplace(BT::InputPort<std::string>(attr_name));
+        }
+      }
       BT::TreeNodeManifest manifest{BT::NodeType::ACTION, id, ports, {}};
       factory.registerBuilder(manifest,
                               [state = observations, tag, occurrence](const std::string& name,
