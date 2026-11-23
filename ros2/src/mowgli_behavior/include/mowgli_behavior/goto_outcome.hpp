@@ -32,13 +32,15 @@ inline constexpr std::string_view kGotoOutcomeFailed = "FAILED";
 inline constexpr std::string_view kGotoOutcomeLowBatteryDocked = "LOW_BATTERY_DOCKED";
 inline constexpr std::string_view kGotoOutcomeLowBatteryDockFailed = "LOW_BATTERY_DOCK_FAILED";
 inline constexpr std::string_view kGotoOutcomeCriticalBatteryDocked = "CRITICAL_BATTERY_DOCKED";
+inline constexpr std::string_view kGotoOutcomeUndockFailed = "UNDOCK_FAILED";
 
-inline constexpr std::array<std::string_view, 5> kGotoOutcomes = {
+inline constexpr std::array<std::string_view, 6> kGotoOutcomes = {
     kGotoOutcomeReached,
     kGotoOutcomeFailed,
     kGotoOutcomeLowBatteryDocked,
     kGotoOutcomeLowBatteryDockFailed,
     kGotoOutcomeCriticalBatteryDocked,
+    kGotoOutcomeUndockFailed,
 };
 
 inline bool isGotoOutcome(std::string_view value)

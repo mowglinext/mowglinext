@@ -97,6 +97,7 @@ TEST(GotoMissionTest, TreeOutcomesMapToResults)
       {"LOW_BATTERY_DOCKED", Goto::Result::LOW_BATTERY_DOCKED},
       {"LOW_BATTERY_DOCK_FAILED", Goto::Result::LOW_BATTERY_DOCK_FAILED},
       {"CRITICAL_BATTERY_DOCKED", Goto::Result::CRITICAL_BATTERY},
+      {"UNDOCK_FAILED", Goto::Result::FAILED},
   };
   for (const auto& [outcome, code] : finished)
   {
@@ -105,6 +106,8 @@ TEST(GotoMissionTest, TreeOutcomesMapToResults)
     EXPECT_EQ(decision.step, GotoMissionStep::kFinish) << outcome;
     EXPECT_EQ(decision.error_code, code) << outcome;
   }
+  in.outcome = "UNDOCK_FAILED";
+  EXPECT_EQ(evaluateGotoMission(in).error_msg, "undock failed");
 }
 
 // The tree's own outcome is the most precise account: it wins over a command
@@ -297,13 +300,13 @@ protected:
 
 TEST_F(GotoActionServerTest, RefusedGoalIsAbortedWithTheReason)
 {
-  refusal = "docked";
+  refusal = "heading_not_calibrated";
   auto handle = sendGoal();
   ASSERT_TRUE(handle);
   const auto result = waitResult(handle);
   EXPECT_EQ(result.code, rclcpp_action::ResultCode::ABORTED);
   EXPECT_EQ(result.result->error_code, Goto::Result::REFUSED);
-  EXPECT_EQ(result.result->error_msg, "docked");
+  EXPECT_EQ(result.result->error_msg, "heading_not_calibrated");
   EXPECT_FALSE(server->active());
 }
 

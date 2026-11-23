@@ -108,6 +108,10 @@ inline GotoMissionDecision evaluateGotoMission(const GotoMissionInput& in)
               Result::FAILED,
               "navigation failed or a run exceeded goto_timeout_sec"};
     }
+    if (in.outcome == kGotoOutcomeUndockFailed)
+    {
+      return {GotoMissionStep::kFinish, Result::FAILED, "undock failed"};
+    }
     if (in.outcome == kGotoOutcomeLowBatteryDocked)
     {
       return {GotoMissionStep::kFinish, Result::LOW_BATTERY_DOCKED, "docked on low battery"};

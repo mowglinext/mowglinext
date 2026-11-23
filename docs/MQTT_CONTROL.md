@@ -453,8 +453,8 @@ MQTT to do either.
 ```
 
 Sends the robot to a point through the `/behavior_tree_node/goto` action (`docs/claude/high-level-api.md`
-§ GOTO action), with all of its admission checks: the robot must be undocked and at rest, the
-target inside a recorded area, and so on. The bridge converts `lat`/`lon` with its datum, so the
+§ GOTO action), with all of its admission checks: the robot must be at rest (on the dock it backs
+out first, as a mowing start does), the target inside a recorded area, and so on. The bridge converts `lat`/`lon` with its datum, so the
 client never handles the map frame. All fields are required; `yaw` is the final heading in radians
 counter-clockwise from east, within ±2π.
 
@@ -472,7 +472,7 @@ counter-clockwise from east, within ±2π.
   (the request store could not be read or written), `clock_unsynced`, `stale`, `future`,
   `datum_unset`, `out_of_range` (more than `goto_max_distance_m` from the datum), `busy` (a GOTO
   from this bridge is active), `action_unavailable`, `goal_rejected` (the action server rejected
-  the goal), and every `~/goto` admission reason (`docked`, `heading_not_calibrated`, …).
+  the goal), and every `~/goto` admission reason (`heading_not_calibrated`, `battery_low`, …).
 - The request is saved (`SUBMITTED`) before its goal is sent; if the save fails it is refused
   `state_unavailable`, so a restart can never send it twice.
 - Every later phase change is saved too. If a save fails, the event is still published with

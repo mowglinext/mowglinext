@@ -5,7 +5,8 @@
 # only exemption for this command is the blade-off dock transit, as for
 # mowing). The blade is never enabled on this path.
 #
-# Accepted only from a settled, undocked rest state. Otherwise success=false
+# Accepted only from a settled rest state; on the dock, the GOTO first backs
+# out as a mowing start does. Otherwise success=false
 # and nothing changes; reason is one of:
 #   invalid_pose            x, y or yaw is NaN/Inf
 #   busy                    a mission (a GOTO included) or a transition is
@@ -15,8 +16,10 @@
 #   critical_charge_hold    command / the charge hold must be resolved first
 #   battery_charge_pending  a battery-driven dock/charge is unfinished;
 #                           COMMAND_STOP or COMMAND_HOME releases it
-#   docked                  on the charger or mid-undock (GOTO does not undock)
-#   heading_not_calibrated  no heading seed yet this session
+#   heading_not_calibrated  off the charger, no undock reverse unfinished, and
+#                           no heading seed yet this session (also on the
+#                           station without charge: telling the station apart
+#                           needs the heading)
 #   localization_degraded   the localization-degraded latch is set
 #   battery_unknown         no recent valid battery voltage, or the battery
 #                           thresholds are not available
@@ -32,11 +35,14 @@
 # Returns success=true if the request was accepted; the actual navigation
 # outcome is reported via /behavior_tree_node/high_level_status, briefly,
 # before the tree returns to IDLE: GOTO_REACHED, GOTO_FAILED,
-# GOTO_LOW_BATTERY_DOCKED, GOTO_LOW_BATTERY_DOCK_FAILED or
-# GOTO_CRITICAL_BATTERY_DOCKED. No request ID correlates a status with a
-# request and the status is not latched: subscribe to high_level_status BEFORE
-# calling this service, then wait for GOTO_ACTIVE after success and for the
-# next terminal name (or a non-GOTO state if the GOTO was interrupted).
+# GOTO_LOW_BATTERY_DOCKED, GOTO_LOW_BATTERY_DOCK_FAILED,
+# GOTO_CRITICAL_BATTERY_DOCKED or GOTO_UNDOCK_FAILED. No request ID correlates
+# a status with a request and the status is not latched: subscribe to
+# high_level_status BEFORE calling this service. From the dock, the undock's
+# PREFLIGHT_CHECK, UNDOCKING, CALIBRATING_HEADING (and UNDOCK_FAILED) come
+# first; GOTO_UNDOCK_FAILED ends the GOTO without GOTO_ACTIVE. Then wait for
+# GOTO_ACTIVE and for the next terminal name (or another non-GOTO state if the
+# GOTO was interrupted).
 float64 x
 float64 y
 float64 yaw

@@ -23,7 +23,7 @@ float64 yaw
 # ── Result ────────────────────────────────────────────────────────────────
 uint16 NONE=0                     # target reached (see settled)
 uint16 REFUSED=1                  # not admitted; error_msg is the ~/goto_pose reason
-uint16 FAILED=2                   # navigation failed, or one run exceeded goto_timeout_sec
+uint16 FAILED=2                   # navigation or the undock failed, or one run exceeded goto_timeout_sec
 uint16 LOW_BATTERY_DOCKED=3       # low battery: transit halted, docked once
 uint16 LOW_BATTERY_DOCK_FAILED=4  # low battery: transit halted, docking failed
 uint16 CRITICAL_BATTERY=5         # critical-battery handling took over (error_msg: its state)
