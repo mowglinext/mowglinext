@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"sync"
 	"time"
@@ -234,6 +235,30 @@ func parseScheduleID(payload []byte) string {
 	return string(payload)
 }
 
+// mqttClientID derives this client's MQTT client ID exactly as
+// mqtt_bridge_node derives its own (mqtt_client_id in
+// ros2/src/mowgli_monitoring/include/mowgli_monitoring/mqtt_connection.hpp):
+// "mowglinext_<prefix>_<hash>_<role>", the prefix with every byte other than
+// [A-Za-z0-9_-] replaced by '_' and cut to 32 bytes, then the FNV-1a 32-bit
+// hash of the unmodified prefix as 8 lowercase hex digits. A broker drops the
+// older session when a second client connects with the same ID, so the GUIs of
+// two robots sharing a broker must not share one.
+func mqttClientID(topicPrefix, role string) string {
+	const maxPrefixBytes = 32
+	id := []byte("mowglinext_")
+	for i := 0; i < len(topicPrefix) && i < maxPrefixBytes; i++ {
+		c := topicPrefix[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+			id = append(id, c)
+		} else {
+			id = append(id, '_')
+		}
+	}
+	h := fnv.New32a()
+	h.Write([]byte(topicPrefix))
+	return fmt.Sprintf("%s_%08x_%s", id, h.Sum32(), role)
+}
+
 // --- broker settings --------------------------------------------------------
 
 type mqttBrokerSettings struct {
@@ -350,7 +375,7 @@ func newPahoMqttClient(s mqttBrokerSettings) (*pahoMqttClient, error) {
 	}
 	opts := mqtt.NewClientOptions().
 		AddBroker(fmt.Sprintf("%s://%s:%d", scheme, s.host, s.port)).
-		SetClientID("mowgli-gui-schedules").
+		SetClientID(mqttClientID(s.topicPrefix, "gui")).
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
 		SetOnConnectHandler(c.onConnected)
