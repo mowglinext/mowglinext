@@ -1,7 +1,7 @@
 import {beforeEach, describe, expect, it, vi} from 'vitest';
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, renderHook, screen, waitFor} from '@testing-library/react';
 import {App} from 'antd';
-import {MowerActions} from './MowerActions.tsx';
+import {MowerActions, useMowerAction} from './MowerActions.tsx';
 import en from '../i18n/locales/en.json';
 
 const callCreate = vi.fn();
@@ -36,5 +36,15 @@ describe('map blade controls', () => {
         await waitFor(() => expect(callCreate).toHaveBeenCalledExactlyOnceWith('blade_control', {
             mow_enabled: enabled, mow_direction: direction,
         }));
+    });
+});
+
+describe('useMowerAction controller correlation', () => {
+    it('forwards optional request parameters to the existing service route', async () => {
+        callCreate.mockReset().mockResolvedValue({});
+        const {result} = renderHook(() => useMowerAction(), {wrapper: App});
+        const params = {headers: {'X-Mowgli-Gamepad-Session': 'opaque-session'}};
+        await act(async () => { await result.current('high_level_control', {Command: 3}, params)(); });
+        expect(callCreate).toHaveBeenCalledExactlyOnceWith('high_level_control', {Command: 3}, params);
     });
 });

@@ -158,6 +158,9 @@ export const useWS = <T>(
     }, [teardown]);
 
     const stop = teardown;
-    const sendJsonMessage = ws.sendJsonMessage;
+    // Keep the adapters stable without allowing queued commands to replay on
+    // reconnect, including after a controller ownership handover.
+    const sendRawJsonMessage = ws.sendJsonMessage;
+    const sendJsonMessage = useCallback((...args: [message: unknown, keep?: boolean]) => sendRawJsonMessage(args[0], false), [sendRawJsonMessage]);
     return useMemo(() => ({start, stop, sendJsonMessage}), [start, stop, sendJsonMessage]);
 };

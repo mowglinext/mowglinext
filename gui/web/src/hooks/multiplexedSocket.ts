@@ -30,6 +30,7 @@ type StatusListener = (status: MultiplexStatus) => void;
 /** Minimum interval between "malformed frame" console warnings. */
 const DECODE_WARN_INTERVAL_MS = 10_000;
 
+const CONNECT_TIMEOUT_MS = 5_000;
 const STREAM_SILENCE_MS = 30_000;
 // These topics normally publish continuously. Latched/on-change topics (map,
 // path, plan, etc.) may legitimately stay quiet indefinitely.
@@ -104,6 +105,7 @@ export class MultiplexedSocket {
     private pendingFirst = new WeakSet<Listener>();
     private reconnectAttempt = 0;
     private reconnectTimer: number | null = null;
+    private connectTimer: number | null = null;
     private silenceTimer: number | null = null;
     private lastFrameAt = 0;
     private statusListeners = new Set<StatusListener>();
@@ -232,9 +234,17 @@ export class MultiplexedSocket {
         // Server frames are MessagePack binary; receive them as ArrayBuffer.
         ws.binaryType = "arraybuffer";
         this.ws = ws;
+        this.connectTimer = window.setTimeout(() => {
+            // A cleared deadline may already be queued. Never retire a newer
+            // socket or one whose handshake has completed in the meantime.
+            if (this.ws !== ws || this.state !== "connecting") return;
+            this.disconnect();
+            this.scheduleReconnect();
+        }, CONNECT_TIMEOUT_MS);
 
         ws.onopen = () => {
             if (this.ws !== ws) return;
+            this.stopConnectTimer();
             // Every subscriber may have gone away during the handshake —
             // don't keep an orphan connection alive.
             if (this.listeners.size === 0) {
@@ -305,6 +315,7 @@ export class MultiplexedSocket {
     }
 
     private disconnect(): void {
+        this.stopConnectTimer();
         this.grids.clear();
         this.resyncing.clear();
         this.stopSilenceWatchdog();
@@ -318,6 +329,13 @@ export class MultiplexedSocket {
             try { ws.close(); } catch { /* best effort */ }
         }
         this.notifyStatus();
+    }
+
+    private stopConnectTimer(): void {
+        if (this.connectTimer != null) {
+            clearTimeout(this.connectTimer);
+            this.connectTimer = null;
+        }
     }
 
     private stopSilenceWatchdog(): void {

@@ -2,6 +2,16 @@ package types
 
 import "context"
 
+// ContextRosPublisher is required for leased input such as browser gamepad
+// motion. Implementations must carry ctx through every transport, recheck it
+// after acquiring the transport writer, and cap the write by its deadline.
+// An expired/canceled publish must never be queued for replay. Callers that
+// require this contract must reject unsupported providers rather than falling
+// back to IRosProvider.Publish. Cleanup zeroes use an independent context.
+type ContextRosPublisher interface {
+	PublishContext(ctx context.Context, topic string, msgType string, msg interface{}) error
+}
+
 // RosParameter is a single ROS2 parameter as surfaced to the GUI. Value holds
 // the raw JSON value (number / bool / string / array).
 type RosParameter struct {
