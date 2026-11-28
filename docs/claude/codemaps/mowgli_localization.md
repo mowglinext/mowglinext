@@ -55,6 +55,7 @@
 | **`test/`** | | |
 | `test_cog_yaw_math.cpp` | 262 | Forward/reverse/turning heading recovery, sweep gate, latch staleness |
 | `test_costmap_scan_filter.cpp` | 397 | Radial blank + ground filter (mount yaw π, run-length guard, terrain reference on slopes); the ground filter is the **production header**, the radial blank and corridor helpers are still re-implemented |
+| `test_area_ring_index.cpp` | 329 | Corridor filter's point-in-recorded-area index (`include/mowgli_localization/area_ring_index.hpp`, the **production header**) vs a frozen copy of the plain even-odd walk on random, grid-snapped, band-boundary, horizontal-edge, on-edge, zigzag, offset, float-rounded, dense and non-finite rings, plus the any-area walk incl. an empty list |
 | `test_delta_gate.cpp` | 186 | Seed/accept/reject/re-seed/flapping behaviour of `DeltaGate` |
 | `test_dock_cog_gate.cpp` | 185 | Circular stats + all four reject reasons + no-π-offset invariant |
 | `test_navsat_projection_utils.cpp` | 62 | Typed RTK state wins over NavSatFix status; standalone fix never masquerades as RTK |
