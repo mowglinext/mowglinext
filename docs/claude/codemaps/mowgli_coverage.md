@@ -9,6 +9,25 @@
 > uses no TF. Index generated 2026-09-03 at f21729e9; regenerate when files are added/removed.
 > Loaded on demand from `ros2/CLAUDE.md`.
 
+## Planning-time update (2026-11-09)
+
+Two exact accelerations; the plan is unchanged bit for bit (`test/bench`, `test_exact_acceleration`).
+
+- `RingIndex` (`coverage_planning.hpp`): `pointInRing` for many queries against one ring —
+  edges bucketed in y-bands, pointInRing's own crossing expression on the query's band only.
+  Used for every connector/fillet/pivot-join containment test, the #388 clamp and the server's
+  per-pose verify. A non-owning view (`ring` must outlive it). The linear `pointInRing` was
+  ~50–86 % of a plan.
+- `leastCostNearestFirst` / `leastCostInScanOrder` (`coverage_planning.hpp`): the swath-chaining
+  choice in `buildContinuousSubPaths`. Candidates are visited by endpoint gap and the search stops
+  once a gap exceeds the best join cost; every join cost is ≥ its gap, so this is the index-order
+  scan's choice (it falls back to that scan if the chosen cost is below its gap). The scan used to
+  build ~30 full connectors per row to swaths across the lawn.
+- `test/bench/`: `make_bench_fixtures.py` (realistic 200–2000 m² lawns, 0–20 obstacles, 5 / AUTO /
+  no rings), `ab_compare.py` (exact-output gate + interleaved timing of two `coverage_replay`
+  builds), `e2e/` (A/B through two real `coverage_server` processes, byte-identical results).
+  Three of the fields are also `run_replay.py` cases, so `coverage-replay.yml` pins them old-vs-new.
+
 ## Route-ordering update (2026-10-05)
 
 Regenerated from the current planner and test registration; the older line-number map
@@ -58,8 +77,8 @@ below predates this change.
   selected first path for a ring-free direct caller. Rings off = no ring to start on:
   the hint is ignored and `PreviewCoverage.start_adjustable` is false. The preview answers with the
   real `start_x/y` (the snapped point). Tests `test/test_start_point.cpp`.
-- CMake registers `test_coverage_planning`, `test_pivot_joins`, `test_start_point`, `test_coverage_preview`
-  and `test_coverage_route`. Run with `colcon test --packages-select mowgli_coverage
+- CMake registers `test_coverage_planning`, `test_pivot_joins`, `test_start_point`, `test_coverage_preview`,
+  `test_coverage_route` and `test_exact_acceleration`. Run with `colcon test --packages-select mowgli_coverage
   --return-code-on-test-failure`. Local standalone replay against real F2C 3.0.0 passes
   93 tests; it does not exercise the ROS action server or the physical robot.
 

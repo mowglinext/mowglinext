@@ -29,7 +29,7 @@ python3 ros2/src/mowgli_coverage/test/replay/run_replay.py \
 
 Build types `Debug` and `RelWithDebInfo` use the same commands with separate build
 directories. The normal package's ament suite runs `test_planning_trace`, the
-Python runner/provenance tests and a 26-fixture replay matrix with two repetitions in each
+Python runner/provenance tests and a 29-fixture replay matrix with two repetitions in each
 of two fresh processes (104 replay runs). Larger stress runs use the commands
 above. These are registered checks, not a statement that they have passed.
 The standalone suite builds all five existing planner test files unchanged.
@@ -117,10 +117,10 @@ revision refresh at build time, including incremental and packed-ref updates.
 The dedicated `Coverage planner replay` workflow runs Release, Debug and
 RelWithDebInfo on changes to this package (or by manual dispatch). It extracts
 the tested synthetic merge's base parent (validated against the PR head), with
-matching planner/header/tests/fixtures, freezes the 26 fixture files once and feeds
+matching planner/header/tests/fixtures, freezes the 29 fixture files once and feeds
 them to both implementations. Each configuration runs 15 untraced repetitions
 per fixture for each implementation and 100 traced candidate repetitions per
-fixture: 3,380 replay records, plus the standalone tests. Multi-polygon records
+fixture: 3,770 replay records, plus the standalone tests. Multi-polygon records
 contain more than one field-planning call.
 
 Artifacts named `coverage-planner-replay-<build type>` retain the exact fixtures,

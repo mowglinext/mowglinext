@@ -187,7 +187,7 @@ jobs:
               'baseline_revision': os.environ['BASELINE_SHA'],
               'candidate_revision': os.environ['CANDIDATE_SHA'],
               'replay': {
-                  'fixtures': 26,
+                  'fixtures': 29,
                   'baseline_candidate_runs_per_fixture': 15,
                   'candidate_trace_runs_per_fixture': 100,
                   'comparison_input_hashes_required': True,
@@ -305,8 +305,8 @@ jobs:
           runner = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(runner)
           fixtures = runner.cases(binary)
-          if len(fixtures) != 26:
-              raise SystemExit(f'expected 26 fixtures, got {len(fixtures)}')
+          if len(fixtures) != 29:
+              raise SystemExit(f'expected 29 fixtures, got {len(fixtures)}')
           for name, fixture in fixtures.items():
               (output / f'{name}.json').write_text(
                   json.dumps(fixture, indent=2, allow_nan=False) + '\n', encoding='utf-8'
@@ -315,8 +315,8 @@ jobs:
           PY
           mapfile -t FIXTURES < <(find "$FIXTURE_DIR" -maxdepth 1 -type f \
             -name '*.json' ! -name summary.json -print | LC_ALL=C sort)
-          if [[ "${#FIXTURES[@]}" -ne 26 ]]; then
-            echo "Expected 26 exact fixture files; got ${#FIXTURES[@]}." >&2
+          if [[ "${#FIXTURES[@]}" -ne 29 ]]; then
+            echo "Expected 29 exact fixture files; got ${#FIXTURES[@]}." >&2
             exit 1
           fi
           FIXTURE_ARGS=()
@@ -339,7 +339,7 @@ jobs:
             --environment "$ROOT/environment/environment.json" \
             --output-json "$ROOT/comparison.json" \
             --output-markdown "$ROOT/comparison.md" \
-            --expected-cases 26 --expected-runs 15 \
+            --expected-cases 29 --expected-runs 15 \
             --expected-trace-runs 100 --expected-processes 3 \
             --require-identical
 
