@@ -34,6 +34,22 @@ const wsWriteTimeout = 5 * time.Second
 // are not worth the CPU. 4 KiB is well below any grid and above every status message.
 const wsCompressMinBytes = 4 * 1024
 
+// Diagnostics frames are compressed from a much lower size: after the per-status
+// limit (diagnostics_rate.go) there are only a few per second, and they are text
+// that repeats in every status (names, messages, value keys). The 0.5-3 kB
+// arrays of the mowgli/* and Nav2 updaters were otherwise sent at full size and
+// were half of what a client still received (#1097).
+const wsDiagnosticsCompressMinBytes = 512
+
+// compressFrame reports whether a multiplex frame of size bytes on topic is sent
+// with permessage-deflate (when the browser negotiated it).
+func compressFrame(topic string, size int) bool {
+	if topic == "diagnostics" {
+		return size >= wsDiagnosticsCompressMinBytes
+	}
+	return size >= wsCompressMinBytes
+}
+
 // wsCompressionLevel favours speed: the mower's CPU is small and the win comes from
 // the redundancy of the data, not from squeezing the last byte.
 const wsCompressionLevel = 1
@@ -411,8 +427,9 @@ func compactMultiplexNumbers(value any) any {
 //	server → client: MessagePack {"topic": "<key>", "data": <decoded object>[, "seq": n]}
 //	                 or, for a delta subscription, {"topic": "<key>", "patch": {...}} (grid_delta.go)
 //
-// Per-topic throttling reuses topicSubscribeInterval. Unknown topics are
-// ignored. On disconnect, all live subscriptions are released.
+// Per-topic throttling reuses topicSubscribeInterval; diagnostics is further
+// limited per status name (diagnostics_rate.go). Unknown topics are ignored.
+// On disconnect, all live subscriptions are released.
 //
 // @Summary multiplexed topic subscription
 // @Description multiplexed topic subscription
@@ -433,6 +450,9 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			// delta is set for the occupancy-grid topics the browser asked to receive as
 			// patches (see grid_delta.go); nil for every other subscription.
 			delta *gridDelta
+			// diagnostics limits the diagnostics topic per status name
+			// (diagnostics_rate.go); nil for every other subscription.
+			diagnostics *diagnosticsRateGate
 		}
 		var stateMu sync.Mutex
 		state := map[string]*subState{}
@@ -483,7 +503,7 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			// timeout/error, close the conn so the read loop unblocks and the
 			// deferred cleanup releases all subscriptions.
 			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
-			conn.EnableWriteCompression(payload.Len() >= wsCompressMinBytes)
+			conn.EnableWriteCompression(compressFrame(topic, payload.Len()))
 			if err := conn.WriteMessage(websocket.BinaryMessage, payload.Bytes()); err != nil {
 				_ = conn.Close()
 			}
@@ -546,6 +566,11 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			if delta && gridDeltaTopics[topic] {
 				sub.delta = &gridDelta{}
 			}
+			if topic == "diagnostics" {
+				sub.diagnostics = newDiagnosticsRateGate(diagnosticsBrowserInterval, func(frame []byte) {
+					writeFrame(topic, frame)
+				})
+			}
 			state[topic] = sub
 			stateMu.Unlock()
 
@@ -557,6 +582,10 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 					sendGrid(topic, sub.delta, msg)
 					return
 				}
+				if sub.diagnostics != nil {
+					sub.diagnostics.deliver(msg)
+					return
+				}
 				writeFrame(topic, msg)
 			})
 			if err != nil {
@@ -564,6 +593,9 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 				stateMu.Lock()
 				delete(state, topic)
 				stateMu.Unlock()
+				if sub.diagnostics != nil {
+					sub.diagnostics.close()
+				}
 			}
 		}
 
@@ -574,6 +606,9 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			stateMu.Unlock()
 			if ok {
 				provider.UnSubscribe(topic, s.id)
+				if s.diagnostics != nil {
+					s.diagnostics.close()
+				}
 			}
 		}
 
@@ -582,18 +617,21 @@ func MultiplexRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 			stateMu.Lock()
 			snapshot := make([]struct {
 				topic string
-				id    string
+				sub   *subState
 			}, 0, len(state))
 			for topic, s := range state {
 				snapshot = append(snapshot, struct {
 					topic string
-					id    string
-				}{topic, s.id})
+					sub   *subState
+				}{topic, s})
 			}
 			state = map[string]*subState{}
 			stateMu.Unlock()
 			for _, s := range snapshot {
-				provider.UnSubscribe(s.topic, s.id)
+				provider.UnSubscribe(s.topic, s.sub.id)
+				if s.sub.diagnostics != nil {
+					s.sub.diagnostics.close()
+				}
 			}
 		}()
 
