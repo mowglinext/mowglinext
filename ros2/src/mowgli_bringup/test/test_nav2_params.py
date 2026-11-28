@@ -1220,6 +1220,23 @@ def test_ftc_blade_load_keys_present_in_both_variants() -> None:
         assert fcp["blade_load_telemetry_max_age_s"] >= 0.5
 
 
+def test_ftc_curvature_regulation_ships_off_in_both_variants() -> None:
+    """FTC's curvature regulation (ftc_curvature_feedforward.hpp) is
+    EXPERIMENTAL with simulation evidence only. Every key must be present (a
+    missing one silently falls back to the C++ default) and both switches must
+    ship at their native-law values: no speed cap, zero feed-forward gain. The
+    secondary knobs must lie inside the ranges FTCController accepts, or the
+    controller refuses to start.
+    """
+    for loader in (_load_params, _load_no_lidar_params):
+        fcp = _controller_section(loader())["FollowCoveragePath"]
+        assert fcp["curvature_speed_limit_enabled"] is False
+        assert fcp["curvature_feedforward_gain"] == 0.0
+        assert 0.0 <= fcp["curvature_speed_yaw_reserve"] <= 0.9
+        assert 0.0 <= fcp["curvature_speed_response_s"] <= 2.0
+        assert 0.0 <= fcp["curvature_speed_min_turn_deg"] <= 180.0
+
+
 def test_blade_load_template_defaults_match_static_yaml() -> None:
     """The template's blade_load_* knobs must equal the static
     nav2_params_base.yaml values so a sparse installed file (no overrides) is
