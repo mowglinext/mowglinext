@@ -5,8 +5,8 @@ The host↔firmware compatibility key is MOWGLI_PROTOCOL_VERSION (firmware
 mowgli_protocol.h) which the host mirrors as kMowgliProtocolVersion
 (ll_datatypes.hpp). If a `pkt_*_t` struct or a `PKT_ID_*` id changes but the
 version is not bumped, an old host silently mis-parses a new firmware's packets.
-This mirrors the codegen-drift guard (sync_ros_lib.py): it fingerprints the
-wire-defining region of mowgli_protocol.h and stores it in protocol_baseline.json.
+It fingerprints the wire-defining region of
+mowgli_protocol.h and stores it in protocol_baseline.json.
 
 Usage (from repo root):
     protocol_version_guard.py           # refresh baseline (requires a version bump)

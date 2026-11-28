@@ -46,9 +46,8 @@
 | `firmware/scripts/protocol_baseline.json` | 4 | `{version: 6, hash}` baseline for the guard above |
 | `firmware/scripts/board_defaults_parity.py` | 108 | Asserts `board.h`/`board.h.template` consume `board_defaults.h` and never re-`#define` the 10 managed safety macros |
 | `firmware/scripts/package_release.py` | 182 | Stamps `.pio/build/<env>/firmware.{bin,elf}` → `mowgli-fw_<board>_<panel>_p<proto>_v<ver>_<sha>.bin` + `manifest.json` |
-| `firmware/scripts/sync_ros_lib.py` | 395 | Generates rosserial-style `ros_lib/mower_msgs/*.h` from `ros2/src/mowgli_interfaces/msg/*.msg` (output is NOT compiled — see Pitfalls) |
 | **`firmware/stm32/ros_usbnode/` — build & tooling** | | |
-| `firmware/stm32/ros_usbnode/platformio.ini` | 81 | Envs `Yardforce500` (genericSTM32F103VC), `Yardforce500_STLINK_V3`, `Yardforce500B` (custom `boards/genericSTM32F401VC.json`), `Yardforce500B_STLINK_V3`, `Yardforce500_REMOTE_UPLOAD`; `build_src_filter` excludes `proxy_inc/**` and `ros/ros_lib/**`; pre-scripts below |
+| `firmware/stm32/ros_usbnode/platformio.ini` | 81 | Envs `Yardforce500` (genericSTM32F103VC), `Yardforce500_STLINK_V3`, `Yardforce500B` (custom `boards/genericSTM32F401VC.json`), `Yardforce500B_STLINK_V3`, `Yardforce500_REMOTE_UPLOAD`; `build_src_filter` excludes `proxy_inc/**`; pre-scripts below |
 | `firmware/stm32/ros_usbnode/boards/genericSTM32F401VC.json` | 46 | PlatformIO board manifest for the 500B (Cortex-M4; declares `f_cpu` 84 MHz — `SystemClock_Config()` actually runs it at 72 MHz) |
 | `firmware/stm32/ros_usbnode/git_build_id.py` | 56 | pre: injects `MOWGLI_FW_VERSION_{MAJOR,MINOR,PATCH}` `-D` flags from git |
 | `firmware/stm32/ros_usbnode/patch_usb.py` | 21 | pre: copies `CDC/` over `~/.platformio/packages/framework-stm32cubef1/.../Class/CDC/` (mutates the host toolchain) |
@@ -92,7 +91,6 @@
 | `src/usbd_cdc_if.c` | 1078 | CDC class glue: RX/TX queues, `CDC_Transmit`, busy-stuck recovery, host-open detection, USB reset/suspend notifications, diagnostic counters |
 | `src/usb_device.c`, `src/usbd_desc.c` | 119, 392 | USB device init and descriptors |
 | `src/stm32f_it.c`, `src/startup_stm32f.S`, `src/usbd_conf.c` | 5, 5, 5 | Variant shims that `#include` `src/proxy_inc/stm32f{1,4}/{stm32fXxx_it.c, startup_stm32fXxx.S, usbd_conf.c}` (405/0/669 and 385/431/676 lines) |
-| `src/ros/generate_ros_lib.sh`, `src/ros/update_ros_lib.sh` | 8, 184 | Legacy rosserial `ros_lib` regeneration (scp from a ROS1 host / docker `open_mower_ros` image) |
 | `test/README`, `lib/README`, `include/README` | 11, 46, 39 | PlatformIO placeholders; the one native test is `test/test_cmd_vel_safety.cpp` (`pio test -e native`), the rest is `firmware/scripts/test_*.py` |
 | **Secondary trees** | | |
 | `firmware/stm32/custom_panel_fw/YF500C_panel/` | src 274+81+145+247 | STM32F0/GD32F303 replacement panel firmware (`platformio.ini` env `GD32F303_STM32F030`, board `disco_f051r8`); `flash_firmware.sh`, `trace.sh`, `configure-trace.cfg`, `gd32f303.cfg`, `yardforce500.cfg`, `firmware_bin.py` (post: bin) |
@@ -164,7 +162,6 @@ pio device monitor -b 115200 -p /dev/ttyAMA0 # UART debug (ORIG variant)
 # Guards (pure Python, run from repo root)
 python3 firmware/scripts/protocol_version_guard.py --check
 python3 firmware/scripts/board_defaults_parity.py
-python3 firmware/scripts/sync_ros_lib.py --check
 python3 firmware/scripts/protocol_version_guard.py        # refresh baseline AFTER a version bump
 
 # Release packaging (what CI does on a v*.*.* tag)
@@ -178,7 +175,7 @@ Tests — native safety tests and Python production-source harnesses run in `fir
 - `gui/pkg/providers/firmware_test.go` — `TestFlashFirmwareRouting`, `TestBuildBoard` (template rendering / env routing).
 - Anti-dig, yaw loop, PI loop: manual supervised field procedure only (`cpp_main.cpp:765-773`).
 
-CI: `.github/workflows/firmware-ci.yml` (jobs `defaults-parity`, `build` matrix `Yardforce500`/`Yardforce500B`, `release` on `v*.*.*` tags → attaches `dist/*.bin`, `dist/*.elf`, `dist/manifest.json`), `.github/workflows/protocol-version-drift.yml` (`protocol_version_guard.py --check`), `.github/workflows/msg-codegen-drift.yml` (`sync_ros_lib.py --check`). Only `firmware-ci.yml` triggers on `firmware/**`; the two drift guards trigger on their own explicit file lists (`mowgli_protocol.h` + `ll_datatypes.hpp` + guard + baseline; `mowgli_interfaces/**` + the GUI codegen paths + `sync_ros_lib.py` + `ros_lib/mower_msgs/**`). All push on `feat/**`, `fix/**`… branches.
+CI: `.github/workflows/firmware-ci.yml` (jobs `defaults-parity`, `build` matrix `Yardforce500`/`Yardforce500B`, `release` on `v*.*.*` tags → attaches `dist/*.bin`, `dist/*.elf`, `dist/manifest.json`), `.github/workflows/protocol-version-drift.yml` (`protocol_version_guard.py --check`). Only `firmware-ci.yml` triggers on `firmware/**`; the drift guard triggers on its own explicit file list (`mowgli_protocol.h` + `ll_datatypes.hpp` + guard + baseline). All push on `feat/**`, `fix/**`… branches.
 
 ## Change coupling — "if you change X, also update Y"
 
@@ -198,7 +195,7 @@ CI: `.github/workflows/firmware-ci.yml` (jobs `defaults-parity`, `build` matrix 
 
 ## Pitfalls
 
-- **Generated `ros_lib/mower_msgs/*.h` are not compiled.** `platformio.ini:16-17` excludes `ros/ros_lib/**` and no source includes them; the wire is `pkt_*_t` only. `sync_ros_lib.py` + `msg-codegen-drift.yml` keep dead output in sync.
+- **The firmware does not consume `mowgli_interfaces/*.msg`.** The wire is `pkt_*_t` only; the rosserial `ros_lib/` (vendored headers + generated `mower_msgs/*.h`, never compiled) and its generator were removed.
 - `ros2/src/mowgli_hardware/firmware/` is a **stale v3 copy** (`mowgli_protocol.h:60` there says `3u`, `mowgli_comms.h:90` there still has `MAX_HANDLERS 8`); it is not built by `mowgli_hardware/CMakeLists.txt`. The real host mirror is `ll_datatypes.hpp`.
 - `MOWGLI_COMMS_MAX_HANDLERS` too small = silent "Firmware incompatible / vunknown" forever (history in `mowgli_comms.h:73-80`); `init_ROS()` registers 9.
 - Header comments disagree with code: `mowgli_protocol.h:302` "~25 Hz" status (actual 4 Hz), `:123`/`:391` heartbeat "~250/500 ms" (actual timeout 2000 ms), `mowgli_comms.h:30` "pkt_imu_t = 40 bytes" (41). Trust `cpp_main.cpp` + the `_Static_assert`s.
@@ -218,7 +215,6 @@ CI: `.github/workflows/firmware-ci.yml` (jobs `defaults-parity`, `build` matrix 
 
 ## Generated & vendored — do not hand-edit
 
-- `firmware/stm32/ros_usbnode/src/ros/ros_lib/**` (564 files) — vendored rosserial headers; `mower_msgs/` subset regenerated by `firmware/scripts/sync_ros_lib.py`; excluded from the build.
 - `firmware/stm32/ros_usbnode/CDC/**` — patched ST `STM32_USB_Device_Library` CDC class, copied over the framework by `patch_usb.py`.
 - `firmware/stm32/ros_usbnode/include/i2c_lis3dh.h` + `src/i2c_lis3dh.c` (1050 + 2742) and `firmware/stm32/test_code/{include/lis3dh_reg.h,src/lis3dh_reg.c}` — ST LIS3DH register driver.
 - `firmware/stm32/ros_usbnode/include/pid.hpp` — vendored PX4 PID (BSD-3; local `pid_constrain`, header-only) — edit only with upstream in mind.

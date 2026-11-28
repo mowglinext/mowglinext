@@ -75,14 +75,13 @@ pio run -e Yardforce500 -t upload            # ST-Link v2
 pio run -e Yardforce500_STLINK_V3 -t upload  # OpenOCD (also Yardforce500B_STLINK_V3)
 ```
 
-### Guards & codegen
+### Guards
 
 Pure Python, run from the repo root — no toolchain needed:
 
 ```bash
 python3 firmware/scripts/board_defaults_parity.py           # CI: firmware-ci / defaults-parity
 python3 firmware/scripts/protocol_version_guard.py --check  # CI: protocol-version-drift
-python3 firmware/scripts/sync_ros_lib.py --check            # CI: msg-codegen-drift
 ```
 
 `include/mowgli_protocol.h` is the single source of truth for the wire format. Changing a `pkt_*_t`
@@ -90,11 +89,6 @@ means bumping `MOWGLI_PROTOCOL_VERSION`, hand-mirroring the struct into
 `ros2/src/mowgli_hardware/include/mowgli_hardware/ll_datatypes.hpp`, and re-running
 `protocol_version_guard.py` (without `--check`) to refresh `scripts/protocol_baseline.json` —
 otherwise every already-flashed board reports "incompatible, reflash".
-
-`sync_ros_lib.py` regenerates the rosserial-style `ros_lib/mower_msgs/*.h` from
-`mowgli_interfaces/*.msg`. That output is **excluded from the build** (`platformio.ini`
-`build_src_filter`) and included by no source file — it exists only to satisfy the CI drift gate;
-the live wire is `pkt_*_t` only.
 
 There are no firmware-side unit tests. Behaviour is pinned by the host mirror
 `ros2/src/mowgli_hardware/test/test_protocol.cpp`, the three guards above, and

@@ -44,6 +44,6 @@
 - [ ] No unrelated changes
 - [ ] Physical behavior (blades, motion, e-stop, safety gates) — flagged as **safety-critical** in the summary above, or unaffected
 - [ ] C++ touched → changed lines are clang-format **18** clean (CI installs `clang-format-18`; pre-commit pins `v18.1.8`)
-- [ ] `ros2/src/mowgli_interfaces/` touched → regenerated all three consumers (`firmware/scripts/sync_ros_lib.py`, `gui/generate_go_msgs.sh`, `gui/generate_ts_types.sh`) — gated by `msg-codegen-drift`
+- [ ] `ros2/src/mowgli_interfaces/` touched → regenerated both consumers (`gui/generate_go_msgs.sh`, `gui/generate_ts_types.sh`) — gated by `msg-codegen-drift`
 - [ ] COBS wire touched (`mowgli_protocol.h` / `ll_datatypes.hpp`) → bumped `MOWGLI_PROTOCOL_VERSION` **and** its host mirror `kMowgliProtocolVersion` — gated by `protocol-version-drift`
 - [ ] `mowgli_robot.yaml` touched → `python3 ros2/scripts/check_config_drift.py` passes (installed file stays sparse over the template)
