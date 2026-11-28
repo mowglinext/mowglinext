@@ -300,6 +300,7 @@ private:
   {
     double dx = 0.0;  // body-frame integration since last tick
     double dy = 0.0;
+    double wheel_travel_m = 0.0;  // sum of raw interval translation magnitudes
     double dtheta_wheel = 0.0;
     double dtheta_gyro = 0.0;
     double dt_total = 0.0;
@@ -449,6 +450,8 @@ private:
   // read by AddGyroDelta to gate EMA updates. Single-writer (Tick)
   // / single-reader (AddGyroDelta), both under mu_.
   bool wheel_stationary_now_ = false;
+  // Start of the current run of encoder-still nodes (gyro_bias_min_still_s).
+  std::optional<double> bias_still_since_s_;
 
   // ── Async-rebase pipeline ───────────────────────────────────────
   // RebaseISAM2 rebuilds the iSAM2 Bayes tree from scratch with one
@@ -470,6 +473,16 @@ private:
 
   // Helper — create a NoiseModel with diagonal sigmas.
   static gtsam::SharedNoiseModel MakeDiagonal(const std::vector<double>& sigmas);
+  // Window rebuilds (RebaseISAM2, RigidTransformAll, Load) re-anchor every
+  // pose with an independent prior and add them through AddPosePriorTree:
+  // kWindowPlainPriors + 1 Bayes-tree roots instead of one per pose. The
+  // newest kWindowPlainPriors stay plain priors, so everything the live graph
+  // extends right after a rebuild (the head the next between-factor attaches
+  // to, stamped GNSS / LiDAR targets, the rebase replay) keeps exactly the
+  // tree shape it had before. 25 nodes = 1 s at the configured 0.04 s node period.
+  // Not covered: with use_imu_preint (opt-in) RebaseISAM2 still gives every
+  // per-node gyro-bias variable its own PriorFactor<double>, i.e. its own root.
+  static constexpr size_t kWindowPlainPriors = 25;
 
   // Internal — actually creates the node and runs iSAM2. Caller must
   // hold mu_.
