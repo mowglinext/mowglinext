@@ -67,6 +67,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_sim_gps_quality_launch test/test_sim_gps_quality_launch.py
     TIMEOUT 30
   )
+  ament_add_pytest_test(test_sim_world_obstacle_in_map test/test_sim_world_obstacle_in_map.py
+    TIMEOUT 30
+  )
   ament_add_pytest_test(test_foxglove_launch_config test/test_foxglove_launch_config.py
     TIMEOUT 30
   )

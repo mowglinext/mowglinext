@@ -301,6 +301,10 @@ Features:
 
 To verify it's loaded, check the noVNC view or the Foxglove 3D display.
 
+With `use_lidar:=false`, the shipped `mowgli_garden.wbt` seeds the box into
+a fresh map. A saved map takes precedence, so add the box to any existing map
+that should account for it. Custom worlds use their own map data.
+
 ### Custom Worlds
 
 To create a custom world:
