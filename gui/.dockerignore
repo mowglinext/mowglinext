@@ -2,6 +2,7 @@ web/dist
 web/node_modules
 .idea
 .git
+openmower-gui
 docker-compose.yaml
 .env
 mower_config.sh

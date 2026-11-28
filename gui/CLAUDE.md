@@ -84,7 +84,7 @@ cd web && yarn generate:api     # src/api/Api.ts from ../docs/swagger.json
 - Container names are hardcoded: `mowgli-gps` (`pkg/api/gnss.go`), `mowgli-ros2` (`pkg/api/rosbag.go`, `pkg/api/drive_tuning.go`); renaming them in `install/compose/*.yml` silently breaks those tools. `mowgli-remote` (`pkg/providers/remote_access.go`) is the other way round: it is NOT in any compose fragment — the GUI creates it over the Docker socket, so do not add a fragment for it or the two would fight over the name.
 - `main.go` panics if the `system.homekit.enabled` / `system.mqtt.enabled` DB keys are unreadable, and `NewDBProvider` panics on a non-recoverable bitcask error.
 - Playwright specs live under `web/tests/e2e/` and are explicitly excluded by `vitest.config.ts` — never co-locate a `.spec.ts` under `web/src/`. Add a robot state to `tests/e2e/mock/scenarios.ts` and every page spec picks it up.
-- `gui/openmower-gui` is a tracked 40 MB build artifact — do not rely on it and do not re-commit it.
+- `gui/openmower-gui` is a local build artifact and is ignored by Git and Docker.
 
 ## Safety
 

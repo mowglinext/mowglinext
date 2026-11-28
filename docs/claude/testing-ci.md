@@ -38,7 +38,7 @@
 | Simulation E2E — GPS-only | `ros2/src/e2e_test_no_lidar.py` | rclpy script, self-scored | `cd ros2 && make e2e-test-no-lidar` | **NONE** |
 | STM32 firmware | none — `firmware/stm32/ros_usbnode/test/` holds only PlatformIO's placeholder `README` | (no `pio test` env defined in `platformio.ini`) | — | `firmware-ci.yml` build-checks only (`pio run -e Yardforce500` / `-e Yardforce500B`) |
 
-`ros2/scripts/e2e_test.py` is an **older, separate** harness from `ros2/src/e2e_test.py` (different file, different metrics); the Makefile targets drive the `src/` pair only.
+The Makefile targets drive the E2E harnesses in `ros2/src/`.
 
 Two more piles of test files exist but **never execute**: the 62 CTest suites in the universal-gnss submodule's non-ROS libs (`gnss_core/`, `gnss_protocols/`, `gnss_driver/`, `gnss_transport/`, `gnss_ntrip/`, `gnss_tools/` — `gnss_ros2/CMakeLists.txt:31–66` forces `BUILD_TESTING OFF` around their `add_subdirectory` calls, so only `gnss_ros2`'s own 6 survive colcon), and the upstream `ros2/src/opennav_coverage/*/test/*.cpp` suites, whose packages are `COLCON_IGNORE`'d (only `opennav_coverage_msgs` is built).
 

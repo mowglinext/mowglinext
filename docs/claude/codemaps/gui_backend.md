@@ -95,7 +95,7 @@ See `docs/UPDATE_CHECKS.md` for the behavior.
 | `gui/pkg/api/web_static.go` | 123 | Static bundle, `.gz` sidecar negotiation, no-cache HTML shell, SPA `NoRoute` |
 | `gui/pkg/api/config.go` | 116 | Raw DB key get/set + `/config/envs` (tile URI) |
 | `gui/pkg/api/system.go` | 101 | CPU temp, host reboot/poweroff via `nsenter` |
-| `gui/pkg/api/utils.go` | 65 | `unmarshalROSMessage` (mapstructure, case/underscore-insensitive), `snakeToCamel` |
+| `gui/pkg/api/utils.go` | 44 | `unmarshalROSMessage` (mapstructure, case/underscore-insensitive) |
 | `gui/pkg/api/params.go` | 64 | Live ROS2 parameter list/set |
 | `gui/pkg/api/setup.go` | 95 | `/setup/flashBoard` SSE stream around `FlashFirmware`; `flashStreamEvent` lifts `types.FlashStageMarker` lines out of the log as `stage` events (JSON `FlashStageEvent`), everything else is a `message` |
 | `gui/pkg/api/tiles.go` | 47 | Reverse proxy `/tiles/*` → `system.map.tileServer` |
@@ -286,13 +286,13 @@ Tests (what each pins):
 - GNSS apply is destructive to the receiver: `factory-reset-apply` refuses u-blox (`TestGNSSFactoryResetApply_RejectsUbloxWithoutRunningDestructiveWorkflow`) and both gates on explicit confirm flags.
 - `main.go` swagger header says `@host localhost:4200`; the real default listen address is `:4006` (`db.go:41`).
 - `gui/README.md` is OpenMower-era in two sections: its MQTT topic/command lists (`/gui/mower_logic/current_state`, `/gui/call/mower_service/*`, `dynamic_reconfigure`) do not match `mqtt.go:91-101,118-121`, and it documents `ROS_NODE_HOST` as the listening port — the port comes from `API_ADDR` / `system.api.addr`, and `ROS_NODE_HOST` is read by nothing.
-- `gui/openmower-gui` is a tracked 40 MB compiled binary at the repo path `docs/claude/commands.md:32` builds to — do not rely on it and avoid re-committing it.
+- `gui/openmower-gui` is the local `go build -o openmower-gui` output (`CONTRIBUTING.md`); it is ignored by Git and Docker — do not commit it.
 
 ## Generated & vendored — do not hand-edit
 - `gui/pkg/msgs/{geometry,nav,sensor,std,visualization,mowgli}/types_generated.go`, `gui/pkg/msgs/mowgli/services_generated.go` — from `gui/generate_go_msgs.sh` ("Code generated … DO NOT EDIT"); CI-gated by `msg-codegen-drift.yml`.
 - `gui/web/src/types/ros.generated.ts` — from `gui/generate_ts_types.sh` (frontend area, same gate).
 - `gui/docs/{docs.go,swagger.json,swagger.yaml}` — swaggo/swag output from `// @…` annotations; served at `/swagger/`.
-- `gui/asserts/board.h` — rendered sample of `board.h.template`; the template is the source.
-- `gui/openmower-gui` — build artifact (binary) checked into git; `gui/go.sum` — Go module checksums.
+- Expert flashing renders `include/board.h.template` from the selected firmware checkout.
+- `gui/go.sum` — Go module checksums.
 
 External release components: `gui/cmd/publish-deployment/definition.go` reads built/external entries in `install/deployment.json`. The workflow builds only built entries; publisher resolves external Docker Hub/GHCR index digests and both platforms. Deployment schema 3 and journal schema 5 preserve external provenance; existing storage, health, installer-selection and core-image guards still apply. See `docs/UPDATES.md`, External images in standard deployments.
