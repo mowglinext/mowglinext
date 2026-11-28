@@ -112,7 +112,7 @@ procedure. It supersedes Kilted-specific build details in the September 3 codema
 | [`docs/IMPORT_OPENMOWER_MAP.md`](../IMPORT_OPENMOWER_MAP.md) | contributor | OpenMower `map.json` import — live and wired (`openmower_import.go` + `ImportOpenMowerModal.tsx`). §6 (`.bag`) is design-only. |
 | [`ros2/scripts/compute_nav2_params.md`](../../ros2/scripts/compute_nav2_params.md) | contributor | Design note for the physics-derived Nav2 param calculator. Its § *Future: launch injection* is still aspirational — the script has no caller in the tree. |
 | [`ros2/scripts/diagnostics/README.md`](../../ros2/scripts/diagnostics/README.md) | contributor | Single-shot drivetrain/localization characterisation scripts; all five files still present. |
-| [`ros2/src/mowgli_hardware/firmware/README.md`](../../ros2/src/mowgli_hardware/firmware/README.md) | contributor | COBS+CRC-16 wire protocol reference and the firmware-side drop-in files. |
+| [`ros2/src/mowgli_hardware/firmware/README.md`](../../ros2/src/mowgli_hardware/firmware/README.md) | contributor | COBS+CRC-16 framing and links to maintained protocol implementations. |
 | [`ros2/src/mowgli_leds/README.md`](../../ros2/src/mowgli_leds/README.md) | contributor/operator | WS2812 ring: wiring, SPI overlay, display semantics, encoding. Self-flagged **NOT hardware-verified**. |
 | [`tools/motor/README.md`](../../tools/motor/README.md) | contributor/operator | `mowgli_tools` sidecar — the `tune_drive_pid` drive-PID assistant. |
 | [`sensors/README.md`](../../sensors/README.md) | contributor | Supported sensor drivers, the Universal GNSS contract, how to add a sensor. |

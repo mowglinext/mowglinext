@@ -199,7 +199,7 @@ CI: `.github/workflows/firmware-ci.yml` (jobs `defaults-parity`, `build` matrix 
 ## Pitfalls
 
 - **Generated `ros_lib/mower_msgs/*.h` are not compiled.** `platformio.ini:16-17` excludes `ros/ros_lib/**` and no source includes them; the wire is `pkt_*_t` only. `sync_ros_lib.py` + `msg-codegen-drift.yml` keep dead output in sync.
-- `ros2/src/mowgli_hardware/firmware/` is a **stale v3 copy** (`mowgli_protocol.h:60` there says `3u`, `mowgli_comms.h:90` there still has `MAX_HANDLERS 8`); it is not built by `mowgli_hardware/CMakeLists.txt`. The real host mirror is `ll_datatypes.hpp`.
+- `ros2/src/mowgli_hardware/firmware/` holds only the framing README (the old v3 C copy was removed). The real host mirror is `ll_datatypes.hpp`.
 - `MOWGLI_COMMS_MAX_HANDLERS` too small = silent "Firmware incompatible / vunknown" forever (history in `mowgli_comms.h:73-80`); `init_ROS()` registers 9.
 - Header comments disagree with code: `mowgli_protocol.h:302` "~25 Hz" status (actual 4 Hz), `:123`/`:391` heartbeat "~250/500 ms" (actual timeout 2000 ms), `mowgli_comms.h:30` "pkt_imu_t = 40 bytes" (41). Trust `cpp_main.cpp` + the `_Static_assert`s.
 - `on_*` handlers run in USB-RX interrupt context — no `debug_printf` on success paths (it starved the loop and tripped WWDG); `on_set_param` therefore only stores and the main loop applies.
