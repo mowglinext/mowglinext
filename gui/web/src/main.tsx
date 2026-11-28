@@ -27,6 +27,7 @@ const OnboardingPage   = React.lazy(() => import("./pages/OnboardingPage.tsx"));
 const SchedulePage     = React.lazy(() => import("./pages/SchedulePage.tsx"));
 const DiagnosticsPage  = React.lazy(() => import("./pages/DiagnosticsPage.tsx"));
 const StatisticsPage   = React.lazy(() => import("./pages/StatisticsPage.tsx"));
+const ExtensionsPage   = React.lazy(() => import("./pages/ExtensionsPage.tsx"));
 const FleetPage        = React.lazy(() => import("./pages/FleetPage.tsx"));
 const ConceptRoot      = React.lazy(() => import("./concept/ConceptRoot.tsx"));
 
@@ -81,6 +82,10 @@ const router = createHashRouter([
             {
                 element: <FleetPage/>,
                 path: "/fleet",
+            },
+            {
+                element: <ExtensionsPage/>,
+                path: "/extensions",
             }
         ]
     },

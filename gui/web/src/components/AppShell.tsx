@@ -6,7 +6,7 @@ import {useMatches, useNavigate, useOutlet} from "react-router-dom";
 import {AnimatePresence, motion, LayoutGroup} from "framer-motion";
 import {
   Home, Map as MapIcon, Calendar, Compass, Settings, Terminal, Rocket, Activity,
-  MoreHorizontal, X, Users,
+  MoreHorizontal, X, Users, Package,
 } from "lucide-react";
 
 import {useTranslation} from "react-i18next";
@@ -54,6 +54,7 @@ const NAV: NavItem[] = [
   {key: '/schedule',    labelKey: 'nav.schedule',    shortLabelKey: 'nav.schedule',  icon: Calendar, showInBottom: true},
   {key: '/diagnostics', labelKey: 'nav.diagnostics', shortLabelKey: 'nav.diagShort', icon: Activity, showInBottom: true},
   {key: '/statistics',  labelKey: 'nav.stats',                                        icon: Compass,  showInBottom: false},
+  {key: '/extensions',  labelKey: 'nav.extensions', shortLabelKey: 'nav.extensionsShort',                                   icon: Package,  showInBottom: false},
   {key: '/fleet',       labelKey: 'nav.fleet',                                        icon: Users,    showInBottom: false},
   {key: '/settings',    labelKey: 'nav.settings',                                     icon: Settings, showInBottom: false},
   {key: '/logs',        labelKey: 'nav.logs',                                         icon: Terminal, showInBottom: false},
@@ -68,6 +69,7 @@ const PAGE_META: Record<string, {titleKey: string; subtitleKey?: string}> = {
   '/schedule':    {titleKey: 'nav.schedule',             subtitleKey: 'pageMeta.schedule.subtitle'},
   '/diagnostics': {titleKey: 'nav.diagnostics',          subtitleKey: 'pageMeta.diagnostics.subtitle'},
   '/statistics':  {titleKey: 'pageMeta.statistics.title', subtitleKey: 'pageMeta.statistics.subtitle'},
+  '/extensions':  {titleKey: 'nav.extensions',           subtitleKey: 'pageMeta.extensions.subtitle'},
   '/fleet':       {titleKey: 'nav.fleet',                subtitleKey: 'pageMeta.fleet.subtitle'},
   '/settings':    {titleKey: 'nav.settings',             subtitleKey: 'pageMeta.settings.subtitle'},
   '/logs':        {titleKey: 'nav.logs',                 subtitleKey: 'pageMeta.logs.subtitle'},

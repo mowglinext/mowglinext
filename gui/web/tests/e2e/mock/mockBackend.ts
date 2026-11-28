@@ -17,6 +17,7 @@ export const BLACKBOX_STATUS: BlackboxStatus = {
  * pathname (query string ignored).
  */
 const DEFAULT_REST: Record<string, unknown> = {
+    "/api/system/extensions/state": {api: 1, configured: false, entries: []},
     // Critical: keeps AppShell from redirecting to /onboarding.
     "/api/settings/status": {onboarding_completed: true},
     // Nominal shell settings envelope. Malformed/legacy responses belong to
