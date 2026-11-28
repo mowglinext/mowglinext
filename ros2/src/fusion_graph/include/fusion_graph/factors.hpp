@@ -9,9 +9,14 @@
 
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include <Eigen/Core>
 #include <gtsam/geometry/Pose2.h>
 #include <gtsam/nonlinear/NonlinearFactor.h>
+#include <gtsam/nonlinear/NonlinearFactorGraph.h>
+#include <gtsam/slam/PriorFactor.h>
 
 namespace fusion_graph
 {
@@ -144,6 +149,68 @@ public:
 private:
   double meas_yaw_;
 };
+
+// ---------------------------------------------------------------------------
+// LinkedPosePriorFactor
+// ---------------------------------------------------------------------------
+//
+// A PriorFactor<Pose2> on `prior.key()` that also lists a second pose, `link`,
+// with an EXACTLY ZERO Jacobian. The probability model is the plain prior's:
+// same error, same whitened Jacobian and right-hand side, and the zero block
+// couples nothing (elimination gives a zero off-diagonal and an unchanged
+// marginal, back-substitution gives the prior's own solution). Only the
+// Bayes-tree shape changes: the pose becomes a child of `link` instead of a
+// separate root.
+//
+// Why: the window rebuild (RebaseISAM2, RigidTransformAll, Load) re-anchors
+// thousands of poses with independent priors. Each one became its own Bayes-
+// tree root, and iSAM2 visits every root on every back-substitution
+// (ISAM2::updateDelta, i.e. every pose read) — O(window) work per graph node
+// that never changes a number. Linked into a tree they share one root, and a
+// later factor on one of them re-eliminates only its ancestors (tens of
+// cliques for a 6000-pose window; COLAMD, not the link order, picks the root).
+//
+// Floating point: a linked pose that is re-eliminated after the rebuild (it
+// received further factors, or its tree parent was relinearised) is solved
+// together with its tree ancestors, where GTSAM may sum its non-zero factor
+// contributions in a different order. That pose can then differ from the
+// plain-prior result in the last bits (a few ulp, ~1e-15 m). It reaches the
+// live chain only through zero blocks, so the head pose and covariance are
+// unchanged — as long as no factor ever couples a window pose to the live
+// chain (today only consecutive between/gyro factors and unaries exist). A
+// factor that did (a loop closure, a multi-node LiDAR factor) would put the
+// linked tree into the head's component and change the head's elimination.
+class LinkedPosePriorFactor : public gtsam::NonlinearFactor
+{
+public:
+  LinkedPosePriorFactor(const gtsam::PriorFactor<gtsam::Pose2>& prior, gtsam::Key link);
+
+  double error(const gtsam::Values& c) const override
+  {
+    return prior_.error(c);
+  }
+  size_t dim() const override
+  {
+    return 3;
+  }
+  std::shared_ptr<gtsam::GaussianFactor> linearize(const gtsam::Values& c) const override;
+  gtsam::NonlinearFactor::shared_ptr clone() const override;
+  bool equals(const gtsam::NonlinearFactor& other, double tol = 1e-9) const override;
+  void print(const std::string& s = "",
+             const gtsam::KeyFormatter& kf = gtsam::DefaultKeyFormatter) const override;
+
+private:
+  gtsam::PriorFactor<gtsam::Pose2> prior_;
+};
+
+// Adds independent Pose2 priors (ascending key order) to `fg`: the newest
+// `plain_tail` stay plain PriorFactors (one root each, as before), and every
+// older prior j becomes a LinkedPosePriorFactor linked to prior (j - 1) / 2, so
+// all of those share ONE root — plain_tail + 1 roots instead of N. Same
+// probability model as adding each prior on its own.
+void AddPosePriorTree(gtsam::NonlinearFactorGraph& fg,
+                      const std::vector<gtsam::PriorFactor<gtsam::Pose2>>& priors,
+                      size_t plain_tail);
 
 // ---------------------------------------------------------------------------
 // Helper: yaw wrap to (-pi, pi]

@@ -204,6 +204,8 @@ add_executable(scan_deskew_node
   src/scan_deskew_node.cpp
 )
 
+target_include_directories(scan_deskew_node PRIVATE ${INCLUDE_DIR})
+
 target_link_libraries(scan_deskew_node
   ${rclcpp_TARGETS}
   ${sensor_msgs_TARGETS}
@@ -305,6 +307,28 @@ if(BUILD_TESTING)
     ${CMAKE_CURRENT_SOURCE_DIR}/include
   )
 
+  ament_add_gtest(test_cog_motion_history
+    test/test_cog_motion_history.cpp
+  )
+  target_include_directories(test_cog_motion_history PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+
+  ament_add_gtest(test_cog_source_motion_node
+    test/test_cog_source_motion_node.cpp
+  )
+  target_include_directories(test_cog_source_motion_node PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  target_link_libraries(test_cog_source_motion_node
+    ${rclcpp_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${geometry_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${mowgli_interfaces_TARGETS}
+    yaml-cpp
+  )
+
   ament_add_gtest(test_cog_observation_timing
     test/test_cog_observation_timing.cpp
   )
@@ -324,6 +348,23 @@ if(BUILD_TESTING)
   target_link_libraries(test_localization_monitor_freshness
     ${mowgli_interfaces_TARGETS}
   )
+
+  # Opt-in benchmark, not part of the default build or CI:
+  #   colcon build --packages-select mowgli_localization --cmake-target scan_deskew_bench
+  add_executable(scan_deskew_bench EXCLUDE_FROM_ALL
+    test/bench/scan_deskew_bench.cpp
+  )
+  target_include_directories(scan_deskew_bench PRIVATE ${INCLUDE_DIR})
+  target_link_libraries(scan_deskew_bench
+    ${rclcpp_TARGETS}
+    ${nav_msgs_TARGETS}
+    ${sensor_msgs_TARGETS}
+  )
+
+  ament_add_gtest(test_deskew_history_cursor
+    test/test_deskew_history_cursor.cpp
+  )
+  target_include_directories(test_deskew_history_cursor PRIVATE ${INCLUDE_DIR})
 
   # ---- test_costmap_scan_filter ----
   # The ground filter is tested through the production header

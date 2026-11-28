@@ -50,6 +50,7 @@
 #include "mowgli_nav2_plugins/ftc_collision_monitor_hold.hpp"
 #include "mowgli_nav2_plugins/ftc_contour_bypass.hpp"
 #include "mowgli_nav2_plugins/ftc_corner_geometry.hpp"
+#include "mowgli_nav2_plugins/ftc_curvature_feedforward.hpp"
 #include "mowgli_nav2_plugins/ftc_lattice_solver.hpp"
 #include "mowgli_nav2_plugins/ftc_reverse_escape.hpp"
 #include "mowgli_nav2_plugins/ftc_turn_fallback.hpp"
@@ -107,6 +108,7 @@ public:
 
 private:
   friend struct FTCSpeedLimitTestAccess;
+  friend struct FTCCurvatureTestAccess;
 
   // ── State machine ─────────────────────────────────────────────────────────
 
@@ -147,6 +149,20 @@ private:
 
   /// Compute the look-ahead distance along the remaining straight path.
   double distanceLookahead() const;
+
+  // ── Curvature regulation (ftc_curvature_feedforward.hpp) ─────────────────
+
+  /// Clean nominal FOLLOWING: no skirt, hold, reverse, recovery, turn
+  /// fallback / contour bypass, stall or stop-corner approach. Only then is
+  /// the plan's curvature the driven one.
+  bool curvatureRegulationAllowed() const;
+  /// Project the robot onto the plan behind the carrot and evaluate the
+  /// curvature speed cap from there (one bounded search per cycle). Leaves
+  /// curvature_ unsupported when disabled, not allowed or not found.
+  void updateCurvatureAtRobot();
+  /// This cycle's robot projection and curvature evidence.
+  std::optional<CurvatureRobotOnPlan> curvature_robot_;
+  CurvatureAtRobot curvature_;
 
   // Local point approach for a forward-monotone prefix ending at an explicit
   // corner. Recovery/deviation keep their existing output ownership.
@@ -766,6 +782,20 @@ private:
     // PRE_ROTATE pivot, but that high gain limit-cycles on a straight (the
     // left-right weave). Defaults to kp_ang (no change unless set lower).
     double kp_ang_following{1.0};
+    // FOLLOWING-only angular feed-forward: gain x commanded forward speed x
+    // plan curvature at the robot (ftc_curvature_feedforward.hpp). 0 = off,
+    // the native feedback-only law.
+    double curvature_feedforward_gain{0.0};
+    // FOLLOWING-only curvature speed cap: never faster than the tightest arc
+    // within the braking distance ahead of the ROBOT allows with
+    // (1 - curvature_speed_yaw_reserve) of max_cmd_vel_ang, after
+    // curvature_speed_response_s of plant delay. Off = native speed law.
+    bool curvature_speed_limit_enabled{false};
+    double curvature_speed_yaw_reserve{0.15};
+    double curvature_speed_response_s{0.3};
+    // Only bends whose total heading change reaches this many degrees cap the
+    // speed (CurvatureRunHeadingChange); 0 = every bend, the original cap.
+    double curvature_speed_min_turn_deg{0.0};
 
     // First-order low-pass time constant (s) for the PID derivative terms
     // (d_lat / d_lon / d_angle). The raw finite-difference derivative amplifies
