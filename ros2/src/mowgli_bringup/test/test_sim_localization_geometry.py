@@ -288,3 +288,36 @@ def test_explicit_bundle_requires_simulation_time(builders, relative, executable
     entities, context = builders(relative, {"simulation_geometry": json.dumps(GARDEN)})
     with pytest.raises(ValueError, match="requires use_sim_time=true"):
         _parameters(entities, context, executable)
+
+
+@pytest.mark.parametrize("pose", [(0.0, 0.0, 0.0), (2.0, -1.0, 0.25)])
+def test_sim_map_docking_and_charging_share_the_dock(builders, tmp_path, pose):
+    """Both Nav2 variants receive the same station as the planner and fake contact."""
+    x, y, yaw = pose
+    sim, context = builders(
+        "mowgli_bringup/launch/sim_full_system.launch.py",
+        site={
+            "dock_pose_x": x,
+            "dock_pose_y": y,
+            "dock_pose_yaw": yaw,
+            "dock_approach_overshoot": 0.0,
+        },
+    )
+    map_params = _parameters(sim, context, "map_server_node")[0]
+    assert map_params["dock_pose_explicit"] is True
+    assert tuple(map_params[key] for key in ("dock_pose_x", "dock_pose_y", "dock_pose_yaw")) == pose
+    assert map_params["dock_body_rear_m"] == pytest.approx(0.12)
+    assert map_params["dock_body_length_m"] == pytest.approx(0.80)
+    assert map_params["dock_body_width_m"] == pytest.approx(0.55)
+    bridge = _parameters(sim, context, "fake_hardware_bridge_node")[0]
+    assert tuple(bridge.get(key, 0.0) for key in ("dock_x", "dock_y", "dock_pose_yaw")) == pose
+
+    builders(
+        "mowgli_bringup/launch/navigation.launch.py",
+        _include(sim, context, "navigation.launch.py"),
+    )
+    params_files = list(tmp_path.glob("mowgli_nav2_*.yaml"))
+    assert len(params_files) == 2
+    for path in params_files:
+        docking = yaml.safe_load(path.read_text())["docking_server"]["ros__parameters"]
+        assert docking["home_dock"]["pose"] == list(pose)

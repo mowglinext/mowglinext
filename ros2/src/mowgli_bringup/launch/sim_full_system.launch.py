@@ -44,6 +44,7 @@ Phase 2 work — until that lands the helpers below may not see live data.
 
 import json
 import os
+import sys
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -58,6 +59,9 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 import yaml
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from robot_config_util import dock_body_extents, load_robot_params  # noqa: E402
 
 
 def _on_required_gnss_exit(context):
@@ -160,6 +164,12 @@ def generate_launch_description() -> LaunchDescription:
     # ------------------------------------------------------------------
     behavior_params = os.path.join(behavior_dir, "config", "behavior_tree.yaml")
     map_params = os.path.join(map_dir, "config", "map_server.yaml")
+    # The same merged config navigation.launch.py hands docking_server.
+    robot_params = load_robot_params(bringup_dir, "/ros2_ws/config/mowgli_robot.yaml")
+    dock_x = float(robot_params.get("dock_pose_x", 0.0))
+    dock_y = float(robot_params.get("dock_pose_y", 0.0))
+    dock_yaw = float(robot_params.get("dock_pose_yaw", 0.0))
+    dock_rear_m, dock_length_m = dock_body_extents(robot_params)
     monitoring_params = os.path.join(monitoring_dir, "config", "diagnostics.yaml")
 
     # ------------------------------------------------------------------
@@ -261,6 +271,18 @@ def generate_launch_description() -> LaunchDescription:
                 "area_is_navigation": [False],
                 "area_obstacles": [""],
             },
+            # The planner and fake charging contact use the same dock pose.
+            # The default is the world origin, which needs dock_pose_explicit
+            # so the map server builds a dock body there (#1137).
+            {
+                "dock_pose_x": dock_x,
+                "dock_pose_y": dock_y,
+                "dock_pose_yaw": dock_yaw,
+                "dock_pose_explicit": True,
+                "dock_body_rear_m": dock_rear_m,
+                "dock_body_length_m": dock_length_m,
+                "dock_body_width_m": float(robot_params.get("dock_body_width_m", 0.55)),
+            },
             # Same datum the sim navsat converter projects with (below) —
             # keeps the areas.dat datum stamp / datum-change migration
             # (issue #216) consistent in simulation.
@@ -338,7 +360,12 @@ def generate_launch_description() -> LaunchDescription:
         executable="fake_hardware_bridge_node",
         name="fake_hardware_bridge",
         output="screen",
-        parameters=[{"use_sim_time": True}],
+        parameters=[{
+            "use_sim_time": True,
+            "dock_x": dock_x,
+            "dock_y": dock_y,
+            "dock_pose_yaw": dock_yaw,
+        }],
     )
 
     # ------------------------------------------------------------------

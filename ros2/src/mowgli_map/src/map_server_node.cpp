@@ -597,8 +597,13 @@ MapServerNode::MapServerNode(const rclcpp::NodeOptions& options)
   double dock_x = declare_parameter<double>("dock_pose_x", 0.0);
   double dock_y = declare_parameter<double>("dock_pose_y", 0.0);
   double dock_yaw = declare_parameter<double>("dock_pose_yaw", 0.0);
+  // (0, 0, 0) is the template's "no dock placed yet" value, so it leaves the
+  // dock unset. A caller whose dock really sits at the map origin (the Webots
+  // simulation: fake_hardware_bridge charges within 0.3 m of (0, 0)) sets
+  // dock_pose_explicit so the station is still planned around (#1137).
+  const bool dock_pose_explicit = declare_parameter<bool>("dock_pose_explicit", false);
 
-  if (dock_x != 0.0 || dock_y != 0.0 || dock_yaw != 0.0)
+  if (dock_pose_explicit || dock_x != 0.0 || dock_y != 0.0 || dock_yaw != 0.0)
   {
     docking_pose_.position.x = dock_x;
     docking_pose_.position.y = dock_y;
