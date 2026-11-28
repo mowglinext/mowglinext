@@ -46,13 +46,13 @@ its bound). Only the published snapshot is repaired, never `areas.dat`.
 | Obstacle de-duplication rule (centroid ε = 0.10 m) | `include/mowgli_map/internal_helpers.hpp` `kObstacleDedupEpsilonM` (L41), `has_duplicate_obstacle` (L78) |
 | Dig proposal geometry (wheel ruts, not chassis) + bounds | `internal_helpers.hpp` `dig_proposal_radius`, `dig_proposal_polygon`, `kMinDigProposalRadiusM`, `kMaxDigSlipGrowthM`, `kFallbackDigProposalRadiusM`; accept guard `area_manager.cpp` `robot_inside_accepted_band` / `accept_clearance_m` |
 | Mow-progress stamping (blade-verified swept disc) | `map_server_node.cpp` `on_odom` (L624-717), `stamp_mow_progress` (L881); gate `include/mowgli_map/mow_progress.hpp` `GetMowProgressInhibitReason` (L32) |
-| `~/mow_progress` publish throttle / cache | `map_server_node.cpp` `on_publish_timer` (L842), `rebuild_mow_progress_cache` (L947) |
+| `~/mow_progress` publish throttle / cache | `map_server_node.cpp` `on_publish_timer` (L842), `rebuild_mow_progress_cache` (L947); the full-grid export is `include/mowgli_map/occupancy_grid_export.hpp` `layer_to_occupancy_grid` (byte-identical to `GridMapRosConverter::toOccupancyGrid`, pinned by `test_occupancy_grid_export`) |
 | Boundary violation (soft debounce vs lethal) | `progress_tracker.cpp` `check_boundary_violation` (L63); pure classifier `include/mowgli_map/boundary_classifier.hpp` `ClassifyBoundary` (L45) |
 | `~/get_recovery_point` pose computation | `progress_tracker.cpp` `on_get_recovery_point` (L155) |
 | Map grid geometry / resize to fit areas | `area_manager.cpp` `init_map` (L178), `resize_map_to_areas` (L202, 5 m margin L227) |
 | Binary map save/load (`map_file_path`, off by default) | `area_manager.cpp` `on_save_map` (L263), `on_load_map` (L330) |
 | CellType enum / layer names | `include/mowgli_map/map_types.hpp` `CellType` (L27-41), `layers::` (L69-72) |
-| Obstacle tracker clustering, association, promotion | `ros2/src/mowgli_map/src/obstacle_tracker_node.cpp` `process_costmap` (L258), `associate_clusters` (L1126, `association_dist` 0.5 m L1129), `promote_persistent` (L1313) |
+| Obstacle tracker clustering, association, promotion | `ros2/src/mowgli_map/src/obstacle_tracker_node.cpp` `process_costmap` (L258; the flood fill + early drop of components too wide to pass the radius filter live in `include/mowgli_map/costmap_clusters.hpp` `cluster_costmap_cells` / `cluster_extent`, pinned by `test_costmap_clusters`), `associate_clusters` (L1126, `association_dist` 0.5 m L1129), `promote_persistent` (L1313) |
 | Obstacle tracker keepout re-detection suppression | `obstacle_tracker_node.cpp` `on_keepout_mask` (L471), `centroid_in_keepout_lethal` (L478) |
 | Obstacle tracker boundary fetch / inset | `obstacle_tracker_node.cpp` `fetch_boundary` (L738-836) |
 | `obstacles.yaml` persistence | `obstacle_tracker_node.cpp` `save_to_file` (L1364), `load_from_file` (L1403) |
@@ -63,7 +63,7 @@ its bound). Only the published snapshot is repaired, never `areas.dat`.
 | File | Lines | Purpose |
 |------|-------|---------|
 | **`ros2/src/mowgli_map/`** | | |
-| `CMakeLists.txt` | ~290 | Two static libs (`mowgli_map_lib`, `mowgli_obstacle_tracker_lib`), two executables, six gtest targets |
+| `CMakeLists.txt` | ~290 | Two static libs (`mowgli_map_lib`, `mowgli_obstacle_tracker_lib`), two executables, 13 gtest targets |
 | `package.xml` | 41 | ament_cmake deps (grid_map_*, nav2_msgs, map_msgs, tf2, Boost) |
 | **`include/mowgli_map/`** | | |
 | `map_server_node.hpp` | 893 | `MapServerNode` class: `AreaEntry`/`ObstacleEntry`, all members, test-only accessors (L96-239) |
@@ -71,6 +71,8 @@ its bound). Only the published snapshot is repaired, never `areas.dat`.
 | `mow_progress.hpp` | 86 | Header-only `MowProgressInhibitReason`, `GetMowProgressInhibitReason`, `SweepStepCount` |
 | `boundary_classifier.hpp` | 71 | Header-only `ClassifyBoundary` (soft debounce + undebounced lethal) |
 | `polygon_raster.hpp` | ~260 | Package-private, ROS-free rasterisation: `for_each_cell_inside<Scalar>` (line fill), `for_each_cell_near_edges` (edge-driven distance), `covering_range`, `polygon_window` |
+| `costmap_clusters.hpp` | ~200 | Package-private tracker clustering stage: `cluster_costmap_cells` (4-connected flood fill, skips components provably wider than `max_obstacle_radius`), `cluster_extent` (centroid + radius, early stop above the bound) |
+| `occupancy_grid_export.hpp` | ~110 | Package-private `layer_to_occupancy_grid`: the `~/mow_progress` export, byte-identical to `GridMapRosConverter::toOccupancyGrid` without its per-cell layer lookup |
 | `internal_helpers.hpp` | 153 | Package-private: dedup ε, dig size constants, `polygon_centroid`, `closest_edge_point`, `point_to_polygon_distance` |
 | `obstacle_tracker_node.hpp` | 277 | `ObstacleTrackerNode` class + `TrackedObstacle` struct; friend `ObstacleTrackerAlgorithmTest` |
 | **`src/`** | | |
@@ -79,7 +81,7 @@ its bound). Only the published snapshot is repaired, never `areas.dat`.
 | `costmap_filters.cpp` | 387 | `publish_keepout_mask` + one-shot `CostmapFilterInfo` |
 | `progress_tracker.cpp` | 324 | `point_in_polygon`, `check_boundary_violation`, `on_get_recovery_point`, `apply_promoted_obstacle` |
 | `main.cpp` | 32 | `map_server_node` executable |
-| `obstacle_tracker_node.cpp` | ~1.55k | Costmap flood-fill clustering, DBSCAN (map path), hulls, association, merge, promotion, YAML persistence |
+| `obstacle_tracker_node.cpp` | ~1.55k | Costmap clustering (via `costmap_clusters.hpp`), DBSCAN (map path), hulls, association, merge, promotion, YAML persistence |
 | `obstacle_tracker_main.cpp` | 26 | `obstacle_tracker_node` executable |
 | **`config/`** | | |
 | `map_server.yaml` | 176 | `map_server_node` defaults loaded by both launchers (`map_params`); heavily commented tuning history |
@@ -90,7 +92,9 @@ its bound). Only the published snapshot is repaired, never `areas.dat`.
 | `test_map_server.cpp` | ~1.4k | Layers/geometry, area types, promote idempotence, dig proposals, keepout mask policy, transit boundary clearance (soft mid-cost, never lethal) + dock exemption, obstacle margin, datum migration, areas.dat identity round-trip |
 | `test_map_replace.cpp` | ~520 | GUI map replace: fast keepout mask bit-identical to the per-cell definition (two scenes), line fill == `grid_map::PolygonIterator`, `add_area` + rebuild budgets on a 1687×1516-cell garden, one mask publish after a burst of edits, atomic `areas.dat` |
 | `test_mow_progress.cpp` | 107 | Inhibit gate, sweep step count, full sweep stamping, reset semantics, cache invalidation |
+| `test_occupancy_grid_export.cpp` | ~200 | `layer_to_occupancy_grid` == the real `GridMapRosConverter::toOccupancyGrid` (wrapped buffers, NaN/inf/−0/out-of-range/empty range), Invariant-14 cell placement |
 | `test_boundary_classifier.cpp` | 140 | Pure `ClassifyBoundary` cases (no rclcpp) |
+| `test_costmap_clusters.cpp` | ~300 | `costmap_clusters.hpp` vs the old flood fill + radius filter (`legacy_costmap_clusters.hpp`, verbatim) on garden scenes (`garden_costmap_scene.hpp`), random/degenerate grids, shapes at the span bound, degenerate radii; the early drop fires |
 | `test_obstacle_tracker.cpp` | 433 | Hull/DBSCAN/merge/point-in-polygon algorithms + keepout suppression (one shared node per suite) |
 
 ## Runtime surface
@@ -195,7 +199,9 @@ CI: `.github/workflows/ros2-ci.yml` job `build-and-test` runs `colcon build` + `
 |-------------|------|------|
 | `test_map_server` | `test/test_map_server.cpp` | `MapServerTest`: 2 layers + geometry + defaults + `clear_map`; `AreaTypeTest`: navigation vs mowing areas, save/load round-trip, `PromoteObstacleIsIdempotent`, dig inside/outside/nav-only/repeat, `mowing_area_containing`, keepout mask lethal-outside / nav-allowed / empty, drawn obstacle edge-tight; `BoundaryInnerMarginTest` (7 cases — interior stays free; an edge far from the dock gets the soft mid-cost penalty, never lethal; the outermost coverage ring's own band is never lethal, directly pinning the chassis_safety_inset collision the maintainer flagged; the SAME edge distance near the dock carries no penalty at all within `dock_inner_margin_exempt_radius_m`; a narrow seam between two adjacent areas stays crossable, never lethal; radius=0 falls back to the soft penalty but still never lethal; margin=0 disables the penalty entirely); `ObstacleMarginTest` (`obstacle_margin` 0.3 band); `DatumMigrationTest` (stamp on save, same-datum no-op, re-projection of areas+obstacles+dock, unstamped legacy adopt, 0/0 never migrates — uses `robot_yaml_path` temp file); `DockCalibrationCaptureTest` (antenna averaging + lever arm, yaw sources, the yaw-only MOTION fallback, and the pending-antenna flow: `capture_dock_antenna` gates, antenna + motion yaw written together off the dock (field geometry 2026-09-17), fresh install, yaml content, absent/expired/RTK-rejected capture, samples kept only while charging, a rejected capture leaves the stored pose untouched; a live GPS capture stays rejected off the dock)and the two-step calibration persistence: yaw-only MOTION write passes off the dock / keeps X/Y / writes only `dock_pose_yaw` to the yaml / still needs RTK / needs a stored position; a GPS position capture stays rejected off the dock)AreaTypeTest.DigEventLeavesTheKeepoutMaskAndTheCoverageHolesUntouched` (requirement pin: a dig changes neither the mask nor the `get_mowing_area` holes); `DigProposalTest` (dig never reaches areas.dat, pending is neither lethal nor a coverage hole, accept applies + persists with `_source: 2`, unknown id fails, discard writes nothing, accepted cannot be discarded, name round-trip, legacy file loads) |
 | `test_mow_progress` | `test/test_mow_progress.cpp` | inhibit-reason truth table, `SweepStepCount`, straight-sweep stamping, no sweep across reset, cache invalidation |
+| `test_occupancy_grid_export` | `test/test_occupancy_grid_export.cpp` | byte-identical to the upstream converter for every geometry/value class; each cell lands at its map position |
 | `test_boundary_classifier` | `test/test_boundary_classifier.cpp` | soft needs N consecutive samples, lethal immediate, reset on inside, exact-margin is inside, counter saturates |
+| `test_costmap_clusters` | `test/test_costmap_clusters.cpp` | flood fill bit-identical to the original; accepted clusters (centroid, radius) identical with the early drop, incl. at the 2 x max_radius span bound |
 | `test_obstacle_tracker` | `test/test_obstacle_tracker.cpp` | `boundary_hull` L/circle/small, `convex_hull`, `inflate_hull`, `merge_overlapping`, DBSCAN, point-in-polygon, `ClusterOnKeepoutCellIsDropped`, `NoKeepoutMaskFailsOpen` |
 
 All node tests call handlers directly through the `*_for_test` accessors (`map_server_node.hpp` L96-239) — no executor spin, no DDS peers.
