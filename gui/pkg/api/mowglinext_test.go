@@ -285,15 +285,40 @@ func TestServiceRoute_StartInAreaMalformedRequest(t *testing.T) {
 
 func TestClearMapRoute(t *testing.T) {
 	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(service string, _ any, res any) {
+		if saved, ok := res.(*triggerRes); ok && service == "/map_server_node/save_areas" {
+			saved.Success = true
+		}
+	}
 	router := setupMowgliNextRouter(mock)
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("DELETE", "/api/mowglinext/map", nil)
 	router.ServeHTTP(w, req)
 
+	// A clear is committed like any replace: map_server keeps the corridor
+	// filter off from clear_map until save_areas.
 	assert.Equal(t, http.StatusOK, w.Code)
-	require.Len(t, mock.ServiceCalls, 1)
+	require.Len(t, mock.ServiceCalls, 2)
 	assert.Equal(t, "/map_server_node/clear_map", mock.ServiceCalls[0].Service)
+	assert.Equal(t, "/map_server_node/save_areas", mock.ServiceCalls[1].Service)
+}
+
+func TestClearMapRoute_SaveRefused(t *testing.T) {
+	mock := types.NewMockRosProvider()
+	mock.ServiceResponder = func(service string, _ any, res any) {
+		if saved, ok := res.(*triggerRes); ok && service == "/map_server_node/save_areas" {
+			saved.Message = "disk full"
+		}
+	}
+	router := setupMowgliNextRouter(mock)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("DELETE", "/api/mowglinext/map", nil)
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "disk full")
 }
 
 func TestClearMapRoute_Error(t *testing.T) {

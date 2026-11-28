@@ -179,6 +179,10 @@ func AddMapAreaRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 
 // ClearMapRoute delete a map area
 //
+// A clear is a replace with no areas, so it is committed with save_areas like
+// any other replace: map_server keeps the LiDAR-ignore corridor filter off
+// from clear_map until that commit (a later add_area alone would not end it).
+//
 // @Summary clear the map
 // @Description clear the map
 // @Tags mowglinext
@@ -200,9 +204,13 @@ func ClearMapRoute(group *gin.RouterGroup, provider types.IRosProvider) {
 		err := provider.CallService(ctx, "/map_server_node/clear_map", &mowgli.ClearMapReq{}, &mowgli.ClearMapRes{}, "std_srvs/srv/Trigger")
 		if err != nil {
 			c.JSON(500, ErrorResponse{Error: err.Error()})
-		} else {
-			c.JSON(200, OkResponse{})
+			return
 		}
+		if err := persistAreas(ctx, provider); err != nil {
+			c.JSON(500, ErrorResponse{Error: "the map was cleared, but saving it failed: " + err.Error()})
+			return
+		}
+		c.JSON(200, OkResponse{})
 	})
 }
 
