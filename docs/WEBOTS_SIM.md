@@ -113,7 +113,24 @@ uses yaw extracted from the full native quaternion; this is not a 3D antenna
 model. Generated coordinates and fix/status stamps belong to the selected new truth pose; the raw antenna frame
 is preserved. Each generated observation has a nonzero lifetime sequence, even
 at rest. Future truth waits for clock eligibility without advancing authority;
-clock rewind clears the pending/accepted stamps but preserves sequence identity.
+clock rewind clears pending truth, delivery and accepted stamps but preserves
+sequence identity and the source quality-cycle origin.
+
+The simulator can model GNSS delivery latency with `gps_delivery_latency_s:=0.020`
+on `sim_full_system.launch.py`. The launch argument and the immutable relay
+parameter `delivery_latency_s` both default to `0.0` seconds. With latency
+configured, fix/status pairs wait until source epoch plus that delay in producer
+ROS time. Coordinates, noise, quality, covariance, header and sequence are
+generated once from source truth and retained unchanged. A 20 ms ROS timer
+releases final pending pairs without another raw GPS callback. A paused clock
+holds the queue. The ten-pair FIFO logs and drops a newly generated pair on
+overflow, consuming its identity. Clock rewind discards pending deliveries.
+A forward jump releases original epochs, which may correctly be stale.
+
+The producer cannot observe a consumer's clock. A consumer whose clock still
+lags the source epoch can reject the observation as future-dated. Input, timer and clock-jump
+state use the executable's single-threaded executor. Clock-jump notification
+also catches rewind-and-catch-up between sensor/timer callbacks.
 Raw vendor wheel/IMU header phase and arbitrary cross-generation replay remain
 separate contracts.
 
