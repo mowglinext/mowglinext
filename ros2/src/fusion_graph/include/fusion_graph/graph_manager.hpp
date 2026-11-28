@@ -300,6 +300,7 @@ private:
   {
     double dx = 0.0;  // body-frame integration since last tick
     double dy = 0.0;
+    double wheel_travel_m = 0.0;  // sum of raw interval translation magnitudes
     double dtheta_wheel = 0.0;
     double dtheta_gyro = 0.0;
     double dt_total = 0.0;
@@ -449,6 +450,8 @@ private:
   // read by AddGyroDelta to gate EMA updates. Single-writer (Tick)
   // / single-reader (AddGyroDelta), both under mu_.
   bool wheel_stationary_now_ = false;
+  // Start of the current run of encoder-still nodes (gyro_bias_min_still_s).
+  std::optional<double> bias_still_since_s_;
 
   // ── Async-rebase pipeline ───────────────────────────────────────
   // RebaseISAM2 rebuilds the iSAM2 Bayes tree from scratch with one
