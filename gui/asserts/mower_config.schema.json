@@ -705,6 +705,18 @@
           "default": 0.16,
           "description": "Reverse speed when undocking (m/s)."
         },
+        "min_gps_fix_type": {
+          "type": "integer",
+          "title": "Minimum GPS Fix for Undock",
+          "default": 2,
+          "enum": [
+            0,
+            2,
+            3,
+            4
+          ],
+          "description": "Minimum GPS fix quality required on the dock before reversing out (PreFlightCheck in UndockSequence). 0 = any / no fix required (undock immediately on wheel odometry, then wait for RTK Fixed in the open after leaving the station); 2 = 3D / DGPS fix; 3 = RTK Float; 4 = RTK Fixed. Applied after ROS2 restart."
+        },
         "dock_approach_distance": {
           "type": "number",
           "title": "Dock Approach Distance",

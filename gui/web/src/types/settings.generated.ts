@@ -104,6 +104,7 @@ export interface SettingsValues {
     loc_sigma_backstop_persist_s?: number | null;
     undock_distance?: number | null;
     undock_speed?: number | null;
+    min_gps_fix_type?: number | null;
     dock_approach_distance?: number | null;
     dock_approach_overshoot?: number | null;
     dock_max_retries?: number | null;

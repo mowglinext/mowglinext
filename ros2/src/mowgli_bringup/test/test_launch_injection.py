@@ -733,3 +733,15 @@ def test_navigation_launch_injects_transit_planning_timeout() -> None:
         'navigation.launch.py must assign grid_based["max_planning_time"] — '
         "without it planner_server keeps its static 8.0 s value."
     )
+
+
+def test_full_system_injects_min_gps_fix_type_into_behavior_tree() -> None:
+    """full_system.launch.py must forward min_gps_fix_type from robot_params to
+    behavior_tree_node so the GUI Docking setting reaches PreFlightCheck."""
+    call = _find_node_call(_parse("full_system.launch.py"), "behavior_tree_node")
+    assert call is not None
+    values = _node_parameter_values(call, "min_gps_fix_type")
+    assert len(values) == 1
+    expression = compile(ast.Expression(body=values[0]), "launch", "eval")
+    assert eval(expression, {"int": int, "robot_params": {}}) == 2
+    assert eval(expression, {"int": int, "robot_params": {"min_gps_fix_type": 0}}) == 0

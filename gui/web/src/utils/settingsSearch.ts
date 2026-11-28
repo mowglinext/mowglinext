@@ -104,6 +104,14 @@ const FIELD_TEXT: Record<string, string[]> = {
         "dockingSection.undockSpeed",
         "dockingSection.undockSpeedTooltip"
     ],
+    "min_gps_fix_type": [
+        "dockingSection.minGpsFixType",
+        "dockingSection.minGpsFixTypeTooltip",
+        "dockingSection.minGpsFixNone",
+        "dockingSection.minGpsFix3d",
+        "dockingSection.minGpsFixFloat",
+        "dockingSection.minGpsFixFixed"
+    ],
     "dock_approach_distance": [
         "dockingSection.approachDistance",
         "dockingSection.approachDistanceTooltip"

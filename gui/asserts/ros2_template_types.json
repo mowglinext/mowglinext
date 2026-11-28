@@ -114,6 +114,7 @@
     "max_charge_voltage": "number",
     "max_mps": "number",
     "max_obstacle_avoidance_distance": "number",
+    "min_gps_fix_type": "integer",
     "min_horizontal_uT": "number",
     "min_turning_radius": "number",
     "mow_angle_deg": "number",

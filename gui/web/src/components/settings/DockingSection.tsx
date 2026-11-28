@@ -1,6 +1,6 @@
 import {NumberWithAddon} from '../inputs/NumberWithAddon';
 import React from "react";
-import { Card, Col, Collapse, Form, InputNumber, Row, Space, Switch, Typography } from "antd";
+import { Card, Col, Collapse, Form, InputNumber, Row, Select, Space, Switch, Typography } from "antd";
 import { HomeOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useThemeMode } from "../../theme/ThemeContext.tsx";
@@ -65,6 +65,21 @@ export const DockingSection: React.FC<Props> = ({ values, onChange, isOverridden
                                         onChange={(v) => onChange("undock_speed", v)}
                                         min={0.05} max={0.3} step={0.05} precision={2}
                                         style={{ width: "100%" }} after="m/s"
+                                    />
+                                </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={12}>
+                                <Form.Item htmlFor="setting-min_gps_fix_type" data-setting-key="min_gps_fix_type" label={fieldLabel("min_gps_fix_type", t('dockingSection.minGpsFixType'))} tooltip={t('dockingSection.minGpsFixTypeTooltip')}>
+                                    <Select<number> id="setting-min_gps_fix_type"
+                                        value={values.min_gps_fix_type ?? 2}
+                                        onChange={(v) => onChange("min_gps_fix_type", v)}
+                                        style={{ width: "100%" }}
+                                        options={[
+                                            { value: 0, label: t('dockingSection.minGpsFixNone') },
+                                            { value: 2, label: t('dockingSection.minGpsFix3d') },
+                                            { value: 3, label: t('dockingSection.minGpsFixFloat') },
+                                            { value: 4, label: t('dockingSection.minGpsFixFixed') },
+                                        ]}
                                     />
                                 </Form.Item>
                             </Col>

@@ -1524,6 +1524,9 @@ private:
     blackboard_->set("undock_speed", undock_speed);
     const double undock_distance = declare_parameter<double>("undock_distance", 1.0);
     blackboard_->set("undock_distance", undock_distance);
+    const int min_gps_fix_type =
+        std::clamp(static_cast<int>(declare_parameter<int>("min_gps_fix_type", 2)), 0, 4);
+    blackboard_->set("min_gps_fix_type", min_gps_fix_type);
 
     // idle_nav2_suspend (default false): when true, the BT PAUSEs the Nav2
     // lifecycle stack (via SetNav2Lifecycle) while parked on the dock to cut

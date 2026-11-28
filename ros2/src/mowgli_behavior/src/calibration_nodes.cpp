@@ -76,16 +76,22 @@ BT::NodeStatus RecordUndockStart::tick()
   ctx->undock_start_x = ctx->gps_x;
   ctx->undock_start_y = ctx->gps_y;
   ctx->undock_start_recorded = true;
+  ctx->undock_start_gps_fixed = ctx->gps_is_fixed;
   // Clear the per-undock GPS buffer and seed it with the current sample
+  // (only if RTK-Fixed, matching the subscriber gate in behavior_tree_node.cpp)
   // so CalibrateHeadingFromUndock can line-fit the whole BackUp
   // trajectory. The GPS subscriber will append further samples (with
   // 5 cm dedup) while undock_start_recorded stays true.
   ctx->undock_gps_samples.clear();
-  ctx->undock_gps_samples.emplace_back(ctx->gps_x, ctx->gps_y);
+  if (ctx->gps_is_fixed)
+  {
+    ctx->undock_gps_samples.emplace_back(ctx->gps_x, ctx->gps_y);
+  }
   RCLCPP_INFO(ctx->node->get_logger(),
-              "RecordUndockStart: pos=(%.3f, %.3f)",
+              "RecordUndockStart: pos=(%.3f, %.3f) gps_is_fixed=%s",
               ctx->undock_start_x,
-              ctx->undock_start_y);
+              ctx->undock_start_y,
+              ctx->undock_start_gps_fixed ? "true" : "false");
   return BT::NodeStatus::SUCCESS;
 }
 
@@ -154,7 +160,16 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
   const double dy = ctx->gps_y - ctx->undock_start_y;
   const double dist = std::hypot(dx, dy);
 
-  if (dist < min_displacement)
+  const auto& samples = ctx->undock_gps_samples;
+  const bool have_line_fit_samples =
+      samples.size() >= 4u && std::hypot(samples.back().first - samples.front().first,
+                                         samples.back().second - samples.front().second) >= 0.5;
+  const double effective_dist = have_line_fit_samples
+                                    ? std::hypot(samples.back().first - samples.front().first,
+                                                 samples.back().second - samples.front().second)
+                                    : dist;
+
+  if (effective_dist < min_displacement)
   {
     const bool still_on_dock = ctx->latest_power.charger_enabled;
     ctx->undock_start_recorded = false;
@@ -166,7 +181,7 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
       RCLCPP_WARN(ctx->node->get_logger(),
                   "CalibrateHeadingFromUndock: displacement %.3fm below min %.3fm "
                   "AND is_charging=true — robot stuck on dock, retrying undock.",
-                  dist,
+                  effective_dist,
                   min_displacement);
       return BT::NodeStatus::FAILURE;
     }
@@ -178,7 +193,7 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
     RCLCPP_INFO(ctx->node->get_logger(),
                 "CalibrateHeadingFromUndock: partial undock (%.3fm < %.3fm) but "
                 "charging dropped — keeping dock_yaw seed, skipping refinement.",
-                dist,
+                effective_dist,
                 min_displacement);
     ctx->yaw_seeded_this_session = true;
     return BT::NodeStatus::SUCCESS;
@@ -196,10 +211,27 @@ BT::NodeStatus CalibrateHeadingFromUndock::tick()
   // the END of the BackUp — by construction the chassis didn't rotate
   // during the straight reverse so it equals the dock_pose_yaw, which
   // is what we want to persist.
-  const auto& samples = ctx->undock_gps_samples;
-  const bool have_line_fit_samples =
-      samples.size() >= 4u && std::hypot(samples.back().first - samples.front().first,
-                                         samples.back().second - samples.front().second) >= 0.5;
+  if (!have_line_fit_samples && (!ctx->undock_start_gps_fixed || !ctx->gps_is_fixed))
+  {
+    const bool still_on_dock = ctx->latest_power.charger_enabled;
+    ctx->undock_start_recorded = false;
+    if (still_on_dock)
+    {
+      RCLCPP_WARN(ctx->node->get_logger(),
+                  "CalibrateHeadingFromUndock: no RTK-Fixed trajectory and is_charging=true "
+                  "— robot stuck on dock, retrying undock.");
+      return BT::NodeStatus::FAILURE;
+    }
+    RCLCPP_INFO(ctx->node->get_logger(),
+                "CalibrateHeadingFromUndock: undocked with non-RTK-Fixed start/end "
+                "(start_fixed=%s, end_fixed=%s, samples=%zu) — keeping dock_yaw seed, "
+                "skipping endpoint refinement.",
+                ctx->undock_start_gps_fixed ? "true" : "false",
+                ctx->gps_is_fixed ? "true" : "false",
+                samples.size());
+    ctx->yaw_seeded_this_session = true;
+    return BT::NodeStatus::SUCCESS;
+  }
   double yaw = 0.0;
   double sigma_yaw = 0.0;
   const char* method = "endpoint";

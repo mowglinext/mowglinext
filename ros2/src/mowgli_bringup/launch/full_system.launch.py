@@ -352,6 +352,7 @@ def generate_launch_description() -> LaunchDescription:
             # references in main_tree.xml. See issue #191.
             {"undock_speed": float(robot_params.get("undock_speed", 0.15))},
             {"undock_distance": float(robot_params.get("undock_distance", 1.0))},
+            {"min_gps_fix_type": int(robot_params.get("min_gps_fix_type", 2))},
             # rain_mode / rain_delay_minutes / rain_debounce_sec: consumed by
             # IsNewRain / IsRainModeAtLeast off the {rain_mode} /
             # {rain_debounce_sec} blackboard refs (condition_nodes.cpp) and
